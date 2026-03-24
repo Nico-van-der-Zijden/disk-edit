@@ -557,8 +557,13 @@
     border-color: var(--accent);
   }
 
-  .petscii-mod:hover:not(.active) {
+  .petscii-mod:hover:not(.active):not(.disabled) {
     background: var(--hover);
+  }
+
+  .petscii-mod.disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
   }
 
   .petscii-kb-row {
@@ -607,6 +612,33 @@
   .petscii-key.rev-char:hover {
     background: var(--accent);
     color: var(--bg);
+  }
+
+  .petscii-key.unsafe {
+    border-color: #f38ba8;
+    color: #f38ba8;
+  }
+
+  [data-theme="light"] .petscii-key.unsafe {
+    border-color: #d20f39;
+    color: #d20f39;
+  }
+
+  .petscii-key.unsafe:hover {
+    background: #f38ba8;
+    color: var(--bg);
+    border-color: #f38ba8;
+  }
+
+  .petscii-key.disabled {
+    opacity: 0.2;
+    cursor: not-allowed;
+  }
+
+  .petscii-key.disabled:hover {
+    background: var(--bg);
+    color: var(--text);
+    border-color: var(--border);
   }
 
   .petscii-key.empty {
@@ -807,6 +839,12 @@
     <div class="menu-dropdown">
       <div class="option" id="opt-show-addr"><span class="check" id="check-addr"></span>Show Addresses</div>
       <div class="option" id="opt-show-ts"><span class="check" id="check-ts"></span>Show Track/Sector</div>
+    </div>
+  </div>
+  <div class="menu-item" id="menu-options">
+    Options
+    <div class="menu-dropdown">
+      <div class="option" id="opt-unsafe-chars"><span class="check" id="check-unsafe"></span>Allow Unsafe Characters</div>
     </div>
   </div>
   <div class="spacer"></div>
@@ -1217,6 +1255,27 @@ function writePetsciiString(buffer, offset, str, maxLen, overrides) {
   }
 }
 
+// ── Safe PETSCII characters ───────────────────────────────────────────
+let allowUnsafeChars = localStorage.getItem('d64-allowUnsafe') === 'true';
+
+// Bytes that are safe to use in C64 filenames
+// Unsafe: $00(NULL), $0D(CR), $14(DEL), $22("), $60-$7F(GFX set 1),
+//         $8D(shifted CR), $A0(padding), $E0-$FE(GFX duplicates), $FF(π)
+const SAFE_PETSCII = new Set([
+  0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B,0x0C,0x0E,0x0F,
+  0x10,0x11,0x12,0x13,0x15,0x16,0x17,0x18,0x19,0x1A,0x1B,0x1C,0x1D,0x1E,0x1F,
+  0x20,0x21,0x23,0x24,0x25,0x26,0x27,0x28,0x29,0x2A,0x2B,0x2C,0x2D,0x2E,0x2F,
+  0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x3A,0x3B,0x3C,0x3D,0x3E,0x3F,
+  0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,0x49,0x4A,0x4B,0x4C,0x4D,0x4E,0x4F,
+  0x50,0x51,0x52,0x53,0x54,0x55,0x56,0x57,0x58,0x59,0x5A,0x5B,0x5C,0x5D,0x5E,0x5F,
+  0x80,0x81,0x82,0x83,0x84,0x85,0x86,0x87,0x88,0x89,0x8A,0x8B,0x8C,0x8E,0x8F,
+  0x90,0x91,0x92,0x93,0x94,0x95,0x96,0x97,0x98,0x99,0x9A,0x9B,0x9C,0x9D,0x9E,0x9F,
+  0xA1,0xA2,0xA3,0xA4,0xA5,0xA6,0xA7,0xA8,0xA9,0xAA,0xAB,0xAC,0xAD,0xAE,0xAF,
+  0xB0,0xB1,0xB2,0xB3,0xB4,0xB5,0xB6,0xB7,0xB8,0xB9,0xBA,0xBB,0xBC,0xBD,0xBE,0xBF,
+  0xC0,0xC1,0xC2,0xC3,0xC4,0xC5,0xC6,0xC7,0xC8,0xC9,0xCA,0xCB,0xCC,0xCD,0xCE,0xCF,
+  0xD0,0xD1,0xD2,0xD3,0xD4,0xD5,0xD6,0xD7,0xD8,0xD9,0xDA,0xDB,0xDC,0xDD,0xDE,0xDF,
+]);
+
 // ── PETSCII Picker ───────────────────────────────────────────────────
 const petsciiPicker = document.getElementById('petscii-picker');
 let pickerTarget = null; // the element being edited
@@ -1239,9 +1298,11 @@ const KB_ROWS = [
 
 // Front-of-key graphics (SHIFT+letter → right graphic, same PETSCII as shift column above
 // but we also allow the 0x60-0x7F graphics via a separate "GFX" mode)
-const KB_GFX_ROW2 = [0x71,0x77,0x65,0x72,0x74,0x79,0x75,0x69,0x6F,0x70];
-const KB_GFX_ROW3 = [0x61,0x73,0x64,0x66,0x67,0x68,0x6A,0x6B,0x6C];
-const KB_GFX_ROW4 = [0x7A,0x78,0x63,0x76,0x62,0x6E,0x6D];
+// GFX keys use 0xC0-0xDF range (safe) instead of 0x60-0x7F (unsafe)
+// Both map to the same screen codes (64-95) on the C64
+const KB_GFX_ROW2 = [0xD1,0xD7,0xC5,0xD2,0xD4,0xD9,0xD5,0xC9,0xCF,0xD0];
+const KB_GFX_ROW3 = [0xC1,0xD3,0xC4,0xC6,0xC7,0xC8,0xCA,0xCB,0xCC];
+const KB_GFX_ROW4 = [0xDA,0xD8,0xC3,0xD6,0xC2,0xCE,0xCD];
 
 let pickerModifier = 'normal'; // 'normal', 'shift', 'gfx', 'cbm'
 let pickerReverse = false;
@@ -1258,6 +1319,7 @@ function buildPetsciiPicker() {
     // Modifier buttons
     const mod = e.target.closest('.petscii-mod');
     if (mod) {
+      if (mod.classList.contains('disabled')) return;
       const m = mod.dataset.mod;
       if (m === 'rev') {
         pickerReverse = !pickerReverse;
@@ -1270,7 +1332,7 @@ function buildPetsciiPicker() {
 
     // Character keys
     const key = e.target.closest('.petscii-key');
-    if (!key || !pickerTarget || key.classList.contains('empty')) return;
+    if (!key || !pickerTarget || key.classList.contains('empty') || key.classList.contains('disabled')) return;
     let code = parseInt(key.dataset.code, 10);
     if (code < 0) return;
 
@@ -1306,7 +1368,7 @@ function renderPicker() {
       if (pickerModifier === 'shift') code = shift;
       else if (pickerModifier === 'cbm') code = cbm;
       else if (pickerModifier === 'gfx') {
-        // Front-of-key graphics (0x60-0x7F range)
+        // GFX keys: use safe 0xC0-0xDF codes but display the 0x60-0x7F glyphs
         if (r === 1 && k < 10) code = KB_GFX_ROW2[k];
         else if (r === 2 && k < 9) code = KB_GFX_ROW3[k];
         else if (r === 3 && k < 7) code = KB_GFX_ROW4[k];
@@ -1317,9 +1379,19 @@ function renderPicker() {
       if (code === -1) {
         html += '<div class="petscii-key empty" data-code="-1"></div>';
       } else {
-        const ch = PETSCII_MAP[code];
-        const title = label + ' → $' + code.toString(16).toUpperCase().padStart(2, '0') + (pickerReverse ? ' (RVS)' : '');
-        html += '<div class="petscii-key' + (pickerReverse ? ' rev-char' : '') + '" data-code="' + code + '" title="' + title + '">' + escHtml(ch) + '</div>';
+        // Determine actual code after reverse
+        let actualCode = code;
+        if (pickerReverse) {
+          if (code >= 0x40 && code <= 0x5F) actualCode = code - 0x40;
+          else if (code >= 0xC0 && code <= 0xDF) actualCode = code - 0xC0 + 0x80;
+        }
+        const isSafe = SAFE_PETSCII.has(actualCode);
+        const disabled = !isSafe && !allowUnsafeChars;
+        // For GFX mode, show the graphic glyph from 0x60-0x7F range (same screen code)
+        const displayCode = (pickerModifier === 'gfx' && code >= 0xC0 && code <= 0xDF) ? code - 0x60 : code;
+        const ch = PETSCII_MAP[displayCode];
+        const title = label + ' → $' + code.toString(16).toUpperCase().padStart(2, '0') + (pickerReverse ? ' (RVS)' : '') + (!isSafe ? ' (unsafe)' : '');
+        html += '<div class="petscii-key' + (pickerReverse ? ' rev-char' : '') + (disabled ? ' disabled' : (!isSafe ? ' unsafe' : '')) + '" data-code="' + code + '" title="' + title + '">' + escHtml(ch) + '</div>';
       }
     }
     html += '</div>';
@@ -2358,6 +2430,17 @@ document.getElementById('opt-show-ts').addEventListener('click', (e) => {
   }
 });
 
+// ── Options menu ──────────────────────────────────────────────────────
+document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeMenus();
+  allowUnsafeChars = !allowUnsafeChars;
+  localStorage.setItem('d64-allowUnsafe', allowUnsafeChars);
+  document.getElementById('check-unsafe').innerHTML = allowUnsafeChars ? '<i class="fa-solid fa-check"></i>' : '';
+  // Re-render picker if open
+  if (pickerTarget) renderPicker();
+});
+
 document.getElementById('opt-edit-free').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
@@ -3353,6 +3436,7 @@ updateThemeIcon();
 document.getElementById('check-deleted').innerHTML = showDeleted ? '<i class="fa-solid fa-check"></i>' : '';
 document.getElementById('check-addr').innerHTML = showAddresses ? '<i class="fa-solid fa-check"></i>' : '';
 document.getElementById('check-ts').innerHTML = showTrackSector ? '<i class="fa-solid fa-check"></i>' : '';
+document.getElementById('check-unsafe').innerHTML = allowUnsafeChars ? '<i class="fa-solid fa-check"></i>' : '';
 
 themeToggle.addEventListener('click', () => {
   const current = document.documentElement.getAttribute('data-theme');
