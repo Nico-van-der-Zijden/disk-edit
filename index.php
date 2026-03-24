@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <title>D64 Disk Viewer</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='2' width='56' height='60' rx='3' fill='%23222' stroke='%23555' stroke-width='2'/%3E%3Crect x='18' y='2' width='28' height='14' rx='1' fill='%23888'/%3E%3Crect x='24' y='4' width='16' height='10' rx='1' fill='%23222'/%3E%3Ccircle cx='32' cy='36' r='14' fill='none' stroke='%23555' stroke-width='2'/%3E%3Ccircle cx='32' cy='36' r='6' fill='%23555'/%3E%3Crect x='30' y='30' width='4' height='12' rx='1' fill='%23888' transform='rotate(45 32 36)'/%3E%3Crect x='8' y='52' width='20' height='6' rx='1' fill='%23444'/%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #1e1e2e;
@@ -51,7 +53,7 @@
     user-select: none;
   }
 
-  .editable, .dir-name.editing {
+  .editable, .dir-name.editing, .blocks-input, .name-input, .header-input {
     -webkit-user-select: text;
     user-select: text;
   }
@@ -78,6 +80,10 @@
   .menu-item:hover,
   .menu-item.open {
     background: var(--menu-hover);
+  }
+
+  .menubar.menu-active .menu-item:hover > .menu-dropdown {
+    display: block;
   }
 
   .menu-dropdown {
@@ -200,6 +206,8 @@
   .disk-header-spacer {
     width: 48px;
     flex-shrink: 0;
+    text-align: right;
+    color: var(--text-muted);
   }
 
   .disk-name {
@@ -219,11 +227,11 @@
   }
 
   .disk-name .editable {
-    min-width: 16ch;
+    min-width: 18ch;
   }
 
   .disk-id .editable {
-    min-width: 5ch;
+    min-width: 6ch;
   }
 
   .disk-name .editable.empty,
@@ -239,17 +247,20 @@
 
   .disk-name .editable.editing,
   .disk-id .editable.editing {
-    background: var(--bg);
-    outline: 1px solid var(--accent);
+    background: none;
+    outline: none;
+    padding: 0;
     cursor: text;
   }
 
   .disk-id {
     width: 5ch;
+    min-width: 5ch;
     font-size: 14px;
     color: var(--text-muted);
     text-align: left;
     flex-shrink: 0;
+    white-space: pre;
   }
 
   /* --- Directory Listing --- */
@@ -274,7 +285,29 @@
     cursor: pointer;
   }
 
-  .dir-entry:hover {
+  .dir-header-row {
+    cursor: default;
+    font-size: 11px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px;
+    margin-bottom: 4px;
+  }
+
+  .dir-header-row .dir-blocks,
+  .dir-header-row .dir-name,
+  .dir-header-row .dir-type,
+  .dir-header-row .dir-ts,
+  .dir-header-row .dir-addr {
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+
+  .dir-header-row:hover {
+    background: none;
+  }
+
+  .dir-entry:not(.dir-header-row):hover {
     background: var(--hover);
   }
 
@@ -284,7 +317,9 @@
   }
 
   .dir-entry.selected .dir-blocks,
-  .dir-entry.selected .dir-type {
+  .dir-entry.selected .dir-type,
+  .dir-entry.selected .dir-addr,
+  .dir-entry.selected .dir-ts {
     color: var(--bg);
   }
 
@@ -295,18 +330,43 @@
     flex-shrink: 0;
   }
 
+  .blocks-input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 0 4px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: inherit;
+    text-align: right;
+    outline: none;
+    -moz-appearance: textfield;
+  }
+
+  .blocks-input::-webkit-inner-spin-button,
+  .blocks-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
   .dir-name {
     flex: 1;
     white-space: pre;
   }
 
-  .dir-name.editing {
+  .name-input, .header-input {
+    width: 100%;
+    box-sizing: border-box;
     background: var(--bg);
-    outline: 1px solid var(--accent);
+    border: 1px solid var(--accent);
     border-radius: 3px;
     padding: 0 4px;
-    white-space: pre;
     color: var(--text);
+    font-family: inherit;
+    font-size: inherit;
+    letter-spacing: inherit;
+    outline: none;
   }
 
   .dir-type {
@@ -316,6 +376,73 @@
     flex-shrink: 0;
     white-space: pre;
     position: relative;
+  }
+
+  .dir-addr {
+    width: 11ch;
+    text-align: left;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 12px;
+    white-space: pre;
+    display: none;
+  }
+
+  .show-addresses .dir-addr {
+    display: block;
+  }
+
+  .dir-ts {
+    width: 7ch;
+    text-align: left;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 12px;
+    white-space: pre;
+    display: none;
+  }
+
+  .show-tracksector .dir-ts {
+    display: block;
+  }
+
+  .dir-grip {
+    width: 16px;
+    flex-shrink: 0;
+    cursor: grab;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .dir-entry:hover .dir-grip {
+    opacity: 0.5;
+  }
+
+  .dir-entry.selected .dir-grip {
+    color: var(--bg);
+  }
+
+  .dir-header-row .dir-grip {
+    cursor: default;
+    opacity: 0 !important;
+  }
+
+  .dir-entry.drag-over-top {
+    border-top: 2px solid var(--accent);
+  }
+
+  .dir-entry.drag-over-bottom {
+    border-bottom: 2px solid var(--accent);
+  }
+
+  .dir-entry.dragging {
+    opacity: 0.4;
   }
 
   .type-dropdown {
@@ -373,6 +500,107 @@
 
   .dir-entry.deleted {
     opacity: 0.5;
+  }
+
+  .petscii-rev {
+    background: var(--text);
+    color: var(--bg);
+    border-radius: 1px;
+  }
+
+  /* --- PETSCII Keyboard Picker --- */
+  .petscii-picker {
+    display: none;
+    position: fixed;
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    z-index: 250;
+    box-shadow: 0 8px 32px rgba(0,0,0,.4);
+  }
+
+  .petscii-picker.open {
+    display: block;
+  }
+
+  .petscii-modifiers {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+
+  .petscii-mod {
+    padding: 4px 12px;
+    font-family: inherit;
+    font-size: 11px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  .petscii-mod.active {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+
+  .petscii-mod:hover:not(.active) {
+    background: var(--hover);
+  }
+
+  .petscii-kb-row {
+    display: flex;
+    gap: 3px;
+    margin-bottom: 3px;
+    justify-content: center;
+  }
+
+  .petscii-key {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text);
+    background: var(--bg);
+    flex-shrink: 0;
+  }
+
+  .petscii-key:hover {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+
+  .petscii-key.wide {
+    width: auto;
+    padding: 0 10px;
+    font-size: 11px;
+  }
+
+  .petscii-key.space {
+    width: 180px;
+  }
+
+  .petscii-key.rev-char {
+    background: var(--text);
+    color: var(--bg);
+  }
+
+  .petscii-key.rev-char:hover {
+    background: var(--accent);
+    color: var(--bg);
+  }
+
+  .petscii-key.empty {
+    visibility: hidden;
   }
 
   /* Hidden file input */
@@ -451,8 +679,10 @@
   .modal-footer {
     padding: 10px 16px;
     border-top: 1px solid var(--border);
-    text-align: right;
     flex-shrink: 0;
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
   }
 
   .modal-footer button {
@@ -469,6 +699,32 @@
   .modal-footer button:hover {
     background: var(--menu-hover);
   }
+
+  .modal-btn-secondary {
+    background: transparent !important;
+    border-color: var(--border) !important;
+  }
+
+  .modal-btn-secondary:hover {
+    background: var(--hover) !important;
+  }
+
+  .modal-input {
+    width: 100%;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 14px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    outline: none;
+  }
+
+  .modal-input:focus {
+    border-color: var(--accent);
+  }
+
 </style>
 </head>
 <body>
@@ -485,7 +741,7 @@
       <div class="option disabled" id="opt-save-as">Save As...</div>
       <div class="separator"></div>
       <div class="option disabled" id="opt-validate">Validate</div>
-      <div class="option disabled" id="opt-show-deleted"><span class="check" id="check-deleted">&#10003;</span>Show Deleted Files</div>
+      <div class="option disabled" id="opt-show-deleted"><span class="check" id="check-deleted"></span>Show Deleted Files</div>
       <div class="option disabled has-submenu" id="opt-sort">Sort
         <div class="submenu">
           <div class="option" data-sort="name-asc">Name Ascending</div>
@@ -495,15 +751,31 @@
           <div class="option" data-sort="blocks-desc">Blocks Descending</div>
         </div>
       </div>
+      <div class="separator"></div>
+      <div class="option disabled" id="opt-edit-free">Edit Blocks Free</div>
+      <div class="option disabled" id="opt-recalc-free">Recalculate Blocks Free</div>
     </div>
   </div>
   <div class="menu-item" id="menu-entry">
     File
     <div class="menu-dropdown">
       <div class="option disabled" id="opt-rename">Rename</div>
+      <div class="option disabled" id="opt-insert">Insert File</div>
+      <div class="option disabled" id="opt-remove">Remove Entry</div>
+      <div class="option disabled has-submenu" id="opt-align">Align
+        <div class="submenu">
+          <div class="option" data-align="left">Align Left</div>
+          <div class="option" data-align="right">Align Right</div>
+          <div class="option" data-align="center">Center</div>
+          <div class="option" data-align="justify">Justify</div>
+          <div class="option" data-align="expand">Expand</div>
+        </div>
+      </div>
       <div class="separator"></div>
       <div class="option disabled" id="opt-lock">Lock File</div>
       <div class="option disabled" id="opt-splat">Scratch File</div>
+      <div class="option disabled" id="opt-block-size">Change File Size</div>
+      <div class="option disabled" id="opt-recalc-size">Set Actual File Size</div>
       <div class="option disabled has-submenu" id="opt-change-type">File Type
         <div class="submenu">
           <div class="option" data-typeidx="0"><span class="check" id="check-type-0"></span>DEL</div>
@@ -513,6 +785,13 @@
           <div class="option" data-typeidx="4"><span class="check" id="check-type-4"></span>REL</div>
         </div>
       </div>
+    </div>
+  </div>
+  <div class="menu-item" id="menu-view">
+    View
+    <div class="menu-dropdown">
+      <div class="option" id="opt-show-addr"><span class="check" id="check-addr"></span>Show Addresses</div>
+      <div class="option" id="opt-show-ts"><span class="check" id="check-ts"></span>Show Track/Sector</div>
     </div>
   </div>
   <div class="spacer"></div>
@@ -526,6 +805,21 @@
     No disk loaded.<br>
     Use File &gt; New to create an empty disk,<br>
     or File &gt; Open to load a .d64 file.
+  </div>
+</div>
+
+<div class="petscii-picker" id="petscii-picker"></div>
+
+<div class="modal-overlay" id="input-modal-overlay">
+  <div class="modal">
+    <div class="modal-title" id="input-modal-title"></div>
+    <div class="modal-body">
+      <input type="text" id="input-modal-field" class="modal-input">
+    </div>
+    <div class="modal-footer">
+      <button id="input-modal-cancel" class="modal-btn-secondary">Cancel</button>
+      <button id="input-modal-ok">OK</button>
+    </div>
   </div>
 </div>
 
@@ -586,15 +880,60 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
+// ── Input Modal ───────────────────────────────────────────────────────
+let inputModalResolve = null;
+
+function showInputModal(title, defaultValue) {
+  return new Promise((resolve) => {
+    inputModalResolve = resolve;
+    document.getElementById('input-modal-title').textContent = title;
+    const field = document.getElementById('input-modal-field');
+    field.value = defaultValue || '';
+    document.getElementById('input-modal-overlay').classList.add('open');
+    field.focus();
+    field.select();
+  });
+}
+
+function closeInputModal(value) {
+  document.getElementById('input-modal-overlay').classList.remove('open');
+  if (inputModalResolve) {
+    inputModalResolve(value);
+    inputModalResolve = null;
+  }
+}
+
+document.getElementById('input-modal-ok').addEventListener('click', () => {
+  closeInputModal(document.getElementById('input-modal-field').value);
+});
+
+document.getElementById('input-modal-cancel').addEventListener('click', () => {
+  closeInputModal(null);
+});
+
+document.getElementById('input-modal-overlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeInputModal(null);
+});
+
+document.getElementById('input-modal-field').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    closeInputModal(document.getElementById('input-modal-field').value);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeInputModal(null);
+  }
+});
+
 // ── Disable Edge/browser mini menu and context menu ───────────────────
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('selectstart', e => {
-  if (!e.target.isContentEditable) e.preventDefault();
+  if (!e.target.isContentEditable && !e.target.closest('.editing')) e.preventDefault();
 });
 if (navigator.userAgent.includes('Edg')) {
   document.addEventListener('pointerup', e => {
     const sel = window.getSelection();
-    if (sel && !e.target.isContentEditable) sel.removeAllRanges();
+    if (sel && !e.target.isContentEditable && !e.target.closest('.editing')) sel.removeAllRanges();
   });
 }
 
@@ -628,24 +967,432 @@ function sectorOffset(track, sector) {
   return TRACK_OFFSETS[track] + sector * 256;
 }
 
-// ── PETSCII → Unicode (screen-friendly subset) ───────────────────────
+// ── PETSCII → Unicode ─────────────────────────────────────────────────
+// C64 uppercase/graphics mode character mapping.
+// Maps PETSCII byte values to Unicode characters.
+// Graphics characters use Box Drawing, Block Elements, and Geometric Shapes.
+const PETSCII_MAP = (() => {
+  const m = new Array(256).fill('\u00B7'); // · middle dot for unmapped
+
+  // 0x00-0x1F: reversed characters (reverse video of screen codes 0-31)
+  // On C64 screen these show as inverted (white on blue). We mark them for
+  // special rendering with a prefix that renderDisk will detect.
+  m[0x00] = '@';
+  for (let i = 0x01; i <= 0x1A; i++) m[i] = String.fromCharCode(i - 0x01 + 65); // A-Z
+  m[0x1B] = '[';
+  m[0x1C] = '\u00A3'; // £
+  m[0x1D] = ']';
+  m[0x1E] = '\u2191'; // ↑
+  m[0x1F] = '\u2190'; // ←
+
+  // 0x20-0x3F: standard ASCII printable (space, digits, punctuation)
+  for (let i = 0x20; i <= 0x3F; i++) m[i] = String.fromCharCode(i);
+
+  // 0x40: @
+  m[0x40] = '@';
+
+  // 0x41-0x5A: A-Z → display as lowercase (modern convention)
+  for (let i = 0x41; i <= 0x5A; i++) m[i] = String.fromCharCode(i + 32);
+
+  // 0x5B-0x5F: special PETSCII characters
+  m[0x5B] = '[';
+  m[0x5C] = '\u00A3'; // £ (pound sign)
+  m[0x5D] = ']';
+  m[0x5E] = '\u2191'; // ↑ (up arrow)
+  m[0x5F] = '\u2190'; // ← (left arrow)
+
+  // 0x60-0x7F: graphics characters (screen codes 64-95)
+  // These are the SHIFT+key graphics on the C64 keyboard
+  const gfx1 = [
+    '\u2500', // 0x60 SC64: ─ horizontal line
+    '\u2660', // 0x61 SC65: ♠ spade
+    '\u2502', // 0x62 SC66: │ vertical line
+    '\u2500', // 0x63 SC67: ─ horizontal line
+    '\u2597', // 0x64 SC68: ▗ quadrant lower right
+    '\u2596', // 0x65 SC69: ▖ quadrant lower left
+    '\u2598', // 0x66 SC70: ▘ quadrant upper left
+    '\u259D', // 0x67 SC71: ▝ quadrant upper right
+    '\u256E', // 0x68 SC72: ╮ rounded corner top-right
+    '\u2570', // 0x69 SC73: ╰ rounded corner bottom-left
+    '\u256F', // 0x6A SC74: ╯ rounded corner bottom-right
+    '\u2572', // 0x6B SC75: ╲ diagonal backslash
+    '\u2571', // 0x6C SC76: ╱ diagonal slash
+    '\u25CF', // 0x6D SC77: ● filled circle
+    '\u2592', // 0x6E SC78: ▒ checker pattern
+    '\u2665', // 0x6F SC79: ♥ heart
+    '\u256D', // 0x70 SC80: ╭ rounded corner top-left
+    '\u2518', // 0x71 SC81: ┘ box bottom-right
+    '\u2524', // 0x72 SC82: ┤ box right T
+    '\u2510', // 0x73 SC83: ┐ box top-right
+    '\u250C', // 0x74 SC84: ┌ box top-left
+    '\u2534', // 0x75 SC85: ┴ box bottom T
+    '\u252C', // 0x76 SC86: ┬ box top T
+    '\u251C', // 0x77 SC87: ├ box left T
+    '\u253C', // 0x78 SC88: ┼ box cross
+    '\u2514', // 0x79 SC89: └ box bottom-left
+    '\u2666', // 0x7A SC90: ♦ diamond
+    '\u253C', // 0x7B SC91: ┼ cross
+    '\u2502', // 0x7C SC92: │ vertical (thick)
+    '\u2500', // 0x7D SC93: ─ horizontal (thick)
+    '\u03C0', // 0x7E SC94: π pi
+    '\u25E5', // 0x7F SC95: ◥ upper right triangle
+  ];
+  for (let i = 0; i < 32; i++) m[0x60 + i] = gfx1[i];
+
+  // 0x80-0x9F: reversed characters (reverse video of screen codes 0-31)
+  // In context of filenames, display as their non-reversed equivalents
+  m[0x80] = ' '; // reversed @? treat as space
+  for (let i = 0x81; i <= 0x9A; i++) m[i] = String.fromCharCode(i - 0x81 + 65); // reversed A-Z → A-Z
+  m[0x9B] = '[';
+  m[0x9C] = '\u00A3'; // reversed £
+  m[0x9D] = ']';
+  m[0x9E] = '\u2191'; // reversed ↑
+  m[0x9F] = '\u2190'; // reversed ←
+
+  // 0xA0: shifted space
+  m[0xA0] = ' ';
+
+  // 0xA1-0xBF: graphics characters (screen codes 97-127)
+  // These are the CBM+key graphics on the C64 keyboard
+  const gfx2 = [
+    '\u258C', // 0xA1 SC97:  ▌ left half block
+    '\u2584', // 0xA2 SC98:  ▄ lower half block
+    '\u2594', // 0xA3 SC99:  ▔ upper 1/8 block
+    '\u2581', // 0xA4 SC100: ▁ lower 1/8 block
+    '\u258E', // 0xA5 SC101: ▎ left 1/4 block
+    '\u2592', // 0xA6 SC102: ▒ medium shade
+    '\u2595', // 0xA7 SC103: ▕ right 1/8 block
+    '\u259E', // 0xA8 SC104: ▞ quadrant upper right + lower left
+    '\u25E4', // 0xA9 SC105: ◤ upper left triangle
+    '\u259A', // 0xAA SC106: ▚ quadrant upper left + lower right
+    '\u2586', // 0xAB SC107: ▆ lower 3/4 block
+    '\u258A', // 0xAC SC108: ▊ left 3/4 block
+    '\u259B', // 0xAD SC109: ▛ upper left + upper right + lower left
+    '\u259C', // 0xAE SC110: ▜ upper left + upper right + lower right
+    '\u2599', // 0xAF SC111: ▙ upper left + lower left + lower right
+    '\u259F', // 0xB0 SC112: ▟ upper right + lower left + lower right
+    '\u2580', // 0xB1 SC113: ▀ upper half block
+    '\u2590', // 0xB2 SC114: ▐ right half block
+    '\u2588', // 0xB3 SC115: █ full block
+    '\u2582', // 0xB4 SC116: ▂ lower 1/4 block
+    '\u258F', // 0xB5 SC117: ▏ left 1/8 block
+    '\u2583', // 0xB6 SC118: ▃ lower 3/8 block
+    '\u2585', // 0xB7 SC119: ▅ lower 5/8 block
+    '\u2587', // 0xB8 SC120: ▇ lower 7/8 block
+    '\u258B', // 0xB9 SC121: ▋ left 5/8 block
+    '\u2589', // 0xBA SC122: ▉ left 7/8 block
+    '\u258D', // 0xBB SC123: ▍ left 3/8 block
+    '\u2663', // 0xBC SC124: ♣ club
+    '\u25CF', // 0xBD SC125: ● filled circle
+    '\u25CB', // 0xBE SC126: ○ empty circle
+    '\u2663', // 0xBF SC127: ♣ club (variant)
+  ];
+  for (let i = 0; i < 31; i++) m[0xA1 + i] = gfx2[i];
+
+  // 0xC0: ─ horizontal line (same as SC64)
+  m[0xC0] = '\u2500';
+
+  // 0xC1-0xDA: uppercase A-Z (commonly used in D64 filenames)
+  for (let i = 0xC1; i <= 0xDA; i++) m[i] = String.fromCharCode(i - 0xC1 + 65);
+
+  // 0xDB-0xDF: special chars (same visual as 0x5B-0x5F)
+  m[0xDB] = '[';
+  m[0xDC] = '\u00A3'; // £
+  m[0xDD] = ']';
+  m[0xDE] = '\u2191'; // ↑
+  m[0xDF] = '\u2190'; // ←
+
+  // 0xE0-0xFE: same graphics as 0xA0-0xBE
+  for (let i = 0xE0; i <= 0xFE; i++) m[i] = m[i - 0x40];
+
+  // 0xFF: π
+  m[0xFF] = '\u03C0';
+
+  return m;
+})();
+
 function petsciiToAscii(byte) {
-  if (byte === 0xA0) return ' ';  // shifted space (padding)
-  if (byte >= 0x41 && byte <= 0x5A) return String.fromCharCode(byte + 32); // A-Z → a-z
-  if (byte >= 0xC1 && byte <= 0xDA) return String.fromCharCode(byte - 0xC1 + 65); // → A-Z
-  if (byte >= 0x20 && byte <= 0x7E) return String.fromCharCode(byte);
-  return '.';
+  return PETSCII_MAP[byte & 0xFF];
 }
 
-function readPetsciiString(data, offset, len) {
+function readPetsciiString(data, offset, len, stopAtPadding) {
+  let contentLen = len;
+  if (stopAtPadding !== false) {
+    // Find content length: 0xA0 is padding, stop there
+    for (let i = 0; i < len; i++) {
+      if (data[offset + i] === 0xA0) {
+        contentLen = i;
+        break;
+      }
+    }
+  }
   let s = '';
-  for (let i = 0; i < len; i++) {
-    const b = data[offset + i];
-    if (b === 0xA0 && s.length > 0) break; // padding
-    s += petsciiToAscii(b);
+  for (let i = 0; i < contentLen; i++) {
+    s += petsciiToAscii(data[offset + i]);
   }
   return s;
 }
+
+// Returns array of {char, reversed} for rendering with inverse video
+function readPetsciiRich(data, offset, len) {
+  // Find content length: 0xA0 is padding
+  let contentLen = len;
+  for (let i = 0; i < len; i++) {
+    if (data[offset + i] === 0xA0) {
+      contentLen = i;
+      break;
+    }
+  }
+  const chars = [];
+  for (let i = 0; i < contentLen; i++) {
+    const b = data[offset + i];
+    const reversed = (b >= 0x00 && b <= 0x1F) || (b >= 0x80 && b <= 0x9F);
+    chars.push({ char: petsciiToAscii(b), reversed });
+  }
+  return chars;
+}
+
+// ── Reverse PETSCII map (Unicode → PETSCII byte) ─────────────────────
+const UNICODE_TO_PETSCII = (() => {
+  const rev = new Map();
+  // Build reverse map, prefer lower PETSCII codes for duplicates
+  for (let i = 255; i >= 0; i--) {
+    const ch = PETSCII_MAP[i];
+    if (ch && ch !== ' ' && ch !== '\u00B7') {
+      rev.set(ch, i);
+    }
+  }
+  // Explicit overrides for common chars (prefer standard PETSCII range)
+  for (let i = 0x41; i <= 0x5A; i++) rev.set(String.fromCharCode(i + 32), i); // a-z → 0x41-0x5A
+  for (let i = 0x41; i <= 0x5A; i++) rev.set(String.fromCharCode(i), i); // A-Z → 0x41-0x5A
+  for (let i = 0x20; i <= 0x3F; i++) rev.set(String.fromCharCode(i), i); // standard punctuation
+  rev.set('@', 0x40);
+  rev.set('[', 0x5B);
+  rev.set(']', 0x5D);
+  rev.set('\u00A3', 0x5C); // £
+  rev.set('\u2191', 0x5E); // ↑
+  rev.set('\u2190', 0x5F); // ←
+  rev.set('\u03C0', 0xFF); // π
+  rev.set(' ', 0x20);
+  return rev;
+})();
+
+function unicodeToPetscii(char) {
+  return UNICODE_TO_PETSCII.get(char) ?? 0x20;
+}
+
+// Write a Unicode string to the d64 buffer as PETSCII bytes
+function writePetsciiString(buffer, offset, str, maxLen, overrides) {
+  const data = new Uint8Array(buffer);
+  for (let i = 0; i < maxLen; i++) {
+    if (i < str.length) {
+      // Use override if a specific PETSCII code was set (e.g., reversed chars from picker)
+      if (overrides && overrides[i] !== undefined) {
+        data[offset + i] = overrides[i];
+      } else {
+        data[offset + i] = unicodeToPetscii(str[i]);
+      }
+    } else {
+      data[offset + i] = 0xA0; // padding
+    }
+  }
+}
+
+// ── PETSCII Picker ───────────────────────────────────────────────────
+const petsciiPicker = document.getElementById('petscii-picker');
+let pickerTarget = null; // the element being edited
+let pickerMaxLen = 16;
+let pickerClicking = false; // prevents blur during picker interaction
+
+// C64 keyboard layout: [label, normal, shift, cbm] per key
+// In uppercase mode: normal = lowercase display (0x41-0x5A), shift = uppercase (0xC1-0xDA)
+// Graphics: on key fronts — right side = shift, left side = cbm
+const KB_ROWS = [
+  // Row 1: ← 1-9 0 + - £
+  [['←',0x5F,-1,-1],['1',0x31,0x21,-1],['2',0x32,0x22,-1],['3',0x33,0x23,-1],['4',0x34,0x24,-1],['5',0x35,0x25,-1],['6',0x36,0x26,-1],['7',0x37,0x27,-1],['8',0x38,0x28,-1],['9',0x39,0x29,-1],['0',0x30,-1,-1],['+',0x2B,-1,-1],['-',0x2D,-1,-1],['£',0x5C,-1,-1]],
+  // Row 2: Q-P @ * ↑
+  [['q',0x51,0xC1,0xAB],['w',0x57,0xC7,0xB3],['e',0x45,0xC5,0xB1],['r',0x52,0xD2,0xB2],['t',0x54,0xD4,0xA3],['y',0x59,0xD9,0xB7],['u',0x55,0xD5,0xB8],['i',0x49,0xC9,0xA2],['o',0x4F,0xCF,0xB9],['p',0x50,0xD0,0xAF],['@',0x40,0xBA,-1],['*',0x2A,0xC0,-1],['↑',0x5E,0xFF,-1]],
+  // Row 3: A-L : ; =
+  [['a',0x41,0xC1,0xB0],['s',0x53,0xD3,0xAE],['d',0x44,0xC4,0xAC],['f',0x46,0xC6,0xBB],['g',0x47,0xC7,0xA5],['h',0x48,0xC8,0xB4],['j',0x4A,0xCA,0xB5],['k',0x4B,0xCB,0xA1],['l',0x4C,0xCC,0xB6],[':',0x3A,0x5B,-1],[';',0x3B,0x5D,-1],['=',0x3D,-1,-1]],
+  // Row 4: Z-M , . /
+  [['z',0x5A,0xDA,0xAD],['x',0x58,0xD8,0xBD],['c',0x43,0xC3,0xBC],['v',0x56,0xD6,0xBE],['b',0x42,0xC2,0xBF],['n',0x4E,0xCE,0xAA],['m',0x4D,0xCD,0xA7],[',',0x2C,0x3C,-1],['.',0x2E,0x3E,-1],['/',0x2F,0x3F,-1]],
+];
+
+// Front-of-key graphics (SHIFT+letter → right graphic, same PETSCII as shift column above
+// but we also allow the 0x60-0x7F graphics via a separate "GFX" mode)
+const KB_GFX_ROW2 = [0x71,0x77,0x65,0x72,0x74,0x79,0x75,0x69,0x6F,0x70];
+const KB_GFX_ROW3 = [0x61,0x73,0x64,0x66,0x67,0x68,0x6A,0x6B,0x6C];
+const KB_GFX_ROW4 = [0x7A,0x78,0x63,0x76,0x62,0x6E,0x6D];
+
+let pickerModifier = 'normal'; // 'normal', 'shift', 'gfx', 'cbm'
+let pickerReverse = false;
+
+function buildPetsciiPicker() {
+  renderPicker();
+
+  petsciiPicker.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    pickerClicking = true;
+    setTimeout(() => { pickerClicking = false; }, 100);
+
+    // Modifier buttons
+    const mod = e.target.closest('.petscii-mod');
+    if (mod) {
+      const m = mod.dataset.mod;
+      if (m === 'rev') {
+        pickerReverse = !pickerReverse;
+      } else {
+        pickerModifier = (pickerModifier === m) ? 'normal' : m;
+      }
+      renderPicker();
+      return;
+    }
+
+    // Character keys
+    const key = e.target.closest('.petscii-key');
+    if (!key || !pickerTarget || key.classList.contains('empty')) return;
+    let code = parseInt(key.dataset.code, 10);
+    if (code < 0) return;
+
+    // Apply reverse where PETSCII has reversed equivalents:
+    // 0x40-0x5F (@,A-Z,[,£,],↑,←) → 0x00-0x1F (reversed)
+    // 0xC0-0xDF (same chars, shifted) → 0x80-0x9F (reversed)
+    // Other ranges (graphics, punctuation) have no PETSCII reversed codes
+    let actualCode = code;
+    if (pickerReverse) {
+      if (code >= 0x40 && code <= 0x5F) actualCode = code - 0x40;
+      else if (code >= 0xC0 && code <= 0xDF) actualCode = code - 0xC0 + 0x80;
+    }
+
+    const ch = PETSCII_MAP[actualCode];
+    insertAtCursor(pickerTarget, ch, actualCode);
+  });
+}
+
+function renderPicker() {
+  let html = '<div class="petscii-modifiers">';
+  html += '<div class="petscii-mod' + (pickerModifier === 'shift' ? ' active' : '') + '" data-mod="shift">SHIFT</div>';
+  html += '<div class="petscii-mod' + (pickerModifier === 'gfx' ? ' active' : '') + '" data-mod="gfx">GFX</div>';
+  html += '<div class="petscii-mod' + (pickerModifier === 'cbm' ? ' active' : '') + '" data-mod="cbm">CBM</div>';
+  html += '<div class="petscii-mod' + (pickerReverse ? ' active' : '') + '" data-mod="rev">RVS</div>';
+  html += '</div>';
+
+  for (let r = 0; r < KB_ROWS.length; r++) {
+    const row = KB_ROWS[r];
+    html += '<div class="petscii-kb-row">';
+    for (let k = 0; k < row.length; k++) {
+      const [label, normal, shift, cbm] = row[k];
+      let code;
+      if (pickerModifier === 'shift') code = shift;
+      else if (pickerModifier === 'cbm') code = cbm;
+      else if (pickerModifier === 'gfx') {
+        // Front-of-key graphics (0x60-0x7F range)
+        if (r === 1 && k < 10) code = KB_GFX_ROW2[k];
+        else if (r === 2 && k < 9) code = KB_GFX_ROW3[k];
+        else if (r === 3 && k < 7) code = KB_GFX_ROW4[k];
+        else code = -1;
+      }
+      else code = normal;
+
+      if (code === -1) {
+        html += '<div class="petscii-key empty" data-code="-1"></div>';
+      } else {
+        const ch = PETSCII_MAP[code];
+        const title = label + ' → $' + code.toString(16).toUpperCase().padStart(2, '0') + (pickerReverse ? ' (RVS)' : '');
+        html += '<div class="petscii-key' + (pickerReverse ? ' rev-char' : '') + '" data-code="' + code + '" title="' + title + '">' + escHtml(ch) + '</div>';
+      }
+    }
+    html += '</div>';
+  }
+
+  // Space bar row
+  html += '<div class="petscii-kb-row">';
+  html += '<div class="petscii-key space" data-code="32">SPACE</div>';
+  html += '</div>';
+
+  petsciiPicker.innerHTML = html;
+}
+
+function trackCursorPos(input) {
+  const update = () => { input._lastCursorPos = input.selectionStart; };
+  input.addEventListener('keyup', update);
+  input.addEventListener('click', update);
+  input.addEventListener('input', update);
+  update();
+}
+
+function insertAtCursor(el, ch, petsciiCode) {
+  if (el.tagName === 'INPUT') {
+    // Always use tracked position — browser may reset selectionStart on blur/refocus
+    const start = el._lastCursorPos != null ? el._lastCursorPos : (el.selectionStart || 0);
+    const end = start;
+    const val = el.value;
+    const maxLen = el.maxLength || Infinity;
+    const newVal = val.slice(0, start) + ch + val.slice(end);
+    if (newVal.length > maxLen) return; // enforce max length
+    el.value = newVal;
+
+    // Track raw PETSCII bytes for characters that can't round-trip via Unicode
+    if (petsciiCode !== undefined) {
+      if (!el._petsciiOverrides) el._petsciiOverrides = {};
+      el._petsciiOverrides[start] = petsciiCode;
+    }
+
+    // Focus first, then set cursor position
+    el.focus();
+    const newPos = start + ch.length;
+    el.selectionStart = el.selectionEnd = newPos;
+    el._lastCursorPos = newPos;
+    return;
+  }
+
+  if (el.isContentEditable) {
+    el.focus();
+    const sel = window.getSelection();
+    if (sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(document.createTextNode(ch));
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      el.textContent += ch;
+    }
+  }
+}
+
+function showPetsciiPicker(targetEl, maxLen) {
+  pickerTarget = targetEl;
+  pickerMaxLen = maxLen;
+  pickerModifier = 'normal';
+  renderPicker();
+
+  const rect = targetEl.getBoundingClientRect();
+  petsciiPicker.classList.add('open');
+
+  let top = rect.bottom + 4;
+  let left = rect.left;
+
+  const pickerRect = petsciiPicker.getBoundingClientRect();
+  if (top + pickerRect.height > window.innerHeight) {
+    top = rect.top - pickerRect.height - 4;
+  }
+  if (left + pickerRect.width > window.innerWidth) {
+    left = window.innerWidth - pickerRect.width - 8;
+  }
+
+  petsciiPicker.style.top = Math.max(0, top) + 'px';
+  petsciiPicker.style.left = Math.max(0, left) + 'px';
+}
+
+function hidePetsciiPicker() {
+  petsciiPicker.classList.remove('open');
+  pickerTarget = null;
+}
+
+buildPetsciiPicker();
 
 // ── File type names ──────────────────────────────────────────────────
 const FILE_TYPES = ['DEL', 'SEQ', 'PRG', 'USR', 'REL'];
@@ -669,7 +1416,7 @@ function parseD64(buffer) {
   const bamOffset = sectorOffset(18, 0);
 
   const diskName = readPetsciiString(data, bamOffset + 0x90, 16);
-  const diskId = readPetsciiString(data, bamOffset + 0xA2, 5);
+  const diskId = readPetsciiString(data, bamOffset + 0xA2, 5, false);
 
   // Count free blocks from BAM (tracks 1-35, skip track 18)
   let freeBlocks = 0;
@@ -696,8 +1443,22 @@ function parseD64(buffer) {
       const entryOff = off + i * 32;
       const typeByte = data[entryOff + 2];
 
+      // Skip completely unused slots: type=0, no file track/sector,
+      // no name data, and no block count
+      if (typeByte === 0x00) {
+        const fileTrack = data[entryOff + 3];
+        const fileSector = data[entryOff + 4];
+        const blocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
+        let hasName = false;
+        for (let j = 0; j < 16; j++) {
+          if (data[entryOff + 5 + j] !== 0x00 && data[entryOff + 5 + j] !== 0xA0) {
+            hasName = true; break;
+          }
+        }
+        if (!hasName && fileTrack === 0 && fileSector === 0 && blocks === 0) continue;
+      }
+
       const name = readPetsciiString(data, entryOff + 5, 16);
-      if (!name.trim()) continue;
 
       const blocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
       const closed = (typeByte & 0x80) !== 0;
@@ -766,26 +1527,39 @@ function createEmptyD64() {
     }
   }
 
-  // Disk name: fill with 0xA0 (shifted space)
-  for (let i = 0; i < 27; i++) {
+  // BAM byte 3: 0x00 (unused, should be 0x00 on 1541)
+  data[bamOff + 3] = 0x00;
+
+  // Disk name at 0x90-0x9F: all 0xA0 (no name)
+  for (let i = 0; i < 16; i++) {
     data[bamOff + 0x90 + i] = 0xA0;
   }
 
-  // Default disk name
-  const name = 'EMPTY DISK';
-  for (let i = 0; i < name.length; i++) {
-    data[bamOff + 0x90 + i] = name.charCodeAt(i);
-  }
+  // Bytes 0xA0-0xA1: 0xA0 (fill bytes between name and ID)
+  data[bamOff + 0xA0] = 0xA0;
+  data[bamOff + 0xA1] = 0xA0;
 
-  // Disk ID
-  data[bamOff + 0xA2] = 0x30; // '0'
-  data[bamOff + 0xA3] = 0x30; // '0'
+  // Disk ID at 0xA2-0xA3: 0xA0 (no ID)
+  data[bamOff + 0xA2] = 0xA0;
+  data[bamOff + 0xA3] = 0xA0;
+
+  // Byte 0xA4: 0xA0 (fill)
   data[bamOff + 0xA4] = 0xA0;
+
+  // DOS type at 0xA5-0xA6: "2A"
   data[bamOff + 0xA5] = 0x32; // '2'
   data[bamOff + 0xA6] = 0x41; // 'A'
 
-  // First directory sector at track 18, sector 1 — all zeros is fine
-  // (next track=0 means end of chain, entries are empty)
+  // Bytes 0xA7-0xAA: 0xA0 (fill)
+  for (let i = 0xA7; i <= 0xAA; i++) {
+    data[bamOff + i] = 0xA0;
+  }
+
+  // First directory sector at track 18, sector 1
+  const dirOff = sectorOffset(18, 1);
+  data[dirOff + 0] = 0x00; // no next track (end of chain)
+  data[dirOff + 1] = 0xFF; // standard end-of-chain marker
+  // All 8 entries are zeroed (already 0x00 from Uint8Array init)
 
   return data.buffer;
 }
@@ -793,33 +1567,27 @@ function createEmptyD64() {
 // ── Current disk state ─────────────────────────────────────────────────
 let currentBuffer = null;
 let currentFileName = null;
-let showDeleted = true;
-let currentSort = null;
+let showDeleted = localStorage.getItem('d64-showDeleted') !== 'false'; // default true
 let selectedEntryIndex = -1;
+let showAddresses = localStorage.getItem('d64-showAddresses') === 'true';
+let showTrackSector = localStorage.getItem('d64-showTrackSector') === 'true';
 
 // ── Allowed C64 characters ────────────────────────────────────────────
-// Letters A-Z, digits 0-9, space, and common C64 PETSCII printable symbols
-const ALLOWED_C64 = /^[A-Za-z0-9 !#$%&'()*+,\-./:;<=>?@\[\]^_]$/;
+function isValidPetscii(ch) {
+  return UNICODE_TO_PETSCII.has(ch);
+}
 
 function filterC64Input(str, maxLen) {
-  return str.split('').filter(ch => ALLOWED_C64.test(ch)).slice(0, maxLen).join('');
+  return Array.from(str).filter(ch => isValidPetscii(ch)).slice(0, maxLen).join('');
 }
 
 // ── Write header fields back to D64 buffer ────────────────────────────
-function writeDiskName(buffer, name) {
-  const data = new Uint8Array(buffer);
-  const bamOff = sectorOffset(18, 0);
-  for (let i = 0; i < 16; i++) {
-    data[bamOff + 0x90 + i] = i < name.length ? name.toUpperCase().charCodeAt(i) : 0xA0;
-  }
+function writeDiskName(buffer, name, overrides) {
+  writePetsciiString(buffer, sectorOffset(18, 0) + 0x90, name, 16, overrides);
 }
 
-function writeDiskId(buffer, id) {
-  const data = new Uint8Array(buffer);
-  const bamOff = sectorOffset(18, 0);
-  for (let i = 0; i < 5; i++) {
-    data[bamOff + 0xA2 + i] = i < id.length ? id.toUpperCase().charCodeAt(i) : 0xA0;
-  }
+function writeDiskId(buffer, id, overrides) {
+  writePetsciiString(buffer, sectorOffset(18, 0) + 0xA2, id, 5, overrides);
 }
 
 // ── Validate (mimics 1541 VALIDATE command) ──────────────────────────
@@ -999,26 +1767,59 @@ function renderDisk(info) {
   const content = document.getElementById('content');
 
   let html = `
-    <div class="disk-panel">
+    <div class="disk-panel${showAddresses ? ' show-addresses' : ''}${showTrackSector ? ' show-tracksector' : ''}">
       <div class="disk-header">
-        <div class="disk-header-spacer"></div>
-        <div class="disk-name"><span class="editable${info.diskName.trim() ? '' : ' empty'}" id="edit-name" data-field="name" data-max="16">${info.diskName.trim() ? escHtml(info.diskName.padEnd(16)) : ''}</span></div>
-        <div class="disk-id"><span class="editable${info.diskId.trim() ? '' : ' empty'}" id="edit-id" data-field="id" data-max="5">${info.diskId.trim() ? escHtml(info.diskId) : ''}</span></div>
+        <div class="disk-header-spacer">0</div>
+        <div class="disk-name"><span class="editable" id="edit-name" data-field="name" data-max="16">"${escHtml(info.diskName.padEnd(16))}"</span></div>
+        <div class="disk-id"><span class="editable" id="edit-id" data-field="id" data-max="5">${escHtml(info.diskId)}</span></div>
       </div>
-      <div class="dir-listing">`;
+      <div class="dir-listing">
+        <div class="dir-entry dir-header-row">
+          <span class="dir-grip"></span>
+          <span class="dir-blocks">Size</span>
+          <span class="dir-name">Filename</span>
+          <span class="dir-type">Type</span>
+          <span class="dir-ts">T/S</span>
+          <span class="dir-addr">Address</span>
+        </div>`;
 
   let entries = info.entries.filter(e => !e.deleted || showDeleted);
-  if (currentSort === 'name-asc') entries.sort((a, b) => a.name.localeCompare(b.name));
-  else if (currentSort === 'name-desc') entries.sort((a, b) => b.name.localeCompare(a.name));
-  else if (currentSort === 'blocks-asc') entries.sort((a, b) => a.blocks - b.blocks);
-  else if (currentSort === 'blocks-desc') entries.sort((a, b) => b.blocks - a.blocks);
 
   for (const e of entries) {
+    // Render filename with reversed character support
+    const richName = currentBuffer ? readPetsciiRich(new Uint8Array(currentBuffer), e.entryOff + 5, 16) : null;
+    let nameHtml;
+    if (richName) {
+      const nameStr = richName.map(c =>
+        c.reversed ? '<span class="petscii-rev">' + escHtml(c.char) + '</span>' : escHtml(c.char)
+      ).join('');
+      // Closing quote after content, then pad to fill 18 chars total (quote + 16 + quote)
+      const pad = Math.max(0, 16 - richName.length);
+      nameHtml = '"' + nameStr + '"' + ' '.repeat(pad);
+    } else {
+      const pad = Math.max(0, 16 - e.name.length);
+      nameHtml = '"' + escHtml(e.name) + '"' + ' '.repeat(pad);
+    }
+
+    // Get file addresses if showing
+    let addrHtml = '';
+    if (showAddresses && currentBuffer && !e.deleted) {
+      const addr = getFileAddresses(currentBuffer, e.entryOff);
+      if (addr) {
+        const s = '$' + addr.start.toString(16).toUpperCase().padStart(4, '0');
+        const en = '$' + addr.end.toString(16).toUpperCase().padStart(4, '0');
+        addrHtml = s + '-' + en;
+      }
+    }
+
     html += `
-        <div class="dir-entry${e.deleted ? ' deleted' : ''}" data-offset="${e.entryOff}">
+        <div class="dir-entry${e.deleted ? ' deleted' : ''}" data-offset="${e.entryOff}" draggable="true">
+          <span class="dir-grip"><i class="fa-solid fa-grip-vertical"></i></span>
           <span class="dir-blocks">${e.blocks}</span>
-          <span class="dir-name">"${escHtml(e.name.padEnd(16))}"</span>
+          <span class="dir-name">${nameHtml}</span>
           <span class="dir-type">${escHtml(e.type)}</span>
+          <span class="dir-ts">${currentBuffer ? ('$' + new Uint8Array(currentBuffer)[e.entryOff + 3].toString(16).toUpperCase().padStart(2, '0') + ' $' + new Uint8Array(currentBuffer)[e.entryOff + 4].toString(16).toUpperCase().padStart(2, '0')) : ''}</span>
+          <span class="dir-addr">${addrHtml}</span>
         </div>`;
   }
 
@@ -1034,6 +1835,15 @@ function renderDisk(info) {
   bindEditableFields();
   bindDirSelection();
 
+  // Double-click on blocks free to edit
+  const footerBlocks = document.querySelector('.dir-footer-blocks');
+  if (footerBlocks) {
+    footerBlocks.style.cursor = 'pointer';
+    footerBlocks.addEventListener('dblclick', () => {
+      startEditFreeBlocks(footerBlocks);
+    });
+  }
+
   // Restore selection
   if (prevSelected >= 0) {
     const el = document.querySelector(`.dir-entry[data-offset="${prevSelected}"]`);
@@ -1045,29 +1855,207 @@ function renderDisk(info) {
   updateEntryMenuState();
 }
 
+let activeEditEl = null;
+let activeEditCleanup = null;
+
+function registerActiveEdit(el, cleanup) {
+  activeEditEl = el;
+  activeEditCleanup = cleanup;
+}
+
+function cancelActiveEdits() {
+  if (activeEditEl && activeEditCleanup) {
+    activeEditCleanup();
+  }
+  activeEditEl = null;
+  activeEditCleanup = null;
+}
+
 function bindDirSelection() {
-  const entries = document.querySelectorAll('.dir-entry');
+  const entries = document.querySelectorAll('.dir-entry:not(.dir-header-row)');
+  let dragSrcOffset = null;
+
   entries.forEach(el => {
-    el.addEventListener('click', () => {
+    // Click to select/deselect
+    el.addEventListener('click', (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.classList.contains('editing') || e.target.closest('.editing')) return;
+      cancelActiveEdits();
+      const wasSelected = el.classList.contains('selected');
       entries.forEach(e => e.classList.remove('selected'));
-      el.classList.add('selected');
-      selectedEntryIndex = parseInt(el.dataset.offset, 10);
+      if (wasSelected) {
+        selectedEntryIndex = -1;
+      } else {
+        el.classList.add('selected');
+        selectedEntryIndex = parseInt(el.dataset.offset, 10);
+      }
       updateEntryMenuState();
     });
+
+    // Double-click to edit
     el.addEventListener('dblclick', (e) => {
       if (e.target.classList.contains('dir-type')) {
         const entryOff = parseInt(el.dataset.offset, 10);
         showTypeDropdown(e.target, entryOff);
+      } else if (e.target.classList.contains('dir-blocks')) {
+        startEditBlockSize(el);
       } else {
         startRenameEntry(el);
       }
     });
+
+    // Drag and drop
+    el.addEventListener('dragstart', (e) => {
+      dragSrcOffset = parseInt(el.dataset.offset, 10);
+      el.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+    });
+
+    el.addEventListener('dragend', () => {
+      el.classList.remove('dragging');
+      entries.forEach(e => { e.classList.remove('drag-over-top', 'drag-over-bottom'); });
+      dragSrcOffset = null;
+    });
+
+    el.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      entries.forEach(e => { e.classList.remove('drag-over-top', 'drag-over-bottom'); });
+      const rect = el.getBoundingClientRect();
+      const midY = rect.top + rect.height / 2;
+      if (e.clientY < midY) {
+        el.classList.add('drag-over-top');
+      } else {
+        el.classList.add('drag-over-bottom');
+      }
+    });
+
+    el.addEventListener('dragleave', () => {
+      el.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+
+    el.addEventListener('drop', (e) => {
+      e.preventDefault();
+      entries.forEach(e => { e.classList.remove('drag-over-top', 'drag-over-bottom'); });
+      if (dragSrcOffset === null || !currentBuffer) return;
+
+      const targetOffset = parseInt(el.dataset.offset, 10);
+      if (dragSrcOffset === targetOffset) return;
+
+      const slots = getDirSlotOffsets(currentBuffer);
+      const srcIdx = slots.indexOf(dragSrcOffset);
+      let targetIdx = slots.indexOf(targetOffset);
+      if (srcIdx < 0 || targetIdx < 0) return;
+
+      // Determine if dropping above or below
+      const rect = el.getBoundingClientRect();
+      const midY = rect.top + rect.height / 2;
+      if (e.clientY >= midY && targetIdx < srcIdx) targetIdx++;
+      else if (e.clientY < midY && targetIdx > srcIdx) targetIdx--;
+
+      // Move by repeatedly swapping adjacent entries
+      const dir = targetIdx > srcIdx ? 1 : -1;
+      let cur = srcIdx;
+      while (cur !== targetIdx) {
+        swapDirEntries(currentBuffer, slots[cur], slots[cur + dir]);
+        cur += dir;
+      }
+
+      selectedEntryIndex = slots[targetIdx];
+      const info = parseD64(currentBuffer);
+      renderDisk(info);
+    });
   });
+
 }
+
+// Click outside dir entries deselects (registered once)
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.dir-entry') && !e.target.closest('.menu-item') && !e.target.closest('.petscii-picker') && !e.target.closest('.type-dropdown')) {
+    document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
+    selectedEntryIndex = -1;
+    updateEntryMenuState();
+  }
+});
+
+// Keyboard: Arrow Up/Down to select, Ctrl+Arrow to move entry
+// Registered once outside bindDirSelection to avoid stacking listeners
+document.addEventListener('keydown', (e) => {
+  if (!currentBuffer) return;
+  if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.isContentEditable)) return;
+
+  // Enter: edit selected filename
+  if (e.key === 'Enter' && selectedEntryIndex >= 0) {
+    e.preventDefault();
+    const selected = document.querySelector('.dir-entry.selected');
+    if (selected) startRenameEntry(selected);
+    return;
+  }
+
+  // Delete: remove selected entry
+  if (e.key === 'Delete' && selectedEntryIndex >= 0 && currentBuffer) {
+    e.preventDefault();
+    const slots = getDirSlotOffsets(currentBuffer);
+    const idx = slots.indexOf(selectedEntryIndex);
+    removeFileEntry(currentBuffer, selectedEntryIndex);
+    const info = parseD64(currentBuffer);
+    // Select next entry, or previous if at end
+    const visibleEntries = info.entries.filter(en => !en.deleted || showDeleted);
+    if (visibleEntries.length > 0) {
+      const newIdx = Math.min(idx, visibleEntries.length - 1);
+      selectedEntryIndex = visibleEntries[newIdx].entryOff;
+    } else {
+      selectedEntryIndex = -1;
+    }
+    renderDisk(info);
+    return;
+  }
+
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  e.preventDefault();
+
+  const dir = e.key === 'ArrowUp' ? -1 : 1;
+
+  if (e.ctrlKey && selectedEntryIndex >= 0) {
+    // Ctrl+Arrow: move the selected entry
+    moveEntry(dir);
+  } else {
+    // Arrow: select next/previous entry
+    const allEntries = document.querySelectorAll('.dir-entry:not(.dir-header-row)');
+    if (allEntries.length === 0) return;
+
+    if (selectedEntryIndex < 0) {
+      // Nothing selected — select first or last
+      const target = dir === 1 ? allEntries[0] : allEntries[allEntries.length - 1];
+      allEntries.forEach(el => el.classList.remove('selected'));
+      target.classList.add('selected');
+      selectedEntryIndex = parseInt(target.dataset.offset, 10);
+      target.scrollIntoView({ block: 'nearest' });
+    } else {
+      // Find current index in the DOM list
+      let currentIdx = -1;
+      allEntries.forEach((el, i) => {
+        if (parseInt(el.dataset.offset, 10) === selectedEntryIndex) currentIdx = i;
+      });
+      const newIdx = currentIdx + dir;
+      if (newIdx >= 0 && newIdx < allEntries.length) {
+        allEntries.forEach(el => el.classList.remove('selected'));
+        allEntries[newIdx].classList.add('selected');
+        selectedEntryIndex = parseInt(allEntries[newIdx].dataset.offset, 10);
+        allEntries[newIdx].scrollIntoView({ block: 'nearest' });
+      }
+    }
+    updateEntryMenuState();
+  }
+});
 
 function updateEntryMenuState() {
   const hasSelection = selectedEntryIndex >= 0 && currentBuffer;
   document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection);
+  document.getElementById('opt-insert').classList.toggle('disabled', !currentBuffer || !canInsertFile());
+  document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection);
+  document.getElementById('opt-align').classList.toggle('disabled', !hasSelection);
+  document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection);
+  document.getElementById('opt-recalc-size').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection);
@@ -1102,72 +2090,78 @@ function bindEditableFields() {
 
 function startEditing(el) {
   if (el.classList.contains('editing')) return;
+  if (el.querySelector('input')) return;
   const field = el.dataset.field;
   const maxLen = parseInt(el.dataset.max, 10);
-  const isEmpty = el.classList.contains('empty');
-  const currentValue = isEmpty ? '' : el.textContent.trimEnd();
+  // Read actual content from buffer (stops at 0xA0 padding)
+  let currentValue = '';
+  if (currentBuffer) {
+    const data = new Uint8Array(currentBuffer);
+    const bamOff = sectorOffset(18, 0);
+    if (field === 'name') currentValue = readPetsciiString(data, bamOff + 0x90, 16);
+    else if (field === 'id') currentValue = readPetsciiString(data, bamOff + 0xA2, 5);
+  } else {
+    const isEmpty = el.classList.contains('empty');
+    currentValue = isEmpty ? '' : el.textContent;
+  }
 
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.maxLength = maxLen;
+  input.value = currentValue;
+  input.className = 'header-input';
+
+  el.textContent = '';
+  el.appendChild(input);
   el.classList.add('editing');
   el.classList.remove('empty');
-  el.contentEditable = 'true';
-  el.textContent = currentValue;
-  el.focus();
+  trackCursorPos(input);
+  input.focus();
+  input.selectionStart = input.selectionEnd = currentValue.length;
 
-  // Select all text
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
+  showPetsciiPicker(input, maxLen);
 
   function setDisplay(value) {
-    if (value.trim()) {
-      el.classList.remove('empty');
-      el.textContent = field === 'name' ? value.padEnd(16) : value;
+    el.classList.remove('empty');
+    if (field === 'name') {
+      el.textContent = '"' + value.padEnd(16) + '"';
     } else {
-      el.classList.add('empty');
-      el.textContent = '';
+      el.textContent = value;
     }
+  }
+
+  let reverted = false;
+
+  function cleanup() {
+    el.classList.remove('editing');
+    hidePetsciiPicker();
   }
 
   function commitEdit() {
-    el.contentEditable = 'false';
-    el.classList.remove('editing');
-    el.removeEventListener('blur', commitEdit);
-    el.removeEventListener('keydown', onKeyDown);
-
-    let value = filterC64Input(el.textContent, maxLen).toUpperCase();
-
+    if (reverted) return;
+    let value = filterC64Input(input.value, maxLen);
     if (currentBuffer) {
-      if (field === 'name') writeDiskName(currentBuffer, value);
-      else if (field === 'id') writeDiskId(currentBuffer, value);
+      if (field === 'name') writeDiskName(currentBuffer, value, input._petsciiOverrides);
+      else if (field === 'id') writeDiskId(currentBuffer, value, input._petsciiOverrides);
     }
+    cleanup();
     setDisplay(value);
   }
 
-  function onKeyDown(e) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      el.blur();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      el.contentEditable = 'false';
-      el.classList.remove('editing');
-      el.removeEventListener('blur', commitEdit);
-      el.removeEventListener('keydown', onKeyDown);
-      setDisplay(currentValue);
-    } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
-      const sel = window.getSelection();
-      const curText = el.textContent;
-      const selLen = sel.toString().length;
-      if (!ALLOWED_C64.test(e.key) || (curText.length - selLen >= maxLen)) {
-        e.preventDefault();
-      }
-    }
+  function revert() {
+    reverted = true;
+    cleanup();
+    setDisplay(currentValue);
   }
 
-  el.addEventListener('blur', commitEdit);
-  el.addEventListener('keydown', onKeyDown);
+  input.addEventListener('blur', () => {
+    if (pickerClicking) { input.focus(); input.selectionStart = input.selectionEnd = input._lastCursorPos || 0; return; }
+    commitEdit();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); revert(); }
+  });
 }
 
 function escHtml(s) {
@@ -1192,6 +2186,8 @@ function updateMenuState() {
   document.getElementById('opt-validate').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-show-deleted').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-sort').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-edit-free').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk);
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -1200,6 +2196,7 @@ let openMenu = null;
 
 function closeMenus() {
   document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('open'));
+  document.querySelector('.menubar').classList.remove('menu-active');
   openMenu = null;
 }
 
@@ -1210,6 +2207,14 @@ document.querySelectorAll('.menu-item').forEach(menu => {
       closeMenus();
     } else {
       closeMenus();
+      menu.classList.add('open');
+      document.querySelector('.menubar').classList.add('menu-active');
+      openMenu = menu;
+    }
+  });
+  menu.addEventListener('mouseenter', () => {
+    if (openMenu && openMenu !== menu) {
+      openMenu.classList.remove('open');
       menu.classList.add('open');
       openMenu = menu;
     }
@@ -1261,12 +2266,12 @@ document.getElementById('opt-save').addEventListener('click', (e) => {
   downloadD64(currentBuffer, currentFileName);
 });
 
-document.getElementById('opt-save-as').addEventListener('click', (e) => {
+document.getElementById('opt-save-as').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
   const defaultName = currentFileName || 'disk.d64';
-  const fileName = prompt('Save as:', defaultName);
+  const fileName = await showInputModal('Save As', defaultName);
   if (!fileName) return;
   currentFileName = fileName.endsWith('.d64') ? fileName : fileName + '.d64';
   downloadD64(currentBuffer, currentFileName);
@@ -1288,6 +2293,7 @@ document.getElementById('opt-show-deleted').addEventListener('click', (e) => {
   if (!currentBuffer) return;
   closeMenus();
   showDeleted = !showDeleted;
+  localStorage.setItem('d64-showDeleted', showDeleted);
   document.getElementById('check-deleted').textContent = showDeleted ? '\u2713' : '';
   const info = parseD64(currentBuffer);
   renderDisk(info);
@@ -1298,19 +2304,502 @@ document.querySelectorAll('#opt-sort .submenu .option').forEach(el => {
     e.stopPropagation();
     if (!currentBuffer) return;
     closeMenus();
-    currentSort = el.dataset.sort;
-
+    sortDirectory(currentBuffer, el.dataset.sort);
     const info = parseD64(currentBuffer);
     renderDisk(info);
   });
 });
 
-// ── File menu: Rename ─────────────────────────────────────────────────
-function writeFileName(buffer, entryOff, name) {
-  const data = new Uint8Array(buffer);
-  for (let i = 0; i < 16; i++) {
-    data[entryOff + 5 + i] = i < name.length ? name.toUpperCase().charCodeAt(i) : 0xA0;
+// ── View menu ─────────────────────────────────────────────────────────
+document.getElementById('opt-show-addr').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeMenus();
+  showAddresses = !showAddresses;
+  localStorage.setItem('d64-showAddresses', showAddresses);
+  document.getElementById('check-addr').textContent = showAddresses ? '\u2713' : '';
+  if (currentBuffer) {
+    const info = parseD64(currentBuffer);
+    renderDisk(info);
   }
+});
+
+document.getElementById('opt-show-ts').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeMenus();
+  showTrackSector = !showTrackSector;
+  localStorage.setItem('d64-showTrackSector', showTrackSector);
+  document.getElementById('check-ts').textContent = showTrackSector ? '\u2713' : '';
+  if (currentBuffer) {
+    const info = parseD64(currentBuffer);
+    renderDisk(info);
+  }
+});
+
+document.getElementById('opt-edit-free').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+  const footerBlocks = document.querySelector('.dir-footer-blocks');
+  if (footerBlocks) startEditFreeBlocks(footerBlocks);
+});
+
+document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+
+  // Recalculate by following all file sector chains to find used sectors,
+  // then rebuild the BAM free counts from scratch. Don't trust the existing BAM.
+  const data = new Uint8Array(currentBuffer);
+  const bamOff = sectorOffset(18, 0);
+  const sectorsPerTrack = t => {
+    if (t <= 17) return 21;
+    if (t <= 24) return 19;
+    if (t <= 30) return 18;
+    return 17;
+  };
+
+  // Build allocation map: mark all sectors as free, then mark used ones
+  const used = {};
+  for (let t = 1; t <= 35; t++) {
+    used[t] = new Uint8Array(sectorsPerTrack(t));
+  }
+
+  // Track 18 sector 0 (BAM) is always used
+  used[18][0] = 1;
+
+  // Mark directory chain sectors as used
+  let dirT = 18, dirS = 1;
+  const dirVisited = new Set();
+  while (dirT !== 0) {
+    const key = `${dirT}:${dirS}`;
+    if (dirVisited.has(key)) break;
+    dirVisited.add(key);
+    if (dirT < 1 || dirT > 35 || dirS < 0 || dirS >= sectorsPerTrack(dirT)) break;
+    used[dirT][dirS] = 1;
+    const off = sectorOffset(dirT, dirS);
+    dirT = data[off];
+    dirS = data[off + 1];
+  }
+
+  // Follow each closed file's sector chain
+  const info = parseD64(currentBuffer);
+  for (const entry of info.entries) {
+    if (entry.deleted) continue;
+    let ft = data[entry.entryOff + 3];
+    let fs = data[entry.entryOff + 4];
+    const visited = new Set();
+    while (ft !== 0) {
+      if (ft < 1 || ft > 35) break;
+      if (fs < 0 || fs >= sectorsPerTrack(ft)) break;
+      const key = `${ft}:${fs}`;
+      if (visited.has(key)) break;
+      visited.add(key);
+      used[ft][fs] = 1;
+      const off = sectorOffset(ft, fs);
+      ft = data[off];
+      fs = data[off + 1];
+    }
+  }
+
+  // Read old total
+  const oldInfo = parseD64(currentBuffer);
+  const oldFree = oldInfo.freeBlocks;
+
+  // Update only the free block counts per track, leave BAM bitmaps untouched
+  for (let t = 1; t <= 35; t++) {
+    if (t === 18) continue;
+    const spt = sectorsPerTrack(t);
+    let free = 0;
+    for (let s = 0; s < spt; s++) {
+      if (!used[t][s]) free++;
+    }
+    data[bamOff + 4 * t] = free;
+  }
+
+  const updatedInfo = parseD64(currentBuffer);
+  renderDisk(updatedInfo);
+
+  const newFree = updatedInfo.freeBlocks;
+  if (oldFree === newFree) {
+    showModal('Recalculate Blocks Free', ['Blocks free is correct: ' + newFree + '.']);
+  } else {
+    showModal('Recalculate Blocks Free', ['Changed from ' + oldFree + ' to ' + newFree + ' blocks free.']);
+  }
+});
+
+// ── Move directory entry ──────────────────────────────────────────────
+// Get ordered list of directory entry offsets from the chain
+function getDirSlotOffsets(buffer) {
+  const data = new Uint8Array(buffer);
+  const offsets = [];
+  let t = 18, s = 1;
+  const visited = new Set();
+  while (t !== 0) {
+    const key = `${t}:${s}`;
+    if (visited.has(key)) break;
+    visited.add(key);
+    const off = sectorOffset(t, s);
+    if (off < 0) break;
+    for (let i = 0; i < 8; i++) offsets.push(off + i * 32);
+    t = data[off];
+    s = data[off + 1];
+  }
+  return offsets;
+}
+
+function swapDirEntries(buffer, offA, offB) {
+  if (offA === offB) return;
+  const data = new Uint8Array(buffer);
+  // Swap bytes 2-31 (entry data, skip 0-1 which are chain links for entry 0)
+  for (let j = 2; j < 32; j++) {
+    const tmp = data[offA + j];
+    data[offA + j] = data[offB + j];
+    data[offB + j] = tmp;
+  }
+}
+
+function moveEntry(direction) {
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  const slots = getDirSlotOffsets(currentBuffer);
+  const currentIdx = slots.indexOf(selectedEntryIndex);
+  if (currentIdx < 0) return;
+
+  const targetIdx = currentIdx + direction;
+  if (targetIdx < 0 || targetIdx >= slots.length) return;
+
+  swapDirEntries(currentBuffer, slots[currentIdx], slots[targetIdx]);
+  // Update selection to follow the moved entry
+  selectedEntryIndex = slots[targetIdx];
+  const info = parseD64(currentBuffer);
+  renderDisk(info);
+}
+
+// ── Sort directory ────────────────────────────────────────────────────
+function sortDirectory(buffer, sortType) {
+  const data = new Uint8Array(buffer);
+
+  // Collect all directory entry slots (raw 32-byte blocks) from the chain
+  const slots = []; // { off, bytes, isEmpty, name, blocks }
+  let t = 18, s = 1;
+  const visited = new Set();
+  const sectorOffsets = [];
+
+  while (t !== 0) {
+    const key = `${t}:${s}`;
+    if (visited.has(key)) break;
+    visited.add(key);
+    const off = sectorOffset(t, s);
+    if (off < 0) break;
+    sectorOffsets.push(off);
+
+    for (let i = 0; i < 8; i++) {
+      const eo = off + i * 32;
+      const raw = data.slice(eo, eo + 32);
+      const typeByte = raw[2];
+
+      // Check if slot is empty
+      let isEmpty = true;
+      for (let j = 2; j < 32; j++) {
+        if (raw[j] !== 0x00) { isEmpty = false; break; }
+      }
+
+      const name = readPetsciiString(data, eo + 5, 16);
+      const blocks = raw[30] | (raw[31] << 8);
+
+      slots.push({ off: eo, bytes: new Uint8Array(raw), isEmpty, name, blocks, typeByte });
+    }
+
+    t = data[off];
+    s = data[off + 1];
+  }
+
+  // Separate non-empty and empty slots
+  const entries = slots.filter(s => !s.isEmpty);
+  const empties = slots.filter(s => s.isEmpty);
+
+  // Sort non-empty entries
+  if (sortType === 'name-asc') entries.sort((a, b) => a.name.localeCompare(b.name));
+  else if (sortType === 'name-desc') entries.sort((a, b) => b.name.localeCompare(a.name));
+  else if (sortType === 'blocks-asc') entries.sort((a, b) => a.blocks - b.blocks);
+  else if (sortType === 'blocks-desc') entries.sort((a, b) => b.blocks - a.blocks);
+
+  // Recombine: entries first, empties at end
+  const sorted = [...entries, ...empties];
+
+  // Write back to the directory sectors in order
+  // Note: bytes 0-1 of each entry slot are NOT part of the entry data for entries 1-7.
+  // Only entry 0 of each sector uses bytes 0-1 as the chain link (next T/S).
+  // For entries 1-7, bytes 0-1 in their 32-byte slot are part of the entry but
+  // conventionally unused (the real chain link is only in entry 0).
+  for (let i = 0; i < sorted.length && i < slots.length; i++) {
+    const targetOff = slots[i].off;
+    const srcBytes = sorted[i].bytes;
+    // Write bytes 2-31 (skip 0-1 which are chain link for entry 0 or unused)
+    for (let j = 2; j < 32; j++) {
+      data[targetOff + j] = srcBytes[j];
+    }
+  }
+}
+
+// ── Align filename ────────────────────────────────────────────────────
+function getFilenameContent(data, entryOff) {
+  // Find content: everything before the first 0xA0 padding byte
+  const nameOff = entryOff + 5;
+  let contentLen = 16;
+  for (let i = 0; i < 16; i++) {
+    if (data[nameOff + i] === 0xA0) { contentLen = i; break; }
+  }
+  const content = [];
+  for (let i = 0; i < contentLen; i++) content.push(data[nameOff + i]);
+  return content;
+}
+
+function writeFilenameAligned(data, entryOff, content) {
+  const nameOff = entryOff + 5;
+  for (let i = 0; i < 16; i++) {
+    data[nameOff + i] = i < content.length ? content[i] : 0xA0;
+  }
+}
+
+function alignFilename(buffer, entryOff, alignment) {
+  const data = new Uint8Array(buffer);
+  const content = getFilenameContent(data, entryOff);
+
+  // Strip trailing 0x20 spaces and 0xA0 padding
+  while (content.length > 0 && (content[content.length - 1] === 0x20 || content[content.length - 1] === 0xA0)) content.pop();
+  // Strip leading 0x20 spaces
+  while (content.length > 0 && content[0] === 0x20) content.shift();
+  if (content.length === 0 || content.length >= 16) return;
+
+  const result = new Uint8Array(16).fill(0x20); // fill with real spaces
+  const padCount = 16 - content.length;
+
+  if (alignment === 'left') {
+    for (let i = 0; i < content.length; i++) result[i] = content[i];
+
+  } else if (alignment === 'right') {
+    for (let i = 0; i < content.length; i++) result[padCount + i] = content[i];
+
+  } else if (alignment === 'center') {
+    const leftPad = Math.floor(padCount / 2);
+    for (let i = 0; i < content.length; i++) result[leftPad + i] = content[i];
+
+  } else if (alignment === 'justify') {
+    // Split into words (by 0x20 space)
+    const words = [];
+    let word = [];
+    for (const b of content) {
+      if (b === 0x20) {
+        if (word.length) { words.push(word); word = []; }
+      } else {
+        word.push(b);
+      }
+    }
+    if (word.length) words.push(word);
+
+    if (words.length <= 1) {
+      // Single word — left align
+      for (let i = 0; i < content.length; i++) result[i] = content[i];
+    } else {
+      const totalChars = words.reduce((sum, w) => sum + w.length, 0);
+      const totalGaps = words.length - 1;
+      const totalSpaces = 16 - totalChars;
+      if (totalSpaces < totalGaps) {
+        // Not enough room — just left align
+        for (let i = 0; i < content.length; i++) result[i] = content[i];
+      } else {
+        const baseSpaces = Math.floor(totalSpaces / totalGaps);
+        let extraSpaces = totalSpaces % totalGaps;
+        let pos = 0;
+        for (let w = 0; w < words.length; w++) {
+          for (const b of words[w]) result[pos++] = b;
+          if (w < words.length - 1) {
+            let spaces = baseSpaces + (extraSpaces > 0 ? 1 : 0);
+            if (extraSpaces > 0) extraSpaces--;
+            for (let s = 0; s < spaces; s++) result[pos++] = 0x20;
+          }
+        }
+      }
+    }
+
+  } else if (alignment === 'expand') {
+    // Pad filename with 0x20 spaces to fill all 16 bytes
+    for (let i = 0; i < content.length; i++) result[i] = content[i];
+    for (let i = content.length; i < 16; i++) result[i] = 0x20;
+  }
+
+  writeFilenameAligned(data, entryOff, result);
+}
+
+// ── Remove directory entry ────────────────────────────────────────────
+function removeFileEntry(buffer, entryOff) {
+  const data = new Uint8Array(buffer);
+  const slots = getDirSlotOffsets(buffer);
+  const idx = slots.indexOf(entryOff);
+  if (idx < 0) return;
+
+  // Shift all entries after the removed one up by one slot
+  for (let i = idx; i < slots.length - 1; i++) {
+    const src = slots[i + 1];
+    const dst = slots[i];
+    // Copy bytes 2-31 (entry data, preserve chain links)
+    for (let j = 2; j < 32; j++) {
+      data[dst + j] = data[src + j];
+    }
+  }
+
+  // Zero out the last slot (now a duplicate or was already empty)
+  const lastSlot = slots[slots.length - 1];
+  for (let j = 2; j < 32; j++) {
+    data[lastSlot + j] = 0x00;
+  }
+}
+
+// ── Insert file entry ─────────────────────────────────────────────────
+// Max 144 entries: 18 directory sectors on track 18 (sectors 1-18) × 8 entries
+const MAX_DIR_ENTRIES = 144;
+
+function countDirEntries() {
+  if (!currentBuffer) return 0;
+  const data = new Uint8Array(currentBuffer);
+  let count = 0;
+  let t = 18, s = 1;
+  const visited = new Set();
+  while (t !== 0) {
+    const key = `${t}:${s}`;
+    if (visited.has(key)) break;
+    visited.add(key);
+    const off = sectorOffset(t, s);
+    if (off < 0) break;
+    for (let i = 0; i < 8; i++) {
+      const eo = off + i * 32;
+      // Count non-empty slots (any slot that isn't fully zeroed)
+      const typeByte = data[eo + 2];
+      if (typeByte !== 0x00) { count++; continue; }
+      let hasData = false;
+      for (let j = 3; j < 32; j++) {
+        if (data[eo + j] !== 0x00) { hasData = true; break; }
+      }
+      if (hasData) count++;
+    }
+    t = data[off];
+    s = data[off + 1];
+  }
+  return count;
+}
+
+function canInsertFile() {
+  if (!currentBuffer) return false;
+  return countDirEntries() < MAX_DIR_ENTRIES;
+}
+
+function insertFileEntry() {
+  if (!currentBuffer) return -1;
+  const data = new Uint8Array(currentBuffer);
+  const bamOff = sectorOffset(18, 0);
+
+  const sectorsPerTrack = t => {
+    if (t <= 17) return 21;
+    if (t <= 24) return 19;
+    if (t <= 30) return 18;
+    return 17;
+  };
+
+  // Walk directory chain, find first empty slot
+  let t = 18, s = 1;
+  const visited = new Set();
+  let lastOff = -1;
+
+  while (t !== 0) {
+    const key = `${t}:${s}`;
+    if (visited.has(key)) break;
+    visited.add(key);
+    const off = sectorOffset(t, s);
+    if (off < 0) break;
+    lastOff = off;
+
+    for (let i = 0; i < 8; i++) {
+      const eo = off + i * 32;
+      // Check if slot is fully zeroed (unused)
+      let isEmpty = true;
+      for (let j = 2; j < 32; j++) {
+        if (data[eo + j] !== 0x00) { isEmpty = false; break; }
+      }
+      if (isEmpty) {
+        // Found empty slot — write new entry
+        writeNewEntry(data, eo);
+        return eo;
+      }
+    }
+
+    t = data[off];
+    s = data[off + 1];
+  }
+
+  // No empty slots in existing chain — allocate a new directory sector
+  // Find a free sector on track 18 (sectors 1-18)
+  const spt = sectorsPerTrack(18);
+  let newSector = -1;
+  for (let cs = 1; cs < spt; cs++) {
+    if (visited.has(`18:${cs}`)) continue;
+    newSector = cs;
+    break;
+  }
+
+  if (newSector === -1) return -1; // track 18 full
+
+  // Link the new sector from the last sector in the chain
+  if (lastOff >= 0) {
+    data[lastOff] = 18;
+    data[lastOff + 1] = newSector;
+  }
+
+  // Initialize new directory sector
+  const newOff = sectorOffset(18, newSector);
+  data[newOff] = 0x00; // end of chain
+  data[newOff + 1] = 0xFF;
+  // Zero out all 8 entries
+  for (let i = 2; i < 256; i++) data[newOff + i] = 0x00;
+
+  // Write new entry in first slot
+  writeNewEntry(data, newOff);
+
+  // Mark sector as used in BAM
+  const bamBase = bamOff + 4 * 18;
+  const bm = data[bamBase + 1] | (data[bamBase + 2] << 8) | (data[bamBase + 3] << 16);
+  const newBm = bm & ~(1 << newSector);
+  data[bamBase + 1] = newBm & 0xFF;
+  data[bamBase + 2] = (newBm >> 8) & 0xFF;
+  data[bamBase + 3] = (newBm >> 16) & 0xFF;
+  // Update free count
+  let free = 0;
+  for (let cs = 0; cs < spt; cs++) {
+    if (newBm & (1 << cs)) free++;
+  }
+  data[bamBase] = free;
+
+  return newOff;
+}
+
+function writeNewEntry(data, entryOff) {
+  // Type: PRG, closed
+  data[entryOff + 2] = 0x82;
+  // File start: track 18, sector 0 (placeholder)
+  data[entryOff + 3] = 18;
+  data[entryOff + 4] = 0;
+  // Filename: filled with 0xA0 (empty name)
+  for (let i = 0; i < 16; i++) data[entryOff + 5 + i] = 0xA0;
+  // Unused bytes
+  for (let i = 21; i < 30; i++) data[entryOff + i] = 0x00;
+  // Block size: 0
+  data[entryOff + 30] = 0;
+  data[entryOff + 31] = 0;
+}
+
+// ── File menu: Rename ─────────────────────────────────────────────────
+function writeFileName(buffer, entryOff, name, overrides) {
+  writePetsciiString(buffer, entryOff + 5, name, 16, overrides);
 }
 
 // ── Change file type ──────────────────────────────────────────────────
@@ -1373,61 +2862,370 @@ function showTypeDropdown(typeSpan, entryOff) {
   setTimeout(() => document.addEventListener('click', closeDropdown), 0);
 }
 
-function startRenameEntry(entryEl) {
-  if (!currentBuffer || !entryEl) return;
-  const entryOff = parseInt(entryEl.dataset.offset, 10);
-  const nameSpan = entryEl.querySelector('.dir-name');
-  if (nameSpan.classList.contains('editing')) return;
+// ── Edit block size ───────────────────────────────────────────────────
+// Max value for block size field: 16-bit unsigned (2 bytes in directory entry)
+const MAX_BLOCKS = 65535;
 
-  const currentValue = nameSpan.textContent.replace(/^"|"$/g, '').trimEnd();
+function getFileAddresses(buffer, entryOff) {
+  const data = new Uint8Array(buffer);
+  const typeByte = data[entryOff + 2];
+  const fileType = typeByte & 0x07;
 
-  nameSpan.classList.add('editing');
-  nameSpan.contentEditable = 'true';
-  nameSpan.textContent = currentValue;
-  nameSpan.focus();
+  let t = data[entryOff + 3];
+  let s = data[entryOff + 4];
+  if (t === 0) return null;
 
-  const range = document.createRange();
-  range.selectNodeContents(nameSpan);
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
+  const sectorsPerTrack = t => {
+    if (t <= 17) return 21;
+    if (t <= 24) return 19;
+    if (t <= 30) return 18;
+    return 17;
+  };
 
-  function commitRename() {
-    nameSpan.contentEditable = 'false';
-    nameSpan.classList.remove('editing');
-    nameSpan.removeEventListener('blur', commitRename);
-    nameSpan.removeEventListener('keydown', onKeyDown);
+  // Read first sector to get load address (first 2 data bytes for PRG)
+  const firstOff = sectorOffset(t, s);
+  if (firstOff < 0) return null;
 
-    let value = filterC64Input(nameSpan.textContent, 16).toUpperCase();
-    if (currentBuffer) {
-      writeFileName(currentBuffer, entryOff, value);
+  // For PRG files, bytes 2-3 of first sector are the load address
+  // For other types, there's no standard load address
+  const startAddr = data[firstOff + 2] | (data[firstOff + 3] << 8);
+
+  // Follow chain to find total data size
+  const visited = new Set();
+  let totalBytes = 0;
+  let lastUsed = 0;
+  while (t !== 0) {
+    if (t < 1 || t > 35) break;
+    if (s < 0 || s >= sectorsPerTrack(t)) break;
+    const key = `${t}:${s}`;
+    if (visited.has(key)) break;
+    visited.add(key);
+
+    const off = sectorOffset(t, s);
+    const nextT = data[off];
+    const nextS = data[off + 1];
+
+    if (nextT === 0) {
+      // Last sector: nextS = number of bytes used in this sector (1-based)
+      lastUsed = nextS;
+      totalBytes += Math.max(0, nextS - 1); // -1 because byte count includes the pointer byte
+    } else {
+      totalBytes += 254; // 256 - 2 byte pointer
     }
-    nameSpan.textContent = '"' + value.padEnd(16) + '"';
+
+    t = nextT;
+    s = nextS;
   }
 
-  function onKeyDown(ev) {
-    if (ev.key === 'Enter') {
-      ev.preventDefault();
-      nameSpan.blur();
-    } else if (ev.key === 'Escape') {
-      ev.preventDefault();
-      nameSpan.contentEditable = 'false';
-      nameSpan.classList.remove('editing');
-      nameSpan.removeEventListener('blur', commitRename);
-      nameSpan.removeEventListener('keydown', onKeyDown);
-      nameSpan.textContent = '"' + currentValue.padEnd(16) + '"';
-    } else if (ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey) {
-      const sel = window.getSelection();
-      const curText = nameSpan.textContent;
-      const selLen = sel.toString().length;
-      if (!ALLOWED_C64.test(ev.key) || (curText.length - selLen >= 16)) {
-        ev.preventDefault();
+  // For PRG: subtract 2 for the load address bytes stored in the data
+  // End address = start + data size - 1
+  if (fileType === 2) { // PRG
+    const dataSize = Math.max(0, totalBytes - 2);
+    const endAddr = (startAddr + dataSize) & 0xFFFF;
+    return { start: startAddr, end: endAddr };
+  }
+
+  // For other types, show start address and data extent
+  const endAddr = (startAddr + Math.max(0, totalBytes - 1)) & 0xFFFF;
+  return { start: startAddr, end: endAddr };
+}
+
+function countActualBlocks(buffer, entryOff) {
+  const data = new Uint8Array(buffer);
+  let t = data[entryOff + 3];
+  let s = data[entryOff + 4];
+  if (t === 0) return 0;
+
+  const sectorsPerTrack = t => {
+    if (t <= 17) return 21;
+    if (t <= 24) return 19;
+    if (t <= 30) return 18;
+    return 17;
+  };
+
+  const visited = new Set();
+  let blocks = 0;
+  while (t !== 0) {
+    if (t < 1 || t > 35) break;
+    if (s < 0 || s >= sectorsPerTrack(t)) break;
+    const key = `${t}:${s}`;
+    if (visited.has(key)) break;
+    visited.add(key);
+    blocks++;
+    const off = sectorOffset(t, s);
+    t = data[off + 0];
+    s = data[off + 1];
+  }
+  return blocks;
+}
+
+// ── Free blocks editing ───────────────────────────────────────────────
+// Free block count per track is a single byte (0-255), stored in BAM.
+// 34 data tracks (1-17, 19-35) × 255 = 8670 max displayable on a C64.
+const MAX_FREE_BLOCKS = 8670;
+
+function writeFreeBlocks(buffer, freeBlocks) {
+  const data = new Uint8Array(buffer);
+  const bamOff = sectorOffset(18, 0);
+  const sectorsPerTrack = t => {
+    if (t <= 17) return 21;
+    if (t <= 24) return 19;
+    if (t <= 30) return 18;
+    return 17;
+  };
+
+  // Read current per-track free counts and their max
+  const tracks = [];
+  let currentTotal = 0;
+  for (let t = 1; t <= 35; t++) {
+    if (t === 18) continue;
+    const free = data[bamOff + 4 * t];
+    const spt = sectorsPerTrack(t);
+    tracks.push({ t, free, spt });
+    currentTotal += free;
+  }
+
+  const desired = Math.max(0, freeBlocks);
+  const diff = desired - currentTotal;
+
+  if (diff === 0) return;
+
+  if (diff > 0) {
+    // Need more free blocks — increase tracks that aren't at max yet
+    let remaining = diff;
+    for (const tr of tracks) {
+      if (remaining <= 0) break;
+      const canAdd = Math.min(255, tr.spt) - tr.free;
+      if (canAdd > 0) {
+        const add = Math.min(remaining, canAdd);
+        tr.free += add;
+        remaining -= add;
+      }
+    }
+    // If still remaining (exceeding real max), overflow into first tracks
+    for (const tr of tracks) {
+      if (remaining <= 0) break;
+      const canAdd = 255 - tr.free;
+      if (canAdd > 0) {
+        const add = Math.min(remaining, canAdd);
+        tr.free += add;
+        remaining -= add;
+      }
+    }
+  } else {
+    // Need fewer free blocks — decrease tracks that have free sectors
+    let remaining = -diff;
+    for (let i = tracks.length - 1; i >= 0; i--) {
+      if (remaining <= 0) break;
+      const tr = tracks[i];
+      const canRemove = tr.free;
+      if (canRemove > 0) {
+        const remove = Math.min(remaining, canRemove);
+        tr.free -= remove;
+        remaining -= remove;
       }
     }
   }
 
-  nameSpan.addEventListener('blur', commitRename);
-  nameSpan.addEventListener('keydown', onKeyDown);
+  // Write back only the count bytes, leave bitmaps untouched
+  for (const tr of tracks) {
+    data[bamOff + 4 * tr.t] = tr.free;
+  }
+}
+
+function countActualFreeBlocks(buffer) {
+  const data = new Uint8Array(buffer);
+  const bamOff = sectorOffset(18, 0);
+  let free = 0;
+  for (let t = 1; t <= 35; t++) {
+    if (t === 18) continue;
+    free += data[bamOff + 4 * t];
+  }
+  return free;
+}
+
+function startEditFreeBlocks(blocksSpan) {
+  if (!currentBuffer || !blocksSpan) return;
+  if (blocksSpan.querySelector('input')) return;
+
+  cancelActiveEdits();
+  const currentValue = blocksSpan.textContent.trim();
+
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '0';
+  input.max = String(MAX_FREE_BLOCKS);
+  input.value = currentValue;
+  input.className = 'blocks-input';
+
+  blocksSpan.textContent = '';
+  blocksSpan.appendChild(input);
+  blocksSpan.classList.add('editing');
+  input.focus();
+  input.select();
+
+  let reverted = false;
+
+  function cleanup() {
+    blocksSpan.classList.remove('editing');
+    activeEditEl = null;
+    activeEditCleanup = null;
+  }
+
+  function commitEdit() {
+    if (reverted) return;
+    let value = parseInt(input.value, 10);
+    if (isNaN(value) || value < 0) value = 0;
+    if (value > MAX_FREE_BLOCKS) value = MAX_FREE_BLOCKS;
+    writeFreeBlocks(currentBuffer, value);
+    cleanup();
+    blocksSpan.textContent = value;
+  }
+
+  function revert() {
+    reverted = true;
+    cleanup();
+    blocksSpan.textContent = currentValue;
+  }
+
+  input.addEventListener('blur', () => {
+    if (pickerClicking) { input.focus(); input.selectionStart = input.selectionEnd = input._lastCursorPos || 0; return; }
+    commitEdit();
+  });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); commitEdit(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); revert(); }
+  });
+
+  registerActiveEdit(blocksSpan, revert);
+}
+
+function writeBlockSize(buffer, entryOff, blocks) {
+  const data = new Uint8Array(buffer);
+  data[entryOff + 30] = blocks & 0xFF;
+  data[entryOff + 31] = (blocks >> 8) & 0xFF;
+}
+
+function startEditBlockSize(entryEl) {
+  if (!currentBuffer || !entryEl) return;
+  const entryOff = parseInt(entryEl.dataset.offset, 10);
+  const blocksSpan = entryEl.querySelector('.dir-blocks');
+  if (blocksSpan.querySelector('input')) return;
+
+  cancelActiveEdits();
+  const currentValue = blocksSpan.textContent.trim();
+
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '0';
+  input.max = String(MAX_BLOCKS);
+  input.value = currentValue;
+  input.className = 'blocks-input';
+
+  blocksSpan.textContent = '';
+  blocksSpan.appendChild(input);
+  blocksSpan.classList.add('editing');
+  input.focus();
+  input.select();
+
+  let reverted = false;
+
+  function cleanup() {
+    blocksSpan.classList.remove('editing');
+    activeEditEl = null;
+    activeEditCleanup = null;
+  }
+
+  function commitEdit() {
+    if (reverted) return;
+    let value = parseInt(input.value, 10);
+    if (isNaN(value) || value < 0) value = 0;
+    if (value > MAX_BLOCKS) value = MAX_BLOCKS;
+    writeBlockSize(currentBuffer, entryOff, value);
+    cleanup();
+    blocksSpan.textContent = value;
+  }
+
+  function revert() {
+    reverted = true;
+    cleanup();
+    blocksSpan.textContent = currentValue;
+  }
+
+  input.addEventListener('blur', () => {
+    if (pickerClicking) { input.focus(); input.selectionStart = input.selectionEnd = input._lastCursorPos || 0; return; }
+    commitEdit();
+  });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); commitEdit(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); revert(); }
+  });
+
+  registerActiveEdit(blocksSpan, revert);
+}
+
+function startRenameEntry(entryEl) {
+  if (!currentBuffer || !entryEl) return;
+  const entryOff = parseInt(entryEl.dataset.offset, 10);
+  const nameSpan = entryEl.querySelector('.dir-name');
+  if (nameSpan.querySelector('input')) return;
+
+  cancelActiveEdits();
+  // Read actual content from buffer (stops at 0xA0 padding)
+  const currentValue = readPetsciiString(new Uint8Array(currentBuffer), entryOff + 5, 16);
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.maxLength = 16;
+  input.value = currentValue;
+  input.className = 'name-input';
+
+  nameSpan.textContent = '';
+  nameSpan.appendChild(input);
+  nameSpan.classList.add('editing');
+  trackCursorPos(input);
+  input.focus();
+  input.selectionStart = input.selectionEnd = currentValue.length;
+
+  showPetsciiPicker(input, 16);
+
+  let reverted = false;
+
+  function cleanup() {
+    nameSpan.classList.remove('editing');
+    hidePetsciiPicker();
+    activeEditEl = null;
+    activeEditCleanup = null;
+  }
+
+  function commitRename() {
+    if (reverted) return;
+    let value = filterC64Input(input.value, 16);
+    if (currentBuffer) {
+      writeFileName(currentBuffer, entryOff, value, input._petsciiOverrides);
+    }
+    cleanup();
+    // Re-render to show reversed chars properly
+    const info = parseD64(currentBuffer);
+    renderDisk(info);
+  }
+
+  function revert() {
+    reverted = true;
+    cleanup();
+    nameSpan.textContent = '"' + currentValue.padEnd(16) + '"';
+  }
+
+  input.addEventListener('blur', () => {
+    if (pickerClicking) { input.focus(); input.selectionStart = input.selectionEnd = input._lastCursorPos || 0; return; }
+    commitRename();
+  });
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); commitRename(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); revert(); }
+  });
+
+  registerActiveEdit(nameSpan, revert);
 }
 
 document.getElementById('opt-rename').addEventListener('click', (e) => {
@@ -1436,6 +3234,65 @@ document.getElementById('opt-rename').addEventListener('click', (e) => {
   closeMenus();
   const selected = document.querySelector('.dir-entry.selected');
   startRenameEntry(selected);
+});
+
+document.getElementById('opt-insert').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer || !canInsertFile()) return;
+  closeMenus();
+  const newOff = insertFileEntry();
+  if (newOff >= 0) {
+    selectedEntryIndex = newOff;
+    const info = parseD64(currentBuffer);
+    renderDisk(info);
+  }
+});
+
+document.getElementById('opt-remove').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  const slots = getDirSlotOffsets(currentBuffer);
+  const idx = slots.indexOf(selectedEntryIndex);
+  removeFileEntry(currentBuffer, selectedEntryIndex);
+  const info = parseD64(currentBuffer);
+  const visibleEntries = info.entries.filter(en => !en.deleted || showDeleted);
+  if (visibleEntries.length > 0) {
+    const newIdx = Math.min(idx, visibleEntries.length - 1);
+    selectedEntryIndex = visibleEntries[newIdx].entryOff;
+  } else {
+    selectedEntryIndex = -1;
+  }
+  renderDisk(info);
+});
+
+document.querySelectorAll('#opt-align .submenu .option').forEach(el => {
+  el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!currentBuffer || selectedEntryIndex < 0) return;
+    closeMenus();
+    alignFilename(currentBuffer, selectedEntryIndex, el.dataset.align);
+    const info = parseD64(currentBuffer);
+    renderDisk(info);
+  });
+});
+
+document.getElementById('opt-block-size').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  const selected = document.querySelector('.dir-entry.selected');
+  startEditBlockSize(selected);
+});
+
+document.getElementById('opt-recalc-size').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  const actual = countActualBlocks(currentBuffer, selectedEntryIndex);
+  writeBlockSize(currentBuffer, selectedEntryIndex, actual);
+  const info = parseD64(currentBuffer);
+  renderDisk(info);
 });
 
 document.getElementById('opt-lock').addEventListener('click', (e) => {
@@ -1496,7 +3353,10 @@ function updateThemeIcon() {
   themeToggle.textContent = isDark ? '\u2600' : '\u263D';
 }
 updateThemeIcon();
-updateSortChecks();
+// Restore check marks from saved settings
+document.getElementById('check-deleted').textContent = showDeleted ? '\u2713' : '';
+document.getElementById('check-addr').textContent = showAddresses ? '\u2713' : '';
+document.getElementById('check-ts').textContent = showTrackSector ? '\u2713' : '';
 
 themeToggle.addEventListener('click', () => {
   const current = document.documentElement.getAttribute('data-theme');
