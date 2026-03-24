@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <title>D64 Disk Viewer</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous">
+<link rel="stylesheet" href="assets/fontawesome/all.min.css">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='2' width='56' height='60' rx='3' fill='%23222' stroke='%23555' stroke-width='2'/%3E%3Crect x='18' y='2' width='28' height='14' rx='1' fill='%23888'/%3E%3Crect x='24' y='4' width='16' height='10' rx='1' fill='%23222'/%3E%3Ccircle cx='32' cy='36' r='14' fill='none' stroke='%23555' stroke-width='2'/%3E%3Ccircle cx='32' cy='36' r='6' fill='%23555'/%3E%3Crect x='30' y='30' width='4' height='12' rx='1' fill='%23888' transform='rotate(45 32 36)'/%3E%3Crect x='8' y='52' width='20' height='6' rx='1' fill='%23444'/%3E%3C/svg%3E">
 <style>
   :root {
@@ -116,10 +116,14 @@
     left: 10px;
     top: 50%;
     transform: translateY(-50%);
+    font-size: 10px;
   }
 
   .has-submenu::after {
-    content: '\25B8';
+    content: '\f054';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    font-size: 9px;
     position: absolute;
     right: 10px;
     top: 50%;
@@ -469,6 +473,7 @@
     left: 8px;
     top: 50%;
     transform: translateY(-50%);
+    font-size: 10px;
   }
 
   .type-dropdown .type-option:hover {
@@ -496,6 +501,11 @@
 
   .dir-footer-label {
     flex: 1;
+  }
+
+  .dir-footer-tracks {
+    font-size: 11px;
+    opacity: 0.6;
   }
 
   .dir-entry.deleted {
@@ -733,7 +743,12 @@
   <div class="menu-item" id="menu-file">
     Disk
     <div class="menu-dropdown">
-      <div class="option" id="opt-new">New</div>
+      <div class="option has-submenu" id="opt-new">New
+        <div class="submenu">
+          <div class="option" data-tracks="35">35 Tracks</div>
+          <div class="option" data-tracks="40">40 Tracks</div>
+        </div>
+      </div>
       <div class="option" id="opt-open">Open...</div>
       <div class="option disabled" id="opt-close">Close</div>
       <div class="separator"></div>
@@ -938,14 +953,24 @@ if (navigator.userAgent.includes('Edg')) {
 }
 
 // ── D64 Format Constants ──────────────────────────────────────────────
+const D64_SIZE_35 = 174848;   // 35 tracks, 683 sectors
+const D64_SIZE_35E = 175531;  // 35 tracks + 683 error bytes
+const D64_SIZE_40 = 196608;   // 40 tracks, 768 sectors
+const D64_SIZE_40E = 197376;  // 40 tracks + 768 error bytes
+
+function sectorsPerTrack(t) {
+  if (t <= 17) return 21;
+  if (t <= 24) return 19;
+  if (t <= 30) return 18;
+  return 17;
+}
+
+function detectTrackCount(bufferSize) {
+  if (bufferSize >= D64_SIZE_40) return 40;
+  return 35;
+}
+
 const TRACK_OFFSETS = (() => {
-  // Precompute byte offset for each track (1-indexed)
-  const sectorsPerTrack = t => {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
   const offsets = [0]; // index 0 unused
   let offset = 0;
   for (let t = 1; t <= 40; t++) {
@@ -956,13 +981,7 @@ const TRACK_OFFSETS = (() => {
 })();
 
 function sectorOffset(track, sector) {
-  const sectorsPerTrack = t => {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
-  if (track < 1 || track > 35) return -1;
+  if (track < 1 || track > 40) return -1;
   if (sector < 0 || sector >= sectorsPerTrack(track)) return -1;
   return TRACK_OFFSETS[track] + sector * 256;
 }
@@ -1410,7 +1429,10 @@ function fileTypeName(typeByte) {
 // ── Parse D64 ────────────────────────────────────────────────────────
 function parseD64(buffer) {
   const data = new Uint8Array(buffer);
-  if (data.length < 174848) throw new Error('File too small to be a valid .d64');
+  if (data.length < D64_SIZE_35) throw new Error('File too small to be a valid .d64');
+
+  const numTracks = detectTrackCount(data.length);
+  currentTracks = numTracks;
 
   // BAM is at track 18, sector 0
   const bamOffset = sectorOffset(18, 0);
@@ -1418,9 +1440,11 @@ function parseD64(buffer) {
   const diskName = readPetsciiString(data, bamOffset + 0x90, 16);
   const diskId = readPetsciiString(data, bamOffset + 0xA2, 5, false);
 
-  // Count free blocks from BAM (tracks 1-35, skip track 18)
+  // Count free blocks from BAM (skip track 18)
+  // Note: tracks 36-40 on extended D64 are NOT in the standard BAM
+  // The 1541 only stores BAM for tracks 1-35
   let freeBlocks = 0;
-  for (let t = 1; t <= 35; t++) {
+  for (let t = 1; t <= Math.min(numTracks, 35); t++) {
     if (t === 18) continue; // directory track
     freeBlocks += data[bamOffset + 4 * t];
   }
@@ -1488,15 +1512,14 @@ function parseD64(buffer) {
 }
 
 // ── Create empty D64 ─────────────────────────────────────────────────
-function createEmptyD64() {
-  const data = new Uint8Array(174848);
-
-  const sectorsPerTrack = t => {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
+function createEmptyD64(numTracks) {
+  numTracks = numTracks || 35;
+  const totalSectors = (() => {
+    let s = 0;
+    for (let t = 1; t <= numTracks; t++) s += sectorsPerTrack(t);
+    return s;
+  })();
+  const data = new Uint8Array(totalSectors * 256);
 
   // BAM at track 18, sector 0
   const bamOff = sectorOffset(18, 0);
@@ -1504,8 +1527,9 @@ function createEmptyD64() {
   data[bamOff + 1] = 1;   // directory sector
   data[bamOff + 2] = 0x41; // DOS version 'A'
 
-  // BAM entries for tracks 1-35
-  for (let t = 1; t <= 35; t++) {
+  // BAM entries for tracks 1-35 (standard BAM only covers 35 tracks)
+  const bamTracks = Math.min(numTracks, 35);
+  for (let t = 1; t <= bamTracks; t++) {
     const spt = sectorsPerTrack(t);
     const base = bamOff + 4 * t;
     if (t === 18) {
@@ -1567,6 +1591,7 @@ function createEmptyD64() {
 // ── Current disk state ─────────────────────────────────────────────────
 let currentBuffer = null;
 let currentFileName = null;
+let currentTracks = 35;
 let showDeleted = localStorage.getItem('d64-showDeleted') !== 'false'; // default true
 let selectedEntryIndex = -1;
 let showAddresses = localStorage.getItem('d64-showAddresses') === 'true';
@@ -1599,18 +1624,12 @@ function writeDiskId(buffer, id, overrides) {
 function validateD64(buffer) {
   const data = new Uint8Array(buffer);
   const bamOff = sectorOffset(18, 0);
+  const numTracks = currentTracks;
   const log = [];
-
-  const sectorsPerTrack = t => {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
 
   // Allocation map: true = used
   const allocated = [];
-  for (let t = 0; t <= 35; t++) {
+  for (let t = 0; t <= numTracks; t++) {
     allocated[t] = new Uint8Array(sectorsPerTrack(Math.max(t, 1)));
   }
 
@@ -1624,7 +1643,7 @@ function validateD64(buffer) {
     let t = startTrack, s = startSector;
     let blocks = 0;
     while (t !== 0) {
-      if (t < 1 || t > 35) {
+      if (t < 1 || t > numTracks) {
         log.push(`  ERROR: ${label}: illegal track ${t}`);
         return { blocks, error: true };
       }
@@ -1664,7 +1683,7 @@ function validateD64(buffer) {
       break;
     }
     dirVisited.add(key);
-    if (dirTrack < 1 || dirTrack > 35 || dirSector < 0 || dirSector >= sectorsPerTrack(dirTrack)) {
+    if (dirTrack < 1 || dirTrack > numTracks || dirSector < 0 || dirSector >= sectorsPerTrack(dirTrack)) {
       log.push(`ERROR: illegal directory sector track ${dirTrack} sector ${dirSector}`);
       break;
     }
@@ -1712,9 +1731,9 @@ function validateD64(buffer) {
     }
   }
 
-  // Rebuild BAM from allocation map
+  // Rebuild BAM from allocation map (BAM only covers tracks 1-35)
   let bamErrors = 0;
-  for (let t = 1; t <= 35; t++) {
+  for (let t = 1; t <= Math.min(numTracks, 35); t++) {
     const spt = sectorsPerTrack(t);
     const base = bamOff + 4 * t;
 
@@ -1803,7 +1822,7 @@ function renderDisk(info) {
 
     // Get file addresses if showing
     let addrHtml = '';
-    if (showAddresses && currentBuffer && !e.deleted) {
+    if (showAddresses && currentBuffer) {
       const addr = getFileAddresses(currentBuffer, e.entryOff);
       if (addr) {
         const s = '$' + addr.start.toString(16).toUpperCase().padStart(4, '0');
@@ -1828,6 +1847,7 @@ function renderDisk(info) {
       <div class="dir-footer">
         <span class="dir-footer-blocks">${info.freeBlocks}</span>
         <span class="dir-footer-label">blocks free.</span>
+        <span class="dir-footer-tracks">${currentTracks} tracks</span>
       </div>
     </div>`;
 
@@ -2070,7 +2090,7 @@ function updateEntryMenuState() {
     lockEl.textContent = locked ? 'Unlock File' : 'Lock File';
     splatEl.textContent = closed ? 'Scratch File' : 'Unscratch File';
     for (let i = 0; i < 5; i++) {
-      document.getElementById('check-type-' + i).textContent = i === currentTypeIdx ? '\u2713' : '';
+      document.getElementById('check-type-' + i).innerHTML = i === currentTypeIdx ? '<i class="fa-solid fa-check"></i>' : '';
     }
   } else {
     lockEl.textContent = 'Lock File';
@@ -2225,15 +2245,18 @@ document.addEventListener('click', () => {
   closeMenus();
 });
 
-document.getElementById('opt-new').addEventListener('click', (e) => {
-  e.stopPropagation();
-  closeMenus();
-  const buf = createEmptyD64();
-  currentBuffer = buf;
-  currentFileName = null;
-  const info = parseD64(buf);
-  renderDisk(info);
-  updateMenuState();
+document.querySelectorAll('#opt-new .submenu .option').forEach(el => {
+  el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeMenus();
+    const tracks = parseInt(el.dataset.tracks, 10);
+    const buf = createEmptyD64(tracks);
+    currentBuffer = buf;
+    currentFileName = null;
+    const info = parseD64(buf);
+    renderDisk(info);
+    updateMenuState();
+  });
 });
 
 document.getElementById('opt-open').addEventListener('click', (e) => {
@@ -2294,7 +2317,7 @@ document.getElementById('opt-show-deleted').addEventListener('click', (e) => {
   closeMenus();
   showDeleted = !showDeleted;
   localStorage.setItem('d64-showDeleted', showDeleted);
-  document.getElementById('check-deleted').textContent = showDeleted ? '\u2713' : '';
+  document.getElementById('check-deleted').innerHTML = showDeleted ? '<i class="fa-solid fa-check"></i>' : '';
   const info = parseD64(currentBuffer);
   renderDisk(info);
 });
@@ -2316,7 +2339,7 @@ document.getElementById('opt-show-addr').addEventListener('click', (e) => {
   closeMenus();
   showAddresses = !showAddresses;
   localStorage.setItem('d64-showAddresses', showAddresses);
-  document.getElementById('check-addr').textContent = showAddresses ? '\u2713' : '';
+  document.getElementById('check-addr').innerHTML = showAddresses ? '<i class="fa-solid fa-check"></i>' : '';
   if (currentBuffer) {
     const info = parseD64(currentBuffer);
     renderDisk(info);
@@ -2328,7 +2351,7 @@ document.getElementById('opt-show-ts').addEventListener('click', (e) => {
   closeMenus();
   showTrackSector = !showTrackSector;
   localStorage.setItem('d64-showTrackSector', showTrackSector);
-  document.getElementById('check-ts').textContent = showTrackSector ? '\u2713' : '';
+  document.getElementById('check-ts').innerHTML = showTrackSector ? '<i class="fa-solid fa-check"></i>' : '';
   if (currentBuffer) {
     const info = parseD64(currentBuffer);
     renderDisk(info);
@@ -2352,16 +2375,10 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
   // then rebuild the BAM free counts from scratch. Don't trust the existing BAM.
   const data = new Uint8Array(currentBuffer);
   const bamOff = sectorOffset(18, 0);
-  const sectorsPerTrack = t => {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
 
-  // Build allocation map: mark all sectors as free, then mark used ones
+  // Build allocation map for all tracks
   const used = {};
-  for (let t = 1; t <= 35; t++) {
+  for (let t = 1; t <= currentTracks; t++) {
     used[t] = new Uint8Array(sectorsPerTrack(t));
   }
 
@@ -2375,7 +2392,7 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
     const key = `${dirT}:${dirS}`;
     if (dirVisited.has(key)) break;
     dirVisited.add(key);
-    if (dirT < 1 || dirT > 35 || dirS < 0 || dirS >= sectorsPerTrack(dirT)) break;
+    if (dirT < 1 || dirT > currentTracks || dirS < 0 || dirS >= sectorsPerTrack(dirT)) break;
     used[dirT][dirS] = 1;
     const off = sectorOffset(dirT, dirS);
     dirT = data[off];
@@ -2390,7 +2407,7 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
     let fs = data[entry.entryOff + 4];
     const visited = new Set();
     while (ft !== 0) {
-      if (ft < 1 || ft > 35) break;
+      if (ft < 1 || ft > currentTracks) break;
       if (fs < 0 || fs >= sectorsPerTrack(ft)) break;
       const key = `${ft}:${fs}`;
       if (visited.has(key)) break;
@@ -2407,7 +2424,8 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
   const oldFree = oldInfo.freeBlocks;
 
   // Update only the free block counts per track, leave BAM bitmaps untouched
-  for (let t = 1; t <= 35; t++) {
+  // BAM only covers tracks 1-35
+  for (let t = 1; t <= Math.min(currentTracks, 35); t++) {
     if (t === 18) continue;
     const spt = sectorsPerTrack(t);
     let free = 0;
@@ -2699,13 +2717,6 @@ function insertFileEntry() {
   const data = new Uint8Array(currentBuffer);
   const bamOff = sectorOffset(18, 0);
 
-  const sectorsPerTrack = t => {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
-
   // Walk directory chain, find first empty slot
   let t = 18, s = 1;
   const visited = new Set();
@@ -2828,7 +2839,7 @@ function showTypeDropdown(typeSpan, entryOff) {
     opt.className = 'type-option';
     const check = document.createElement('span');
     check.className = 'check';
-    check.textContent = idx === currentTypeIdx ? '\u2713' : '';
+    check.innerHTML = idx === currentTypeIdx ? '<i class="fa-solid fa-check"></i>' : '';
     opt.appendChild(check);
     opt.appendChild(document.createTextNode(typeName));
     opt.addEventListener('click', (e) => {
@@ -2875,13 +2886,6 @@ function getFileAddresses(buffer, entryOff) {
   let s = data[entryOff + 4];
   if (t === 0) return null;
 
-  const sectorsPerTrack = t => {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
-
   // Read first sector to get load address (first 2 data bytes for PRG)
   const firstOff = sectorOffset(t, s);
   if (firstOff < 0) return null;
@@ -2895,7 +2899,7 @@ function getFileAddresses(buffer, entryOff) {
   let totalBytes = 0;
   let lastUsed = 0;
   while (t !== 0) {
-    if (t < 1 || t > 35) break;
+    if (t < 1 || t > currentTracks) break;
     if (s < 0 || s >= sectorsPerTrack(t)) break;
     const key = `${t}:${s}`;
     if (visited.has(key)) break;
@@ -2936,17 +2940,10 @@ function countActualBlocks(buffer, entryOff) {
   let s = data[entryOff + 4];
   if (t === 0) return 0;
 
-  const sectorsPerTrack = t => {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
-
   const visited = new Set();
   let blocks = 0;
   while (t !== 0) {
-    if (t < 1 || t > 35) break;
+    if (t < 1 || t > currentTracks) break;
     if (s < 0 || s >= sectorsPerTrack(t)) break;
     const key = `${t}:${s}`;
     if (visited.has(key)) break;
@@ -2961,23 +2958,21 @@ function countActualBlocks(buffer, entryOff) {
 
 // ── Free blocks editing ───────────────────────────────────────────────
 // Free block count per track is a single byte (0-255), stored in BAM.
-// 34 data tracks (1-17, 19-35) × 255 = 8670 max displayable on a C64.
+// BAM only covers tracks 1-35. Data tracks = tracks 1-35 minus track 18.
+// 34 data tracks × 255 = 8670 max.
 const MAX_FREE_BLOCKS = 8670;
 
 function writeFreeBlocks(buffer, freeBlocks) {
   const data = new Uint8Array(buffer);
   const bamOff = sectorOffset(18, 0);
-  const sectorsPerTrack = t => {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
+
+  // BAM only covers tracks 1-35
+  const bamTracks = Math.min(currentTracks, 35);
 
   // Read current per-track free counts and their max
   const tracks = [];
   let currentTotal = 0;
-  for (let t = 1; t <= 35; t++) {
+  for (let t = 1; t <= bamTracks; t++) {
     if (t === 18) continue;
     const free = data[bamOff + 4 * t];
     const spt = sectorsPerTrack(t);
@@ -3037,7 +3032,8 @@ function countActualFreeBlocks(buffer) {
   const data = new Uint8Array(buffer);
   const bamOff = sectorOffset(18, 0);
   let free = 0;
-  for (let t = 1; t <= 35; t++) {
+  const bamTracks = Math.min(currentTracks, 35);
+  for (let t = 1; t <= bamTracks; t++) {
     if (t === 18) continue;
     free += data[bamOff + 4 * t];
   }
@@ -3350,13 +3346,13 @@ if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
 
 function updateThemeIcon() {
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  themeToggle.textContent = isDark ? '\u2600' : '\u263D';
+  themeToggle.innerHTML = isDark ? '<i class="fa-solid fa-sun"></i>' : '<i class="fa-solid fa-moon"></i>';
 }
 updateThemeIcon();
 // Restore check marks from saved settings
-document.getElementById('check-deleted').textContent = showDeleted ? '\u2713' : '';
-document.getElementById('check-addr').textContent = showAddresses ? '\u2713' : '';
-document.getElementById('check-ts').textContent = showTrackSector ? '\u2713' : '';
+document.getElementById('check-deleted').innerHTML = showDeleted ? '<i class="fa-solid fa-check"></i>' : '';
+document.getElementById('check-addr').innerHTML = showAddresses ? '<i class="fa-solid fa-check"></i>' : '';
+document.getElementById('check-ts').innerHTML = showTrackSector ? '<i class="fa-solid fa-check"></i>' : '';
 
 themeToggle.addEventListener('click', () => {
   const current = document.documentElement.getAttribute('data-theme');
