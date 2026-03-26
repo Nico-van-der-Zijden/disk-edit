@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title>CBM Disk Editor</title>
+<link rel="stylesheet" href="assets/fontawesome/all.min.css">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='2' width='56' height='60' rx='3' fill='%23222' stroke='%23555' stroke-width='2'/%3E%3Crect x='18' y='2' width='28' height='14' rx='1' fill='%23888'/%3E%3Crect x='24' y='4' width='16' height='10' rx='1' fill='%23222'/%3E%3Ccircle cx='32' cy='36' r='14' fill='none' stroke='%23555' stroke-width='2'/%3E%3Ccircle cx='32' cy='36' r='6' fill='%23555'/%3E%3Crect x='30' y='30' width='4' height='12' rx='1' fill='%23888' transform='rotate(45 32 36)'/%3E%3Crect x='8' y='52' width='20' height='6' rx='1' fill='%23444'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --bg-menu: #252540;
+    --bg-panel: #222238;
+    --text: #e8ecf8;
+    --text-muted: #9399b2;
+    --border: #4a4d6a;
+    --accent: #89b4fa;
+    --hover: #32325a;
+    --menu-hover: #3a3a5e;
+    --placeholder-bg: #2a2a48;
+    --hover-edit: #44447a;
+  }
+
+  [data-theme="light"] {
+    --bg: #eff1f5;
+    --bg-menu: #dce0e8;
+    --bg-panel: #e6e9ef;
+    --text: #4c4f69;
+    --text-muted: #8c8fa1;
+    --border: #bcc0cc;
+    --accent: #1e66f5;
+    --hover: #ccd0da;
+    --menu-hover: #c5c9d5;
+    --placeholder-bg: #d0d4de;
+    --hover-edit: #b8bcc8;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-user-modify: unset; }
+
+  ::selection { background: var(--accent); color: var(--bg); }
+
+  body {
+    font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", "Courier New", monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    -ms-content-zooming: none;
+  }
+
+  body, .menubar, .dir-listing, .dir-entry, .disk-header, .dir-footer {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .editable, .dir-name.editing, .blocks-input, .name-input, .header-input {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* --- Menu Bar --- */
+  .menubar {
+    display: flex;
+    align-items: center;
+    background: var(--bg-menu);
+    border-bottom: 1px solid var(--border);
+    height: 32px;
+    padding: 0 4px;
+    user-select: none;
+    font-size: 13px;
+  }
+
+  .menu-item {
+    position: relative;
+    padding: 4px 10px;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+
+  .menu-item:hover,
+  .menu-item.open {
+    background: var(--menu-hover);
+  }
+
+  .menubar.menu-active .menu-item:hover > .menu-dropdown {
+    display: block;
+  }
+
+  .menu-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 0;
+    min-width: 160px;
+    z-index: 100;
+    box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  }
+
+  .menu-item.open .menu-dropdown {
+    display: block;
+  }
+
+  .menu-dropdown .option {
+    padding: 6px 12px 6px 28px;
+    cursor: pointer;
+    white-space: nowrap;
+    position: relative;
+  }
+
+  .menu-dropdown .option .check {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+  }
+
+  .has-submenu::after {
+    content: '\f054';
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    font-size: 9px;
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  .submenu {
+    display: none;
+    position: absolute;
+    left: 100%;
+    top: -4px;
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 0;
+    min-width: 180px;
+    box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  }
+
+  .has-submenu:not(.disabled):hover > .submenu {
+    display: block;
+  }
+
+  .menu-dropdown .option:hover:not(.disabled) {
+    background: var(--hover);
+  }
+
+  .menu-dropdown .option.disabled {
+    color: var(--text-muted);
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  .menu-dropdown .separator {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+  }
+
+  .spacer { flex: 1; }
+
+  .theme-toggle {
+    padding: 4px 10px;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+  .theme-toggle:hover { background: var(--menu-hover); }
+
+  /* --- Content --- */
+  .content {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 24px 16px;
+  }
+
+  .empty-state {
+    text-align: center;
+    color: var(--text-muted);
+    margin-top: 120px;
+    font-size: 14px;
+    line-height: 2;
+  }
+
+  /* --- Disk Panel --- */
+  .disk-panel {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 80px);
+  }
+
+  /* --- Disk Header --- */
+  .disk-header {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 14px 16px;
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-radius: 6px 6px 0 0;
+    flex-shrink: 0;
+  }
+
+  .disk-header-spacer {
+    width: 48px;
+    flex-shrink: 0;
+    text-align: right;
+    color: var(--text-muted);
+  }
+
+  .disk-name {
+    flex: 1;
+    font-size: 16px;
+    color: var(--accent);
+    letter-spacing: 1px;
+    white-space: pre;
+  }
+
+  .disk-name .editable,
+  .disk-id .editable {
+    display: inline-block;
+    padding: 2px 4px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  .disk-name .editable {
+    min-width: 18ch;
+  }
+
+  .disk-id .editable {
+    min-width: 6ch;
+  }
+
+  .disk-name .editable.empty,
+  .disk-id .editable.empty {
+    background: var(--placeholder-bg);
+    min-height: 1.4em;
+  }
+
+  .disk-name .editable:hover,
+  .disk-id .editable:hover {
+    background: var(--hover-edit);
+  }
+
+  .disk-name .editable.editing,
+  .disk-id .editable.editing {
+    background: none;
+    outline: none;
+    padding: 0;
+    cursor: text;
+  }
+
+  .disk-id {
+    width: 5ch;
+    min-width: 5ch;
+    font-size: 14px;
+    color: var(--text-muted);
+    text-align: left;
+    flex-shrink: 0;
+    white-space: pre;
+  }
+
+  /* --- Directory Listing --- */
+  .dir-listing {
+    font-size: 14px;
+    line-height: 1.7;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    padding: 8px 0;
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+  }
+
+  .dir-entry {
+    display: flex;
+    gap: 8px;
+    padding: 2px 16px;
+  }
+
+  .dir-entry {
+    cursor: pointer;
+  }
+
+  .dir-header-row {
+    cursor: default;
+    font-size: 11px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px;
+    margin-bottom: 4px;
+  }
+
+  .dir-header-row .dir-blocks,
+  .dir-header-row .dir-name,
+  .dir-header-row .dir-type,
+  .dir-header-row .dir-ts,
+  .dir-header-row .dir-addr {
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+
+  .dir-header-row:hover {
+    background: none;
+  }
+
+  .dir-entry:not(.dir-header-row):hover {
+    background: var(--hover);
+  }
+
+  .dir-entry.selected {
+    background: var(--accent);
+    color: var(--bg);
+  }
+
+  .dir-entry.selected .dir-blocks,
+  .dir-entry.selected .dir-type,
+  .dir-entry.selected .dir-addr,
+  .dir-entry.selected .dir-ts {
+    color: var(--bg);
+  }
+
+  .dir-blocks {
+    width: 48px;
+    text-align: right;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .blocks-input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 0 4px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: inherit;
+    text-align: right;
+    outline: none;
+    -moz-appearance: textfield;
+  }
+
+  .blocks-input::-webkit-inner-spin-button,
+  .blocks-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  .dir-name {
+    flex: 1;
+    white-space: pre;
+  }
+
+  .name-input, .header-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 0 4px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: inherit;
+    letter-spacing: inherit;
+    outline: none;
+  }
+
+  .dir-type {
+    width: 5ch;
+    text-align: left;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    white-space: pre;
+    position: relative;
+  }
+
+  .dir-addr {
+    width: 11ch;
+    text-align: left;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 12px;
+    white-space: pre;
+    display: none;
+  }
+
+  .show-addresses .dir-addr {
+    display: block;
+  }
+
+  .dir-ts {
+    width: 7ch;
+    text-align: left;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 12px;
+    white-space: pre;
+    display: none;
+  }
+
+  .show-tracksector .dir-ts {
+    display: block;
+  }
+
+  .dir-grip {
+    width: 16px;
+    flex-shrink: 0;
+    cursor: grab;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .dir-entry:hover .dir-grip {
+    opacity: 0.5;
+  }
+
+  .dir-entry.selected .dir-grip {
+    color: var(--bg);
+  }
+
+  .dir-header-row .dir-grip {
+    cursor: default;
+    opacity: 0 !important;
+  }
+
+  .dir-entry.drag-over-top {
+    border-top: 2px solid var(--accent);
+  }
+
+  .dir-entry.drag-over-bottom {
+    border-bottom: 2px solid var(--accent);
+  }
+
+  .dir-entry.dragging {
+    opacity: 0.4;
+  }
+
+  .type-dropdown {
+    position: fixed;
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 0;
+    min-width: 80px;
+    z-index: 200;
+    box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  }
+
+  .type-dropdown .type-option {
+    padding: 4px 10px 4px 26px;
+    cursor: pointer;
+    white-space: nowrap;
+    position: relative;
+    color: var(--text);
+  }
+
+  .type-dropdown .type-option .check {
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 10px;
+  }
+
+  .type-dropdown .type-option:hover {
+    background: var(--hover);
+  }
+
+  .dir-footer {
+    display: flex;
+    gap: 8px;
+    padding: 10px 16px;
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 6px 6px;
+    color: var(--text-muted);
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+
+  .dir-footer-blocks {
+    width: 48px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .dir-footer-label {
+    flex: 1;
+  }
+
+  .dir-footer-tracks {
+    font-size: 11px;
+    opacity: 0.6;
+  }
+
+  .dir-entry.deleted {
+    opacity: 0.5;
+  }
+
+  .petscii-rev {
+    background: var(--text);
+    color: var(--bg);
+    border-radius: 1px;
+  }
+
+  /* --- PETSCII Keyboard Picker --- */
+  .petscii-picker {
+    display: none;
+    position: fixed;
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    z-index: 250;
+    box-shadow: 0 8px 32px rgba(0,0,0,.4);
+  }
+
+  .petscii-picker.open {
+    display: block;
+  }
+
+  .petscii-modifiers {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+
+  .petscii-mod {
+    padding: 4px 12px;
+    font-family: inherit;
+    font-size: 11px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  .petscii-mod.active {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+
+  .petscii-mod:hover:not(.active):not(.disabled) {
+    background: var(--hover);
+  }
+
+  .petscii-mod.disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .petscii-kb-row {
+    display: flex;
+    gap: 3px;
+    margin-bottom: 3px;
+    justify-content: center;
+  }
+
+  .petscii-key {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text);
+    background: var(--bg);
+    flex-shrink: 0;
+  }
+
+  .petscii-key:hover {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+
+  .petscii-key.wide {
+    width: auto;
+    padding: 0 10px;
+    font-size: 11px;
+  }
+
+  .petscii-key.space {
+    width: 180px;
+  }
+
+  .petscii-key.rev-char {
+    background: var(--text);
+    color: var(--bg);
+  }
+
+  .petscii-key.rev-char:hover {
+    background: var(--accent);
+    color: var(--bg);
+  }
+
+  .petscii-key.unsafe {
+    border-color: #f38ba8;
+    color: #f38ba8;
+  }
+
+  [data-theme="light"] .petscii-key.unsafe {
+    border-color: #d20f39;
+    color: #d20f39;
+  }
+
+  .petscii-key.unsafe:hover {
+    background: #f38ba8;
+    color: var(--bg);
+    border-color: #f38ba8;
+  }
+
+  .petscii-key.disabled {
+    opacity: 0.2;
+    cursor: not-allowed;
+  }
+
+  .petscii-key.disabled:hover {
+    background: var(--bg);
+    color: var(--text);
+    border-color: var(--border);
+  }
+
+  .petscii-key.empty {
+    visibility: hidden;
+  }
+
+  /* Hidden file input */
+  #file-input { display: none; }
+
+  /* --- Modal --- */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .5);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal-overlay.open {
+    display: flex;
+  }
+
+  .modal {
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: 460px;
+    max-width: 90vw;
+    max-height: 70vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, .4);
+  }
+
+  .modal-title {
+    padding: 14px 16px;
+    font-size: 14px;
+    font-weight: bold;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .modal-body {
+    padding: 16px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  .modal-body ul {
+    list-style: disc;
+    padding-left: 20px;
+    margin: 0;
+  }
+
+  .modal-body ul li {
+    padding: 1px 0;
+  }
+
+  .modal-body .log-error {
+    color: #f38ba8;
+  }
+
+  [data-theme="light"] .modal-body .log-error {
+    color: #d20f39;
+  }
+
+  .modal-body .log-warning {
+    color: #fab387;
+  }
+
+  [data-theme="light"] .modal-body .log-warning {
+    color: #df8e1d;
+  }
+
+  .modal-footer {
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .modal-footer button {
+    font-family: inherit;
+    font-size: 13px;
+    padding: 6px 20px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--hover);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .modal-footer button:hover {
+    background: var(--menu-hover);
+  }
+
+  .modal-btn-secondary {
+    background: transparent !important;
+    border-color: var(--border) !important;
+  }
+
+  .modal-btn-secondary:hover {
+    background: var(--hover) !important;
+  }
+
+  .modal-input {
+    width: 100%;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 14px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    outline: none;
+  }
+
+  .modal-input:focus {
+    border-color: var(--accent);
+  }
+
+</style>
+</head>
+<body>
+
+<div class="menubar">
+  <div class="menu-item" id="menu-file">
+    Disk
+    <div class="menu-dropdown">
+      <div class="option has-submenu" id="opt-new">New
+        <div class="submenu">
+          <div class="option" data-format="d64" data-tracks="35">D64 - 35 Tracks</div>
+          <div class="option" data-format="d64" data-tracks="40">D64 - 40 Tracks</div>
+          <div class="option" data-format="d71" data-tracks="70">D71 - 70 Tracks</div>
+          <div class="option" data-format="d81" data-tracks="80">D81 - 80 Tracks</div>
+        </div>
+      </div>
+      <div class="option" id="opt-open">Open...</div>
+      <div class="option disabled" id="opt-close">Close</div>
+      <div class="separator"></div>
+      <div class="option disabled" id="opt-save">Save</div>
+      <div class="option disabled" id="opt-save-as">Save As...</div>
+      <div class="separator"></div>
+      <div class="option disabled" id="opt-validate">Validate</div>
+      <div class="option disabled" id="opt-show-deleted"><span class="check" id="check-deleted"></span>Show Deleted Files</div>
+      <div class="option disabled has-submenu" id="opt-sort">Sort
+        <div class="submenu">
+          <div class="option" data-sort="name-asc">Name Ascending</div>
+          <div class="option" data-sort="name-desc">Name Descending</div>
+          <div class="separator"></div>
+          <div class="option" data-sort="blocks-asc">Blocks Ascending</div>
+          <div class="option" data-sort="blocks-desc">Blocks Descending</div>
+        </div>
+      </div>
+      <div class="separator"></div>
+      <div class="option disabled" id="opt-edit-free">Edit Blocks Free</div>
+      <div class="option disabled" id="opt-recalc-free">Recalculate Blocks Free</div>
+    </div>
+  </div>
+  <div class="menu-item" id="menu-entry">
+    File
+    <div class="menu-dropdown">
+      <div class="option disabled" id="opt-rename">Rename</div>
+      <div class="option disabled" id="opt-insert">Insert File</div>
+      <div class="option disabled" id="opt-remove">Remove Entry</div>
+      <div class="option disabled has-submenu" id="opt-align">Align
+        <div class="submenu">
+          <div class="option" data-align="left">Align Left</div>
+          <div class="option" data-align="right">Align Right</div>
+          <div class="option" data-align="center">Center</div>
+          <div class="option" data-align="justify">Justify</div>
+          <div class="option" data-align="expand">Expand</div>
+        </div>
+      </div>
+      <div class="separator"></div>
+      <div class="option disabled" id="opt-lock">Lock File</div>
+      <div class="option disabled" id="opt-splat">Scratch File</div>
+      <div class="option disabled" id="opt-block-size">Change File Size</div>
+      <div class="option disabled" id="opt-recalc-size">Set Actual File Size</div>
+      <div class="option disabled has-submenu" id="opt-change-type">File Type
+        <div class="submenu">
+          <div class="option" data-typeidx="0"><span class="check" id="check-type-0"></span>DEL</div>
+          <div class="option" data-typeidx="1"><span class="check" id="check-type-1"></span>SEQ</div>
+          <div class="option" data-typeidx="2"><span class="check" id="check-type-2"></span>PRG</div>
+          <div class="option" data-typeidx="3"><span class="check" id="check-type-3"></span>USR</div>
+          <div class="option" data-typeidx="4"><span class="check" id="check-type-4"></span>REL</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="menu-item" id="menu-view">
+    View
+    <div class="menu-dropdown">
+      <div class="option" id="opt-show-addr"><span class="check" id="check-addr"></span>Show Addresses</div>
+      <div class="option" id="opt-show-ts"><span class="check" id="check-ts"></span>Show Track/Sector</div>
+    </div>
+  </div>
+  <div class="menu-item" id="menu-options">
+    Options
+    <div class="menu-dropdown">
+      <div class="option" id="opt-unsafe-chars"><span class="check" id="check-unsafe"></span>Allow Unsafe Characters</div>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <div class="theme-toggle" id="theme-toggle" title="Toggle theme"></div>
+</div>
+
+<input type="file" id="file-input" accept=".d64,.d71,.d81">
+
+<div class="content" id="content">
+  <div class="empty-state">
+    No disk loaded.<br>
+    Use File &gt; New to create an empty disk,<br>
+    or Disk &gt; Open to load a disk image.
+  </div>
+</div>
+
+<div class="petscii-picker" id="petscii-picker"></div>
+
+<div class="modal-overlay" id="input-modal-overlay">
+  <div class="modal">
+    <div class="modal-title" id="input-modal-title"></div>
+    <div class="modal-body">
+      <input type="text" id="input-modal-field" class="modal-input">
+    </div>
+    <div class="modal-footer">
+      <button id="input-modal-cancel" class="modal-btn-secondary">Cancel</button>
+      <button id="input-modal-ok">OK</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <div class="modal-title" id="modal-title"></div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer">
+      <button id="modal-close">OK</button>
+    </div>
+  </div>
+</div>
+
+<script src="assets/js/cbm-format.js"></script>
+<script src="assets/js/cbm-editor.js"></script>
+<script src="assets/js/ui.js"></script>
+
+
+</body>
+</html>

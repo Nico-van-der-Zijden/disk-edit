@@ -1,892 +1,3 @@
-<!DOCTYPE html>
-<html lang="en" data-theme="dark">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta http-equiv="X-UA-Compatible" content="IE=edge">
-<title>D64 Disk Viewer</title>
-<link rel="stylesheet" href="assets/fontawesome/all.min.css">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='2' width='56' height='60' rx='3' fill='%23222' stroke='%23555' stroke-width='2'/%3E%3Crect x='18' y='2' width='28' height='14' rx='1' fill='%23888'/%3E%3Crect x='24' y='4' width='16' height='10' rx='1' fill='%23222'/%3E%3Ccircle cx='32' cy='36' r='14' fill='none' stroke='%23555' stroke-width='2'/%3E%3Ccircle cx='32' cy='36' r='6' fill='%23555'/%3E%3Crect x='30' y='30' width='4' height='12' rx='1' fill='%23888' transform='rotate(45 32 36)'/%3E%3Crect x='8' y='52' width='20' height='6' rx='1' fill='%23444'/%3E%3C/svg%3E">
-<style>
-  :root {
-    --bg: #1e1e2e;
-    --bg-menu: #2a2a3c;
-    --bg-panel: #262637;
-    --text: #cdd6f4;
-    --text-muted: #6c7086;
-    --border: #45475a;
-    --accent: #89b4fa;
-    --hover: #363648;
-    --menu-hover: #3a3a4e;
-    --placeholder-bg: #2e2e40;
-    --hover-edit: #40405a;
-  }
-
-  [data-theme="light"] {
-    --bg: #eff1f5;
-    --bg-menu: #dce0e8;
-    --bg-panel: #e6e9ef;
-    --text: #4c4f69;
-    --text-muted: #8c8fa1;
-    --border: #bcc0cc;
-    --accent: #1e66f5;
-    --hover: #ccd0da;
-    --menu-hover: #c5c9d5;
-    --placeholder-bg: #d0d4de;
-    --hover-edit: #b8bcc8;
-  }
-
-  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-user-modify: unset; }
-
-  ::selection { background: var(--accent); color: var(--bg); }
-
-  body {
-    font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", "Courier New", monospace;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-    -ms-content-zooming: none;
-  }
-
-  body, .menubar, .dir-listing, .dir-entry, .disk-header, .dir-footer {
-    -webkit-user-select: none;
-    user-select: none;
-  }
-
-  .editable, .dir-name.editing, .blocks-input, .name-input, .header-input {
-    -webkit-user-select: text;
-    user-select: text;
-  }
-
-  /* --- Menu Bar --- */
-  .menubar {
-    display: flex;
-    align-items: center;
-    background: var(--bg-menu);
-    border-bottom: 1px solid var(--border);
-    height: 32px;
-    padding: 0 4px;
-    user-select: none;
-    font-size: 13px;
-  }
-
-  .menu-item {
-    position: relative;
-    padding: 4px 10px;
-    cursor: pointer;
-    border-radius: 4px;
-  }
-
-  .menu-item:hover,
-  .menu-item.open {
-    background: var(--menu-hover);
-  }
-
-  .menubar.menu-active .menu-item:hover > .menu-dropdown {
-    display: block;
-  }
-
-  .menu-dropdown {
-    display: none;
-    position: absolute;
-    top: 100%;
-    left: 0;
-    background: var(--bg-menu);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 4px 0;
-    min-width: 160px;
-    z-index: 100;
-    box-shadow: 0 4px 16px rgba(0,0,0,.25);
-  }
-
-  .menu-item.open .menu-dropdown {
-    display: block;
-  }
-
-  .menu-dropdown .option {
-    padding: 6px 12px 6px 28px;
-    cursor: pointer;
-    white-space: nowrap;
-    position: relative;
-  }
-
-  .menu-dropdown .option .check {
-    position: absolute;
-    left: 10px;
-    top: 50%;
-    transform: translateY(-50%);
-    font-size: 10px;
-  }
-
-  .has-submenu::after {
-    content: '\f054';
-    font-family: 'Font Awesome 6 Free';
-    font-weight: 900;
-    font-size: 9px;
-    position: absolute;
-    right: 10px;
-    top: 50%;
-    transform: translateY(-50%);
-  }
-
-  .submenu {
-    display: none;
-    position: absolute;
-    left: 100%;
-    top: -4px;
-    background: var(--bg-menu);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 4px 0;
-    min-width: 180px;
-    box-shadow: 0 4px 16px rgba(0,0,0,.25);
-  }
-
-  .has-submenu:not(.disabled):hover > .submenu {
-    display: block;
-  }
-
-  .menu-dropdown .option:hover:not(.disabled) {
-    background: var(--hover);
-  }
-
-  .menu-dropdown .option.disabled {
-    color: var(--text-muted);
-    cursor: default;
-    opacity: 0.5;
-  }
-
-  .menu-dropdown .separator {
-    height: 1px;
-    background: var(--border);
-    margin: 4px 0;
-  }
-
-  .spacer { flex: 1; }
-
-  .theme-toggle {
-    padding: 4px 10px;
-    cursor: pointer;
-    border-radius: 4px;
-    font-size: 13px;
-  }
-  .theme-toggle:hover { background: var(--menu-hover); }
-
-  /* --- Content --- */
-  .content {
-    max-width: 720px;
-    margin: 0 auto;
-    padding: 24px 16px;
-  }
-
-  .empty-state {
-    text-align: center;
-    color: var(--text-muted);
-    margin-top: 120px;
-    font-size: 14px;
-    line-height: 2;
-  }
-
-  /* --- Disk Panel --- */
-  .disk-panel {
-    display: flex;
-    flex-direction: column;
-    max-height: calc(100vh - 80px);
-  }
-
-  /* --- Disk Header --- */
-  .disk-header {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    padding: 14px 16px;
-    background: var(--bg-menu);
-    border: 1px solid var(--border);
-    border-radius: 6px 6px 0 0;
-    flex-shrink: 0;
-  }
-
-  .disk-header-spacer {
-    width: 48px;
-    flex-shrink: 0;
-    text-align: right;
-    color: var(--text-muted);
-  }
-
-  .disk-name {
-    flex: 1;
-    font-size: 16px;
-    color: var(--accent);
-    letter-spacing: 1px;
-    white-space: pre;
-  }
-
-  .disk-name .editable,
-  .disk-id .editable {
-    display: inline-block;
-    padding: 2px 4px;
-    border-radius: 3px;
-    cursor: pointer;
-  }
-
-  .disk-name .editable {
-    min-width: 18ch;
-  }
-
-  .disk-id .editable {
-    min-width: 6ch;
-  }
-
-  .disk-name .editable.empty,
-  .disk-id .editable.empty {
-    background: var(--placeholder-bg);
-    min-height: 1.4em;
-  }
-
-  .disk-name .editable:hover,
-  .disk-id .editable:hover {
-    background: var(--hover-edit);
-  }
-
-  .disk-name .editable.editing,
-  .disk-id .editable.editing {
-    background: none;
-    outline: none;
-    padding: 0;
-    cursor: text;
-  }
-
-  .disk-id {
-    width: 5ch;
-    min-width: 5ch;
-    font-size: 14px;
-    color: var(--text-muted);
-    text-align: left;
-    flex-shrink: 0;
-    white-space: pre;
-  }
-
-  /* --- Directory Listing --- */
-  .dir-listing {
-    font-size: 14px;
-    line-height: 1.7;
-    overflow-y: auto;
-    flex: 1;
-    min-height: 0;
-    padding: 8px 0;
-    border-left: 1px solid var(--border);
-    border-right: 1px solid var(--border);
-  }
-
-  .dir-entry {
-    display: flex;
-    gap: 8px;
-    padding: 2px 16px;
-  }
-
-  .dir-entry {
-    cursor: pointer;
-  }
-
-  .dir-header-row {
-    cursor: default;
-    font-size: 11px;
-    color: var(--text-muted);
-    border-bottom: 1px solid var(--border);
-    padding-bottom: 4px;
-    margin-bottom: 4px;
-  }
-
-  .dir-header-row .dir-blocks,
-  .dir-header-row .dir-name,
-  .dir-header-row .dir-type,
-  .dir-header-row .dir-ts,
-  .dir-header-row .dir-addr {
-    color: var(--text-muted);
-    font-size: 11px;
-  }
-
-  .dir-header-row:hover {
-    background: none;
-  }
-
-  .dir-entry:not(.dir-header-row):hover {
-    background: var(--hover);
-  }
-
-  .dir-entry.selected {
-    background: var(--accent);
-    color: var(--bg);
-  }
-
-  .dir-entry.selected .dir-blocks,
-  .dir-entry.selected .dir-type,
-  .dir-entry.selected .dir-addr,
-  .dir-entry.selected .dir-ts {
-    color: var(--bg);
-  }
-
-  .dir-blocks {
-    width: 48px;
-    text-align: right;
-    color: var(--text-muted);
-    flex-shrink: 0;
-  }
-
-  .blocks-input {
-    width: 100%;
-    background: var(--bg);
-    border: 1px solid var(--accent);
-    border-radius: 3px;
-    padding: 0 4px;
-    color: var(--text);
-    font-family: inherit;
-    font-size: inherit;
-    text-align: right;
-    outline: none;
-    -moz-appearance: textfield;
-  }
-
-  .blocks-input::-webkit-inner-spin-button,
-  .blocks-input::-webkit-outer-spin-button {
-    -webkit-appearance: none;
-    margin: 0;
-  }
-
-  .dir-name {
-    flex: 1;
-    white-space: pre;
-  }
-
-  .name-input, .header-input {
-    width: 100%;
-    box-sizing: border-box;
-    background: var(--bg);
-    border: 1px solid var(--accent);
-    border-radius: 3px;
-    padding: 0 4px;
-    color: var(--text);
-    font-family: inherit;
-    font-size: inherit;
-    letter-spacing: inherit;
-    outline: none;
-  }
-
-  .dir-type {
-    width: 5ch;
-    text-align: left;
-    color: var(--text-muted);
-    flex-shrink: 0;
-    white-space: pre;
-    position: relative;
-  }
-
-  .dir-addr {
-    width: 11ch;
-    text-align: left;
-    color: var(--text-muted);
-    flex-shrink: 0;
-    font-size: 12px;
-    white-space: pre;
-    display: none;
-  }
-
-  .show-addresses .dir-addr {
-    display: block;
-  }
-
-  .dir-ts {
-    width: 7ch;
-    text-align: left;
-    color: var(--text-muted);
-    flex-shrink: 0;
-    font-size: 12px;
-    white-space: pre;
-    display: none;
-  }
-
-  .show-tracksector .dir-ts {
-    display: block;
-  }
-
-  .dir-grip {
-    width: 16px;
-    flex-shrink: 0;
-    cursor: grab;
-    color: var(--text-muted);
-    font-size: 12px;
-    text-align: center;
-    opacity: 0;
-    transition: opacity 0.15s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .dir-entry:hover .dir-grip {
-    opacity: 0.5;
-  }
-
-  .dir-entry.selected .dir-grip {
-    color: var(--bg);
-  }
-
-  .dir-header-row .dir-grip {
-    cursor: default;
-    opacity: 0 !important;
-  }
-
-  .dir-entry.drag-over-top {
-    border-top: 2px solid var(--accent);
-  }
-
-  .dir-entry.drag-over-bottom {
-    border-bottom: 2px solid var(--accent);
-  }
-
-  .dir-entry.dragging {
-    opacity: 0.4;
-  }
-
-  .type-dropdown {
-    position: fixed;
-    background: var(--bg-menu);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 4px 0;
-    min-width: 80px;
-    z-index: 200;
-    box-shadow: 0 4px 16px rgba(0,0,0,.25);
-  }
-
-  .type-dropdown .type-option {
-    padding: 4px 10px 4px 26px;
-    cursor: pointer;
-    white-space: nowrap;
-    position: relative;
-    color: var(--text);
-  }
-
-  .type-dropdown .type-option .check {
-    position: absolute;
-    left: 8px;
-    top: 50%;
-    transform: translateY(-50%);
-    font-size: 10px;
-  }
-
-  .type-dropdown .type-option:hover {
-    background: var(--hover);
-  }
-
-  .dir-footer {
-    display: flex;
-    gap: 8px;
-    padding: 10px 16px;
-    background: var(--bg-menu);
-    border: 1px solid var(--border);
-    border-top: none;
-    border-radius: 0 0 6px 6px;
-    color: var(--text-muted);
-    font-size: 13px;
-    flex-shrink: 0;
-  }
-
-  .dir-footer-blocks {
-    width: 48px;
-    text-align: right;
-    flex-shrink: 0;
-  }
-
-  .dir-footer-label {
-    flex: 1;
-  }
-
-  .dir-footer-tracks {
-    font-size: 11px;
-    opacity: 0.6;
-  }
-
-  .dir-entry.deleted {
-    opacity: 0.5;
-  }
-
-  .petscii-rev {
-    background: var(--text);
-    color: var(--bg);
-    border-radius: 1px;
-  }
-
-  /* --- PETSCII Keyboard Picker --- */
-  .petscii-picker {
-    display: none;
-    position: fixed;
-    background: var(--bg-menu);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px;
-    z-index: 250;
-    box-shadow: 0 8px 32px rgba(0,0,0,.4);
-  }
-
-  .petscii-picker.open {
-    display: block;
-  }
-
-  .petscii-modifiers {
-    display: flex;
-    gap: 4px;
-    margin-bottom: 8px;
-  }
-
-  .petscii-mod {
-    padding: 4px 12px;
-    font-family: inherit;
-    font-size: 11px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    cursor: pointer;
-    background: var(--bg);
-    color: var(--text);
-  }
-
-  .petscii-mod.active {
-    background: var(--accent);
-    color: var(--bg);
-    border-color: var(--accent);
-  }
-
-  .petscii-mod:hover:not(.active):not(.disabled) {
-    background: var(--hover);
-  }
-
-  .petscii-mod.disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-
-  .petscii-kb-row {
-    display: flex;
-    gap: 3px;
-    margin-bottom: 3px;
-    justify-content: center;
-  }
-
-  .petscii-key {
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 14px;
-    color: var(--text);
-    background: var(--bg);
-    flex-shrink: 0;
-  }
-
-  .petscii-key:hover {
-    background: var(--accent);
-    color: var(--bg);
-    border-color: var(--accent);
-  }
-
-  .petscii-key.wide {
-    width: auto;
-    padding: 0 10px;
-    font-size: 11px;
-  }
-
-  .petscii-key.space {
-    width: 180px;
-  }
-
-  .petscii-key.rev-char {
-    background: var(--text);
-    color: var(--bg);
-  }
-
-  .petscii-key.rev-char:hover {
-    background: var(--accent);
-    color: var(--bg);
-  }
-
-  .petscii-key.unsafe {
-    border-color: #f38ba8;
-    color: #f38ba8;
-  }
-
-  [data-theme="light"] .petscii-key.unsafe {
-    border-color: #d20f39;
-    color: #d20f39;
-  }
-
-  .petscii-key.unsafe:hover {
-    background: #f38ba8;
-    color: var(--bg);
-    border-color: #f38ba8;
-  }
-
-  .petscii-key.disabled {
-    opacity: 0.2;
-    cursor: not-allowed;
-  }
-
-  .petscii-key.disabled:hover {
-    background: var(--bg);
-    color: var(--text);
-    border-color: var(--border);
-  }
-
-  .petscii-key.empty {
-    visibility: hidden;
-  }
-
-  /* Hidden file input */
-  #file-input { display: none; }
-
-  /* --- Modal --- */
-  .modal-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, .5);
-    z-index: 200;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .modal-overlay.open {
-    display: flex;
-  }
-
-  .modal {
-    background: var(--bg-menu);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    width: 460px;
-    max-width: 90vw;
-    max-height: 70vh;
-    display: flex;
-    flex-direction: column;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, .4);
-  }
-
-  .modal-title {
-    padding: 14px 16px;
-    font-size: 14px;
-    font-weight: bold;
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-
-  .modal-body {
-    padding: 16px;
-    overflow-y: auto;
-    flex: 1;
-    min-height: 0;
-    font-size: 13px;
-    line-height: 1.7;
-  }
-
-  .modal-body ul {
-    list-style: disc;
-    padding-left: 20px;
-    margin: 0;
-  }
-
-  .modal-body ul li {
-    padding: 1px 0;
-  }
-
-  .modal-body .log-error {
-    color: #f38ba8;
-  }
-
-  [data-theme="light"] .modal-body .log-error {
-    color: #d20f39;
-  }
-
-  .modal-body .log-warning {
-    color: #fab387;
-  }
-
-  [data-theme="light"] .modal-body .log-warning {
-    color: #df8e1d;
-  }
-
-  .modal-footer {
-    padding: 10px 16px;
-    border-top: 1px solid var(--border);
-    flex-shrink: 0;
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
-  }
-
-  .modal-footer button {
-    font-family: inherit;
-    font-size: 13px;
-    padding: 6px 20px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--hover);
-    color: var(--text);
-    cursor: pointer;
-  }
-
-  .modal-footer button:hover {
-    background: var(--menu-hover);
-  }
-
-  .modal-btn-secondary {
-    background: transparent !important;
-    border-color: var(--border) !important;
-  }
-
-  .modal-btn-secondary:hover {
-    background: var(--hover) !important;
-  }
-
-  .modal-input {
-    width: 100%;
-    padding: 8px 10px;
-    font-family: inherit;
-    font-size: 14px;
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    outline: none;
-  }
-
-  .modal-input:focus {
-    border-color: var(--accent);
-  }
-
-</style>
-</head>
-<body>
-
-<div class="menubar">
-  <div class="menu-item" id="menu-file">
-    Disk
-    <div class="menu-dropdown">
-      <div class="option has-submenu" id="opt-new">New
-        <div class="submenu">
-          <div class="option" data-tracks="35">35 Tracks</div>
-          <div class="option" data-tracks="40">40 Tracks</div>
-        </div>
-      </div>
-      <div class="option" id="opt-open">Open...</div>
-      <div class="option disabled" id="opt-close">Close</div>
-      <div class="separator"></div>
-      <div class="option disabled" id="opt-save">Save</div>
-      <div class="option disabled" id="opt-save-as">Save As...</div>
-      <div class="separator"></div>
-      <div class="option disabled" id="opt-validate">Validate</div>
-      <div class="option disabled" id="opt-show-deleted"><span class="check" id="check-deleted"></span>Show Deleted Files</div>
-      <div class="option disabled has-submenu" id="opt-sort">Sort
-        <div class="submenu">
-          <div class="option" data-sort="name-asc">Name Ascending</div>
-          <div class="option" data-sort="name-desc">Name Descending</div>
-          <div class="separator"></div>
-          <div class="option" data-sort="blocks-asc">Blocks Ascending</div>
-          <div class="option" data-sort="blocks-desc">Blocks Descending</div>
-        </div>
-      </div>
-      <div class="separator"></div>
-      <div class="option disabled" id="opt-edit-free">Edit Blocks Free</div>
-      <div class="option disabled" id="opt-recalc-free">Recalculate Blocks Free</div>
-    </div>
-  </div>
-  <div class="menu-item" id="menu-entry">
-    File
-    <div class="menu-dropdown">
-      <div class="option disabled" id="opt-rename">Rename</div>
-      <div class="option disabled" id="opt-insert">Insert File</div>
-      <div class="option disabled" id="opt-remove">Remove Entry</div>
-      <div class="option disabled has-submenu" id="opt-align">Align
-        <div class="submenu">
-          <div class="option" data-align="left">Align Left</div>
-          <div class="option" data-align="right">Align Right</div>
-          <div class="option" data-align="center">Center</div>
-          <div class="option" data-align="justify">Justify</div>
-          <div class="option" data-align="expand">Expand</div>
-        </div>
-      </div>
-      <div class="separator"></div>
-      <div class="option disabled" id="opt-lock">Lock File</div>
-      <div class="option disabled" id="opt-splat">Scratch File</div>
-      <div class="option disabled" id="opt-block-size">Change File Size</div>
-      <div class="option disabled" id="opt-recalc-size">Set Actual File Size</div>
-      <div class="option disabled has-submenu" id="opt-change-type">File Type
-        <div class="submenu">
-          <div class="option" data-typeidx="0"><span class="check" id="check-type-0"></span>DEL</div>
-          <div class="option" data-typeidx="1"><span class="check" id="check-type-1"></span>SEQ</div>
-          <div class="option" data-typeidx="2"><span class="check" id="check-type-2"></span>PRG</div>
-          <div class="option" data-typeidx="3"><span class="check" id="check-type-3"></span>USR</div>
-          <div class="option" data-typeidx="4"><span class="check" id="check-type-4"></span>REL</div>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="menu-item" id="menu-view">
-    View
-    <div class="menu-dropdown">
-      <div class="option" id="opt-show-addr"><span class="check" id="check-addr"></span>Show Addresses</div>
-      <div class="option" id="opt-show-ts"><span class="check" id="check-ts"></span>Show Track/Sector</div>
-    </div>
-  </div>
-  <div class="menu-item" id="menu-options">
-    Options
-    <div class="menu-dropdown">
-      <div class="option" id="opt-unsafe-chars"><span class="check" id="check-unsafe"></span>Allow Unsafe Characters</div>
-    </div>
-  </div>
-  <div class="spacer"></div>
-  <div class="theme-toggle" id="theme-toggle" title="Toggle theme"></div>
-</div>
-
-<input type="file" id="file-input" accept=".d64">
-
-<div class="content" id="content">
-  <div class="empty-state">
-    No disk loaded.<br>
-    Use File &gt; New to create an empty disk,<br>
-    or File &gt; Open to load a .d64 file.
-  </div>
-</div>
-
-<div class="petscii-picker" id="petscii-picker"></div>
-
-<div class="modal-overlay" id="input-modal-overlay">
-  <div class="modal">
-    <div class="modal-title" id="input-modal-title"></div>
-    <div class="modal-body">
-      <input type="text" id="input-modal-field" class="modal-input">
-    </div>
-    <div class="modal-footer">
-      <button id="input-modal-cancel" class="modal-btn-secondary">Cancel</button>
-      <button id="input-modal-ok">OK</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal-overlay" id="modal-overlay">
-  <div class="modal">
-    <div class="modal-title" id="modal-title"></div>
-    <div class="modal-body" id="modal-body"></div>
-    <div class="modal-footer">
-      <button id="modal-close">OK</button>
-    </div>
-  </div>
-</div>
-
-<script>
 // ── Modal ─────────────────────────────────────────────────────────────
 function showModal(title, lines) {
   document.getElementById('modal-title').textContent = title;
@@ -990,872 +101,15 @@ if (navigator.userAgent.includes('Edg')) {
   });
 }
 
-// ── D64 Format Constants ──────────────────────────────────────────────
-const D64_SIZE_35 = 174848;   // 35 tracks, 683 sectors
-const D64_SIZE_35E = 175531;  // 35 tracks + 683 error bytes
-const D64_SIZE_40 = 196608;   // 40 tracks, 768 sectors
-const D64_SIZE_40E = 197376;  // 40 tracks + 768 error bytes
-
-function sectorsPerTrack(t) {
-  if (t <= 17) return 21;
-  if (t <= 24) return 19;
-  if (t <= 30) return 18;
-  return 17;
-}
-
-function detectTrackCount(bufferSize) {
-  if (bufferSize >= D64_SIZE_40) return 40;
-  return 35;
-}
-
-const TRACK_OFFSETS = (() => {
-  const offsets = [0]; // index 0 unused
-  let offset = 0;
-  for (let t = 1; t <= 40; t++) {
-    offsets.push(offset);
-    offset += sectorsPerTrack(t) * 256;
-  }
-  return offsets;
-})();
-
-function sectorOffset(track, sector) {
-  if (track < 1 || track > 40) return -1;
-  if (sector < 0 || sector >= sectorsPerTrack(track)) return -1;
-  return TRACK_OFFSETS[track] + sector * 256;
-}
-
-// ── PETSCII → Unicode ─────────────────────────────────────────────────
-// C64 uppercase/graphics mode character mapping.
-// Maps PETSCII byte values to Unicode characters.
-// Graphics characters use Box Drawing, Block Elements, and Geometric Shapes.
-const PETSCII_MAP = (() => {
-  const m = new Array(256).fill('\u00B7'); // · middle dot for unmapped
-
-  // 0x00-0x1F: reversed characters (reverse video of screen codes 0-31)
-  // On C64 screen these show as inverted (white on blue). We mark them for
-  // special rendering with a prefix that renderDisk will detect.
-  m[0x00] = '@';
-  for (let i = 0x01; i <= 0x1A; i++) m[i] = String.fromCharCode(i - 0x01 + 65); // A-Z
-  m[0x1B] = '[';
-  m[0x1C] = '\u00A3'; // £
-  m[0x1D] = ']';
-  m[0x1E] = '\u2191'; // ↑
-  m[0x1F] = '\u2190'; // ←
-
-  // 0x20-0x3F: standard ASCII printable (space, digits, punctuation)
-  for (let i = 0x20; i <= 0x3F; i++) m[i] = String.fromCharCode(i);
-
-  // 0x40: @
-  m[0x40] = '@';
-
-  // 0x41-0x5A: A-Z → display as lowercase (modern convention)
-  for (let i = 0x41; i <= 0x5A; i++) m[i] = String.fromCharCode(i + 32);
-
-  // 0x5B-0x5F: special PETSCII characters
-  m[0x5B] = '[';
-  m[0x5C] = '\u00A3'; // £ (pound sign)
-  m[0x5D] = ']';
-  m[0x5E] = '\u2191'; // ↑ (up arrow)
-  m[0x5F] = '\u2190'; // ← (left arrow)
-
-  // 0x60-0x7F: graphics characters (screen codes 64-95)
-  // These are the SHIFT+key graphics on the C64 keyboard
-  const gfx1 = [
-    '\u2500', // 0x60 SC64: ─ horizontal line
-    '\u2660', // 0x61 SC65: ♠ spade
-    '\u2502', // 0x62 SC66: │ vertical line
-    '\u2500', // 0x63 SC67: ─ horizontal line
-    '\u2597', // 0x64 SC68: ▗ quadrant lower right
-    '\u2596', // 0x65 SC69: ▖ quadrant lower left
-    '\u2598', // 0x66 SC70: ▘ quadrant upper left
-    '\u259D', // 0x67 SC71: ▝ quadrant upper right
-    '\u256E', // 0x68 SC72: ╮ rounded corner top-right
-    '\u2570', // 0x69 SC73: ╰ rounded corner bottom-left
-    '\u256F', // 0x6A SC74: ╯ rounded corner bottom-right
-    '\u2572', // 0x6B SC75: ╲ diagonal backslash
-    '\u2571', // 0x6C SC76: ╱ diagonal slash
-    '\u25CF', // 0x6D SC77: ● filled circle
-    '\u2592', // 0x6E SC78: ▒ checker pattern
-    '\u2665', // 0x6F SC79: ♥ heart
-    '\u256D', // 0x70 SC80: ╭ rounded corner top-left
-    '\u2518', // 0x71 SC81: ┘ box bottom-right
-    '\u2524', // 0x72 SC82: ┤ box right T
-    '\u2510', // 0x73 SC83: ┐ box top-right
-    '\u250C', // 0x74 SC84: ┌ box top-left
-    '\u2534', // 0x75 SC85: ┴ box bottom T
-    '\u252C', // 0x76 SC86: ┬ box top T
-    '\u251C', // 0x77 SC87: ├ box left T
-    '\u253C', // 0x78 SC88: ┼ box cross
-    '\u2514', // 0x79 SC89: └ box bottom-left
-    '\u2666', // 0x7A SC90: ♦ diamond
-    '\u253C', // 0x7B SC91: ┼ cross
-    '\u2502', // 0x7C SC92: │ vertical (thick)
-    '\u2500', // 0x7D SC93: ─ horizontal (thick)
-    '\u03C0', // 0x7E SC94: π pi
-    '\u25E5', // 0x7F SC95: ◥ upper right triangle
-  ];
-  for (let i = 0; i < 32; i++) m[0x60 + i] = gfx1[i];
-
-  // 0x80-0x9F: reversed characters (reverse video of screen codes 0-31)
-  // In context of filenames, display as their non-reversed equivalents
-  m[0x80] = ' '; // reversed @? treat as space
-  for (let i = 0x81; i <= 0x9A; i++) m[i] = String.fromCharCode(i - 0x81 + 65); // reversed A-Z → A-Z
-  m[0x9B] = '[';
-  m[0x9C] = '\u00A3'; // reversed £
-  m[0x9D] = ']';
-  m[0x9E] = '\u2191'; // reversed ↑
-  m[0x9F] = '\u2190'; // reversed ←
-
-  // 0xA0: shifted space
-  m[0xA0] = ' ';
-
-  // 0xA1-0xBF: graphics characters (screen codes 97-127)
-  // These are the CBM+key graphics on the C64 keyboard
-  const gfx2 = [
-    '\u258C', // 0xA1 SC97:  ▌ left half block
-    '\u2584', // 0xA2 SC98:  ▄ lower half block
-    '\u2594', // 0xA3 SC99:  ▔ upper 1/8 block
-    '\u2581', // 0xA4 SC100: ▁ lower 1/8 block
-    '\u258E', // 0xA5 SC101: ▎ left 1/4 block
-    '\u2592', // 0xA6 SC102: ▒ medium shade
-    '\u2595', // 0xA7 SC103: ▕ right 1/8 block
-    '\u259E', // 0xA8 SC104: ▞ quadrant upper right + lower left
-    '\u25E4', // 0xA9 SC105: ◤ upper left triangle
-    '\u259A', // 0xAA SC106: ▚ quadrant upper left + lower right
-    '\u2586', // 0xAB SC107: ▆ lower 3/4 block
-    '\u258A', // 0xAC SC108: ▊ left 3/4 block
-    '\u259B', // 0xAD SC109: ▛ upper left + upper right + lower left
-    '\u259C', // 0xAE SC110: ▜ upper left + upper right + lower right
-    '\u2599', // 0xAF SC111: ▙ upper left + lower left + lower right
-    '\u259F', // 0xB0 SC112: ▟ upper right + lower left + lower right
-    '\u2580', // 0xB1 SC113: ▀ upper half block
-    '\u2590', // 0xB2 SC114: ▐ right half block
-    '\u2588', // 0xB3 SC115: █ full block
-    '\u2582', // 0xB4 SC116: ▂ lower 1/4 block
-    '\u258F', // 0xB5 SC117: ▏ left 1/8 block
-    '\u2583', // 0xB6 SC118: ▃ lower 3/8 block
-    '\u2585', // 0xB7 SC119: ▅ lower 5/8 block
-    '\u2587', // 0xB8 SC120: ▇ lower 7/8 block
-    '\u258B', // 0xB9 SC121: ▋ left 5/8 block
-    '\u2589', // 0xBA SC122: ▉ left 7/8 block
-    '\u258D', // 0xBB SC123: ▍ left 3/8 block
-    '\u2663', // 0xBC SC124: ♣ club
-    '\u25CF', // 0xBD SC125: ● filled circle
-    '\u25CB', // 0xBE SC126: ○ empty circle
-    '\u2663', // 0xBF SC127: ♣ club (variant)
-  ];
-  for (let i = 0; i < 31; i++) m[0xA1 + i] = gfx2[i];
-
-  // 0xC0: ─ horizontal line (same as SC64)
-  m[0xC0] = '\u2500';
-
-  // 0xC1-0xDA: uppercase A-Z (commonly used in D64 filenames)
-  for (let i = 0xC1; i <= 0xDA; i++) m[i] = String.fromCharCode(i - 0xC1 + 65);
-
-  // 0xDB-0xDF: special chars (same visual as 0x5B-0x5F)
-  m[0xDB] = '[';
-  m[0xDC] = '\u00A3'; // £
-  m[0xDD] = ']';
-  m[0xDE] = '\u2191'; // ↑
-  m[0xDF] = '\u2190'; // ←
-
-  // 0xE0-0xFE: same graphics as 0xA0-0xBE
-  for (let i = 0xE0; i <= 0xFE; i++) m[i] = m[i - 0x40];
-
-  // 0xFF: π
-  m[0xFF] = '\u03C0';
-
-  return m;
-})();
-
-function petsciiToAscii(byte) {
-  return PETSCII_MAP[byte & 0xFF];
-}
-
-function readPetsciiString(data, offset, len, stopAtPadding) {
-  let contentLen = len;
-  if (stopAtPadding !== false) {
-    // Find content length: 0xA0 is padding, stop there
-    for (let i = 0; i < len; i++) {
-      if (data[offset + i] === 0xA0) {
-        contentLen = i;
-        break;
-      }
-    }
-  }
-  let s = '';
-  for (let i = 0; i < contentLen; i++) {
-    s += petsciiToAscii(data[offset + i]);
-  }
-  return s;
-}
-
-// Returns array of {char, reversed} for rendering with inverse video
-function readPetsciiRich(data, offset, len) {
-  // Find content length: 0xA0 is padding
-  let contentLen = len;
-  for (let i = 0; i < len; i++) {
-    if (data[offset + i] === 0xA0) {
-      contentLen = i;
-      break;
-    }
-  }
-  const chars = [];
-  for (let i = 0; i < contentLen; i++) {
-    const b = data[offset + i];
-    const reversed = (b >= 0x00 && b <= 0x1F) || (b >= 0x80 && b <= 0x9F);
-    chars.push({ char: petsciiToAscii(b), reversed });
-  }
-  return chars;
-}
-
-// ── Reverse PETSCII map (Unicode → PETSCII byte) ─────────────────────
-const UNICODE_TO_PETSCII = (() => {
-  const rev = new Map();
-  // Build reverse map, prefer lower PETSCII codes for duplicates
-  for (let i = 255; i >= 0; i--) {
-    const ch = PETSCII_MAP[i];
-    if (ch && ch !== ' ' && ch !== '\u00B7') {
-      rev.set(ch, i);
-    }
-  }
-  // Explicit overrides for common chars (prefer standard PETSCII range)
-  for (let i = 0x41; i <= 0x5A; i++) rev.set(String.fromCharCode(i + 32), i); // a-z → 0x41-0x5A
-  for (let i = 0x41; i <= 0x5A; i++) rev.set(String.fromCharCode(i), i); // A-Z → 0x41-0x5A
-  for (let i = 0x20; i <= 0x3F; i++) rev.set(String.fromCharCode(i), i); // standard punctuation
-  rev.set('@', 0x40);
-  rev.set('[', 0x5B);
-  rev.set(']', 0x5D);
-  rev.set('\u00A3', 0x5C); // £
-  rev.set('\u2191', 0x5E); // ↑
-  rev.set('\u2190', 0x5F); // ←
-  rev.set('\u03C0', 0xFF); // π
-  rev.set(' ', 0x20);
-  return rev;
-})();
-
-function unicodeToPetscii(char) {
-  return UNICODE_TO_PETSCII.get(char) ?? 0x20;
-}
-
-// Write a Unicode string to the d64 buffer as PETSCII bytes
-function writePetsciiString(buffer, offset, str, maxLen, overrides) {
-  const data = new Uint8Array(buffer);
-  for (let i = 0; i < maxLen; i++) {
-    if (i < str.length) {
-      // Use override if a specific PETSCII code was set (e.g., reversed chars from picker)
-      if (overrides && overrides[i] !== undefined) {
-        data[offset + i] = overrides[i];
-      } else {
-        data[offset + i] = unicodeToPetscii(str[i]);
-      }
-    } else {
-      data[offset + i] = 0xA0; // padding
-    }
-  }
-}
-
-// ── Safe PETSCII characters ───────────────────────────────────────────
-let allowUnsafeChars = localStorage.getItem('d64-allowUnsafe') === 'true';
-
-// Bytes that are safe to use in C64 filenames
-// Unsafe: $00(NULL), $0D(CR), $14(DEL), $22("), $60-$7F(GFX set 1),
-//         $8D(shifted CR), $A0(padding), $E0-$FE(GFX duplicates), $FF(π)
-const SAFE_PETSCII = new Set([
-  0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B,0x0C,0x0E,0x0F,
-  0x10,0x11,0x12,0x13,0x15,0x16,0x17,0x18,0x19,0x1A,0x1B,0x1C,0x1D,0x1E,0x1F,
-  0x20,0x21,0x23,0x24,0x25,0x26,0x27,0x28,0x29,0x2A,0x2B,0x2C,0x2D,0x2E,0x2F,
-  0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x3A,0x3B,0x3C,0x3D,0x3E,0x3F,
-  0x40,0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48,0x49,0x4A,0x4B,0x4C,0x4D,0x4E,0x4F,
-  0x50,0x51,0x52,0x53,0x54,0x55,0x56,0x57,0x58,0x59,0x5A,0x5B,0x5C,0x5D,0x5E,0x5F,
-  0x80,0x81,0x82,0x83,0x84,0x85,0x86,0x87,0x88,0x89,0x8A,0x8B,0x8C,0x8E,0x8F,
-  0x90,0x91,0x92,0x93,0x94,0x95,0x96,0x97,0x98,0x99,0x9A,0x9B,0x9C,0x9D,0x9E,0x9F,
-  0xA1,0xA2,0xA3,0xA4,0xA5,0xA6,0xA7,0xA8,0xA9,0xAA,0xAB,0xAC,0xAD,0xAE,0xAF,
-  0xB0,0xB1,0xB2,0xB3,0xB4,0xB5,0xB6,0xB7,0xB8,0xB9,0xBA,0xBB,0xBC,0xBD,0xBE,0xBF,
-  0xC0,0xC1,0xC2,0xC3,0xC4,0xC5,0xC6,0xC7,0xC8,0xC9,0xCA,0xCB,0xCC,0xCD,0xCE,0xCF,
-  0xD0,0xD1,0xD2,0xD3,0xD4,0xD5,0xD6,0xD7,0xD8,0xD9,0xDA,0xDB,0xDC,0xDD,0xDE,0xDF,
-]);
-
-// ── PETSCII Picker ───────────────────────────────────────────────────
-const petsciiPicker = document.getElementById('petscii-picker');
-let pickerTarget = null; // the element being edited
-let pickerMaxLen = 16;
-let pickerClicking = false; // prevents blur during picker interaction
-
-// C64 keyboard layout: [label, normal, shift, cbm] per key
-// In uppercase mode: normal = lowercase display (0x41-0x5A), shift = uppercase (0xC1-0xDA)
-// Graphics: on key fronts — right side = shift, left side = cbm
-const KB_ROWS = [
-  // Row 1: ← 1-9 0 + - £
-  [['←',0x5F,-1,-1],['1',0x31,0x21,-1],['2',0x32,0x22,-1],['3',0x33,0x23,-1],['4',0x34,0x24,-1],['5',0x35,0x25,-1],['6',0x36,0x26,-1],['7',0x37,0x27,-1],['8',0x38,0x28,-1],['9',0x39,0x29,-1],['0',0x30,-1,-1],['+',0x2B,-1,-1],['-',0x2D,-1,-1],['£',0x5C,-1,-1]],
-  // Row 2: Q-P @ * ↑
-  [['q',0x51,0xC1,0xAB],['w',0x57,0xC7,0xB3],['e',0x45,0xC5,0xB1],['r',0x52,0xD2,0xB2],['t',0x54,0xD4,0xA3],['y',0x59,0xD9,0xB7],['u',0x55,0xD5,0xB8],['i',0x49,0xC9,0xA2],['o',0x4F,0xCF,0xB9],['p',0x50,0xD0,0xAF],['@',0x40,0xBA,-1],['*',0x2A,0xC0,-1],['↑',0x5E,0xFF,-1]],
-  // Row 3: A-L : ; =
-  [['a',0x41,0xC1,0xB0],['s',0x53,0xD3,0xAE],['d',0x44,0xC4,0xAC],['f',0x46,0xC6,0xBB],['g',0x47,0xC7,0xA5],['h',0x48,0xC8,0xB4],['j',0x4A,0xCA,0xB5],['k',0x4B,0xCB,0xA1],['l',0x4C,0xCC,0xB6],[':',0x3A,0x5B,-1],[';',0x3B,0x5D,-1],['=',0x3D,-1,-1]],
-  // Row 4: Z-M , . /
-  [['z',0x5A,0xDA,0xAD],['x',0x58,0xD8,0xBD],['c',0x43,0xC3,0xBC],['v',0x56,0xD6,0xBE],['b',0x42,0xC2,0xBF],['n',0x4E,0xCE,0xAA],['m',0x4D,0xCD,0xA7],[',',0x2C,0x3C,-1],['.',0x2E,0x3E,-1],['/',0x2F,0x3F,-1]],
-];
-
-// Front-of-key graphics (SHIFT+letter → right graphic, same PETSCII as shift column above
-// but we also allow the 0x60-0x7F graphics via a separate "GFX" mode)
-// GFX keys use 0xC0-0xDF range (safe) instead of 0x60-0x7F (unsafe)
-// Both map to the same screen codes (64-95) on the C64
-const KB_GFX_ROW2 = [0xD1,0xD7,0xC5,0xD2,0xD4,0xD9,0xD5,0xC9,0xCF,0xD0];
-const KB_GFX_ROW3 = [0xC1,0xD3,0xC4,0xC6,0xC7,0xC8,0xCA,0xCB,0xCC];
-const KB_GFX_ROW4 = [0xDA,0xD8,0xC3,0xD6,0xC2,0xCE,0xCD];
-
-let pickerModifier = 'normal'; // 'normal', 'shift', 'gfx', 'cbm'
-let pickerReverse = false;
-
-function buildPetsciiPicker() {
-  renderPicker();
-
-  petsciiPicker.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    pickerClicking = true;
-    setTimeout(() => { pickerClicking = false; }, 100);
-
-    // Modifier buttons
-    const mod = e.target.closest('.petscii-mod');
-    if (mod) {
-      if (mod.classList.contains('disabled')) return;
-      const m = mod.dataset.mod;
-      if (m === 'rev') {
-        pickerReverse = !pickerReverse;
-      } else {
-        pickerModifier = (pickerModifier === m) ? 'normal' : m;
-      }
-      renderPicker();
-      return;
-    }
-
-    // Character keys
-    const key = e.target.closest('.petscii-key');
-    if (!key || !pickerTarget || key.classList.contains('empty') || key.classList.contains('disabled')) return;
-    let code = parseInt(key.dataset.code, 10);
-    if (code < 0) return;
-
-    // Apply reverse where PETSCII has reversed equivalents:
-    // 0x40-0x5F (@,A-Z,[,£,],↑,←) → 0x00-0x1F (reversed)
-    // 0xC0-0xDF (same chars, shifted) → 0x80-0x9F (reversed)
-    // Other ranges (graphics, punctuation) have no PETSCII reversed codes
-    let actualCode = code;
-    if (pickerReverse) {
-      if (code >= 0x40 && code <= 0x5F) actualCode = code - 0x40;
-      else if (code >= 0xC0 && code <= 0xDF) actualCode = code - 0xC0 + 0x80;
-    }
-
-    const ch = PETSCII_MAP[actualCode];
-    insertAtCursor(pickerTarget, ch, actualCode);
-  });
-}
-
-function renderPicker() {
-  let html = '<div class="petscii-modifiers">';
-  html += '<div class="petscii-mod' + (pickerModifier === 'shift' ? ' active' : '') + '" data-mod="shift">SHIFT</div>';
-  html += '<div class="petscii-mod' + (pickerModifier === 'gfx' ? ' active' : '') + '" data-mod="gfx">GFX</div>';
-  html += '<div class="petscii-mod' + (pickerModifier === 'cbm' ? ' active' : '') + '" data-mod="cbm">CBM</div>';
-  html += '<div class="petscii-mod' + (pickerReverse ? ' active' : '') + '" data-mod="rev">RVS</div>';
-  html += '</div>';
-
-  for (let r = 0; r < KB_ROWS.length; r++) {
-    const row = KB_ROWS[r];
-    html += '<div class="petscii-kb-row">';
-    for (let k = 0; k < row.length; k++) {
-      const [label, normal, shift, cbm] = row[k];
-      let code;
-      if (pickerModifier === 'shift') code = shift;
-      else if (pickerModifier === 'cbm') code = cbm;
-      else if (pickerModifier === 'gfx') {
-        // GFX keys: use safe 0xC0-0xDF codes but display the 0x60-0x7F glyphs
-        if (r === 1 && k < 10) code = KB_GFX_ROW2[k];
-        else if (r === 2 && k < 9) code = KB_GFX_ROW3[k];
-        else if (r === 3 && k < 7) code = KB_GFX_ROW4[k];
-        else code = -1;
-      }
-      else code = normal;
-
-      if (code === -1) {
-        html += '<div class="petscii-key empty" data-code="-1"></div>';
-      } else {
-        // Determine actual code after reverse
-        let actualCode = code;
-        if (pickerReverse) {
-          if (code >= 0x40 && code <= 0x5F) actualCode = code - 0x40;
-          else if (code >= 0xC0 && code <= 0xDF) actualCode = code - 0xC0 + 0x80;
-        }
-        const isSafe = SAFE_PETSCII.has(actualCode);
-        const disabled = !isSafe && !allowUnsafeChars;
-        // For GFX mode, show the graphic glyph from 0x60-0x7F range (same screen code)
-        const displayCode = (pickerModifier === 'gfx' && code >= 0xC0 && code <= 0xDF) ? code - 0x60 : code;
-        const ch = PETSCII_MAP[displayCode];
-        const title = label + ' → $' + code.toString(16).toUpperCase().padStart(2, '0') + (pickerReverse ? ' (RVS)' : '') + (!isSafe ? ' (unsafe)' : '');
-        html += '<div class="petscii-key' + (pickerReverse ? ' rev-char' : '') + (disabled ? ' disabled' : (!isSafe ? ' unsafe' : '')) + '" data-code="' + code + '" title="' + title + '">' + escHtml(ch) + '</div>';
-      }
-    }
-    html += '</div>';
-  }
-
-  // Space bar row
-  html += '<div class="petscii-kb-row">';
-  html += '<div class="petscii-key space" data-code="32">SPACE</div>';
-  html += '</div>';
-
-  petsciiPicker.innerHTML = html;
-}
-
-function trackCursorPos(input) {
-  const update = () => { input._lastCursorPos = input.selectionStart; };
-  input.addEventListener('keyup', update);
-  input.addEventListener('click', update);
-  input.addEventListener('input', update);
-  update();
-}
-
-function insertAtCursor(el, ch, petsciiCode) {
-  if (el.tagName === 'INPUT') {
-    // Always use tracked position — browser may reset selectionStart on blur/refocus
-    const start = el._lastCursorPos != null ? el._lastCursorPos : (el.selectionStart || 0);
-    const end = start;
-    const val = el.value;
-    const maxLen = el.maxLength || Infinity;
-    const newVal = val.slice(0, start) + ch + val.slice(end);
-    if (newVal.length > maxLen) return; // enforce max length
-    el.value = newVal;
-
-    // Track raw PETSCII bytes for characters that can't round-trip via Unicode
-    if (petsciiCode !== undefined) {
-      if (!el._petsciiOverrides) el._petsciiOverrides = {};
-      el._petsciiOverrides[start] = petsciiCode;
-    }
-
-    // Focus first, then set cursor position
-    el.focus();
-    const newPos = start + ch.length;
-    el.selectionStart = el.selectionEnd = newPos;
-    el._lastCursorPos = newPos;
-    return;
-  }
-
-  if (el.isContentEditable) {
-    el.focus();
-    const sel = window.getSelection();
-    if (sel.rangeCount > 0) {
-      const range = sel.getRangeAt(0);
-      range.deleteContents();
-      range.insertNode(document.createTextNode(ch));
-      range.collapse(false);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    } else {
-      el.textContent += ch;
-    }
-  }
-}
-
-function showPetsciiPicker(targetEl, maxLen) {
-  pickerTarget = targetEl;
-  pickerMaxLen = maxLen;
-  pickerModifier = 'normal';
-  renderPicker();
-
-  const rect = targetEl.getBoundingClientRect();
-  petsciiPicker.classList.add('open');
-
-  let top = rect.bottom + 4;
-  let left = rect.left;
-
-  const pickerRect = petsciiPicker.getBoundingClientRect();
-  if (top + pickerRect.height > window.innerHeight) {
-    top = rect.top - pickerRect.height - 4;
-  }
-  if (left + pickerRect.width > window.innerWidth) {
-    left = window.innerWidth - pickerRect.width - 8;
-  }
-
-  petsciiPicker.style.top = Math.max(0, top) + 'px';
-  petsciiPicker.style.left = Math.max(0, left) + 'px';
-}
-
-function hidePetsciiPicker() {
-  petsciiPicker.classList.remove('open');
-  pickerTarget = null;
-}
-
-buildPetsciiPicker();
-
-// ── File type names ──────────────────────────────────────────────────
-const FILE_TYPES = ['DEL', 'SEQ', 'PRG', 'USR', 'REL'];
-
-function fileTypeName(typeByte) {
-  const closed = (typeByte & 0x80) !== 0;
-  const locked = (typeByte & 0x40) !== 0;
-  const idx = typeByte & 0x07;
-  const base = FILE_TYPES[idx] || '???';
-  const prefix = closed ? ' ' : '*';
-  const suffix = locked ? '<' : ' ';
-  return prefix + base + suffix;
-}
-
-// ── Parse D64 ────────────────────────────────────────────────────────
-function parseD64(buffer) {
-  const data = new Uint8Array(buffer);
-  if (data.length < D64_SIZE_35) throw new Error('File too small to be a valid .d64');
-
-  const numTracks = detectTrackCount(data.length);
-  currentTracks = numTracks;
-
-  // BAM is at track 18, sector 0
-  const bamOffset = sectorOffset(18, 0);
-
-  const diskName = readPetsciiString(data, bamOffset + 0x90, 16);
-  const diskId = readPetsciiString(data, bamOffset + 0xA2, 5, false);
-
-  // Count free blocks from BAM (skip track 18)
-  // Note: tracks 36-40 on extended D64 are NOT in the standard BAM
-  // The 1541 only stores BAM for tracks 1-35
-  let freeBlocks = 0;
-  for (let t = 1; t <= Math.min(numTracks, 35); t++) {
-    if (t === 18) continue; // directory track
-    freeBlocks += data[bamOffset + 4 * t];
-  }
-
-  // Read directory chain starting at track 18, sector 1
-  const entries = [];
-  let dirTrack = 18;
-  let dirSector = 1;
-  const visited = new Set();
-
-  while (dirTrack !== 0) {
-    const key = `${dirTrack}:${dirSector}`;
-    if (visited.has(key)) break;
-    visited.add(key);
-
-    const off = sectorOffset(dirTrack, dirSector);
-    if (off < 0) break;
-
-    for (let i = 0; i < 8; i++) {
-      const entryOff = off + i * 32;
-      const typeByte = data[entryOff + 2];
-
-      // Skip completely unused slots: type=0, no file track/sector,
-      // no name data, and no block count
-      if (typeByte === 0x00) {
-        const fileTrack = data[entryOff + 3];
-        const fileSector = data[entryOff + 4];
-        const blocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
-        let hasName = false;
-        for (let j = 0; j < 16; j++) {
-          if (data[entryOff + 5 + j] !== 0x00 && data[entryOff + 5 + j] !== 0xA0) {
-            hasName = true; break;
-          }
-        }
-        if (!hasName && fileTrack === 0 && fileSector === 0 && blocks === 0) continue;
-      }
-
-      const name = readPetsciiString(data, entryOff + 5, 16);
-
-      const blocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
-      const closed = (typeByte & 0x80) !== 0;
-      const deleted = !closed;
-
-      if (deleted) {
-        const idx = typeByte & 0x07;
-        const typeName = FILE_TYPES[idx] || 'DEL';
-        const locked = (typeByte & 0x40) !== 0;
-        entries.push({ name, type: '*' + typeName + (locked ? '<' : ' '), blocks, deleted: true, entryOff: entryOff });
-      } else {
-        entries.push({
-          name,
-          type: fileTypeName(typeByte),
-          blocks,
-          deleted: false,
-          entryOff: entryOff,
-        });
-      }
-    }
-
-    dirTrack = data[off + 0];
-    dirSector = data[off + 1];
-  }
-
-  return { diskName, diskId, freeBlocks, entries };
-}
-
-// ── Create empty D64 ─────────────────────────────────────────────────
-function createEmptyD64(numTracks) {
-  numTracks = numTracks || 35;
-  const totalSectors = (() => {
-    let s = 0;
-    for (let t = 1; t <= numTracks; t++) s += sectorsPerTrack(t);
-    return s;
-  })();
-  const data = new Uint8Array(totalSectors * 256);
-
-  // BAM at track 18, sector 0
-  const bamOff = sectorOffset(18, 0);
-  data[bamOff + 0] = 18;  // directory track
-  data[bamOff + 1] = 1;   // directory sector
-  data[bamOff + 2] = 0x41; // DOS version 'A'
-
-  // BAM entries for tracks 1-35 (standard BAM only covers 35 tracks)
-  const bamTracks = Math.min(numTracks, 35);
-  for (let t = 1; t <= bamTracks; t++) {
-    const spt = sectorsPerTrack(t);
-    const base = bamOff + 4 * t;
-    if (t === 18) {
-      // track 18: mark sectors 0 and 1 as used (BAM + first dir sector)
-      data[base] = spt - 2;
-      // Build bitmap with all sectors free, then clear bits 0 and 1
-      let bm = (1 << spt) - 1; // all free
-      bm &= ~(1 << 0); // sector 0 used
-      bm &= ~(1 << 1); // sector 1 used
-      data[base + 1] = bm & 0xFF;
-      data[base + 2] = (bm >> 8) & 0xFF;
-      data[base + 3] = (bm >> 16) & 0xFF;
-    } else {
-      data[base] = spt;
-      let bm = (1 << spt) - 1;
-      data[base + 1] = bm & 0xFF;
-      data[base + 2] = (bm >> 8) & 0xFF;
-      data[base + 3] = (bm >> 16) & 0xFF;
-    }
-  }
-
-  // BAM byte 3: 0x00 (unused, should be 0x00 on 1541)
-  data[bamOff + 3] = 0x00;
-
-  // Disk name at 0x90-0x9F: all 0xA0 (no name)
-  for (let i = 0; i < 16; i++) {
-    data[bamOff + 0x90 + i] = 0xA0;
-  }
-
-  // Bytes 0xA0-0xA1: 0xA0 (fill bytes between name and ID)
-  data[bamOff + 0xA0] = 0xA0;
-  data[bamOff + 0xA1] = 0xA0;
-
-  // Disk ID at 0xA2-0xA3: 0xA0 (no ID)
-  data[bamOff + 0xA2] = 0xA0;
-  data[bamOff + 0xA3] = 0xA0;
-
-  // Byte 0xA4: 0xA0 (fill)
-  data[bamOff + 0xA4] = 0xA0;
-
-  // DOS type at 0xA5-0xA6: "2A"
-  data[bamOff + 0xA5] = 0x32; // '2'
-  data[bamOff + 0xA6] = 0x41; // 'A'
-
-  // Bytes 0xA7-0xAA: 0xA0 (fill)
-  for (let i = 0xA7; i <= 0xAA; i++) {
-    data[bamOff + i] = 0xA0;
-  }
-
-  // First directory sector at track 18, sector 1
-  const dirOff = sectorOffset(18, 1);
-  data[dirOff + 0] = 0x00; // no next track (end of chain)
-  data[dirOff + 1] = 0xFF; // standard end-of-chain marker
-  // All 8 entries are zeroed (already 0x00 from Uint8Array init)
-
-  return data.buffer;
-}
-
-// ── Current disk state ─────────────────────────────────────────────────
-let currentBuffer = null;
-let currentFileName = null;
-let currentTracks = 35;
-let showDeleted = localStorage.getItem('d64-showDeleted') !== 'false'; // default true
-let selectedEntryIndex = -1;
-let showAddresses = localStorage.getItem('d64-showAddresses') === 'true';
-let showTrackSector = localStorage.getItem('d64-showTrackSector') === 'true';
-
-// ── Allowed C64 characters ────────────────────────────────────────────
-function isValidPetscii(ch) {
-  return UNICODE_TO_PETSCII.has(ch);
-}
-
-function filterC64Input(str, maxLen) {
-  return Array.from(str).filter(ch => isValidPetscii(ch)).slice(0, maxLen).join('');
-}
-
-// ── Write header fields back to D64 buffer ────────────────────────────
-function writeDiskName(buffer, name, overrides) {
-  writePetsciiString(buffer, sectorOffset(18, 0) + 0x90, name, 16, overrides);
-}
-
-function writeDiskId(buffer, id, overrides) {
-  writePetsciiString(buffer, sectorOffset(18, 0) + 0xA2, id, 5, overrides);
-}
-
-// ── Validate (mimics 1541 VALIDATE command) ──────────────────────────
-// The real C64 VALIDATE command:
-// 1. Walks the directory chain and follows every closed file's track/sector chain
-// 2. Rebuilds the BAM from scratch based on which sectors are actually used
-// 3. Removes splat files (unclosed / *-prefixed entries)
-// 4. Updates free block counts per track
-function validateD64(buffer) {
-  const data = new Uint8Array(buffer);
-  const bamOff = sectorOffset(18, 0);
-  const numTracks = currentTracks;
-  const log = [];
-
-  // Allocation map: true = used
-  const allocated = [];
-  for (let t = 0; t <= numTracks; t++) {
-    allocated[t] = new Uint8Array(sectorsPerTrack(Math.max(t, 1)));
-  }
-
-  // Track 18 sector 0 (BAM) is always allocated
-  allocated[18][0] = 1;
-
-  // Follow a track/sector chain, marking sectors as used
-  // Returns { blocks, error }
-  function followChain(startTrack, startSector, label) {
-    const visited = new Set();
-    let t = startTrack, s = startSector;
-    let blocks = 0;
-    while (t !== 0) {
-      if (t < 1 || t > numTracks) {
-        log.push(`  ERROR: ${label}: illegal track ${t}`);
-        return { blocks, error: true };
-      }
-      if (s < 0 || s >= sectorsPerTrack(t)) {
-        log.push(`  ERROR: ${label}: illegal sector ${s} on track ${t}`);
-        return { blocks, error: true };
-      }
-      const key = `${t}:${s}`;
-      if (visited.has(key)) {
-        log.push(`  ERROR: ${label}: circular reference at track ${t} sector ${s}`);
-        return { blocks, error: true };
-      }
-      visited.add(key);
-
-      if (allocated[t][s]) {
-        log.push(`  ERROR: ${label}: cross-linked at track ${t} sector ${s}`);
-        return { blocks, error: true };
-      }
-      allocated[t][s] = 1;
-      blocks++;
-
-      const off = sectorOffset(t, s);
-      t = data[off + 0];
-      s = data[off + 1];
-    }
-    return { blocks, error: false };
-  }
-
-  // Walk directory chain, mark directory sectors as allocated
-  let dirTrack = 18, dirSector = 1;
-  const dirSectors = [];
-  const dirVisited = new Set();
-  while (dirTrack !== 0) {
-    const key = `${dirTrack}:${dirSector}`;
-    if (dirVisited.has(key)) {
-      log.push('ERROR: circular directory chain');
-      break;
-    }
-    dirVisited.add(key);
-    if (dirTrack < 1 || dirTrack > numTracks || dirSector < 0 || dirSector >= sectorsPerTrack(dirTrack)) {
-      log.push(`ERROR: illegal directory sector track ${dirTrack} sector ${dirSector}`);
-      break;
-    }
-    allocated[dirTrack][dirSector] = 1;
-    dirSectors.push({ track: dirTrack, sector: dirSector });
-
-    const off = sectorOffset(dirTrack, dirSector);
-    dirTrack = data[off + 0];
-    dirSector = data[off + 1];
-  }
-
-  // Process directory entries
-  let splatCount = 0;
-  for (const ds of dirSectors) {
-    const off = sectorOffset(ds.track, ds.sector);
-    for (let i = 0; i < 8; i++) {
-      const entryOff = off + i * 32;
-      const typeByte = data[entryOff + 2];
-      const fileType = typeByte & 0x07;
-      const closed = (typeByte & 0x80) !== 0;
-
-      if (fileType === 0 && !closed) continue; // empty slot
-
-      const name = readPetsciiString(data, entryOff + 5, 16);
-      if (!name.trim() && fileType === 0) continue;
-
-      const fileTrack = data[entryOff + 3];
-      const fileSector = data[entryOff + 4];
-
-      if (!closed) {
-        // Splat file — remove it (zero out the entry type)
-        log.push(`Removed splat file: "${name}"`);
-        data[entryOff + 2] = 0x00;
-        splatCount++;
-        continue;
-      }
-
-      // Follow the file's sector chain
-      const label = `"${name}"`;
-      const result = followChain(fileTrack, fileSector, label);
-      const expectedBlocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
-      if (result.blocks !== expectedBlocks && !result.error) {
-        log.push(`  Warning: ${label}: block count ${expectedBlocks} in directory, actual ${result.blocks}`);
-      }
-    }
-  }
-
-  // Rebuild BAM from allocation map (BAM only covers tracks 1-35)
-  let bamErrors = 0;
-  for (let t = 1; t <= Math.min(numTracks, 35); t++) {
-    const spt = sectorsPerTrack(t);
-    const base = bamOff + 4 * t;
-
-    // Count free sectors
-    let free = 0;
-    let bm = 0;
-    for (let s = 0; s < spt; s++) {
-      if (!allocated[t][s]) {
-        free++;
-        bm |= (1 << s);
-      }
-    }
-
-    // Compare with existing BAM
-    const oldFree = data[base];
-    const oldBm = data[base + 1] | (data[base + 2] << 8) | (data[base + 3] << 16);
-    const newBm = bm;
-    if (oldFree !== free || oldBm !== newBm) {
-      bamErrors++;
-    }
-
-    // Write corrected BAM
-    data[base] = free;
-    data[base + 1] = bm & 0xFF;
-    data[base + 2] = (bm >> 8) & 0xFF;
-    data[base + 3] = (bm >> 16) & 0xFF;
-  }
-
-  if (bamErrors > 0) {
-    log.push(`BAM corrected: ${bamErrors} track(s) had incorrect allocation`);
-  }
-  if (splatCount > 0) {
-    log.push(`Removed ${splatCount} splat file(s)`);
-  }
-  if (bamErrors === 0 && splatCount === 0 && log.length === 0) {
-    log.push('Disk is valid. No errors found.');
-  } else if (!log.some(l => l.startsWith('  ERROR'))) {
-    log.push('Validation complete.');
-  } else {
-    log.push('Validation complete with errors.');
-  }
-
-  return log;
-}
-
 // ── Render ────────────────────────────────────────────────────────────
 function renderDisk(info) {
   const prevSelected = selectedEntryIndex;
   selectedEntryIndex = -1;
   const content = document.getElementById('content');
+
+  // Save scroll position
+  const dirListing = content.querySelector('.dir-listing');
+  const prevScroll = dirListing ? dirListing.scrollTop : 0;
 
   let html = `
     <div class="disk-panel${showAddresses ? ' show-addresses' : ''}${showTrackSector ? ' show-tracksector' : ''}">
@@ -1919,7 +173,7 @@ function renderDisk(info) {
       <div class="dir-footer">
         <span class="dir-footer-blocks">${info.freeBlocks}</span>
         <span class="dir-footer-label">blocks free.</span>
-        <span class="dir-footer-tracks">${currentTracks} tracks</span>
+        <span class="dir-footer-tracks">${currentFormat.name} ${currentTracks} tracks</span>
       </div>
     </div>`;
 
@@ -1935,6 +189,10 @@ function renderDisk(info) {
       startEditFreeBlocks(footerBlocks);
     });
   }
+
+  // Restore scroll position
+  const newDirListing = content.querySelector('.dir-listing');
+  if (newDirListing) newDirListing.scrollTop = prevScroll;
 
   // Restore selection
   if (prevSelected >= 0) {
@@ -2189,9 +447,9 @@ function startEditing(el) {
   let currentValue = '';
   if (currentBuffer) {
     const data = new Uint8Array(currentBuffer);
-    const bamOff = sectorOffset(18, 0);
-    if (field === 'name') currentValue = readPetsciiString(data, bamOff + 0x90, 16);
-    else if (field === 'id') currentValue = readPetsciiString(data, bamOff + 0xA2, 5);
+    const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+    if (field === 'name') currentValue = readPetsciiString(data, bamOff + currentFormat.nameOffset, currentFormat.nameLength);
+    else if (field === 'id') currentValue = readPetsciiString(data, bamOff + currentFormat.idOffset, currentFormat.idLength);
   } else {
     const isEmpty = el.classList.contains('empty');
     currentValue = isEmpty ? '' : el.textContent;
@@ -2322,10 +580,11 @@ document.querySelectorAll('#opt-new .submenu .option').forEach(el => {
     e.stopPropagation();
     closeMenus();
     const tracks = parseInt(el.dataset.tracks, 10);
-    const buf = createEmptyD64(tracks);
+    const formatKey = el.dataset.format || 'd64';
+    const buf = createEmptyDisk(formatKey, tracks);
     currentBuffer = buf;
     currentFileName = null;
-    const info = parseD64(buf);
+    const info = parseDisk(buf);
     renderDisk(info);
     updateMenuState();
   });
@@ -2348,7 +607,7 @@ document.getElementById('opt-close').addEventListener('click', (e) => {
     <div class="empty-state">
       No disk loaded.<br>
       Use Disk &gt; New to create an empty disk,<br>
-      or Disk &gt; Open to load a .d64 file.
+      or Disk &gt; Open to load a disk image.
     </div>`;
   updateMenuState();
   updateEntryMenuState();
@@ -2365,10 +624,11 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
-  const defaultName = currentFileName || 'disk.d64';
+  const ext = currentFormat.ext || '.d64';
+  const defaultName = currentFileName || ('disk' + ext);
   const fileName = await showInputModal('Save As', defaultName);
   if (!fileName) return;
-  currentFileName = fileName.endsWith('.d64') ? fileName : fileName + '.d64';
+  currentFileName = fileName.endsWith(ext) ? fileName : fileName + ext;
   downloadD64(currentBuffer, currentFileName);
   updateMenuState();
 });
@@ -2457,7 +717,7 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
   // Recalculate by following all file sector chains to find used sectors,
   // then rebuild the BAM free counts from scratch. Don't trust the existing BAM.
   const data = new Uint8Array(currentBuffer);
-  const bamOff = sectorOffset(18, 0);
+  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
 
   // Build allocation map for all tracks
   const used = {};
@@ -2466,10 +726,10 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
   }
 
   // Track 18 sector 0 (BAM) is always used
-  used[18][0] = 1;
+  used[currentFormat.bamTrack][currentFormat.bamSector] = 1;
 
   // Mark directory chain sectors as used
-  let dirT = 18, dirS = 1;
+  let dirT = currentFormat.dirTrack, dirS = currentFormat.dirSector;
   const dirVisited = new Set();
   while (dirT !== 0) {
     const key = `${dirT}:${dirS}`;
@@ -2508,14 +768,14 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
 
   // Update only the free block counts per track, leave BAM bitmaps untouched
   // BAM only covers tracks 1-35
-  for (let t = 1; t <= Math.min(currentTracks, 35); t++) {
-    if (t === 18) continue;
+  for (let t = 1; t <= currentFormat.bamTracksRange(currentTracks); t++) {
+    if (t === currentFormat.dirTrack) continue;
     const spt = sectorsPerTrack(t);
     let free = 0;
     for (let s = 0; s < spt; s++) {
       if (!used[t][s]) free++;
     }
-    data[bamOff + 4 * t] = free;
+    currentFormat.writeTrackFree(data, bamOff, t, free);
   }
 
   const updatedInfo = parseD64(currentBuffer);
@@ -2534,7 +794,7 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
 function getDirSlotOffsets(buffer) {
   const data = new Uint8Array(buffer);
   const offsets = [];
-  let t = 18, s = 1;
+  let t = currentFormat.dirTrack, s = currentFormat.dirSector;
   const visited = new Set();
   while (t !== 0) {
     const key = `${t}:${s}`;
@@ -2582,7 +842,7 @@ function sortDirectory(buffer, sortType) {
 
   // Collect all directory entry slots (raw 32-byte blocks) from the chain
   const slots = []; // { off, bytes, isEmpty, name, blocks }
-  let t = 18, s = 1;
+  let t = currentFormat.dirTrack, s = currentFormat.dirSector;
   const visited = new Set();
   const sectorOffsets = [];
 
@@ -2758,14 +1018,15 @@ function removeFileEntry(buffer, entryOff) {
 }
 
 // ── Insert file entry ─────────────────────────────────────────────────
-// Max 144 entries: 18 directory sectors on track 18 (sectors 1-18) × 8 entries
-const MAX_DIR_ENTRIES = 144;
+function getMaxDirEntries() {
+  return currentFormat.maxDirSectors * currentFormat.entriesPerSector;
+}
 
 function countDirEntries() {
   if (!currentBuffer) return 0;
   const data = new Uint8Array(currentBuffer);
   let count = 0;
-  let t = 18, s = 1;
+  let t = currentFormat.dirTrack, s = currentFormat.dirSector;
   const visited = new Set();
   while (t !== 0) {
     const key = `${t}:${s}`;
@@ -2792,16 +1053,16 @@ function countDirEntries() {
 
 function canInsertFile() {
   if (!currentBuffer) return false;
-  return countDirEntries() < MAX_DIR_ENTRIES;
+  return countDirEntries() < getMaxDirEntries();
 }
 
 function insertFileEntry() {
   if (!currentBuffer) return -1;
   const data = new Uint8Array(currentBuffer);
-  const bamOff = sectorOffset(18, 0);
+  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
 
   // Walk directory chain, find first empty slot
-  let t = 18, s = 1;
+  let t = currentFormat.dirTrack, s = currentFormat.dirSector;
   const visited = new Set();
   let lastOff = -1;
 
@@ -2832,25 +1093,25 @@ function insertFileEntry() {
   }
 
   // No empty slots in existing chain — allocate a new directory sector
-  // Find a free sector on track 18 (sectors 1-18)
-  const spt = sectorsPerTrack(18);
+  const dirTrk = currentFormat.dirTrack;
+  const spt = sectorsPerTrack(dirTrk);
   let newSector = -1;
   for (let cs = 1; cs < spt; cs++) {
-    if (visited.has(`18:${cs}`)) continue;
+    if (visited.has(`${dirTrk}:${cs}`)) continue;
     newSector = cs;
     break;
   }
 
-  if (newSector === -1) return -1; // track 18 full
+  if (newSector === -1) return -1; // directory track full
 
   // Link the new sector from the last sector in the chain
   if (lastOff >= 0) {
-    data[lastOff] = 18;
+    data[lastOff] = dirTrk;
     data[lastOff + 1] = newSector;
   }
 
   // Initialize new directory sector
-  const newOff = sectorOffset(18, newSector);
+  const newOff = sectorOffset(dirTrk, newSector);
   data[newOff] = 0x00; // end of chain
   data[newOff + 1] = 0xFF;
   // Zero out all 8 entries
@@ -2860,18 +1121,15 @@ function insertFileEntry() {
   writeNewEntry(data, newOff);
 
   // Mark sector as used in BAM
-  const bamBase = bamOff + 4 * 18;
-  const bm = data[bamBase + 1] | (data[bamBase + 2] << 8) | (data[bamBase + 3] << 16);
+  const fmt = currentFormat;
+  const bm = fmt.readTrackBitmap(data, bamOff, dirTrk);
   const newBm = bm & ~(1 << newSector);
-  data[bamBase + 1] = newBm & 0xFF;
-  data[bamBase + 2] = (newBm >> 8) & 0xFF;
-  data[bamBase + 3] = (newBm >> 16) & 0xFF;
-  // Update free count
+  fmt.writeTrackBitmap(data, bamOff, dirTrk, newBm);
   let free = 0;
   for (let cs = 0; cs < spt; cs++) {
     if (newBm & (1 << cs)) free++;
   }
-  data[bamBase] = free;
+  fmt.writeTrackFree(data, bamOff, dirTrk, free);
 
   return newOff;
 }
@@ -2879,8 +1137,8 @@ function insertFileEntry() {
 function writeNewEntry(data, entryOff) {
   // Type: PRG, closed
   data[entryOff + 2] = 0x82;
-  // File start: track 18, sector 0 (placeholder)
-  data[entryOff + 3] = 18;
+  // File start: directory track, sector 0 (placeholder)
+  data[entryOff + 3] = currentFormat.dirTrack;
   data[entryOff + 4] = 0;
   // Filename: filled with 0xA0 (empty name)
   for (let i = 0; i < 16; i++) data[entryOff + 5 + i] = 0xA0;
@@ -3047,17 +1305,17 @@ const MAX_FREE_BLOCKS = 8670;
 
 function writeFreeBlocks(buffer, freeBlocks) {
   const data = new Uint8Array(buffer);
-  const bamOff = sectorOffset(18, 0);
+  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
 
   // BAM only covers tracks 1-35
-  const bamTracks = Math.min(currentTracks, 35);
+  const bamTracks = currentFormat.bamTracksRange(currentTracks);
 
   // Read current per-track free counts and their max
   const tracks = [];
   let currentTotal = 0;
   for (let t = 1; t <= bamTracks; t++) {
-    if (t === 18) continue;
-    const free = data[bamOff + 4 * t];
+    if (t === currentFormat.dirTrack) continue;
+    const free = currentFormat.readTrackFree(data, bamOff, t);
     const spt = sectorsPerTrack(t);
     tracks.push({ t, free, spt });
     currentTotal += free;
@@ -3107,18 +1365,18 @@ function writeFreeBlocks(buffer, freeBlocks) {
 
   // Write back only the count bytes, leave bitmaps untouched
   for (const tr of tracks) {
-    data[bamOff + 4 * tr.t] = tr.free;
+    currentFormat.writeTrackFree(data, bamOff, tr.t, tr.free);
   }
 }
 
 function countActualFreeBlocks(buffer) {
   const data = new Uint8Array(buffer);
-  const bamOff = sectorOffset(18, 0);
+  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
   let free = 0;
-  const bamTracks = Math.min(currentTracks, 35);
+  const bamTracks = currentFormat.bamTracksRange(currentTracks);
   for (let t = 1; t <= bamTracks; t++) {
-    if (t === 18) continue;
-    free += data[bamOff + 4 * t];
+    if (t === currentFormat.dirTrack) continue;
+    free += currentFormat.readTrackFree(data, bamOff, t);
   }
   return free;
 }
@@ -3415,7 +1673,7 @@ fileInput.addEventListener('change', () => {
       renderDisk(info);
       updateMenuState();
     } catch (err) {
-      alert('Error reading .d64 file: ' + err.message);
+      showModal('Error', ['Error reading disk image: ' + err.message]);
     }
   };
   reader.readAsArrayBuffer(file);
@@ -3445,7 +1703,3 @@ themeToggle.addEventListener('click', () => {
   localStorage.setItem('d64-theme', next);
   updateThemeIcon();
 });
-</script>
-
-</body>
-</html>
