@@ -1,10 +1,10 @@
 // ── Current disk state ─────────────────────────────────────────────────
-let currentBuffer = null;
-let currentFileName = null;
-let showDeleted = localStorage.getItem('d64-showDeleted') !== 'false';
-let selectedEntryIndex = -1;
-let showAddresses = localStorage.getItem('d64-showAddresses') === 'true';
-let showTrackSector = localStorage.getItem('d64-showTrackSector') === 'true';
+var currentBuffer = null;
+var currentFileName = null;
+var showDeleted = localStorage.getItem('d64-showDeleted') !== 'false';
+var selectedEntryIndex = -1;
+var showAddresses = localStorage.getItem('d64-showAddresses') === 'true';
+var showTrackSector = localStorage.getItem('d64-showTrackSector') === 'true';
 
 // ── Allowed C64 characters ────────────────────────────────────────────
 function isValidPetscii(ch) {

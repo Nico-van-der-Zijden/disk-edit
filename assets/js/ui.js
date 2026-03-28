@@ -92,7 +92,8 @@ document.getElementById('input-modal-field').addEventListener('keydown', (e) => 
 // ── Disable Edge/browser mini menu and context menu ───────────────────
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('selectstart', e => {
-  if (!e.target.isContentEditable && !e.target.closest('.editing')) e.preventDefault();
+  const el = e.target.nodeType === 3 ? e.target.parentElement : e.target;
+  if (el && !el.isContentEditable && !el.closest('.editing')) e.preventDefault();
 });
 if (navigator.userAgent.includes('Edg')) {
   document.addEventListener('pointerup', e => {
@@ -248,6 +249,8 @@ function bindDirSelection() {
         showTypeDropdown(e.target, entryOff);
       } else if (e.target.classList.contains('dir-blocks')) {
         startEditBlockSize(el);
+      } else if (e.target.classList.contains('dir-ts')) {
+        startEditTrackSector(el);
       } else {
         startRenameEntry(el);
       }
@@ -441,6 +444,7 @@ function bindEditableFields() {
 function startEditing(el) {
   if (el.classList.contains('editing')) return;
   if (el.querySelector('input')) return;
+  cancelActiveEdits();
   const field = el.dataset.field;
   const maxLen = parseInt(el.dataset.max, 10);
   // Read actual content from buffer (stops at 0xA0 padding)
@@ -514,9 +518,7 @@ function startEditing(el) {
   });
 }
 
-function escHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+// escHtml is defined in cbm-format.js
 
 // ── Save helpers ──────────────────────────────────────────────────────
 function downloadD64(buffer, fileName) {
@@ -1165,6 +1167,7 @@ function changeFileType(entryOff, newTypeIdx) {
 }
 
 function showTypeDropdown(typeSpan, entryOff) {
+  cancelActiveEdits();
   // Remove any existing dropdown
   const existing = document.querySelector('.type-dropdown');
   if (existing) existing.remove();
@@ -1441,6 +1444,162 @@ function writeBlockSize(buffer, entryOff, blocks) {
   const data = new Uint8Array(buffer);
   data[entryOff + 30] = blocks & 0xFF;
   data[entryOff + 31] = (blocks >> 8) & 0xFF;
+}
+
+// ── Reusable hex input ────────────────────────────────────────────────
+// Creates a hex input element with validation.
+// Options: { value, maxBytes (1 or 2), validate(val) → bool }
+function createHexInput(options) {
+  const maxChars = (options.maxBytes || 1) * 2;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'hex-input';
+  input.maxLength = maxChars;
+  input.value = (options.value || 0).toString(16).toUpperCase().padStart(maxChars, '0');
+  input.style.width = (maxChars + 1) + 'ch';
+
+  const validateAndMark = () => {
+    const val = parseInt(input.value, 16);
+    const valid = !isNaN(val) && input.value.length > 0 &&
+      /^[0-9A-Fa-f]*$/.test(input.value) &&
+      (!options.validate || options.validate(val));
+    input.classList.toggle('invalid', !valid);
+    return valid;
+  };
+
+  input.addEventListener('input', () => {
+    // Strip non-hex chars
+    input.value = input.value.replace(/[^0-9A-Fa-f]/g, '').toUpperCase().slice(0, maxChars);
+    validateAndMark();
+  });
+
+  input.addEventListener('keydown', (e) => {
+    // Allow: backspace, delete, tab, arrow keys, home, end, select all
+    if (['Backspace','Delete','Tab','ArrowLeft','ArrowRight','Home','End'].includes(e.key)) return;
+    if (e.ctrlKey && e.key === 'a') return;
+    // Allow hex chars
+    if (/^[0-9A-Fa-f]$/.test(e.key)) return;
+    e.preventDefault();
+  });
+
+  input.getValue = () => parseInt(input.value, 16) || 0;
+  input.isValid = validateAndMark;
+  validateAndMark();
+
+  return input;
+}
+
+// ── Track/Sector editor ──────────────────────────────────────────────
+function startEditTrackSector(entryEl) {
+  if (!currentBuffer || !entryEl) return;
+  const entryOff = parseInt(entryEl.dataset.offset, 10);
+  const tsSpan = entryEl.querySelector('.dir-ts');
+  if (!tsSpan || tsSpan.querySelector('.hex-input-group')) return;
+
+  cancelActiveEdits();
+  const data = new Uint8Array(currentBuffer);
+  const curTrack = data[entryOff + 3];
+  const curSector = data[entryOff + 4];
+
+  const group = document.createElement('span');
+  group.className = 'hex-input-group';
+
+  const trackInput = createHexInput({
+    value: curTrack,
+    maxBytes: 1,
+    validate: (val) => val >= 0 && val <= currentTracks
+  });
+
+  const sep = document.createElement('span');
+  sep.className = 'hex-input-sep';
+  sep.textContent = '/';
+
+  const sectorInput = createHexInput({
+    value: curSector,
+    maxBytes: 1,
+    validate: (val) => {
+      const t = trackInput.getValue();
+      if (t < 1 || t > currentTracks) return false;
+      return val >= 0 && val < sectorsPerTrack(t);
+    }
+  });
+
+  // Re-validate sector when track changes
+  trackInput.addEventListener('input', () => sectorInput.isValid());
+
+  group.appendChild(trackInput);
+  group.appendChild(sep);
+  group.appendChild(sectorInput);
+
+  tsSpan.textContent = '';
+  tsSpan.appendChild(group);
+  tsSpan.classList.add('editing');
+
+  trackInput.focus();
+  trackInput.select();
+
+  let reverted = false;
+
+  function cleanup() {
+    tsSpan.classList.remove('editing');
+    activeEditEl = null;
+    activeEditCleanup = null;
+  }
+
+  function commitEdit() {
+    if (reverted) return;
+    if (!trackInput.isValid() || !sectorInput.isValid()) {
+      revert();
+      return;
+    }
+    const newTrack = trackInput.getValue();
+    const newSector = sectorInput.getValue();
+    data[entryOff + 3] = newTrack;
+    data[entryOff + 4] = newSector;
+    cleanup();
+    tsSpan.textContent = '$' + newTrack.toString(16).toUpperCase().padStart(2, '0') +
+      ' $' + newSector.toString(16).toUpperCase().padStart(2, '0');
+  }
+
+  function revert() {
+    reverted = true;
+    cleanup();
+    tsSpan.textContent = '$' + curTrack.toString(16).toUpperCase().padStart(2, '0') +
+      ' $' + curSector.toString(16).toUpperCase().padStart(2, '0');
+  }
+
+  function onBlur(e) {
+    // Don't commit if focus moved to the other input in the group
+    if (pickerClicking) return;
+    setTimeout(() => {
+      if (reverted) return;
+      if (!group.contains(document.activeElement)) {
+        commitEdit();
+      }
+    }, 10);
+  }
+
+  function onKeyDown(e) {
+    if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); revert(); }
+    else if (e.key === 'Tab') {
+      e.preventDefault();
+      if (e.target === trackInput) {
+        sectorInput.focus();
+        sectorInput.select();
+      } else {
+        trackInput.focus();
+        trackInput.select();
+      }
+    }
+  }
+
+  trackInput.addEventListener('blur', onBlur);
+  sectorInput.addEventListener('blur', onBlur);
+  trackInput.addEventListener('keydown', onKeyDown);
+  sectorInput.addEventListener('keydown', onKeyDown);
+
+  registerActiveEdit(tsSpan, revert);
 }
 
 function startEditBlockSize(entryEl) {

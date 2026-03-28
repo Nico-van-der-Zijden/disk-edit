@@ -8,6 +8,14 @@
 <link rel="stylesheet" href="assets/fontawesome/all.min.css">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='2' width='56' height='60' rx='3' fill='%23222' stroke='%23555' stroke-width='2'/%3E%3Crect x='18' y='2' width='28' height='14' rx='1' fill='%23888'/%3E%3Crect x='24' y='4' width='16' height='10' rx='1' fill='%23222'/%3E%3Ccircle cx='32' cy='36' r='14' fill='none' stroke='%23555' stroke-width='2'/%3E%3Ccircle cx='32' cy='36' r='6' fill='%23555'/%3E%3Crect x='30' y='30' width='4' height='12' rx='1' fill='%23888' transform='rotate(45 32 36)'/%3E%3Crect x='8' y='52' width='20' height='6' rx='1' fill='%23444'/%3E%3C/svg%3E">
 <style>
+  @font-face {
+    font-family: 'C64 Pro Mono';
+    src: url('assets/webfonts/C64_Pro_Mono-STYLE.woff2') format('woff2'),
+         url('assets/webfonts/C64_Pro_Mono-STYLE.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+  }
+
   :root {
     --bg: #1a1a2e;
     --bg-menu: #252540;
@@ -53,7 +61,7 @@
     user-select: none;
   }
 
-  .editable, .dir-name.editing, .blocks-input, .name-input, .header-input {
+  .editable, .dir-name.editing, .blocks-input, .name-input, .header-input, .hex-input {
     -webkit-user-select: text;
     user-select: text;
   }
@@ -228,6 +236,7 @@
     padding: 2px 4px;
     border-radius: 3px;
     cursor: pointer;
+    font-family: 'C64 Pro Mono', monospace;
   }
 
   .disk-name .editable {
@@ -258,8 +267,8 @@
   }
 
   .disk-id {
-    width: 5ch;
-    min-width: 5ch;
+    width: auto;
+    min-width: 6ch;
     font-size: 14px;
     color: var(--text-muted);
     text-align: left;
@@ -270,7 +279,7 @@
   /* --- Directory Listing --- */
   .dir-listing {
     font-size: 14px;
-    line-height: 1.7;
+    line-height: 0.8;
     overflow-y: auto;
     flex: 1;
     min-height: 0;
@@ -305,6 +314,7 @@
   .dir-header-row .dir-addr {
     color: var(--text-muted);
     font-size: 11px;
+    font-family: inherit;
   }
 
   .dir-header-row:hover {
@@ -354,9 +364,45 @@
     margin: 0;
   }
 
+  .hex-input {
+    width: 3ch;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 0 3px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: inherit;
+    text-align: center;
+    outline: none;
+    text-transform: uppercase;
+  }
+
+  .hex-input.invalid {
+    border-color: #f38ba8;
+    color: #f38ba8;
+  }
+
+  [data-theme="light"] .hex-input.invalid {
+    border-color: #d20f39;
+    color: #d20f39;
+  }
+
+  .hex-input-group {
+    display: inline-flex;
+    gap: 3px;
+    align-items: center;
+  }
+
+  .hex-input-sep {
+    color: var(--text-muted);
+    font-size: 10px;
+  }
+
   .dir-name {
     flex: 1;
     white-space: pre;
+    font-family: 'C64 Pro Mono', monospace;
   }
 
   .name-input, .header-input {
@@ -582,6 +628,7 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     cursor: pointer;
+    font-family: 'C64 Pro Mono', monospace;
     font-size: 14px;
     color: var(--text);
     background: var(--bg);
@@ -889,6 +936,7 @@
 </div>
 
 <script src="assets/js/cbm-format.js"></script>
+<script src="assets/js/cbm-petscii.js"></script>
 <script src="assets/js/cbm-editor.js"></script>
 <script src="assets/js/ui.js"></script>
 

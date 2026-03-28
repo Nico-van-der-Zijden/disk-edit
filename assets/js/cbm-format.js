@@ -357,8 +357,8 @@ const DISK_FORMATS = {
 };
 
 // ── Active format ────────────────────────────────────────────────────
-let currentFormat = DISK_FORMATS.d64;
-let currentTracks = 35;
+var currentFormat = DISK_FORMATS.d64;
+var currentTracks = 35;
 
 // ── Sector geometry (delegates to current format) ────────────────────
 function sectorsPerTrack(t) {
@@ -412,62 +412,123 @@ function totalSectors(format, numTracks) {
 const PETSCII_MAP = (() => {
   const m = new Array(256).fill('\u00B7');
 
-  m[0x00] = '@';
-  for (let i = 0x01; i <= 0x1A; i++) m[i] = String.fromCharCode(i - 0x01 + 65);
-  m[0x1B] = '[';
-  m[0x1C] = '\u00A3';
-  m[0x1D] = ']';
-  m[0x1E] = '\u2191';
-  m[0x1F] = '\u2190';
+  // C64 uppercase/graphics mode PETSCII to Unicode mapping
+  // On a real C64: PETSCII 0x41-0x5A displays as UPPERCASE A-Z
+  //                PETSCII 0xC1-0xDA displays as GRAPHICS (screen codes 65-90)
 
+  // Graphics characters at screen codes 64-95 (used by 0x60-0x7F and 0xC0-0xDF)
+  // Source: style64.org authoritative PETSCII reference (ucp_rof_ug field)
+  // Entries marked ~ have no standard Unicode equivalent; best approximation used
+  const gfx1 = [
+    '\u2500', // SC64 $60: ─  horizontal line
+    '\u2660', // SC65 $61: ♠  spade
+    '\u2502', // SC66 $62: │  vertical line
+    '\u2500', // SC67 $63: ─  horizontal line
+    '\u2572', // SC68 $64: ~  line segment center→lower-left (approx ╲)
+    '\u2571', // SC69 $65: ~  line segment center→lower-right (approx ╱)
+    '\u2571', // SC70 $66: ~  line segment center→upper-right (approx ╱)
+    '\u2572', // SC71 $67: ~  line segment center→upper-left (approx ╲)
+    '\u25E2', // SC72 $68: ~  partial corner piece (approx ◢)
+    '\u256E', // SC73 $69: ╮  round corner down-left
+    '\u2570', // SC74 $6A: ╰  round corner up-right
+    '\u256F', // SC75 $6B: ╯  round corner up-left
+    '\u25E3', // SC76 $6C: ~  partial corner piece (approx ◣)
+    '\u2572', // SC77 $6D: ╲  diagonal backslash
+    '\u2571', // SC78 $6E: ╱  diagonal slash
+    '\u25E4', // SC79 $6F: ~  partial corner piece (approx ◤)
+    '\u25E5', // SC80 $70: ~  partial corner piece (approx ◥)
+    '\u2022', // SC81 $71: •  bullet/filled circle
+    '\u259A', // SC82 $72: ~  diagonal quadrants (approx ▚)
+    '\u2665', // SC83 $73: ♥  heart
+    '\u259E', // SC84 $74: ~  diagonal quadrants (approx ▞)
+    '\u256D', // SC85 $75: ╭  round corner down-right
+    '\u2573', // SC86 $76: ╳  diagonal cross
+    '\u25CB', // SC87 $77: ○  white circle
+    '\u2663', // SC88 $78: ♣  club
+    '\u2596', // SC89 $79: ~  quadrant lower-left (approx ▖)
+    '\u2666', // SC90 $7A: ♦  diamond
+    '\u253C', // SC91 $7B: ┼  cross/plus
+    '\u259E', // SC92 $7C: ~  (approx ▞)
+    '\u2502', // SC93 $7D: │  vertical line
+    '\u03C0', // SC94 $7E: π  pi
+    '\u25E5', // SC95 $7F: ◥  upper-right triangle
+  ];
+
+  // Graphics characters at screen codes 96-127 (used by 0xA1-0xBF)
+  // Source: style64.org authoritative PETSCII reference (ucp_rof_ug field)
+  const gfx2 = [
+    '\u258C', // SC97  $A1: ▌  left half block
+    '\u2584', // SC98  $A2: ▄  lower half block
+    '\u2594', // SC99  $A3: ▔  upper 1/8 block
+    '\u2581', // SC100 $A4: ▁  lower 1/8 block
+    '\u258E', // SC101 $A5: ▎  left 1/4 block
+    '\u2592', // SC102 $A6: ▒  medium shade/checker
+    '\u2595', // SC103 $A7: ~  right 1/8 block (approx ▕)
+    '\u259E', // SC104 $A8: ~  (approx ▞)
+    '\u25E4', // SC105 $A9: ◤  upper-left triangle
+    '\u2590', // SC106 $AA: ~  right half (approx ▐)
+    '\u251C', // SC107 $AB: ├  T-junction right
+    '\u2597', // SC108 $AC: ▗  quadrant lower-right
+    '\u2514', // SC109 $AD: └  corner up-right
+    '\u2510', // SC110 $AE: ┐  corner down-left
+    '\u2582', // SC111 $AF: ▂  lower 1/4 block
+    '\u250C', // SC112 $B0: ┌  corner down-right
+    '\u2534', // SC113 $B1: ┴  T-junction up
+    '\u252C', // SC114 $B2: ┬  T-junction down
+    '\u2524', // SC115 $B3: ┤  T-junction left
+    '\u258E', // SC116 $B4: ▎  left 1/4 block
+    '\u258D', // SC117 $B5: ▍  left 3/8 block
+    '\u258B', // SC118 $B6: ~  left 5/8 block (approx ▋)
+    '\u2586', // SC119 $B7: ~  lower 3/4 block (approx ▆)
+    '\u2585', // SC120 $B8: ~  lower 5/8 block (approx ▅)
+    '\u2583', // SC121 $B9: ▃  lower 3/8 block
+    '\u2589', // SC122 $BA: ~  left 7/8 block (approx ▉)
+    '\u2596', // SC123 $BB: ▖  quadrant lower-left
+    '\u259D', // SC124 $BC: ▝  quadrant upper-right
+    '\u2518', // SC125 $BD: ┘  corner up-left
+    '\u2598', // SC126 $BE: ▘  quadrant upper-left
+    '\u259A', // SC127 $BF: ▚  diagonal quadrants
+  ];
+
+  // 0x00-0x1F: reversed uppercase letters + specials (reversed screen codes 0-31)
+  m[0x00] = '@';
+  for (let i = 0x01; i <= 0x1A; i++) m[i] = String.fromCharCode(i - 0x01 + 65); // A-Z
+  m[0x1B] = '[';
+  m[0x1C] = '\u00A3'; // £
+  m[0x1D] = ']';
+  m[0x1E] = '\u2191'; // ↑
+  m[0x1F] = '\u2190'; // ←
+
+  // 0x20-0x3F: standard printable (space, digits, punctuation)
   for (let i = 0x20; i <= 0x3F; i++) m[i] = String.fromCharCode(i);
 
+  // 0x40-0x5F: @ + UPPERCASE A-Z + specials
   m[0x40] = '@';
-  for (let i = 0x41; i <= 0x5A; i++) m[i] = String.fromCharCode(i + 32);
-
+  for (let i = 0x41; i <= 0x5A; i++) m[i] = String.fromCharCode(i); // UPPERCASE A-Z
   m[0x5B] = '[';
-  m[0x5C] = '\u00A3';
+  m[0x5C] = '\u00A3'; // £
   m[0x5D] = ']';
-  m[0x5E] = '\u2191';
-  m[0x5F] = '\u2190';
+  m[0x5E] = '\u2191'; // ↑
+  m[0x5F] = '\u2190'; // ←
 
-  const gfx1 = [
-    '\u2500','\u2660','\u2502','\u2500','\u2597','\u2596','\u2598','\u259D',
-    '\u256E','\u2570','\u256F','\u2572','\u2571','\u25CF','\u2592','\u2665',
-    '\u256D','\u2518','\u2524','\u2510','\u250C','\u2534','\u252C','\u251C',
-    '\u253C','\u2514','\u2666','\u253C','\u2502','\u2500','\u03C0','\u25E5',
-  ];
+  // 0x60-0x7F: graphics set 1 (screen codes 64-95)
   for (let i = 0; i < 32; i++) m[0x60 + i] = gfx1[i];
 
-  m[0x80] = ' ';
-  for (let i = 0x81; i <= 0x9A; i++) m[i] = String.fromCharCode(i - 0x81 + 65);
-  m[0x9B] = '[';
-  m[0x9C] = '\u00A3';
-  m[0x9D] = ']';
-  m[0x9E] = '\u2191';
-  m[0x9F] = '\u2190';
+  // 0x80-0x9F: reversed graphics (screen codes 64-95, same shapes as 0xC0-0xDF)
+  for (let i = 0; i < 32; i++) m[0x80 + i] = gfx1[i];
 
+  // 0xA0: shifted space (padding)
   m[0xA0] = ' ';
 
-  const gfx2 = [
-    '\u258C','\u2584','\u2594','\u2581','\u258E','\u2592','\u2595',
-    '\u259E','\u25E4','\u259A','\u2586','\u258A','\u259B','\u259C',
-    '\u2599','\u259F','\u2580','\u2590','\u2588','\u2582','\u258F',
-    '\u2583','\u2585','\u2587','\u258B','\u2589','\u258D','\u2663',
-    '\u25CF','\u25CB','\u2663',
-  ];
+  // 0xA1-0xBF: graphics set 2 (screen codes 97-127)
   for (let i = 0; i < 31; i++) m[0xA1 + i] = gfx2[i];
 
-  m[0xC0] = '\u2500';
-  for (let i = 0xC1; i <= 0xDA; i++) m[i] = String.fromCharCode(i - 0xC1 + 65);
-  m[0xDB] = '[';
-  m[0xDC] = '\u00A3';
-  m[0xDD] = ']';
-  m[0xDE] = '\u2191';
-  m[0xDF] = '\u2190';
+  // 0xC0-0xDF: graphics (screen codes 64-95, same as 0x60-0x7F)
+  for (let i = 0; i < 32; i++) m[0xC0 + i] = gfx1[i];
 
+  // 0xE0-0xFE: graphics set 2 (same as 0xA0-0xBE)
   for (let i = 0xE0; i <= 0xFE; i++) m[i] = m[i - 0x40];
-  m[0xFF] = '\u03C0';
+  m[0xFF] = '\u03C0'; // π
 
   return m;
 })();
@@ -508,8 +569,9 @@ const UNICODE_TO_PETSCII = (() => {
     const ch = PETSCII_MAP[i];
     if (ch && ch !== ' ' && ch !== '\u00B7') rev.set(ch, i);
   }
-  for (let i = 0x41; i <= 0x5A; i++) rev.set(String.fromCharCode(i + 32), i);
-  for (let i = 0x41; i <= 0x5A; i++) rev.set(String.fromCharCode(i), i);
+  // Both uppercase and lowercase keyboard input → PETSCII 0x41-0x5A (displays as uppercase)
+  for (let i = 0x41; i <= 0x5A; i++) rev.set(String.fromCharCode(i), i);       // A-Z
+  for (let i = 0x41; i <= 0x5A; i++) rev.set(String.fromCharCode(i + 32), i);  // a-z
   for (let i = 0x20; i <= 0x3F; i++) rev.set(String.fromCharCode(i), i);
   rev.set('@', 0x40);
   rev.set('[', 0x5B);
@@ -539,6 +601,11 @@ function writePetsciiString(buffer, offset, str, maxLen, overrides) {
       data[offset + i] = 0xA0;
     }
   }
+}
+
+// ── Utility ──────────────────────────────────────────────────────────
+function escHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // ── File type names (shared across all CBM formats) ──────────────────
@@ -666,7 +733,7 @@ function createEmptyDisk(formatKey, numTracks) {
 function createEmptyD64(numTracks) { return createEmptyDisk('d64', numTracks); }
 
 // ── Safe PETSCII characters ──────────────────────────────────────────
-let allowUnsafeChars = localStorage.getItem('d64-allowUnsafe') === 'true';
+var allowUnsafeChars = localStorage.getItem('d64-allowUnsafe') === 'true';
 
 const SAFE_PETSCII = new Set([
   0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B,0x0C,0x0E,0x0F,
