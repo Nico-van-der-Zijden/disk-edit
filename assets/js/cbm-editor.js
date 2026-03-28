@@ -85,15 +85,11 @@ function filterC64Input(str, maxLen) {
 
 // ── Write header fields back to buffer ────────────────────────────────
 function writeDiskName(buffer, name, overrides) {
-  var fmt = currentFormat;
-  var headerOff = sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector);
-  writePetsciiString(buffer, headerOff + fmt.nameOffset, name, fmt.nameLength, overrides);
+  writePetsciiString(buffer, getHeaderOffset() + currentFormat.nameOffset, name, currentFormat.nameLength, overrides);
 }
 
 function writeDiskId(buffer, id, overrides) {
-  var fmt = currentFormat;
-  var headerOff = sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector);
-  writePetsciiString(buffer, headerOff + fmt.idOffset, id, fmt.idLength, overrides);
+  writePetsciiString(buffer, getHeaderOffset() + currentFormat.idOffset, id, currentFormat.idLength, overrides);
 }
 
 // ── Validate disk ────────────────────────────────────────────────────

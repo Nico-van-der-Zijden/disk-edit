@@ -994,6 +994,39 @@
     border-radius: 1px;
   }
 
+  /* --- Error Byte Viewer --- */
+  .error-sector {
+    width: 18px;
+    height: 12px;
+    border-radius: 2px;
+    cursor: pointer;
+    flex-shrink: 0;
+    font-size: 7px;
+    line-height: 12px;
+    text-align: center;
+    font-family: "Cascadia Code", "Consolas", monospace;
+  }
+
+  .error-sector.ok {
+    background: var(--accent);
+    opacity: 0.25;
+  }
+
+  .error-sector.err {
+    background: #f38ba8;
+    color: var(--bg);
+  }
+
+  [data-theme="light"] .error-sector.err {
+    background: #d20f39;
+    color: #fff;
+  }
+
+  .error-sector.no-data {
+    background: var(--border);
+    opacity: 0.3;
+  }
+
   .hex-nav-field {
     cursor: pointer;
     padding: 2px 4px;
@@ -1088,6 +1121,7 @@
           <div class="option" data-format="d64" data-tracks="35">D64 - 35 Tracks</div>
           <div class="option" data-format="d64" data-tracks="40">D64 - 40 Tracks</div>
           <div class="option" data-format="d71" data-tracks="70">D71 - 70 Tracks</div>
+          <div class="option" data-format="d71" data-tracks="80">D71 - 80 Tracks</div>
           <div class="option" data-format="d81" data-tracks="80">D81 - 80 Tracks</div>
         </div>
       </div>
@@ -1158,6 +1192,7 @@
       <div class="option" id="opt-show-ts"><span class="check" id="check-ts"></span>Show Track/Sector</div>
       <div class="separator"></div>
       <div class="option disabled" id="opt-view-bam">View BAM</div>
+      <div class="option disabled" id="opt-view-errors">View Error Bytes</div>
     </div>
   </div>
   <div class="menu-item" id="menu-options">
@@ -1175,7 +1210,7 @@
 <div class="content" id="content">
   <div class="empty-state">
     No disk loaded.<br>
-    Use File &gt; New to create an empty disk,<br>
+    Use Disk &gt; New to create an empty disk,<br>
     or Disk &gt; Open to load a disk image.
   </div>
 </div>

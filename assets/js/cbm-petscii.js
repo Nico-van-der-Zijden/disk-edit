@@ -176,7 +176,6 @@ function hidePetsciiPicker() {
 }
 
 // Old name compatibility
-var insertAtCursor = insertCharAtCursor;
 
 // Initialize
 initPicker();

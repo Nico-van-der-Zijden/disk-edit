@@ -487,10 +487,9 @@ function startEditing(el) {
   let currentValue = '';
   if (currentBuffer) {
     const data = new Uint8Array(currentBuffer);
-    var fmt = currentFormat;
-    var headerOff = sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector);
-    if (field === 'name') currentValue = readPetsciiString(data, headerOff + fmt.nameOffset, fmt.nameLength);
-    else if (field === 'id') currentValue = readPetsciiString(data, headerOff + fmt.idOffset, fmt.idLength, false);
+    var headerOff = getHeaderOffset();
+    if (field === 'name') currentValue = readPetsciiString(data, headerOff + currentFormat.nameOffset, currentFormat.nameLength);
+    else if (field === 'id') currentValue = readPetsciiString(data, headerOff + currentFormat.idOffset, currentFormat.idLength, false);
   } else {
     const isEmpty = el.classList.contains('empty');
     currentValue = isEmpty ? '' : el.textContent;
@@ -579,6 +578,7 @@ function updateMenuState() {
   document.getElementById('opt-edit-free').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || !hasErrorBytes(currentBuffer));
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -854,6 +854,96 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   });
 });
 
+// ── Error Byte Viewer ─────────────────────────────────────────────────
+document.getElementById('opt-view-errors').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || !hasErrorBytes(currentBuffer)) return;
+  closeMenus();
+
+  var data = new Uint8Array(currentBuffer);
+  var fmt = currentFormat;
+  var errOff = getErrorBytesOffset(fmt, currentTracks);
+
+  // Find max sectors for header
+  var maxSpt = 0;
+  for (var t = 1; t <= currentTracks; t++) {
+    var spt = fmt.sectorsPerTrack(t);
+    if (spt > maxSpt) maxSpt = spt;
+  }
+
+  // Count errors
+  var totalErrors = 0;
+  var totalSect = 0;
+  for (t = 1; t <= currentTracks; t++) totalSect += fmt.sectorsPerTrack(t);
+
+  var html = '';
+
+  // Sector number header
+  html += '<div class="bam-header">';
+  html += '<span class="bam-header-spacer"></span>';
+  html += '<span class="bam-header-sectors">';
+  for (var h = 0; h < maxSpt; h++) {
+    html += '<span class="bam-header-num">' + h.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+  }
+  html += '</span></div>';
+
+  html += '<div class="bam-viewer">';
+
+  var errIdx = 0;
+  for (t = 1; t <= currentTracks; t++) {
+    spt = fmt.sectorsPerTrack(t);
+    html += '<div class="bam-track">';
+    html += '<span class="bam-track-num">$' + t.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+    html += '<span class="bam-sectors">';
+
+    for (var s = 0; s < spt; s++) {
+      var errByte = data[errOff + errIdx];
+      var isOk = (errByte === 0x01 || errByte === 0x00);
+      var desc = ERROR_CODES[errByte] || ('Unknown ($' + errByte.toString(16).toUpperCase().padStart(2, '0') + ')');
+      var cls = 'error-sector ' + (isOk ? 'ok' : 'err');
+      if (!isOk) totalErrors++;
+
+      var tooltip = 'T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
+        ' S:$' + s.toString(16).toUpperCase().padStart(2, '0') +
+        ' Error: $' + errByte.toString(16).toUpperCase().padStart(2, '0') +
+        ' - ' + desc;
+
+      html += '<span class="' + cls + '" data-t="' + t + '" data-s="' + s +
+        '" title="' + escHtml(tooltip) + '">' +
+        (isOk ? '' : errByte.toString(16).toUpperCase().padStart(2, '0')) + '</span>';
+      errIdx++;
+    }
+
+    html += '</span></div>';
+  }
+
+  html += '</div>';
+
+  // Legend
+  html += '<div class="bam-legend" style="padding-top:8px">';
+  html += '<span class="bam-legend-item"><span class="bam-legend-box error-sector ok"></span> OK ($01)</span>';
+  html += '<span class="bam-legend-item"><span class="bam-legend-box error-sector err"></span> Error</span>';
+  html += '</div>';
+
+  var title = 'Error Bytes \u2014 ' + (totalErrors > 0 ? totalErrors + ' error(s)' : 'No errors') +
+    ' in ' + totalSect + ' sectors';
+
+  showModal(title, []);
+  var errBody = document.getElementById('modal-body');
+  errBody.innerHTML = html;
+
+  // Click to open sector editor
+  errBody.addEventListener('click', function(ev) {
+    var block = ev.target.closest('.error-sector');
+    if (!block) return;
+    var bt = parseInt(block.getAttribute('data-t'), 10);
+    var bs = parseInt(block.getAttribute('data-s'), 10);
+    if (isNaN(bt) || isNaN(bs)) return;
+    document.getElementById('modal-overlay').classList.remove('open');
+    showSectorHexEditor(bt, bs);
+  });
+});
+
 // ── Options menu ──────────────────────────────────────────────────────
 document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
   e.stopPropagation();
@@ -1123,17 +1213,20 @@ function showSectorHexEditor(track, sector) {
       editBuffer = '';
     } else if (e.key === 'Tab') {
       e.preventDefault();
+      var cur = editingByte;
       stopEdit();
-      var next = e.shiftKey ? editingByte - 1 : editingByte + 1;
+      var next = e.shiftKey ? cur - 1 : cur + 1;
       if (next >= 0 && next < 256) startEdit(next);
     } else if (e.key === 'ArrowRight' && editBuffer.length === 0) {
       e.preventDefault();
+      var cur2 = editingByte;
       stopEdit();
-      if (editingByte < 255) startEdit(editingByte + 1);
+      if (cur2 < 255) startEdit(cur2 + 1);
     } else if (e.key === 'ArrowLeft' && editBuffer.length === 0) {
       e.preventDefault();
+      var cur3 = editingByte;
       stopEdit();
-      if (editingByte > 0) startEdit(editingByte - 1);
+      if (cur3 > 0) startEdit(cur3 - 1);
     }
   }
 
@@ -1218,6 +1311,8 @@ document.getElementById('opt-edit-free').addEventListener('click', (e) => {
   const footerBlocks = document.querySelector('.dir-footer-blocks');
   if (footerBlocks) startEditFreeBlocks(footerBlocks);
 });
+
+
 
 document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
   e.stopPropagation();
@@ -1312,7 +1407,7 @@ function getDirSlotOffsets(buffer) {
     visited.add(key);
     const off = sectorOffset(t, s);
     if (off < 0) break;
-    for (let i = 0; i < 8; i++) offsets.push(off + i * 32);
+    for (let i = 0; i < currentFormat.entriesPerSector; i++) offsets.push(off + i * currentFormat.entrySize);
     t = data[off];
     s = data[off + 1];
   }
@@ -1812,7 +1907,11 @@ function countActualBlocks(buffer, entryOff) {
 // Free block count per track is a single byte (0-255), stored in BAM.
 // BAM only covers tracks 1-35. Data tracks = tracks 1-35 minus track 18.
 // 34 data tracks × 255 = 8670 max.
-const MAX_FREE_BLOCKS = 8670;
+function getMaxFreeBlocks() {
+  // Max = (number of BAM tracks - 1 for dir track) × 255 per track byte
+  var bamTracks = currentFormat.bamTracksRange(currentTracks);
+  return (bamTracks - 1) * 255;
+}
 
 function writeFreeBlocks(buffer, freeBlocks) {
   const data = new Uint8Array(buffer);
@@ -1902,7 +2001,7 @@ function startEditFreeBlocks(blocksSpan) {
   const input = document.createElement('input');
   input.type = 'number';
   input.min = '0';
-  input.max = String(MAX_FREE_BLOCKS);
+  input.max = String(getMaxFreeBlocks());
   input.value = currentValue;
   input.className = 'blocks-input';
 
@@ -1924,7 +2023,7 @@ function startEditFreeBlocks(blocksSpan) {
     if (reverted) return;
     let value = parseInt(input.value, 10);
     if (isNaN(value) || value < 0) value = 0;
-    if (value > MAX_FREE_BLOCKS) value = MAX_FREE_BLOCKS;
+    if (value > getMaxFreeBlocks()) value = getMaxFreeBlocks();
     writeFreeBlocks(currentBuffer, value);
     cleanup();
     blocksSpan.textContent = value;
@@ -2343,6 +2442,9 @@ fileInput.addEventListener('change', () => {
     } catch (err) {
       showModal('Error', ['Error reading disk image: ' + err.message]);
     }
+  };
+  reader.onerror = () => {
+    showModal('Error', ['Failed to read file: ' + (reader.error ? reader.error.message : 'Unknown error')]);
   };
   reader.readAsArrayBuffer(file);
   fileInput.value = '';

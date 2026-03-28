@@ -123,6 +123,8 @@ const DISK_FORMATS = {
     sizes: [
       { tracks: 70, bytes: 349696, label: '70 Tracks' },
       { tracks: 70, bytes: 351062, label: '70 Tracks + Errors' },
+      { tracks: 80, bytes: 393216, label: '80 Tracks' },
+      { tracks: 80, bytes: 394752, label: '80 Tracks + Errors' },
     ],
     sectorsPerTrack(t) {
       // Both sides have the same layout
@@ -136,7 +138,7 @@ const DISK_FORMATS = {
     // Side 2 BAM: at T53/S0 — free counts at bytes 0-34, bitmaps at bytes 0xDD-0xFF
     // Side 2 free count for track t (36-70) at byte (t - 36)
     // Side 2 bitmap for track t at byte 0xDD + (t - 36) * 3
-    bamTracksRange(numTracks) { return numTracks; },
+    bamTracksRange(numTracks) { return Math.min(numTracks, 70); },
     readTrackFree(data, bamOff, track) {
       if (track <= 35) {
         return data[bamOff + 4 * track];
@@ -295,15 +297,15 @@ const DISK_FORMATS = {
     readTrackBitmap(data, bamOff, track) {
       const base = this._bamBase(bamOff, track);
       // 5 bitmap bytes = 40 bits for 40 sectors
-      return data[base+1] | (data[base+2]<<8) | (data[base+3]<<16) |
-             (data[base+4]<<24) | ((data[base+5] & 0xFF) * 0x100000000);
+      return (data[base+1] | (data[base+2]<<8) | (data[base+3]<<16) |
+             ((data[base+4]<<24) >>> 0)) + ((data[base+5] & 0xFF) * 0x100000000);
     },
     writeTrackBitmap(data, bamOff, track, bm) {
       const base = this._bamBase(bamOff, track);
       data[base+1] = bm & 0xFF;
-      data[base+2] = (bm >> 8) & 0xFF;
-      data[base+3] = (bm >> 16) & 0xFF;
-      data[base+4] = (bm >> 24) & 0xFF;
+      data[base+2] = (bm >>> 8) & 0xFF;
+      data[base+3] = (bm >>> 16) & 0xFF;
+      data[base+4] = (bm >>> 24) & 0xFF;
       data[base+5] = Math.floor(bm / 0x100000000) & 0xFF;
     },
     initBAM(data, bamOff, numTracks) {
@@ -496,6 +498,12 @@ const UNICODE_TO_PETSCII = (() => {
 })();
 
 // Convert PUA PETSCII string to readable ASCII (for tooltips, logs, etc.)
+// Get the offset of the header sector (disk name/ID)
+function getHeaderOffset() {
+  var fmt = currentFormat;
+  return sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector);
+}
+
 function petsciiToReadable(str) {
   var out = '';
   for (var i = 0; i < str.length; i++) {
@@ -508,6 +516,38 @@ function petsciiToReadable(str) {
   }
   return out;
 }
+
+// Check if disk image has error bytes appended
+function hasErrorBytes(buffer) {
+  if (!buffer) return false;
+  var size = buffer.byteLength || buffer.length;
+  for (var key in DISK_FORMATS) {
+    var fmt = DISK_FORMATS[key];
+    for (var i = 0; i < fmt.sizes.length; i++) {
+      if (size === fmt.sizes[i].bytes && fmt.sizes[i].label.indexOf('Errors') >= 0) return true;
+    }
+  }
+  return false;
+}
+
+// Get the offset where error bytes start (after all sector data)
+function getErrorBytesOffset(format, numTracks) {
+  return totalSectors(format, numTracks) * 256;
+}
+
+// Error code descriptions
+var ERROR_CODES = {
+  0x00: 'No error (unused)',
+  0x01: 'OK',
+  0x02: 'Header block not found',
+  0x03: 'No sync mark',
+  0x04: 'Data block not found',
+  0x05: 'Checksum error (data)',
+  0x06: 'Decode error',
+  0x09: 'Checksum error (header)',
+  0x0B: 'ID mismatch',
+  0x0F: 'Drive not ready'
+};
 
 function unicodeToPetscii(char) {
   var cp = char.charCodeAt(0);
@@ -557,10 +597,10 @@ function parseDisk(buffer) {
 
   const fmt = currentFormat;
   const bamOffset = sectorOffset(fmt.bamTrack, fmt.bamSector);
-  const headerOffset = sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector);
+  const headerOff = getHeaderOffset();
 
-  const diskName = readPetsciiString(data, headerOffset + fmt.nameOffset, fmt.nameLength);
-  const diskId = readPetsciiString(data, headerOffset + fmt.idOffset, fmt.idLength, false);
+  const diskName = readPetsciiString(data, headerOff + fmt.nameOffset, fmt.nameLength);
+  const diskId = readPetsciiString(data, headerOff + fmt.idOffset, fmt.idLength, false);
 
   // Count free blocks from BAM
   let freeBlocks = 0;
@@ -658,7 +698,6 @@ function createEmptyDisk(formatKey, numTracks) {
 }
 
 // Backward-compatible alias
-function createEmptyD64(numTracks) { return createEmptyDisk('d64', numTracks); }
 
 // ── Safe PETSCII characters ──────────────────────────────────────────
 var allowUnsafeChars = localStorage.getItem('d64-allowUnsafe') === 'true';
