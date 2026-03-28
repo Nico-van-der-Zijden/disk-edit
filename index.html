@@ -333,8 +333,32 @@
   .dir-entry.selected .dir-blocks,
   .dir-entry.selected .dir-type,
   .dir-entry.selected .dir-addr,
-  .dir-entry.selected .dir-ts {
+  .dir-entry.selected .dir-ts,
+  .dir-entry.selected .dir-icons {
     color: var(--bg);
+  }
+
+  .dir-icons {
+    width: 20px;
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 11px;
+  }
+
+  .dir-icon-geos {
+    cursor: pointer;
+    color: var(--text-muted);
+    opacity: 0.7;
+  }
+
+  .dir-icon-geos:hover {
+    color: var(--accent);
+    opacity: 1;
+  }
+
+  .dir-entry.selected .dir-icon-geos:hover {
+    color: var(--bg);
+    opacity: 0.8;
   }
 
   .dir-blocks {
@@ -1145,6 +1169,8 @@
       <div class="separator"></div>
       <div class="option disabled" id="opt-edit-free">Edit Blocks Free</div>
       <div class="option disabled" id="opt-recalc-free">Recalculate Blocks Free</div>
+      <div class="separator"></div>
+      <div class="option disabled" id="opt-convert-geos">Convert to GEOS Format</div>
     </div>
   </div>
   <div class="menu-item" id="menu-entry">
@@ -1193,6 +1219,8 @@
       <div class="separator"></div>
       <div class="option disabled" id="opt-view-bam">View BAM</div>
       <div class="option disabled" id="opt-view-errors">View Error Bytes</div>
+      <div class="separator"></div>
+      <div class="option disabled" id="opt-view-geos">GEOS File Info</div>
     </div>
   </div>
   <div class="menu-item" id="menu-options">

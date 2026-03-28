@@ -133,6 +133,7 @@ function renderDisk(info) {
           <span class="dir-type">Type</span>
           <span class="dir-ts">T/S</span>
           <span class="dir-addr">Address</span>
+          <span class="dir-icons"></span>
         </div>`;
 
   let entries = info.entries.filter(e => !e.deleted || showDeleted);
@@ -172,6 +173,7 @@ function renderDisk(info) {
           <span class="dir-type">${escHtml(e.type)}</span>
           <span class="dir-ts">${currentBuffer ? ('$' + new Uint8Array(currentBuffer)[e.entryOff + 3].toString(16).toUpperCase().padStart(2, '0') + ' $' + new Uint8Array(currentBuffer)[e.entryOff + 4].toString(16).toUpperCase().padStart(2, '0')) : ''}</span>
           <span class="dir-addr">${addrHtml}</span>
+          <span class="dir-icons">${currentBuffer && new Uint8Array(currentBuffer)[e.entryOff + 0x18] > 0 ? '<span class="dir-icon-geos" data-offset="' + e.entryOff + '" title="GEOS file — click for info"><i class="fa-solid fa-globe"></i></span>' : ''}</span>
         </div>`;
   }
 
@@ -236,6 +238,17 @@ function bindDirSelection() {
     // Click to select/deselect
     el.addEventListener('click', (e) => {
       if (e.target.tagName === 'INPUT' || e.target.classList.contains('editing') || e.target.closest('.editing')) return;
+      // GEOS icon click
+      var geosIcon = e.target.closest('.dir-icon-geos');
+      if (geosIcon) {
+        var geosOff = parseInt(geosIcon.getAttribute('data-offset'), 10);
+        selectedEntryIndex = geosOff;
+        entries.forEach(ent => ent.classList.remove('selected'));
+        el.classList.add('selected');
+        updateEntryMenuState();
+        document.getElementById('opt-view-geos').click();
+        return;
+      }
       cancelActiveEdits();
       const wasSelected = el.classList.contains('selected');
       entries.forEach(e => e.classList.remove('selected'));
@@ -420,6 +433,14 @@ function updateEntryMenuState() {
   document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection);
+
+  // GEOS info — enabled when selected entry has GEOS file type
+  var geosEnabled = false;
+  if (hasSelection) {
+    var gdata = new Uint8Array(currentBuffer);
+    geosEnabled = gdata[selectedEntryIndex + 0x18] > 0;
+  }
+  document.getElementById('opt-view-geos').classList.toggle('disabled', !geosEnabled);
   const lockEl = document.getElementById('opt-lock');
   const splatEl = document.getElementById('opt-splat');
   if (hasSelection) {
@@ -579,6 +600,7 @@ function updateMenuState() {
   document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || !hasErrorBytes(currentBuffer));
+  document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || hasGeosSignature(currentBuffer));
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -942,6 +964,71 @@ document.getElementById('opt-view-errors').addEventListener('click', function(e)
     document.getElementById('modal-overlay').classList.remove('open');
     showSectorHexEditor(bt, bs);
   });
+});
+
+// ── GEOS File Info ────────────────────────────────────────────────────
+document.getElementById('opt-view-geos').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+
+  var geos = readGeosInfo(currentBuffer, selectedEntryIndex);
+  if (!geos.isGeos) {
+    showModal('GEOS Info', ['This file is not a GEOS file.']);
+    return;
+  }
+
+  var data = new Uint8Array(currentBuffer);
+  var name = readPetsciiString(data, selectedEntryIndex + 5, 16);
+  var readableName = petsciiToReadable(name);
+
+  var lines = [];
+  lines.push('File: ' + readableName);
+  lines.push('GEOS Type: ' + geos.fileTypeName);
+  lines.push('Structure: ' + geos.structureName);
+  if (geos.date) lines.push('Date: ' + geos.date);
+
+  // Try to read the info block
+  if (geos.infoTrack > 0) {
+    var infoBlock = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
+    if (infoBlock) {
+      if (infoBlock.className) lines.push('Class: ' + infoBlock.className);
+      lines.push('Load: $' + infoBlock.loadAddr.toString(16).toUpperCase().padStart(4, '0') +
+        ' End: $' + infoBlock.endAddr.toString(16).toUpperCase().padStart(4, '0') +
+        ' Init: $' + infoBlock.initAddr.toString(16).toUpperCase().padStart(4, '0'));
+      if (infoBlock.description) lines.push('Description: ' + infoBlock.description);
+    }
+    lines.push('Info Block: T:$' + geos.infoTrack.toString(16).toUpperCase().padStart(2, '0') +
+      ' S:$' + geos.infoSector.toString(16).toUpperCase().padStart(2, '0'));
+  }
+
+  // Build HTML
+  var html = '<table style="font-size:13px;border-collapse:collapse;width:100%">';
+  for (var i = 0; i < lines.length; i++) {
+    var parts = lines[i].split(': ');
+    if (parts.length >= 2) {
+      var label = parts[0];
+      var value = parts.slice(1).join(': ');
+      html += '<tr><td style="color:var(--text-muted);padding:3px 12px 3px 0;white-space:nowrap;vertical-align:top">' +
+        escHtml(label) + '</td><td style="padding:3px 0;white-space:pre-wrap">' + escHtml(value) + '</td></tr>';
+    } else {
+      html += '<tr><td colspan="2" style="padding:3px 0">' + escHtml(lines[i]) + '</td></tr>';
+    }
+  }
+  html += '</table>';
+
+  showModal('GEOS File Info', []);
+  document.getElementById('modal-body').innerHTML = html;
+});
+
+// ── Convert to GEOS ──────────────────────────────────────────────────
+document.getElementById('opt-convert-geos').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || hasGeosSignature(currentBuffer)) return;
+  closeMenus();
+  writeGeosSignature(currentBuffer);
+  updateMenuState();
+  showModal('Convert to GEOS', ['Disk has been marked as GEOS format.']);
 });
 
 // ── Options menu ──────────────────────────────────────────────────────

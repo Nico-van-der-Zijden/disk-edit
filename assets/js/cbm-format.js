@@ -549,6 +549,180 @@ var ERROR_CODES = {
   0x0F: 'Drive not ready'
 };
 
+// ── GEOS support ─────────────────────────────────────────────────────
+var GEOS_FILE_TYPES = {
+  0x00: 'Non-GEOS',
+  0x01: 'BASIC',
+  0x02: 'Assembler',
+  0x03: 'Data file',
+  0x04: 'System file',
+  0x05: 'Desk accessory',
+  0x06: 'Application',
+  0x07: 'Application data',
+  0x08: 'Font file',
+  0x09: 'Printer driver',
+  0x0A: 'Input driver',
+  0x0B: 'Disk driver/device',
+  0x0C: 'System boot file',
+  0x0D: 'Temporary',
+  0x0E: 'Auto-exec file',
+  0x0F: 'Input 128',
+  0x10: 'Numerics',
+  0x11: 'Help file',
+  0x12: 'MEGA patch',
+  0x13: 'Write image',
+  0x14: 'Paint image',
+  0x15: 'Photo scrap',
+  0x16: 'Text scrap',
+  0x17: 'Text album',
+  0x18: 'Photo album',
+  0x19: 'Cardset',
+  0x1A: 'Gateway GeoCalc',
+  0x1B: 'Gateway GeoFile',
+  0x1C: 'Sound file',
+  0x1D: 'Configuration',
+};
+
+var GEOS_STRUCTURE_TYPES = {
+  0x00: 'Sequential',
+  0x01: 'VLIR',
+  0x02: 'Chained VLIR',
+};
+
+var GEOS_SIGNATURE = 'GEOS format V1.0';
+var GEOS_SIG_OFFSET = 0xAD; // offset within BAM sector
+
+// Check if the GEOS signature is present in the BAM sector
+function hasGeosSignature(buffer) {
+  if (!buffer) return false;
+  var data = new Uint8Array(buffer);
+  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  if (bamOff < 0) return false;
+  for (var i = 0; i < GEOS_SIGNATURE.length; i++) {
+    if (data[bamOff + GEOS_SIG_OFFSET + i] !== GEOS_SIGNATURE.charCodeAt(i)) return false;
+  }
+  return true;
+}
+
+// Write the GEOS signature to the BAM sector
+function writeGeosSignature(buffer) {
+  var data = new Uint8Array(buffer);
+  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  if (bamOff < 0) return;
+  for (var i = 0; i < GEOS_SIGNATURE.length; i++) {
+    data[bamOff + GEOS_SIG_OFFSET + i] = GEOS_SIGNATURE.charCodeAt(i);
+  }
+  // Also set the "border" byte at 0xAB to 0x00 (GEOS uses this)
+  data[bamOff + 0xAB] = 0x00;
+  data[bamOff + 0xAC] = 0x00;
+}
+
+// Check if a disk has GEOS formatting (border sector signature at T18/S0 offset 0xAD)
+function isGeosDisk(buffer) {
+  if (!buffer) return false;
+  var data = new Uint8Array(buffer);
+  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  if (bamOff < 0) return false;
+  // GEOS identification: bytes at BAM offset 0xAD-0xBC contain "GEOS format"
+  // or the border sector has specific values. A simpler check: look for any
+  // directory entry with GEOS file type > 0
+  var info = parseDisk(buffer);
+  for (var i = 0; i < info.entries.length; i++) {
+    var eOff = info.entries[i].entryOff;
+    if (data[eOff + 0x18] > 0) return true; // GEOS file type at byte 24
+  }
+  return false;
+}
+
+// Read GEOS info for a directory entry
+function readGeosInfo(buffer, entryOff) {
+  var data = new Uint8Array(buffer);
+  var infoTrack = data[entryOff + 0x15];     // byte 21: info block track
+  var infoSector = data[entryOff + 0x16];    // byte 22: info block sector
+  var geosStructure = data[entryOff + 0x17]; // byte 23: structure type
+  var geosFileType = data[entryOff + 0x18];  // byte 24: GEOS file type
+  var year = data[entryOff + 0x19];          // byte 25: year (0-99, + 1900)
+  var month = data[entryOff + 0x1A];         // byte 26: month (1-12)
+  var day = data[entryOff + 0x1B];           // byte 27: day (1-31)
+  var hour = data[entryOff + 0x1C];          // byte 28: hour (0-23)
+  var minute = data[entryOff + 0x1D];        // byte 29: minute (0-59)
+
+  var fullYear = year > 0 ? (year < 50 ? 2000 + year : 1900 + year) : 0;
+
+  var result = {
+    isGeos: geosFileType > 0,
+    structure: geosStructure,
+    structureName: GEOS_STRUCTURE_TYPES[geosStructure] || 'Unknown ($' + geosStructure.toString(16).toUpperCase().padStart(2, '0') + ')',
+    fileType: geosFileType,
+    fileTypeName: GEOS_FILE_TYPES[geosFileType] || 'Unknown ($' + geosFileType.toString(16).toUpperCase().padStart(2, '0') + ')',
+    year: fullYear,
+    month: month,
+    day: day,
+    hour: hour,
+    minute: minute,
+    date: '',
+    infoTrack: infoTrack,
+    infoSector: infoSector,
+  };
+
+  if (fullYear > 0 && month > 0 && month <= 12 && day > 0 && day <= 31) {
+    result.date = fullYear + '-' +
+      String(month).padStart(2, '0') + '-' +
+      String(day).padStart(2, '0') + ' ' +
+      String(hour).padStart(2, '0') + ':' +
+      String(minute).padStart(2, '0');
+  }
+
+  return result;
+}
+
+// Read GEOS info block (256-byte sector with icon, description, class, author)
+function readGeosInfoBlock(buffer, track, sector) {
+  if (track === 0) return null;
+  var off = sectorOffset(track, sector);
+  if (off < 0) return null;
+  var data = new Uint8Array(buffer);
+
+  // Info block layout:
+  // 0x00-0x01: info block ID bytes (should be 0x00, 0xFF)
+  // 0x02-0x03: icon width (bytes), height (pixels)
+  // 0x04-0x43: icon sprite data (63 bytes)
+  // 0x44: CBM file type
+  // 0x45: GEOS file type
+  // 0x46: GEOS structure type
+  // 0x47-0x48: load address
+  // 0x49-0x4A: end address
+  // 0x4B-0x4C: init address
+  // 0x4D-0x60: class name (20 bytes, 0x00 terminated)
+  // 0x61-0x74: author (20 bytes, 0x00 terminated)  — actually at different offset
+  // 0x85-0xFE: file description (free-form text, 0x00 terminated)
+
+  var className = '';
+  for (var i = 0x4D; i < 0x61; i++) {
+    if (data[off + i] === 0x00) break;
+    className += petsciiToReadable(PETSCII_MAP[data[off + i]]);
+  }
+
+  // Description starts around 0x61 or later — varies by GEOS version
+  // Safer: read from 0x61 to end, stop at 0x00
+  var description = '';
+  for (var j = 0x61; j < 0xFF; j++) {
+    if (data[off + j] === 0x00) break;
+    var ch = data[off + j];
+    if (ch >= 0x20 && ch <= 0x7E) description += String.fromCharCode(ch);
+    else if (ch === 0x0D) description += '\n';
+    else description += '.';
+  }
+
+  return {
+    className: className,
+    description: description,
+    loadAddr: data[off + 0x47] | (data[off + 0x48] << 8),
+    endAddr: data[off + 0x49] | (data[off + 0x4A] << 8),
+    initAddr: data[off + 0x4B] | (data[off + 0x4C] << 8),
+  };
+}
+
 function unicodeToPetscii(char) {
   var cp = char.charCodeAt(0);
   if (cp >= 0xE000 && cp <= 0xE0FF) return cp - 0xE000;
