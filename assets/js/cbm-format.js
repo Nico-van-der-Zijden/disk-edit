@@ -495,6 +495,20 @@ const UNICODE_TO_PETSCII = (() => {
   return rev;
 })();
 
+// Convert PUA PETSCII string to readable ASCII (for tooltips, logs, etc.)
+function petsciiToReadable(str) {
+  var out = '';
+  for (var i = 0; i < str.length; i++) {
+    var cp = str.charCodeAt(i);
+    if (cp >= 0xE041 && cp <= 0xE05A) out += String.fromCharCode(cp - 0xE000); // A-Z
+    else if (cp >= 0xE020 && cp <= 0xE03F) out += String.fromCharCode(cp - 0xE000); // space, punct, digits
+    else if (cp === 0xE040) out += '@';
+    else if (cp >= 0xE000 && cp <= 0xE0FF) out += '.'; // graphics → dot
+    else out += str[i];
+  }
+  return out;
+}
+
 function unicodeToPetscii(char) {
   var cp = char.charCodeAt(0);
   if (cp >= 0xE000 && cp <= 0xE0FF) return cp - 0xE000;

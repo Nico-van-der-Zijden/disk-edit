@@ -6,6 +6,74 @@ var selectedEntryIndex = -1;
 var showAddresses = localStorage.getItem('d64-showAddresses') === 'true';
 var showTrackSector = localStorage.getItem('d64-showTrackSector') === 'true';
 
+// ── BAM integrity check (read-only, doesn't modify disk) ─────────────
+// Returns { sectorOwner: {}, bamErrors: [], allocMismatch: number }
+function checkBAMIntegrity(buffer) {
+  var data = new Uint8Array(buffer);
+  var fmt = currentFormat;
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var bamTracks = fmt.bamTracksRange(currentTracks);
+
+  // Follow all file chains to build sector ownership map
+  var sectorOwner = {};
+  var info = parseDisk(buffer);
+  for (var fi = 0; fi < info.entries.length; fi++) {
+    var entry = info.entries[fi];
+    if (entry.deleted) continue;
+    var ft = data[entry.entryOff + 3];
+    var fs = data[entry.entryOff + 4];
+    var visited = {};
+    while (ft !== 0 && ft <= currentTracks) {
+      if (fs >= fmt.sectorsPerTrack(ft)) break;
+      var key = ft + ':' + fs;
+      if (visited[key]) break;
+      visited[key] = true;
+      sectorOwner[key] = entry.name || '?';
+      var soff = sectorOffset(ft, fs);
+      if (soff < 0) break;
+      ft = data[soff]; fs = data[soff + 1];
+    }
+  }
+
+  // Check free count vs bitmap bits
+  var bamErrors = [];
+  var errorTracks = {}; // track → true
+  for (var t = 1; t <= bamTracks; t++) {
+    var spt = fmt.sectorsPerTrack(t);
+    var storedFree = fmt.readTrackFree(data, bamOff, t);
+    var bm = fmt.readTrackBitmap(data, bamOff, t);
+    var actualFree = 0;
+    for (var s = 0; s < spt; s++) {
+      if (bm & (1 << s)) actualFree++;
+    }
+    if (storedFree !== actualFree) {
+      bamErrors.push('T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
+        ' count=' + storedFree + ' actual=' + actualFree);
+      errorTracks[t] = true;
+    }
+  }
+
+  // Check for sectors used by files but marked free in BAM
+  var allocMismatch = 0;
+  var errorSectors = {}; // "t:s" → true
+  for (t = 1; t <= bamTracks; t++) {
+    if (t === fmt.dirTrack) continue;
+    var spt2 = fmt.sectorsPerTrack(t);
+    var bm2 = fmt.readTrackBitmap(data, bamOff, t);
+    for (var s2 = 0; s2 < spt2; s2++) {
+      var isFree = (bm2 & (1 << s2)) !== 0;
+      var isUsed = sectorOwner[t + ':' + s2] !== undefined;
+      if (isFree && isUsed) {
+        allocMismatch++;
+        errorSectors[t + ':' + s2] = true;
+      }
+    }
+  }
+
+  return { sectorOwner: sectorOwner, bamErrors: bamErrors, allocMismatch: allocMismatch,
+           errorTracks: errorTracks, errorSectors: errorSectors };
+}
+
 // ── Allowed C64 characters ────────────────────────────────────────────
 function isValidPetscii(ch) {
   return UNICODE_TO_PETSCII.has(ch);
@@ -106,13 +174,14 @@ function validateDisk(buffer) {
       if (!name.trim() && fileType === 0) continue;
       const fileTrack = data[entryOff + 3];
       const fileSector = data[entryOff + 4];
+      var rname = petsciiToReadable(name);
       if (!closed) {
-        log.push(`Removed splat file: "${name}"`);
+        log.push('Removed splat file: "' + rname + '"');
         data[entryOff + 2] = 0x00;
         splatCount++;
         continue;
       }
-      const label = `"${name}"`;
+      var label = '"' + rname + '"';
       const result = followChain(fileTrack, fileSector, label);
       const expectedBlocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
       if (result.blocks !== expectedBlocks && !result.error) {

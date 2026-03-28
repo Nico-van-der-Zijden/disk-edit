@@ -1,6 +1,12 @@
 // ── Modal ─────────────────────────────────────────────────────────────
 function showModal(title, lines) {
   document.getElementById('modal-title').textContent = title;
+  // Always restore the standard OK footer
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
   const body = document.getElementById('modal-body');
   body.innerHTML = '';
   const isSummary = l => l.startsWith('Validation complete') || l.startsWith('Disk is valid');
@@ -174,7 +180,7 @@ function renderDisk(info) {
       <div class="dir-footer">
         <span class="dir-footer-blocks">${info.freeBlocks}</span>
         <span class="dir-footer-label">blocks free.</span>
-        <span class="dir-footer-tracks">${currentFormat.name} ${currentTracks} tracks</span>
+        <span class="dir-footer-tracks"><span id="footer-ts"></span>${currentFormat.name} ${currentTracks} tracks</span>
       </div>
     </div>`;
 
@@ -412,6 +418,8 @@ function updateEntryMenuState() {
   document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection);
+  document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection);
+  document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection);
   const lockEl = document.getElementById('opt-lock');
   const splatEl = document.getElementById('opt-splat');
   if (hasSelection) {
@@ -430,6 +438,34 @@ function updateEntryMenuState() {
     splatEl.textContent = 'Scratch File';
     for (let i = 0; i < 5; i++) {
       document.getElementById('check-type-' + i).textContent = '';
+    }
+  }
+
+  // Update footer T/S display
+  var footerTs = document.getElementById('footer-ts');
+  if (footerTs) {
+    if (hasSelection) {
+      // Find which directory sector this entry is in
+      var slots = getDirSlotOffsets(currentBuffer);
+      var slotIdx = slots.indexOf(selectedEntryIndex);
+      var dirSectorIdx = Math.floor(slotIdx / currentFormat.entriesPerSector);
+      var entryInSector = slotIdx % currentFormat.entriesPerSector;
+      // Walk the directory chain to find the actual T/S
+      var data2 = new Uint8Array(currentBuffer);
+      var dt = currentFormat.dirTrack, ds = currentFormat.dirSector;
+      var dVisited = new Set();
+      for (var di = 0; di < dirSectorIdx && dt !== 0; di++) {
+        var dk = dt + ':' + ds;
+        if (dVisited.has(dk)) break;
+        dVisited.add(dk);
+        var doff = sectorOffset(dt, ds);
+        dt = data2[doff]; ds = data2[doff + 1];
+      }
+      footerTs.textContent = 'T:$' + dt.toString(16).toUpperCase().padStart(2, '0') +
+        ' S:$' + ds.toString(16).toUpperCase().padStart(2, '0') +
+        ' E:' + entryInSector + ' | ';
+    } else {
+      footerTs.textContent = '';
     }
   }
 }
@@ -542,6 +578,7 @@ function updateMenuState() {
   document.getElementById('opt-sort').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-edit-free').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk);
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -694,6 +731,129 @@ document.getElementById('opt-show-ts').addEventListener('click', (e) => {
   }
 });
 
+// ── BAM Viewer ───────────────────────────────────────────────────────
+document.getElementById('opt-view-bam').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+
+  var data = new Uint8Array(currentBuffer);
+  var fmt = currentFormat;
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var bamTracks = fmt.bamTracksRange(currentTracks);
+
+  // Use shared BAM integrity check
+  var bamCheck = checkBAMIntegrity(currentBuffer);
+  var sectorOwner = bamCheck.sectorOwner;
+
+  var bamWarnings = '';
+  if (bamCheck.bamErrors.length > 0 || bamCheck.allocMismatch > 0) {
+    bamWarnings += '<ul style="color:#f38ba8;margin:0 0 8px;padding-left:20px;font-size:12px;list-style:none">';
+    if (bamCheck.bamErrors.length > 0) {
+      bamWarnings += '<li><i class="fa-solid fa-triangle-exclamation"></i> ' +
+        bamCheck.bamErrors.length + ' track(s) with wrong free count</li>';
+    }
+    if (bamCheck.allocMismatch > 0) {
+      bamWarnings += '<li><i class="fa-solid fa-triangle-exclamation"></i> ' +
+        bamCheck.allocMismatch + ' sector(s) marked free but used by files</li>';
+    }
+    bamWarnings += '</ul>';
+  }
+
+  // Find max sectors for header
+  var maxSpt = 0;
+  for (var t = 1; t <= bamTracks; t++) {
+    var spt = fmt.sectorsPerTrack(t);
+    if (spt > maxSpt) maxSpt = spt;
+  }
+
+  // Build the BAM visualization
+  var html = '<div class="bam-legend">' +
+    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent)"></span> Used</span>' +
+    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent);opacity:0.25"></span> Free</span>' +
+    '<span class="bam-legend-item"><span class="bam-legend-box bam-sector dir-used"></span> Dir Used</span>' +
+    '<span class="bam-legend-item"><span class="bam-legend-box bam-sector dir-free"></span> Dir Free</span>' +
+    '</div>';
+
+  // Sector number header
+  html += '<div class="bam-header">';
+  html += '<span class="bam-header-spacer"></span>';
+  html += '<span class="bam-header-sectors">';
+  for (var h = 0; h < maxSpt; h++) {
+    html += '<span class="bam-header-num">' + h.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+  }
+  html += '</span></div>';
+
+  html += '<div class="bam-viewer">';
+
+  var totalFree = 0;
+  var totalUsed = 0;
+
+  for (t = 1; t <= bamTracks; t++) {
+    spt = fmt.sectorsPerTrack(t);
+    var free = fmt.readTrackFree(data, bamOff, t);
+    var bm = fmt.readTrackBitmap(data, bamOff, t);
+    var isDirTrack = (t === fmt.dirTrack);
+
+    html += '<div class="bam-track">';
+    html += '<span class="bam-track-num' + (bamCheck.errorTracks[t] ? ' error' : '') + '">$' + t.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+    html += '<span class="bam-sectors">';
+
+    for (var s = 0; s < spt; s++) {
+      var isFree = (bm & (1 << s)) !== 0;
+      var cls = 'bam-sector';
+      if (isDirTrack) {
+        cls += isFree ? ' dir-free' : ' dir-used';
+      } else {
+        cls += isFree ? ' free' : ' used';
+      }
+      if (isFree) totalFree++; else totalUsed++;
+
+      var tooltip = 'T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
+        ' S:$' + s.toString(16).toUpperCase().padStart(2, '0');
+      if (isFree) {
+        tooltip += ' (free)';
+      } else if (isDirTrack) {
+        tooltip += ' (directory)';
+      } else {
+        var owner = sectorOwner[t + ':' + s];
+        if (owner) {
+          tooltip += ' (' + petsciiToReadable(owner) + ')';
+        } else {
+          tooltip += ' (used)';
+        }
+      }
+
+      if (bamCheck.errorSectors[t + ':' + s]) cls += ' error';
+      html += '<span class="' + cls + '" data-t="' + t + '" data-s="' + s + '" title="' + escHtml(tooltip) + '"></span>';
+    }
+
+    html += '</span>';
+    html += '</div>';
+  }
+
+  html += '</div>';
+
+  var title = 'BAM \u2014 ' + totalFree + ' free, ' + totalUsed + ' used of ' +
+    (totalFree + totalUsed) + ' sectors';
+  html = bamWarnings + html;
+  showModal(title, []);
+  var bamBody = document.getElementById('modal-body');
+  bamBody.innerHTML = html;
+
+  // Click on a sector block to open sector editor
+  bamBody.addEventListener('click', function(e) {
+    var block = e.target.closest('.bam-sector');
+    if (!block) return;
+    var bt = parseInt(block.getAttribute('data-t'), 10);
+    var bs = parseInt(block.getAttribute('data-s'), 10);
+    if (isNaN(bt) || isNaN(bs)) return;
+    // Close BAM modal and open sector editor
+    document.getElementById('modal-overlay').classList.remove('open');
+    showSectorHexEditor(bt, bs);
+  });
+});
+
 // ── Options menu ──────────────────────────────────────────────────────
 document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
   e.stopPropagation();
@@ -703,6 +863,352 @@ document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
   document.getElementById('check-unsafe').innerHTML = allowUnsafeChars ? '<i class="fa-solid fa-check"></i>' : '';
   // Re-render picker if open
   if (pickerTarget) renderPicker();
+});
+
+// ── Hex sector editor ─────────────────────────────────────────────────
+function showSectorHexEditor(track, sector) {
+  if (!currentBuffer) return;
+  var off = sectorOffset(track, sector);
+  if (off < 0) return;
+  var data = new Uint8Array(currentBuffer);
+
+  // Copy original sector data for comparison
+  var original = new Uint8Array(256);
+  for (var i = 0; i < 256; i++) original[i] = data[off + i];
+
+  // Working copy
+  var working = new Uint8Array(256);
+  for (i = 0; i < 256; i++) working[i] = original[i];
+
+  var html = '<div class="hex-editor">';
+  for (var row = 0; row < 32; row++) {
+    var rowOff = row * 8;
+    html += '<div class="hex-row">';
+    html += '<span class="hex-offset">' + rowOff.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+    html += '<span class="hex-bytes">';
+    for (var col = 0; col < 8; col++) {
+      var idx = rowOff + col;
+      var b = working[idx];
+      html += '<span class="hex-byte" data-idx="' + idx + '" data-row="' + row + '">' +
+        b.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+    }
+    html += '</span>';
+    html += '<span class="hex-separator"></span>';
+    html += '<span class="hex-ascii">';
+    for (var col2 = 0; col2 < 8; col2++) {
+      var idx2 = rowOff + col2;
+      html += '<span class="hex-char" data-idx="' + idx2 + '">' + escHtml(PETSCII_MAP[working[idx2]]) + '</span>';
+    }
+    html += '</span>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Show modal with editable T/S in title and custom footer
+  var titleEl = document.getElementById('modal-title');
+  titleEl.innerHTML = 'Sector Editor \u2014 T:$' +
+    '<span class="hex-nav-group">' +
+      '<span id="hex-nav-track" class="hex-nav-field">' + track.toString(16).toUpperCase().padStart(2, '0') + '</span>' +
+      '<span class="hex-nav-arrows">' +
+        '<span class="hex-nav-btn" id="hex-track-up"><i class="fa-solid fa-chevron-up"></i></span>' +
+        '<span class="hex-nav-btn" id="hex-track-down"><i class="fa-solid fa-chevron-down"></i></span>' +
+      '</span>' +
+    '</span>' +
+    ' S:$' +
+    '<span class="hex-nav-group">' +
+      '<span id="hex-nav-sector" class="hex-nav-field">' + sector.toString(16).toUpperCase().padStart(2, '0') + '</span>' +
+      '<span class="hex-nav-arrows">' +
+        '<span class="hex-nav-btn" id="hex-sector-up"><i class="fa-solid fa-chevron-up"></i></span>' +
+        '<span class="hex-nav-btn" id="hex-sector-down"><i class="fa-solid fa-chevron-down"></i></span>' +
+      '</span>' +
+    '</span>';
+
+  var body = document.getElementById('modal-body');
+  body.innerHTML = html;
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  var origFooter = footer.innerHTML;
+  footer.innerHTML = '<button id="hex-cancel" class="modal-btn-secondary">Cancel</button><button id="hex-save">Save</button>';
+  document.getElementById('modal-overlay').classList.add('open');
+
+  var navTrack = track;
+  var navSector = sector;
+
+  function saveCurrentAndNavigate(newTrack, newSector) {
+    // Save current edits if modified
+    var hasChanges = false;
+    for (var c = 0; c < 256; c++) { if (working[c] !== original[c]) { hasChanges = true; break; } }
+    if (hasChanges) {
+      for (var c2 = 0; c2 < 256; c2++) data[off + c2] = working[c2];
+    }
+    document.removeEventListener('keydown', onKeyDown);
+    document.getElementById('modal-overlay').classList.remove('open');
+    footer.innerHTML = origFooter;
+    document.getElementById('modal-close').addEventListener('click', function() {
+      document.getElementById('modal-overlay').classList.remove('open');
+    });
+    showSectorHexEditor(newTrack, newSector);
+  }
+
+  // Click track/sector field to edit inline
+  function setupNavClick(spanId, getValue, validateFn, onCommit) {
+    var span = document.getElementById(spanId);
+    if (!span) return;
+    span.addEventListener('click', function() {
+      if (span.querySelector('input')) return;
+      var curVal = getValue();
+      var input = createHexInput({ value: curVal, maxBytes: 1, validate: validateFn });
+      span.textContent = '';
+      span.appendChild(input);
+      input.focus();
+      input.select();
+      function commit() {
+        if (input.isValid()) {
+          onCommit(input.getValue());
+        } else {
+          span.textContent = getValue().toString(16).toUpperCase().padStart(2, '0');
+        }
+      }
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); span.textContent = getValue().toString(16).toUpperCase().padStart(2, '0'); }
+        else if (e.key === 'Tab') { e.preventDefault(); commit(); }
+      });
+      input.addEventListener('blur', function() {
+        setTimeout(function() { if (span.querySelector('input')) commit(); }, 150);
+      });
+    });
+  }
+
+  setupNavClick('hex-nav-track',
+    function() { return navTrack; },
+    function(val) { return val >= 1 && val <= currentTracks; },
+    function(newTrack) {
+      navTrack = newTrack;
+      // Only reset sector if current sector is invalid for the new track
+      if (navSector >= sectorsPerTrack(navTrack)) navSector = 0;
+      document.getElementById('hex-nav-track').textContent = newTrack.toString(16).toUpperCase().padStart(2, '0');
+      // Auto-focus sector
+      var secSpan = document.getElementById('hex-nav-sector');
+      secSpan.textContent = navSector.toString(16).toUpperCase().padStart(2, '0');
+      setTimeout(function() { secSpan.click(); }, 50);
+    }
+  );
+
+  setupNavClick('hex-nav-sector',
+    function() { return navSector; },
+    function(val) { return val >= 0 && val < sectorsPerTrack(navTrack); },
+    function(newSector) {
+      navSector = newSector;
+      saveCurrentAndNavigate(navTrack, navSector);
+    }
+  );
+
+  // Arrow buttons
+  document.getElementById('hex-track-up').addEventListener('click', function() {
+    if (navTrack < currentTracks) {
+      navTrack++;
+      if (navSector >= sectorsPerTrack(navTrack)) navSector = 0;
+      saveCurrentAndNavigate(navTrack, navSector);
+    }
+  });
+  document.getElementById('hex-track-down').addEventListener('click', function() {
+    if (navTrack > 1) {
+      navTrack--;
+      if (navSector >= sectorsPerTrack(navTrack)) navSector = 0;
+      saveCurrentAndNavigate(navTrack, navSector);
+    }
+  });
+  document.getElementById('hex-sector-up').addEventListener('click', function() {
+    if (navSector < sectorsPerTrack(navTrack) - 1) {
+      navSector++;
+    } else if (navTrack < currentTracks) {
+      navTrack++;
+      navSector = 0;
+    } else {
+      return;
+    }
+    saveCurrentAndNavigate(navTrack, navSector);
+  });
+  document.getElementById('hex-sector-down').addEventListener('click', function() {
+    if (navSector > 0) {
+      navSector--;
+    } else if (navTrack > 1) {
+      navTrack--;
+      navSector = sectorsPerTrack(navTrack) - 1;
+    } else {
+      return;
+    }
+    saveCurrentAndNavigate(navTrack, navSector);
+  });
+
+  var editingByte = null;
+  var editBuffer = '';
+
+  function updateByte(idx, val) {
+    working[idx] = val;
+    var byteEl = body.querySelector('.hex-byte[data-idx="' + idx + '"]');
+    var charEl = body.querySelector('.hex-char[data-idx="' + idx + '"]');
+    if (byteEl) {
+      byteEl.textContent = val.toString(16).toUpperCase().padStart(2, '0');
+      byteEl.classList.toggle('modified', val !== original[idx]);
+    }
+    if (charEl) charEl.innerHTML = escHtml(PETSCII_MAP[val]);
+  }
+
+  function startEdit(idx) {
+    stopEdit();
+    editingByte = idx;
+    editBuffer = '';
+    var el = body.querySelector('.hex-byte[data-idx="' + idx + '"]');
+    if (el) el.classList.add('editing');
+  }
+
+  function stopEdit() {
+    if (editingByte !== null) {
+      var el = body.querySelector('.hex-byte[data-idx="' + editingByte + '"]');
+      if (el) el.classList.remove('editing');
+      if (editBuffer.length === 1) {
+        // Partial input — apply as high nibble with 0 low nibble
+        updateByte(editingByte, parseInt(editBuffer + '0', 16));
+      }
+    }
+    editingByte = null;
+    editBuffer = '';
+  }
+
+  // Click to start editing a byte
+  body.addEventListener('click', function(e) {
+    var byteEl = e.target.closest('.hex-byte');
+    if (byteEl) {
+      var idx = parseInt(byteEl.getAttribute('data-idx'), 10);
+      startEdit(idx);
+    }
+  });
+
+  // Keyboard input for hex editing
+  function onKeyDown(e) {
+    if (editingByte === null) return;
+    var hexChar = e.key.toUpperCase();
+
+    if (/^[0-9A-F]$/.test(hexChar)) {
+      e.preventDefault();
+      editBuffer += hexChar;
+      // Show partial input
+      var el = body.querySelector('.hex-byte[data-idx="' + editingByte + '"]');
+      if (el) el.textContent = editBuffer.padEnd(2, '_');
+
+      if (editBuffer.length === 2) {
+        var val = parseInt(editBuffer, 16);
+        updateByte(editingByte, val);
+        var curRow = Math.floor(editingByte / 8);
+        var curCol = editingByte % 8;
+        el.classList.remove('editing');
+        if (curCol < 7) {
+          // Move to next byte on same row
+          startEdit(editingByte + 1);
+        } else {
+          // Last byte on row — stop editing
+          stopEdit();
+        }
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      // Revert current byte to working value
+      var el2 = body.querySelector('.hex-byte[data-idx="' + editingByte + '"]');
+      if (el2) {
+        el2.textContent = working[editingByte].toString(16).toUpperCase().padStart(2, '0');
+        el2.classList.remove('editing');
+      }
+      editingByte = null;
+      editBuffer = '';
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      stopEdit();
+      var next = e.shiftKey ? editingByte - 1 : editingByte + 1;
+      if (next >= 0 && next < 256) startEdit(next);
+    } else if (e.key === 'ArrowRight' && editBuffer.length === 0) {
+      e.preventDefault();
+      stopEdit();
+      if (editingByte < 255) startEdit(editingByte + 1);
+    } else if (e.key === 'ArrowLeft' && editBuffer.length === 0) {
+      e.preventDefault();
+      stopEdit();
+      if (editingByte > 0) startEdit(editingByte - 1);
+    }
+  }
+
+  document.addEventListener('keydown', onKeyDown);
+
+  // Highlight on hover
+  body.addEventListener('mouseover', function(e) {
+    var t = e.target.closest('[data-idx]');
+    if (!t) return;
+    var idx = t.getAttribute('data-idx');
+    body.querySelectorAll('.highlight').forEach(function(el) { el.classList.remove('highlight'); });
+    body.querySelectorAll('[data-idx="' + idx + '"]').forEach(function(el) { el.classList.add('highlight'); });
+  });
+  body.addEventListener('mouseout', function(e) {
+    var t = e.target.closest('[data-idx]');
+    if (t) body.querySelectorAll('.highlight').forEach(function(el) { el.classList.remove('highlight'); });
+  });
+
+  // Close handlers
+  function closeEditor(save) {
+    document.removeEventListener('keydown', onKeyDown);
+    if (save) {
+      // Write working copy back to disk buffer
+      for (var i = 0; i < 256; i++) data[off + i] = working[i];
+      // Re-render disk view
+      var info = parseD64(currentBuffer);
+      renderDisk(info);
+    }
+    document.getElementById('modal-overlay').classList.remove('open');
+    footer.innerHTML = origFooter;
+    // Re-attach the OK button handler
+    document.getElementById('modal-close').addEventListener('click', function() {
+      document.getElementById('modal-overlay').classList.remove('open');
+    });
+  }
+
+  document.getElementById('hex-save').addEventListener('click', function() { closeEditor(true); });
+  document.getElementById('hex-cancel').addEventListener('click', function() { closeEditor(false); });
+}
+
+document.getElementById('opt-edit-sector').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+
+  // Find which directory sector this entry is in
+  var slots = getDirSlotOffsets(currentBuffer);
+  var slotIdx = slots.indexOf(selectedEntryIndex);
+  var dirSectorIdx = Math.floor(slotIdx / currentFormat.entriesPerSector);
+  var data = new Uint8Array(currentBuffer);
+  var dt = currentFormat.dirTrack, ds = currentFormat.dirSector;
+  var visited = new Set();
+  for (var i = 0; i < dirSectorIdx && dt !== 0; i++) {
+    var key = dt + ':' + ds;
+    if (visited.has(key)) break;
+    visited.add(key);
+    var doff = sectorOffset(dt, ds);
+    dt = data[doff]; ds = data[doff + 1];
+  }
+
+  showSectorHexEditor(dt, ds);
+});
+
+document.getElementById('opt-edit-file-sector').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+
+  // Get the file's starting track/sector from the directory entry
+  var data = new Uint8Array(currentBuffer);
+  var ft = data[selectedEntryIndex + 3];
+  var fs = data[selectedEntryIndex + 4];
+  if (ft === 0) return; // no file data
+
+  showSectorHexEditor(ft, fs);
 });
 
 document.getElementById('opt-edit-free').addEventListener('click', (e) => {
@@ -1559,8 +2065,9 @@ function startEditTrackSector(entryEl) {
     data[entryOff + 3] = newTrack;
     data[entryOff + 4] = newSector;
     cleanup();
-    tsSpan.textContent = '$' + newTrack.toString(16).toUpperCase().padStart(2, '0') +
-      ' $' + newSector.toString(16).toUpperCase().padStart(2, '0');
+    // Re-render to update address column
+    const info = parseD64(currentBuffer);
+    renderDisk(info);
   }
 
   function revert() {
