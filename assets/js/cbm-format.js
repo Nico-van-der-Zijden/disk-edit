@@ -8,11 +8,13 @@ const DISK_FORMATS = {
     ext: '.d64',
     dirTrack: 18,
     dirSector: 1,
+    headerTrack: 18,     // disk name/ID are in BAM sector for D64
+    headerSector: 0,
     bamTrack: 18,
     bamSector: 0,
     dosVersion: 0x41,    // 'A'
     dosType: '2A',
-    nameOffset: 0x90,    // offset within BAM sector for disk name
+    nameOffset: 0x90,    // offset within header sector for disk name
     nameLength: 16,
     idOffset: 0xA2,      // offset within BAM sector for disk ID
     idLength: 5,
@@ -102,6 +104,8 @@ const DISK_FORMATS = {
     ext: '.d71',
     dirTrack: 18,
     dirSector: 1,
+    headerTrack: 18,
+    headerSector: 0,
     bamTrack: 18,
     bamSector: 0,
     bamTrack2: 53,       // BAM for side 2
@@ -247,16 +251,18 @@ const DISK_FORMATS = {
     ext: '.d81',
     dirTrack: 40,
     dirSector: 3,
+    headerTrack: 40,    // disk name/ID are in the header sector (T40/S0)
+    headerSector: 0,
     bamTrack: 40,
     bamSector: 1,       // BAM spans sectors 1 and 2
     bamSector2: 2,
     dosVersion: 0x44,   // 'D'
     dosType: '3D',
-    nameOffset: 0x04,   // offset within BAM sector 1 for disk name
+    nameOffset: 0x04,   // offset within HEADER sector for disk name
     nameLength: 16,
-    idOffset: 0x16,     // offset within BAM sector 1 for disk ID
+    idOffset: 0x16,     // offset within HEADER sector for disk ID
     idLength: 5,
-    maxDirSectors: 39,  // sectors 3-39 + more on track 40
+    maxDirSectors: 39,
     entriesPerSector: 8,
     entrySize: 32,
     doubleSidedFlag: 0x00,
@@ -301,53 +307,63 @@ const DISK_FORMATS = {
       data[base+5] = Math.floor(bm / 0x100000000) & 0xFF;
     },
     initBAM(data, bamOff, numTracks) {
-      // BAM sector 1 (T40/S1)
-      data[bamOff + 0x00] = this.dirTrack; // directory track
-      data[bamOff + 0x01] = this.bamSector2; // points to BAM sector 2
-      data[bamOff + 0x02] = this.dosVersion; // 'D'
-      data[bamOff + 0x03] = 0xBB; // double-sided flag for 1581
+      // Header sector (T40/S0) — contains disk name, ID, DOS type
+      var headerOff = bamOff - this.bamSector * 256 + this.headerSector * 256; // T40/S0
+      data[headerOff + 0x00] = this.dirTrack;
+      data[headerOff + 0x01] = this.dirSector;
+      data[headerOff + 0x02] = this.dosVersion; // 'D'
+      data[headerOff + 0x03] = 0xBB;
 
-      // Disk name at offset 0x04: 0xA0 padding
-      for (let i = 0; i < 16; i++) data[bamOff + this.nameOffset + i] = 0xA0;
+      // Disk name at header offset 0x04: 0xA0 padding
+      for (var i = 0; i < 16; i++) data[headerOff + this.nameOffset + i] = 0xA0;
       // Fill bytes
-      data[bamOff + 0x14] = 0xA0;
-      data[bamOff + 0x15] = 0xA0;
+      data[headerOff + 0x14] = 0xA0;
+      data[headerOff + 0x15] = 0xA0;
       // Disk ID: 0xA0
-      data[bamOff + 0x16] = 0xA0;
-      data[bamOff + 0x17] = 0xA0;
+      data[headerOff + 0x16] = 0xA0;
+      data[headerOff + 0x17] = 0xA0;
       // Fill
-      data[bamOff + 0x18] = 0xA0;
+      data[headerOff + 0x18] = 0xA0;
       // DOS type
-      data[bamOff + 0x19] = this.dosType.charCodeAt(0);
-      data[bamOff + 0x1A] = this.dosType.charCodeAt(1);
+      data[headerOff + 0x19] = this.dosType.charCodeAt(0);
+      data[headerOff + 0x1A] = this.dosType.charCodeAt(1);
       // Fill
-      data[bamOff + 0x1B] = 0xA0;
-      data[bamOff + 0x1C] = 0xA0;
+      for (i = 0x1B; i < 0x100; i++) data[headerOff + i] = 0x00;
 
-      // BAM sector 2 (T40/S2) — 256 bytes after sector 1
-      const bam2Off = bamOff + 256;
-      data[bam2Off + 0x00] = 0x00; // no next track
+      // BAM sector 1 (T40/S1) — BAM for tracks 1-40
+      data[bamOff + 0x00] = this.dirTrack;
+      data[bamOff + 0x01] = this.bamSector2;
+      data[bamOff + 0x02] = this.dosVersion;
+      data[bamOff + 0x03] = 0xBB;
+      // Disk ID copy in BAM sectors
+      data[bamOff + 0x04] = 0xA0;
+      data[bamOff + 0x05] = 0xA0;
+
+      // BAM sector 2 (T40/S2) — BAM for tracks 41-80
+      var bam2Off = bamOff + 256;
+      data[bam2Off + 0x00] = 0x00;
       data[bam2Off + 0x01] = 0xFF;
       data[bam2Off + 0x02] = this.dosVersion;
       data[bam2Off + 0x03] = 0xBB;
+      data[bam2Off + 0x04] = 0xA0;
+      data[bam2Off + 0x05] = 0xA0;
 
       // Init BAM entries for all tracks
-      for (let t = 1; t <= numTracks; t++) {
-        const spt = this.sectorsPerTrack(t);
-        const base = this._bamBase(bamOff, t);
+      for (var t = 1; t <= numTracks; t++) {
+        var spt = this.sectorsPerTrack(t);
+        var base = this._bamBase(bamOff, t);
         if (t === this.dirTrack) {
-          // Track 40: sectors 1,2,3 used (BAM1, BAM2, first dir sector)
-          data[base] = spt - 3;
-          // Set all bits free, then clear bits 1,2,3
-          // 40 sectors = 5 bytes of bitmap
-          for (let b = 0; b < 5; b++) data[base + 1 + b] = 0xFF;
-          // Clear sector 1 (BAM1), 2 (BAM2), 3 (first dir sector)
-          data[base + 1] &= ~(1 << 1); // sector 1
-          data[base + 1] &= ~(1 << 2); // sector 2
-          data[base + 1] &= ~(1 << 3); // sector 3
+          // Track 40: sectors 0,1,2,3 used (header, BAM1, BAM2, first dir sector)
+          data[base] = spt - 4;
+          // Set all bits free, then clear bits 0,1,2,3
+          for (var b = 0; b < 5; b++) data[base + 1 + b] = 0xFF;
+          data[base + 1] &= ~(1 << 0); // sector 0 (header)
+          data[base + 1] &= ~(1 << 1); // sector 1 (BAM1)
+          data[base + 1] &= ~(1 << 2); // sector 2 (BAM2)
+          data[base + 1] &= ~(1 << 3); // sector 3 (first dir)
         } else {
           data[base] = spt; // all free
-          for (let b = 0; b < 5; b++) data[base + 1 + b] = 0xFF;
+          for (var b = 0; b < 5; b++) data[base + 1 + b] = 0xFF;
         }
       }
 
@@ -409,126 +425,63 @@ function totalSectors(format, numTracks) {
 
 // ── PETSCII → Unicode ─────────────────────────────────────────────────
 // Shared across all CBM disk formats (D64, D71, D81 all use PETSCII)
+// Complete PETSCII to Unicode mapping for C64 uppercase/graphics mode.
+// Uses standard Unicode where C64 Pro font has glyphs, and PUA (U+E0xx)
+// for characters that have no standard Unicode equivalent.
 const PETSCII_MAP = (() => {
-  const m = new Array(256).fill('\u00B7');
+  var m = new Array(256).fill('\u00B7');
 
-  // C64 uppercase/graphics mode PETSCII to Unicode mapping
-  // On a real C64: PETSCII 0x41-0x5A displays as UPPERCASE A-Z
-  //                PETSCII 0xC1-0xDA displays as GRAPHICS (screen codes 65-90)
-
-  // Graphics characters at screen codes 64-95 (used by 0x60-0x7F and 0xC0-0xDF)
-  // Source: style64.org authoritative PETSCII reference (ucp_rof_ug field)
-  // Entries marked ~ have no standard Unicode equivalent; best approximation used
-  const gfx1 = [
-    '\u2500', // SC64 $60: ─  horizontal line
-    '\u2660', // SC65 $61: ♠  spade
-    '\u2502', // SC66 $62: │  vertical line
-    '\u2500', // SC67 $63: ─  horizontal line
-    '\u2572', // SC68 $64: ~  line segment center→lower-left (approx ╲)
-    '\u2571', // SC69 $65: ~  line segment center→lower-right (approx ╱)
-    '\u2571', // SC70 $66: ~  line segment center→upper-right (approx ╱)
-    '\u2572', // SC71 $67: ~  line segment center→upper-left (approx ╲)
-    '\u25E2', // SC72 $68: ~  partial corner piece (approx ◢)
-    '\u256E', // SC73 $69: ╮  round corner down-left
-    '\u2570', // SC74 $6A: ╰  round corner up-right
-    '\u256F', // SC75 $6B: ╯  round corner up-left
-    '\u25E3', // SC76 $6C: ~  partial corner piece (approx ◣)
-    '\u2572', // SC77 $6D: ╲  diagonal backslash
-    '\u2571', // SC78 $6E: ╱  diagonal slash
-    '\u25E4', // SC79 $6F: ~  partial corner piece (approx ◤)
-    '\u25E5', // SC80 $70: ~  partial corner piece (approx ◥)
-    '\u2022', // SC81 $71: •  bullet/filled circle
-    '\u259A', // SC82 $72: ~  diagonal quadrants (approx ▚)
-    '\u2665', // SC83 $73: ♥  heart
-    '\u259E', // SC84 $74: ~  diagonal quadrants (approx ▞)
-    '\u256D', // SC85 $75: ╭  round corner down-right
-    '\u2573', // SC86 $76: ╳  diagonal cross
-    '\u25CB', // SC87 $77: ○  white circle
-    '\u2663', // SC88 $78: ♣  club
-    '\u2596', // SC89 $79: ~  quadrant lower-left (approx ▖)
-    '\u2666', // SC90 $7A: ♦  diamond
-    '\u253C', // SC91 $7B: ┼  cross/plus
-    '\u259E', // SC92 $7C: ~  (approx ▞)
-    '\u2502', // SC93 $7D: │  vertical line
-    '\u03C0', // SC94 $7E: π  pi
-    '\u25E5', // SC95 $7F: ◥  upper-right triangle
-  ];
-
-  // Graphics characters at screen codes 96-127 (used by 0xA1-0xBF)
-  // Source: style64.org authoritative PETSCII reference (ucp_rof_ug field)
-  const gfx2 = [
-    '\u258C', // SC97  $A1: ▌  left half block
-    '\u2584', // SC98  $A2: ▄  lower half block
-    '\u2594', // SC99  $A3: ▔  upper 1/8 block
-    '\u2581', // SC100 $A4: ▁  lower 1/8 block
-    '\u258E', // SC101 $A5: ▎  left 1/4 block
-    '\u2592', // SC102 $A6: ▒  medium shade/checker
-    '\u2595', // SC103 $A7: ~  right 1/8 block (approx ▕)
-    '\u259E', // SC104 $A8: ~  (approx ▞)
-    '\u25E4', // SC105 $A9: ◤  upper-left triangle
-    '\u2590', // SC106 $AA: ~  right half (approx ▐)
-    '\u251C', // SC107 $AB: ├  T-junction right
-    '\u2597', // SC108 $AC: ▗  quadrant lower-right
-    '\u2514', // SC109 $AD: └  corner up-right
-    '\u2510', // SC110 $AE: ┐  corner down-left
-    '\u2582', // SC111 $AF: ▂  lower 1/4 block
-    '\u250C', // SC112 $B0: ┌  corner down-right
-    '\u2534', // SC113 $B1: ┴  T-junction up
-    '\u252C', // SC114 $B2: ┬  T-junction down
-    '\u2524', // SC115 $B3: ┤  T-junction left
-    '\u258E', // SC116 $B4: ▎  left 1/4 block
-    '\u258D', // SC117 $B5: ▍  left 3/8 block
-    '\u258B', // SC118 $B6: ~  left 5/8 block (approx ▋)
-    '\u2586', // SC119 $B7: ~  lower 3/4 block (approx ▆)
-    '\u2585', // SC120 $B8: ~  lower 5/8 block (approx ▅)
-    '\u2583', // SC121 $B9: ▃  lower 3/8 block
-    '\u2589', // SC122 $BA: ~  left 7/8 block (approx ▉)
-    '\u2596', // SC123 $BB: ▖  quadrant lower-left
-    '\u259D', // SC124 $BC: ▝  quadrant upper-right
-    '\u2518', // SC125 $BD: ┘  corner up-left
-    '\u2598', // SC126 $BE: ▘  quadrant upper-left
-    '\u259A', // SC127 $BF: ▚  diagonal quadrants
-  ];
-
-  // 0x00-0x1F: reversed uppercase letters + specials (reversed screen codes 0-31)
+  // $00-$1F: reversed characters (displayed with inverse video styling)
   m[0x00] = '@';
-  for (let i = 0x01; i <= 0x1A; i++) m[i] = String.fromCharCode(i - 0x01 + 65); // A-Z
-  m[0x1B] = '[';
-  m[0x1C] = '\u00A3'; // £
-  m[0x1D] = ']';
-  m[0x1E] = '\u2191'; // ↑
-  m[0x1F] = '\u2190'; // ←
+  for (var i = 0x01; i <= 0x1A; i++) m[i] = String.fromCharCode(i - 0x01 + 65);
+  m[0x1B] = '['; m[0x1C] = '\u00A3'; m[0x1D] = ']';
+  m[0x1E] = '\u2191'; m[0x1F] = '\u2190';
 
-  // 0x20-0x3F: standard printable (space, digits, punctuation)
-  for (let i = 0x20; i <= 0x3F; i++) m[i] = String.fromCharCode(i);
+  // $20-$3F: standard ASCII
+  for (i = 0x20; i <= 0x3F; i++) m[i] = String.fromCharCode(i);
 
-  // 0x40-0x5F: @ + UPPERCASE A-Z + specials
+  // $40-$5F: @, A-Z, specials
   m[0x40] = '@';
-  for (let i = 0x41; i <= 0x5A; i++) m[i] = String.fromCharCode(i); // UPPERCASE A-Z
-  m[0x5B] = '[';
-  m[0x5C] = '\u00A3'; // £
-  m[0x5D] = ']';
-  m[0x5E] = '\u2191'; // ↑
-  m[0x5F] = '\u2190'; // ←
+  for (i = 0x41; i <= 0x5A; i++) m[i] = String.fromCharCode(i);
+  m[0x5B] = '['; m[0x5C] = '\u00A3'; m[0x5D] = ']';
+  m[0x5E] = '\u2191'; m[0x5F] = '\u2190';
 
-  // 0x60-0x7F: graphics set 1 (screen codes 64-95)
-  for (let i = 0; i < 32; i++) m[0x60 + i] = gfx1[i];
+  // $60-$7F: graphics set 1 — use PUA for chars without standard Unicode glyph in font
+  m[0x60] = '\u2500'; m[0x61] = '\u2660'; m[0x62] = '\u2502'; m[0x63] = '\u2500';
+  m[0x64] = '\uE064'; m[0x65] = '\uE065'; m[0x66] = '\uE066'; m[0x67] = '\uE067';
+  m[0x68] = '\uE068'; m[0x69] = '\u256E'; m[0x6A] = '\u2570'; m[0x6B] = '\u256F';
+  m[0x6C] = '\uE06C'; m[0x6D] = '\u2572'; m[0x6E] = '\u2571'; m[0x6F] = '\uE06F';
+  m[0x70] = '\uE070'; m[0x71] = '\u2022'; m[0x72] = '\uE072'; m[0x73] = '\u2665';
+  m[0x74] = '\uE074'; m[0x75] = '\u256D'; m[0x76] = '\u2573'; m[0x77] = '\u25CB';
+  m[0x78] = '\u2663'; m[0x79] = '\uE079'; m[0x7A] = '\u2666'; m[0x7B] = '\u253C';
+  m[0x7C] = '\uE07C'; m[0x7D] = '\u2502'; m[0x7E] = '\u03C0'; m[0x7F] = '\u25E5';
 
-  // 0x80-0x9F: reversed graphics (screen codes 64-95, same shapes as 0xC0-0xDF)
-  for (let i = 0; i < 32; i++) m[0x80 + i] = gfx1[i];
+  // $80-$9F: reversed characters (same glyphs as $00-$1F, with inverse video)
+  m[0x80] = '@';
+  for (i = 0x81; i <= 0x9A; i++) m[i] = String.fromCharCode(i - 0x81 + 65);
+  m[0x9B] = '['; m[0x9C] = '\u00A3'; m[0x9D] = ']';
+  m[0x9E] = '\u2191'; m[0x9F] = '\u2190';
 
-  // 0xA0: shifted space (padding)
-  m[0xA0] = ' ';
+  // $A0: non-breaking space
+  m[0xA0] = '\u00A0';
 
-  // 0xA1-0xBF: graphics set 2 (screen codes 97-127)
-  for (let i = 0; i < 31; i++) m[0xA1 + i] = gfx2[i];
+  // $A1-$BF: graphics set 2
+  m[0xA1] = '\u258C'; m[0xA2] = '\u2584'; m[0xA3] = '\u2594'; m[0xA4] = '\u2581';
+  m[0xA5] = '\u258E'; m[0xA6] = '\u2592'; m[0xA7] = '\uE0A7'; m[0xA8] = '\uE0A8';
+  m[0xA9] = '\u25E4'; m[0xAA] = '\uE0AA'; m[0xAB] = '\u251C'; m[0xAC] = '\u2597';
+  m[0xAD] = '\u2514'; m[0xAE] = '\u2510'; m[0xAF] = '\u2582'; m[0xB0] = '\u250C';
+  m[0xB1] = '\u2534'; m[0xB2] = '\u252C'; m[0xB3] = '\u2524'; m[0xB4] = '\u258E';
+  m[0xB5] = '\u258D'; m[0xB6] = '\uE0B6'; m[0xB7] = '\uE0B7'; m[0xB8] = '\uE0B8';
+  m[0xB9] = '\u2583'; m[0xBA] = '\uE0BA'; m[0xBB] = '\u2596'; m[0xBC] = '\u259D';
+  m[0xBD] = '\u2518'; m[0xBE] = '\u2598'; m[0xBF] = '\u259A';
 
-  // 0xC0-0xDF: graphics (screen codes 64-95, same as 0x60-0x7F)
-  for (let i = 0; i < 32; i++) m[0xC0 + i] = gfx1[i];
+  // $C0-$DF: same as $60-$7F (with $D1 = ● instead of •)
+  for (i = 0; i < 32; i++) m[0xC0 + i] = m[0x60 + i];
+  m[0xD1] = '\u25CF';
 
-  // 0xE0-0xFE: graphics set 2 (same as 0xA0-0xBE)
-  for (let i = 0xE0; i <= 0xFE; i++) m[i] = m[i - 0x40];
-  m[0xFF] = '\u03C0'; // π
+  // $E0-$FE: same as $A0-$BE
+  for (i = 0xE0; i <= 0xFE; i++) m[i] = m[i - 0x40];
+  m[0xFF] = '\u03C0';
 
   return m;
 })();
@@ -564,28 +517,26 @@ function readPetsciiRich(data, offset, len) {
 }
 
 const UNICODE_TO_PETSCII = (() => {
-  const rev = new Map();
-  for (let i = 255; i >= 0; i--) {
-    const ch = PETSCII_MAP[i];
-    if (ch && ch !== ' ' && ch !== '\u00B7') rev.set(ch, i);
+  var rev = new Map();
+  // Map all PETSCII_MAP entries back (including PUA chars)
+  for (var i = 255; i >= 0; i--) {
+    var ch = PETSCII_MAP[i];
+    if (ch && ch !== '\u00B7') rev.set(ch, i);
   }
-  // Both uppercase and lowercase keyboard input → PETSCII 0x41-0x5A (displays as uppercase)
-  for (let i = 0x41; i <= 0x5A; i++) rev.set(String.fromCharCode(i), i);       // A-Z
-  for (let i = 0x41; i <= 0x5A; i++) rev.set(String.fromCharCode(i + 32), i);  // a-z
-  for (let i = 0x20; i <= 0x3F; i++) rev.set(String.fromCharCode(i), i);
-  rev.set('@', 0x40);
-  rev.set('[', 0x5B);
-  rev.set(']', 0x5D);
-  rev.set('\u00A3', 0x5C);
-  rev.set('\u2191', 0x5E);
-  rev.set('\u2190', 0x5F);
-  rev.set('\u03C0', 0xFF);
-  rev.set(' ', 0x20);
+  // Keyboard typed characters → PETSCII bytes (override duplicates)
+  for (i = 0x41; i <= 0x5A; i++) rev.set(String.fromCharCode(i), i);       // A-Z
+  for (i = 0x41; i <= 0x5A; i++) rev.set(String.fromCharCode(i + 32), i);  // a-z
+  for (i = 0x20; i <= 0x3F; i++) rev.set(String.fromCharCode(i), i);
+  rev.set('@', 0x40); rev.set('[', 0x5B); rev.set(']', 0x5D);
+  rev.set('\u00A3', 0x5C); rev.set('\u2191', 0x5E); rev.set('\u2190', 0x5F);
+  rev.set('\u03C0', 0xFF); rev.set(' ', 0x20);
   return rev;
 })();
 
 function unicodeToPetscii(char) {
-  return UNICODE_TO_PETSCII.get(char) ?? 0x20;
+  var cp = char.charCodeAt(0);
+  if (cp >= 0xE000 && cp <= 0xE0FF) return cp - 0xE000;
+  return UNICODE_TO_PETSCII.get(char) || 0x20;
 }
 
 function writePetsciiString(buffer, offset, str, maxLen, overrides) {
@@ -630,9 +581,10 @@ function parseDisk(buffer) {
 
   const fmt = currentFormat;
   const bamOffset = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  const headerOffset = sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector);
 
-  const diskName = readPetsciiString(data, bamOffset + fmt.nameOffset, fmt.nameLength);
-  const diskId = readPetsciiString(data, bamOffset + fmt.idOffset, fmt.idLength, false);
+  const diskName = readPetsciiString(data, headerOffset + fmt.nameOffset, fmt.nameLength);
+  const diskId = readPetsciiString(data, headerOffset + fmt.idOffset, fmt.idLength, false);
 
   // Count free blocks from BAM
   let freeBlocks = 0;

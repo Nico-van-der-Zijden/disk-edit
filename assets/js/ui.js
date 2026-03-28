@@ -116,8 +116,8 @@ function renderDisk(info) {
     <div class="disk-panel${showAddresses ? ' show-addresses' : ''}${showTrackSector ? ' show-tracksector' : ''}">
       <div class="disk-header">
         <div class="disk-header-spacer">0</div>
-        <div class="disk-name"><span class="editable" id="edit-name" data-field="name" data-max="16">"${escHtml(info.diskName.padEnd(16))}"</span></div>
-        <div class="disk-id"><span class="editable" id="edit-id" data-field="id" data-max="5">${escHtml(info.diskId)}</span></div>
+        <div class="disk-name"><span class="editable" id="edit-name" data-field="name" data-max="${currentFormat.nameLength}">"${escHtml(info.diskName.padEnd(currentFormat.nameLength))}"</span></div>
+        <div class="disk-id"><span class="editable" id="edit-id" data-field="id" data-max="${currentFormat.idLength}">${escHtml(info.diskId)}</span></div>
       </div>
       <div class="dir-listing">
         <div class="dir-entry dir-header-row">
@@ -451,9 +451,10 @@ function startEditing(el) {
   let currentValue = '';
   if (currentBuffer) {
     const data = new Uint8Array(currentBuffer);
-    const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
-    if (field === 'name') currentValue = readPetsciiString(data, bamOff + currentFormat.nameOffset, currentFormat.nameLength);
-    else if (field === 'id') currentValue = readPetsciiString(data, bamOff + currentFormat.idOffset, currentFormat.idLength);
+    var fmt = currentFormat;
+    var headerOff = sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector);
+    if (field === 'name') currentValue = readPetsciiString(data, headerOff + fmt.nameOffset, fmt.nameLength);
+    else if (field === 'id') currentValue = readPetsciiString(data, headerOff + fmt.idOffset, fmt.idLength, false);
   } else {
     const isEmpty = el.classList.contains('empty');
     currentValue = isEmpty ? '' : el.textContent;
@@ -464,6 +465,7 @@ function startEditing(el) {
   input.maxLength = maxLen;
   input.value = currentValue;
   input.className = 'header-input';
+  input.style.width = (maxLen + 1) + 'ch';
 
   el.textContent = '';
   el.appendChild(input);
