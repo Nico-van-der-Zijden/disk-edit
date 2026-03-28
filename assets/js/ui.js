@@ -1038,8 +1038,15 @@ document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
   allowUnsafeChars = !allowUnsafeChars;
   localStorage.setItem('d64-allowUnsafe', allowUnsafeChars);
   document.getElementById('check-unsafe').innerHTML = allowUnsafeChars ? '<i class="fa-solid fa-check"></i>' : '';
-  // Re-render picker if open
   if (pickerTarget) renderPicker();
+});
+
+document.getElementById('opt-picker-all').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeMenus();
+  pickerDefaultAll = !pickerDefaultAll;
+  localStorage.setItem('d64-pickerAll', pickerDefaultAll);
+  document.getElementById('check-picker-all').innerHTML = pickerDefaultAll ? '<i class="fa-solid fa-check"></i>' : '';
 });
 
 // ── Hex sector editor ─────────────────────────────────────────────────
@@ -2552,6 +2559,7 @@ document.getElementById('check-deleted').innerHTML = showDeleted ? '<i class="fa
 document.getElementById('check-addr').innerHTML = showAddresses ? '<i class="fa-solid fa-check"></i>' : '';
 document.getElementById('check-ts').innerHTML = showTrackSector ? '<i class="fa-solid fa-check"></i>' : '';
 document.getElementById('check-unsafe').innerHTML = allowUnsafeChars ? '<i class="fa-solid fa-check"></i>' : '';
+document.getElementById('check-picker-all').innerHTML = pickerDefaultAll ? '<i class="fa-solid fa-check"></i>' : '';
 
 themeToggle.addEventListener('click', () => {
   const current = document.documentElement.getAttribute('data-theme');

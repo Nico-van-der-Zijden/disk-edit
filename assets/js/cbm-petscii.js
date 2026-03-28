@@ -3,8 +3,9 @@
 
 var pickerTarget = null;
 var pickerClicking = false;
-var pickerModifier = 'normal'; // 'normal', 'shift', 'cbm'
+var pickerModifier = 'normal'; // 'normal', 'shift', 'cbm', 'all'
 var pickerReverse = false;
+var pickerDefaultAll = localStorage.getItem('d64-pickerAll') === 'true';
 
 // C64 keyboard layout: [label, normal, shift, cbm] per key
 const KB_ROWS = [
@@ -21,40 +22,72 @@ function renderPicker() {
   html += '<div class="petscii-mod' + (pickerModifier === 'shift' ? ' active' : '') + '" data-mod="shift">SHIFT</div>';
   html += '<div class="petscii-mod' + (pickerModifier === 'cbm' ? ' active' : '') + '" data-mod="cbm">CBM</div>';
   html += '<div class="petscii-mod' + (pickerReverse ? ' active' : '') + '" data-mod="rev">RVS</div>';
+  html += '<div class="petscii-mod' + (pickerModifier === 'all' ? ' active' : '') + '" data-mod="all">ALL</div>';
   html += '</div>';
 
-  for (let r = 0; r < KB_ROWS.length; r++) {
-    const row = KB_ROWS[r];
-    html += '<div class="petscii-kb-row">';
-    for (let k = 0; k < row.length; k++) {
-      const [label, normal, shift, cbm] = row[k];
-      let code;
-      if (pickerModifier === 'shift') code = shift;
-      else if (pickerModifier === 'cbm') code = cbm;
-      else code = normal;
+  if (pickerModifier === 'all') {
+    // Show all PETSCII characters in a 16x16 grid
+    // Header row with column numbers
+    html += '<div class="petscii-kb-row"><div class="petscii-key empty" style="width:28px;font-size:9px;color:var(--text-muted)"></div>';
+    for (var col = 0; col < 16; col++) {
+      html += '<div class="petscii-key empty" style="font-size:9px;color:var(--text-muted);cursor:default">' + col.toString(16).toUpperCase() + '</div>';
+    }
+    html += '</div>';
 
-      if (code === -1) {
-        html += '<div class="petscii-key empty"></div>';
-      } else {
-        let actualCode = code;
-        if (pickerReverse) {
-          if (code >= 0x40 && code <= 0x5F) actualCode = code - 0x40;
-          else if (code >= 0xC0 && code <= 0xDF) actualCode = code - 0xC0 + 0x80;
-        }
-        const isSafe = SAFE_PETSCII.has(actualCode);
-        const disabled = !isSafe && !allowUnsafeChars;
-        const ch = PETSCII_MAP[code];
-        const title = label + ' $' + code.toString(16).toUpperCase().padStart(2, '0');
+    for (var row = 0; row < 16; row++) {
+      html += '<div class="petscii-kb-row">';
+      // Row label
+      html += '<div class="petscii-key empty" style="width:28px;font-size:9px;color:var(--text-muted);cursor:default">' + row.toString(16).toUpperCase() + 'x</div>';
+      for (col = 0; col < 16; col++) {
+        var code = row * 16 + col;
+        var isSafe = SAFE_PETSCII.has(code);
+        var disabled = !isSafe && !allowUnsafeChars;
+        var isReversed = (code >= 0x00 && code <= 0x1F) || (code >= 0x80 && code <= 0x9F);
+        var ch = PETSCII_MAP[code];
+        var title = '$' + code.toString(16).toUpperCase().padStart(2, '0');
         html += '<div class="petscii-key' +
-          (pickerReverse ? ' rev-char' : '') +
+          (isReversed ? ' rev-char' : '') +
           (disabled ? ' disabled' : (!isSafe ? ' unsafe' : '')) +
           '" data-code="' + code + '" title="' + title + '">' + escHtml(ch) + '</div>';
       }
+      html += '</div>';
     }
-    html += '</div>';
-  }
+  } else {
+    // Standard keyboard layout
+    for (var r = 0; r < KB_ROWS.length; r++) {
+      var rowData = KB_ROWS[r];
+      html += '<div class="petscii-kb-row">';
+      for (var k = 0; k < rowData.length; k++) {
+        var entry = rowData[k];
+        var label = entry[0], normal = entry[1], shift = entry[2], cbm = entry[3];
+        var code;
+        if (pickerModifier === 'shift') code = shift;
+        else if (pickerModifier === 'cbm') code = cbm;
+        else code = normal;
 
-  html += '<div class="petscii-kb-row"><div class="petscii-key space" data-code="32">SPACE</div></div>';
+        if (code === -1) {
+          html += '<div class="petscii-key empty"></div>';
+        } else {
+          var actualCode = code;
+          if (pickerReverse) {
+            if (code >= 0x40 && code <= 0x5F) actualCode = code - 0x40;
+            else if (code >= 0xC0 && code <= 0xDF) actualCode = code - 0xC0 + 0x80;
+          }
+          var isSafe = SAFE_PETSCII.has(actualCode);
+          var disabled = !isSafe && !allowUnsafeChars;
+          var ch = PETSCII_MAP[code];
+          var title = label + ' $' + code.toString(16).toUpperCase().padStart(2, '0');
+          html += '<div class="petscii-key' +
+            (pickerReverse ? ' rev-char' : '') +
+            (disabled ? ' disabled' : (!isSafe ? ' unsafe' : '')) +
+            '" data-code="' + code + '" title="' + title + '">' + escHtml(ch) + '</div>';
+        }
+      }
+      html += '</div>';
+    }
+
+    html += '<div class="petscii-kb-row"><div class="petscii-key space" data-code="32">SPACE</div></div>';
+  }
   el.innerHTML = html;
 }
 
@@ -150,7 +183,7 @@ function trackCursorPos(input) {
 function showPetsciiPicker(targetEl, maxLen) {
   var el = document.getElementById('petscii-picker');
   pickerTarget = targetEl;
-  pickerModifier = 'normal';
+  pickerModifier = pickerDefaultAll ? 'all' : 'normal';
   pickerReverse = false;
   renderPicker();
 
