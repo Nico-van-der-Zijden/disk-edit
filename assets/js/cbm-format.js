@@ -426,62 +426,24 @@ function totalSectors(format, numTracks) {
 // ── PETSCII → Unicode ─────────────────────────────────────────────────
 // Shared across all CBM disk formats (D64, D71, D81 all use PETSCII)
 // Complete PETSCII to Unicode mapping for C64 uppercase/graphics mode.
-// Uses standard Unicode where C64 Pro font has glyphs, and PUA (U+E0xx)
-// for characters that have no standard Unicode equivalent.
+// Uses C64 Pro font's PUA (U+E0xx) for all displayable characters ($20-$7F, $A0-$FF).
+// $00-$1F and $80-$9F are control codes with no PUA glyph — use standard chars + inverse.
 const PETSCII_MAP = (() => {
   var m = new Array(256).fill('\u00B7');
 
-  // $00-$1F: reversed characters (displayed with inverse video styling)
-  m[0x00] = '@';
-  for (var i = 0x01; i <= 0x1A; i++) m[i] = String.fromCharCode(i - 0x01 + 65);
-  m[0x1B] = '['; m[0x1C] = '\u00A3'; m[0x1D] = ']';
-  m[0x1E] = '\u2191'; m[0x1F] = '\u2190';
+  // $00-$1F: same as $40-$5F (screen codes 0-31: @, A-Z, specials)
+  // No PUA glyph at E000-E01F, so use the E040-E05F glyphs (same visuals)
+  for (var i = 0x00; i <= 0x1F; i++) m[i] = String.fromCharCode(0xE040 + i);
 
-  // $20-$3F: standard ASCII
-  for (i = 0x20; i <= 0x3F; i++) m[i] = String.fromCharCode(i);
+  // $20-$7F: all use PUA for pixel-perfect C64 Pro font rendering
+  for (i = 0x20; i <= 0x7F; i++) m[i] = String.fromCharCode(0xE000 + i);
 
-  // $40-$5F: @, A-Z, specials
-  m[0x40] = '@';
-  for (i = 0x41; i <= 0x5A; i++) m[i] = String.fromCharCode(i);
-  m[0x5B] = '['; m[0x5C] = '\u00A3'; m[0x5D] = ']';
-  m[0x5E] = '\u2191'; m[0x5F] = '\u2190';
+  // $80-$9F: same graphics as $C0-$DF (screen codes 64-95)
+  // No PUA glyph at E080-E09F, so use the E0C0-E0DF glyphs (same visuals)
+  for (i = 0x80; i <= 0x9F; i++) m[i] = String.fromCharCode(0xE0C0 + (i - 0x80));
 
-  // $60-$7F: graphics set 1 — use PUA for chars without standard Unicode glyph in font
-  m[0x60] = '\u2500'; m[0x61] = '\u2660'; m[0x62] = '\u2502'; m[0x63] = '\u2500';
-  m[0x64] = '\uE064'; m[0x65] = '\uE065'; m[0x66] = '\uE066'; m[0x67] = '\uE067';
-  m[0x68] = '\uE068'; m[0x69] = '\u256E'; m[0x6A] = '\u2570'; m[0x6B] = '\u256F';
-  m[0x6C] = '\uE06C'; m[0x6D] = '\u2572'; m[0x6E] = '\u2571'; m[0x6F] = '\uE06F';
-  m[0x70] = '\uE070'; m[0x71] = '\u2022'; m[0x72] = '\uE072'; m[0x73] = '\u2665';
-  m[0x74] = '\uE074'; m[0x75] = '\u256D'; m[0x76] = '\u2573'; m[0x77] = '\u25CB';
-  m[0x78] = '\u2663'; m[0x79] = '\uE079'; m[0x7A] = '\u2666'; m[0x7B] = '\u253C';
-  m[0x7C] = '\uE07C'; m[0x7D] = '\u2502'; m[0x7E] = '\u03C0'; m[0x7F] = '\u25E5';
-
-  // $80-$9F: reversed characters (same glyphs as $00-$1F, with inverse video)
-  m[0x80] = '@';
-  for (i = 0x81; i <= 0x9A; i++) m[i] = String.fromCharCode(i - 0x81 + 65);
-  m[0x9B] = '['; m[0x9C] = '\u00A3'; m[0x9D] = ']';
-  m[0x9E] = '\u2191'; m[0x9F] = '\u2190';
-
-  // $A0: non-breaking space
-  m[0xA0] = '\u00A0';
-
-  // $A1-$BF: graphics set 2
-  m[0xA1] = '\u258C'; m[0xA2] = '\u2584'; m[0xA3] = '\u2594'; m[0xA4] = '\u2581';
-  m[0xA5] = '\u258E'; m[0xA6] = '\u2592'; m[0xA7] = '\uE0A7'; m[0xA8] = '\uE0A8';
-  m[0xA9] = '\u25E4'; m[0xAA] = '\uE0AA'; m[0xAB] = '\u251C'; m[0xAC] = '\u2597';
-  m[0xAD] = '\u2514'; m[0xAE] = '\u2510'; m[0xAF] = '\u2582'; m[0xB0] = '\u250C';
-  m[0xB1] = '\u2534'; m[0xB2] = '\u252C'; m[0xB3] = '\u2524'; m[0xB4] = '\u258E';
-  m[0xB5] = '\u258D'; m[0xB6] = '\uE0B6'; m[0xB7] = '\uE0B7'; m[0xB8] = '\uE0B8';
-  m[0xB9] = '\u2583'; m[0xBA] = '\uE0BA'; m[0xBB] = '\u2596'; m[0xBC] = '\u259D';
-  m[0xBD] = '\u2518'; m[0xBE] = '\u2598'; m[0xBF] = '\u259A';
-
-  // $C0-$DF: same as $60-$7F (with $D1 = ● instead of •)
-  for (i = 0; i < 32; i++) m[0xC0 + i] = m[0x60 + i];
-  m[0xD1] = '\u25CF';
-
-  // $E0-$FE: same as $A0-$BE
-  for (i = 0xE0; i <= 0xFE; i++) m[i] = m[i - 0x40];
-  m[0xFF] = '\u03C0';
+  // $A0-$FF: all use PUA for pixel-perfect C64 Pro font rendering
+  for (i = 0xA0; i <= 0xFF; i++) m[i] = String.fromCharCode(0xE000 + i);
 
   return m;
 })();
