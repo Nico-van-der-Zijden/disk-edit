@@ -99,7 +99,7 @@ document.getElementById('input-modal-field').addEventListener('keydown', (e) => 
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('selectstart', e => {
   const el = e.target.nodeType === 3 ? e.target.parentElement : e.target;
-  if (el && !el.isContentEditable && !el.closest('.editing')) e.preventDefault();
+  if (el && !el.isContentEditable && !el.closest('.editing') && el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') e.preventDefault();
 });
 if (navigator.userAgent.includes('Edg')) {
   document.addEventListener('pointerup', e => {
@@ -361,9 +361,141 @@ function bindDirSelection() {
 
 }
 
+// ── Context menu on directory entries ─────────────────────────────────
+var contextMenu = document.getElementById('context-menu');
+
+function closeContextMenu() {
+  contextMenu.style.display = 'none';
+  contextMenu.innerHTML = '';
+}
+
+function showContextMenu(x, y) {
+  // Clone the File menu options into the context menu
+  var source = document.querySelector('#menu-entry > .menu-dropdown');
+  contextMenu.innerHTML = source.innerHTML;
+
+  // Refresh enable/disable state
+  updateEntryMenuState();
+
+  // Copy disabled state from original menu items to cloned ones
+  var origOptions = source.querySelectorAll('[id]');
+  origOptions.forEach(function(orig) {
+    var clone = contextMenu.querySelector('#' + orig.id);
+    if (!clone) {
+      // IDs can't be duplicated — use data attribute instead
+    }
+  });
+
+  // Since we can't duplicate IDs, replace IDs with data-ctx-for and mirror state
+  contextMenu.querySelectorAll('[id]').forEach(function(el) {
+    var origId = el.id;
+    el.removeAttribute('id');
+    el.setAttribute('data-ctx-for', origId);
+    var orig = document.getElementById(origId);
+    if (orig) {
+      if (orig.classList.contains('disabled')) el.classList.add('disabled');
+      else el.classList.remove('disabled');
+      // Copy dynamic text (Lock/Unlock, Scratch/Unscratch)
+      if (!el.children.length || el.classList.contains('has-submenu')) {
+        // For items without submenus, copy text
+        if (!el.classList.contains('has-submenu')) el.textContent = orig.textContent;
+      }
+      // Copy check marks for file type submenu
+      var origChecks = orig.querySelectorAll('.check');
+      var cloneChecks = el.querySelectorAll('.check');
+      for (var ci = 0; ci < origChecks.length && ci < cloneChecks.length; ci++) {
+        cloneChecks[ci].innerHTML = origChecks[ci].innerHTML;
+      }
+    }
+  });
+
+  // Position and show
+  contextMenu.style.display = 'block';
+  contextMenu.style.left = x + 'px';
+  contextMenu.style.top = y + 'px';
+
+  // Adjust if off-screen
+  var rect = contextMenu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) contextMenu.style.left = (x - rect.width) + 'px';
+  if (rect.bottom > window.innerHeight) contextMenu.style.top = (y - rect.height) + 'px';
+}
+
+// Delegate clicks from context menu to the real menu items
+contextMenu.addEventListener('click', function(e) {
+  // Handle submenu items first (they're nested inside data-ctx-for elements)
+  var subOption = e.target.closest('[data-align], [data-typeidx], [data-sep-idx]');
+  if (subOption && !subOption.classList.contains('disabled')) {
+    closeContextMenu();
+    if (subOption.dataset.sepIdx !== undefined) {
+      // Separator submenu uses delegation — call insertSeparator directly
+      var idx = parseInt(subOption.dataset.sepIdx, 10);
+      var all = getAllSeparators();
+      if (!isNaN(idx) && idx >= 0 && idx < all.length) insertSeparator(all[idx]);
+    } else {
+      // Align and file type have per-element listeners — click the original
+      var selector = '';
+      if (subOption.dataset.align) selector = '#menu-entry [data-align="' + subOption.dataset.align + '"]';
+      else if (subOption.dataset.typeidx !== undefined) selector = '#menu-entry [data-typeidx="' + subOption.dataset.typeidx + '"]';
+      if (selector) {
+        var origSub = document.querySelector(selector);
+        if (origSub) origSub.click();
+      }
+    }
+    return;
+  }
+  // Handle top-level menu items via data-ctx-for
+  var option = e.target.closest('[data-ctx-for]');
+  if (option && !option.classList.contains('disabled')) {
+    var origId = option.getAttribute('data-ctx-for');
+    var orig = document.getElementById(origId);
+    if (orig) {
+      closeContextMenu();
+      orig.click();
+      return;
+    }
+  }
+});
+
+// Close context menu on outside click or Escape
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#context-menu')) closeContextMenu();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeContextMenu();
+});
+
+// Right-click on dir entries
+document.getElementById('content').addEventListener('contextmenu', function(e) {
+  // Only show context menu when a disk is loaded
+  if (!currentBuffer) return;
+
+  var entry = e.target.closest('.dir-entry:not(.dir-header-row)');
+  var dirListing = e.target.closest('.dir-listing');
+  if (!entry && !dirListing) return;
+  e.preventDefault();
+
+  if (entry) {
+    // Right-click on a file entry — select it
+    var offset = parseInt(entry.dataset.offset, 10);
+    if (selectedEntryIndex !== offset) {
+      document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
+      entry.classList.add('selected');
+      selectedEntryIndex = offset;
+      updateEntryMenuState();
+    }
+  } else {
+    // Right-click on empty area — deselect
+    document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
+    selectedEntryIndex = -1;
+    updateEntryMenuState();
+  }
+
+  showContextMenu(e.clientX, e.clientY);
+});
+
 // Click outside dir entries deselects (registered once)
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('.dir-entry') && !e.target.closest('.menu-item') && !e.target.closest('.petscii-picker') && !e.target.closest('.type-dropdown')) {
+  if (!e.target.closest('.dir-entry') && !e.target.closest('.menu-item') && !e.target.closest('.petscii-picker') && !e.target.closest('.type-dropdown') && !e.target.closest('#context-menu')) {
     document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
     selectedEntryIndex = -1;
     updateEntryMenuState();
@@ -445,6 +577,7 @@ function updateEntryMenuState() {
   const hasSelection = selectedEntryIndex >= 0 && currentBuffer;
   document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-insert').classList.toggle('disabled', !currentBuffer || !canInsertFile());
+  document.getElementById('opt-insert-sep').classList.toggle('disabled', !currentBuffer || !canInsertFile());
   document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-align').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection);
@@ -452,6 +585,17 @@ function updateEntryMenuState() {
   document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection);
+  // Export: enabled when selected file is PRG, SEQ, USR or REL (types 1-4)
+  var exportEnabled = false;
+  if (hasSelection) {
+    var edata = new Uint8Array(currentBuffer);
+    var eType = edata[selectedEntryIndex + 2];
+    var eClosed = (eType & 0x80) !== 0;
+    var eIdx = eType & 0x07;
+    exportEnabled = eClosed && eIdx >= 1 && eIdx <= 4;
+  }
+  document.getElementById('opt-export').classList.toggle('disabled', !exportEnabled);
+  document.getElementById('opt-import').classList.toggle('disabled', !currentBuffer || !canInsertFile());
   document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection);
 
@@ -756,6 +900,7 @@ document.getElementById('opt-charset-mode').addEventListener('click', (e) => {
   var newMode = charsetMode === 'uppercase' ? 'lowercase' : 'uppercase';
   setCharsetMode(newMode);
   document.getElementById('opt-charset-mode').textContent = newMode === 'lowercase' ? 'Switch to Uppercase' : 'Switch to Lowercase';
+  buildSepSubmenu();
   if (currentBuffer) {
     var info = parseD64(currentBuffer);
     renderDisk(info);
@@ -1803,7 +1948,8 @@ function alignFilename(buffer, entryOff, alignment) {
   while (content.length > 0 && (content[content.length - 1] === 0x20 || content[content.length - 1] === 0xA0)) content.pop();
   // Strip leading 0x20 spaces
   while (content.length > 0 && content[0] === 0x20) content.shift();
-  if (content.length === 0 || content.length >= 16) return;
+  if (content.length >= 16) return;
+  if (content.length === 0 && alignment !== 'expand') return;
 
   const result = new Uint8Array(16).fill(0x20); // fill with real spaces
   const padCount = 16 - content.length;
@@ -2607,16 +2753,288 @@ document.getElementById('opt-rename').addEventListener('click', (e) => {
   startRenameEntry(selected);
 });
 
+// Insert a new entry and position it after the selected entry (or at end)
+function insertAndPosition() {
+  if (!currentBuffer || !canInsertFile()) return -1;
+  var newOff = insertFileEntry();
+  if (newOff < 0) return -1;
+
+  if (selectedEntryIndex >= 0 && selectedEntryIndex !== newOff) {
+    var slots = getDirSlotOffsets(currentBuffer);
+    var selIdx = slots.indexOf(selectedEntryIndex);
+    var newIdx = slots.indexOf(newOff);
+    if (selIdx >= 0 && newIdx >= 0 && newIdx > selIdx + 1) {
+      var cur = newIdx;
+      var target = selIdx + 1;
+      while (cur !== target) {
+        swapDirEntries(currentBuffer, slots[cur], slots[cur - 1]);
+        cur--;
+      }
+      newOff = slots[target];
+    }
+  }
+  return newOff;
+}
+
 document.getElementById('opt-insert').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || !canInsertFile()) return;
   closeMenus();
-  const newOff = insertFileEntry();
-  if (newOff >= 0) {
-    selectedEntryIndex = newOff;
-    const info = parseD64(currentBuffer);
-    renderDisk(info);
+  var newOff = insertAndPosition();
+  if (newOff < 0) return;
+  selectedEntryIndex = newOff;
+  var info = parseD64(currentBuffer);
+  renderDisk(info);
+});
+
+// ── Insert Separator ──────────────────────────────────────────────────
+// Separator patterns — each is a 16-byte array or a single byte (repeated 16x)
+// PETSCII codes for box drawing: $C0=─, $DD=│, $B0=┌, $AE=┐, $AD=└, $BD=┘, $AB=├, $B3=┤, $B1=┴, $B2=┬
+// PETSCII box drawing: $C0=─, $DD=│, $B0=┌, $AE=┐, $AD=└, $BD=┘, $AB=├, $B3=┤, $B1=┴, $B2=┬
+// Rounded corners: $D5=╭, $C9=╮, $CA=╰, $CB=╯
+// Diagonals: $CD=╱, $CC=╲
+var _h14 = [0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0];
+var _s14 = [0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20];
+var DEFAULT_SEPARATORS = [
+  { name: 'Horizontal line', bytes: [0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0] },
+  { name: 'Wavy line',       bytes: [0x66,0x72,0xAF,0x72,0x66,0xC0,0x64,0x65,0x65,0x64,0x60,0x66,0x72,0xAF,0x72,0x66] },
+  { name: 'Top sharp',       bytes: [0xB0].concat(_h14,[0xAE]) },
+  { name: 'Bottom sharp',    bytes: [0xAD].concat(_h14,[0xBD]) },
+  { name: 'T-junction',      bytes: [0xAB].concat(_h14,[0xB3]) },
+  { name: 'Sides',           bytes: [0xDD].concat(_s14,[0xDD]) },
+  { name: 'Top rounded',     bytes: [0xD5].concat(_h14,[0xC9]) },
+  { name: 'Bottom rounded',  bytes: [0xCA].concat(_h14,[0xCB]) },
+];
+
+// Custom separators stored in localStorage
+var customSeparators = JSON.parse(localStorage.getItem('d64-customSeparators') || '[]');
+
+function saveCustomSeparators() {
+  localStorage.setItem('d64-customSeparators', JSON.stringify(customSeparators));
+}
+
+function getAllSeparators() {
+  return DEFAULT_SEPARATORS.concat(customSeparators);
+}
+
+function sepBytesToPreview(bytes) {
+  var preview = '';
+  for (var j = 0; j < 16; j++) preview += escHtml(PETSCII_MAP[bytes[j] || 0xA0]);
+  return preview;
+}
+
+// Build the separator submenu
+function buildSepSubmenu() {
+  var submenu = document.getElementById('sep-submenu');
+  if (!submenu) return;
+  var all = getAllSeparators();
+  var html = '';
+  for (var i = 0; i < all.length; i++) {
+    if (i === DEFAULT_SEPARATORS.length && customSeparators.length > 0) {
+      html += '<div class="separator"></div>';
+    }
+    html += '<div class="option" data-sep-idx="' + i + '" title="' + escHtml(all[i].name) + '">' +
+      '<span style="font-family:\'C64 Pro Mono\',monospace;font-size:12px">' + sepBytesToPreview(all[i].bytes) + '</span></div>';
   }
+  submenu.innerHTML = html;
+}
+
+// Separator editor modal
+function showSeparatorEditor() {
+  var editIdx = -1; // -1 = not editing, >= 0 = editing custom separator at this index
+
+  function render() {
+    var html = '<div class="sep-editor-list">';
+    // Default separators (read-only)
+    for (var i = 0; i < DEFAULT_SEPARATORS.length; i++) {
+      html += '<div class="sep-editor-item">';
+      html += '<span class="sep-editor-preview">' + sepBytesToPreview(DEFAULT_SEPARATORS[i].bytes) + '</span>';
+      html += '<span style="font-size:11px;color:var(--text-muted)">' + escHtml(DEFAULT_SEPARATORS[i].name) + '</span>';
+      html += '</div>';
+    }
+    // Custom separators
+    for (var j = 0; j < customSeparators.length; j++) {
+      html += '<div class="sep-editor-item">';
+      html += '<span class="sep-editor-preview">' + sepBytesToPreview(customSeparators[j].bytes) + '</span>';
+      html += '<button class="sep-editor-btn" data-action="edit" data-cidx="' + j + '"><i class="fa-solid fa-pen"></i></button>';
+      html += '<button class="sep-editor-btn danger" data-action="delete" data-cidx="' + j + '"><i class="fa-solid fa-trash"></i></button>';
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // Add/Edit form
+    html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">';
+    html += '<input type="text" id="sep-edit-input" class="sep-editor-input" maxlength="16" value="">';
+    html += '<button class="sep-editor-btn" id="sep-edit-save">' + (editIdx >= 0 ? 'Update' : 'Add') + '</button>';
+    if (editIdx >= 0) html += '<button class="sep-editor-btn" id="sep-edit-cancel">Cancel</button>';
+    html += '</div>';
+
+    // Inline PETSCII 16x16 grid
+    html += '<table style="border-collapse:collapse;margin-top:8px" id="sep-char-grid"><tr><td></td>';
+    for (var col = 0; col < 16; col++) {
+      html += '<td style="text-align:center;font-size:9px;color:var(--text-muted);padding:0 1px;font-family:monospace">' + col.toString(16).toUpperCase() + '</td>';
+    }
+    html += '</tr>';
+    for (var row = 0; row < 16; row++) {
+      html += '<tr><td style="text-align:right;font-size:9px;color:var(--text-muted);padding-right:4px;font-family:monospace">' + row.toString(16).toUpperCase() + 'x</td>';
+      for (var col2 = 0; col2 < 16; col2++) {
+        var p = row * 16 + col2;
+        var isSafe = SAFE_PETSCII.has(p);
+        var disabled = !isSafe && !allowUnsafeChars;
+        var isRev = (p <= 0x1F) || (p >= 0x80 && p <= 0x9F);
+        html += '<td data-insert-code="' + p + '" title="$' + p.toString(16).toUpperCase().padStart(2, '0') + '"' +
+          ' style="width:22px;height:20px;text-align:center;cursor:pointer;font-family:\'C64 Pro Mono\',monospace;font-size:12px;' +
+          'border:1px solid var(--border);border-radius:1px;' +
+          (isRev ? 'background:var(--text);color:var(--bg);' : '') +
+          (disabled ? 'opacity:0.5;cursor:not-allowed;' : '') +
+          '">' + escHtml(PETSCII_MAP[p]) + '</td>';
+      }
+      html += '</tr>';
+    }
+    html += '</table>';
+
+    return html;
+  }
+
+  showModal('Edit Separators', []);
+  var body = document.getElementById('modal-body');
+  body.innerHTML = render();
+
+  function attachEvents() {
+    var input = document.getElementById('sep-edit-input');
+    if (input) {
+      setTimeout(function() { input.focus(); }, 50);
+    }
+
+    // Prevent grid clicks from stealing focus from input
+    var grid = document.getElementById('sep-char-grid');
+    if (grid) {
+      grid.addEventListener('mousedown', function(e) { e.preventDefault(); });
+    }
+
+    body.addEventListener('click', function handler(e) {
+      // Don't interfere with input clicks
+      if (e.target.tagName === 'INPUT') return;
+      // Inline PETSCII grid click
+      var charKey = e.target.closest('[data-insert-code]');
+      if (charKey) {
+        var code = parseInt(charKey.getAttribute('data-insert-code'), 10);
+        var inp = document.getElementById('sep-edit-input');
+        if (inp && inp.value.length < 16) {
+          inp.value += PETSCII_MAP[code];
+          inp.focus();
+        }
+        return;
+      }
+      var btn = e.target.closest('[data-action]');
+      if (!btn) {
+        // Save/Cancel buttons
+        if (e.target.closest('#sep-edit-save')) {
+          var inp = document.getElementById('sep-edit-input');
+          if (!inp || inp.value.length === 0) return;
+          // Convert input value to PETSCII bytes (no padding)
+          var bytes = [];
+          for (var k = 0; k < inp.value.length; k++) {
+            bytes.push(unicodeToPetscii(inp.value[k]));
+          }
+          if (editIdx >= 0) {
+            customSeparators[editIdx].bytes = bytes;
+          } else {
+            customSeparators.push({ name: 'Custom', bytes: bytes });
+          }
+          saveCustomSeparators();
+          buildSepSubmenu();
+          editIdx = -1;
+          body.removeEventListener('click', handler);
+          body.innerHTML = render();
+          attachEvents();
+          return;
+        }
+        if (e.target.closest('#sep-edit-cancel')) {
+          editIdx = -1;
+          body.removeEventListener('click', handler);
+          body.innerHTML = render();
+          attachEvents();
+          return;
+        }
+        return;
+      }
+
+      var action = btn.getAttribute('data-action');
+      var cidx = parseInt(btn.getAttribute('data-cidx'), 10);
+
+      if (action === 'delete') {
+        customSeparators.splice(cidx, 1);
+        saveCustomSeparators();
+        buildSepSubmenu();
+        editIdx = -1;
+        body.removeEventListener('click', handler);
+        body.innerHTML = render();
+        attachEvents();
+      } else if (action === 'edit') {
+        editIdx = cidx;
+        body.removeEventListener('click', handler);
+        body.innerHTML = render();
+        // Pre-fill input with existing bytes
+        var inp2 = document.getElementById('sep-edit-input');
+        if (inp2) {
+          var val = '';
+          for (var m = 0; m < 16; m++) val += PETSCII_MAP[customSeparators[cidx].bytes[m]];
+          inp2.value = val;
+        }
+        attachEvents();
+      }
+    });
+  }
+
+  attachEvents();
+}
+
+document.getElementById('opt-edit-separators').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  showSeparatorEditor();
+});
+
+function insertSeparator(pattern) {
+  if (!currentBuffer || !canInsertFile()) return;
+  var newOff = insertAndPosition();
+  if (newOff < 0) return;
+
+  // Convert to a closed DEL with the separator pattern
+  var data = new Uint8Array(currentBuffer);
+  data[newOff + 2] = 0x80; // DEL, closed (not scratched)
+  data[newOff + 3] = 0x12; // track $12
+  data[newOff + 4] = 0x00; // sector $00
+  var patBytes = pattern.bytes || [];
+  var patLen = patBytes.length;
+  for (var i = 0; i < 16; i++) {
+    if (pattern.byte !== undefined) {
+      data[newOff + 5 + i] = pattern.byte;
+    } else if (i < patLen) {
+      data[newOff + 5 + i] = patBytes[i];
+    }
+  }
+  data[newOff + 30] = 0x00; // 0 blocks
+  data[newOff + 31] = 0x00;
+
+  selectedEntryIndex = newOff;
+  var info = parseD64(currentBuffer);
+  renderDisk(info);
+}
+
+// Build submenu on load and when charset changes
+buildSepSubmenu();
+
+document.getElementById('sep-submenu').addEventListener('click', function(e) {
+  e.stopPropagation();
+  var opt = e.target.closest('[data-sep-idx]');
+  if (!opt) return;
+  var idx = parseInt(opt.getAttribute('data-sep-idx'), 10);
+  var all = getAllSeparators();
+  if (isNaN(idx) || idx < 0 || idx >= all.length) return;
+  closeMenus();
+  insertSeparator(all[idx]);
 });
 
 document.getElementById('opt-remove').addEventListener('click', (e) => {
@@ -2665,6 +3083,460 @@ document.getElementById('opt-recalc-size').addEventListener('click', (e) => {
   const info = parseD64(currentBuffer);
   renderDisk(info);
 });
+
+// ── File menu: Export File ─────────────────────────────────────────────
+document.getElementById('opt-export').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  var data = new Uint8Array(currentBuffer);
+  var typeByte = data[selectedEntryIndex + 2];
+  var typeIdx = typeByte & 0x07;
+  if (typeIdx < 1 || typeIdx > 4) return;
+
+  var result = readFileData(currentBuffer, selectedEntryIndex);
+  if (result.error) {
+    alert('Export error: ' + result.error);
+    return;
+  }
+
+  var extMap = { 1: '.seq', 2: '.prg', 3: '.usr', 4: '.rel' };
+  var ext = extMap[typeIdx];
+  var name = petsciiToReadable(readPetsciiString(data, selectedEntryIndex + 5, 16)).trim();
+  // Sanitize filename: replace characters not safe for filenames
+  name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+  if (!name) name = 'export';
+
+  var blob = new Blob([result.data], { type: 'application/octet-stream' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name + ext;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// ── File menu: Import File ────────────────────────────────────────────
+var importFileInput = document.createElement('input');
+importFileInput.type = 'file';
+importFileInput.accept = '.prg,.seq,.usr,.rel';
+importFileInput.style.display = 'none';
+document.body.appendChild(importFileInput);
+
+document.getElementById('opt-import').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer || !canInsertFile()) return;
+  closeMenus();
+  importFileInput.click();
+});
+
+importFileInput.addEventListener('change', () => {
+  var file = importFileInput.files[0];
+  if (!file) return;
+  importFileInput.value = '';
+  var reader = new FileReader();
+  reader.onload = () => {
+    importFileToDisk(file.name, new Uint8Array(reader.result));
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+// Build a true sector allocation map by following all file and directory chains.
+// Does NOT trust the BAM — walks every chain on disk.
+function buildTrueAllocationMap(buffer) {
+  var data = new Uint8Array(buffer);
+  var fmt = currentFormat;
+  var allocated = {}; // "t:s" -> true
+
+  // Mark BAM sector(s) as allocated
+  allocated[fmt.bamTrack + ':' + fmt.bamSector] = true;
+  if (fmt.bamSector2 !== undefined) allocated[fmt.bamTrack + ':' + fmt.bamSector2] = true;
+  if (fmt.bamTrack2) allocated[fmt.bamTrack2 + ':' + (fmt.bamSector2 || 0)] = true;
+  // D81 header sector
+  if (fmt.headerTrack && fmt.headerSector !== undefined &&
+      (fmt.headerTrack !== fmt.bamTrack || fmt.headerSector !== fmt.bamSector)) {
+    allocated[fmt.headerTrack + ':' + fmt.headerSector] = true;
+  }
+
+  // Follow directory chain
+  var dirT = fmt.dirTrack, dirS = fmt.dirSector;
+  var dirVisited = {};
+  var dirEntries = []; // all entry offsets in the directory
+
+  while (dirT !== 0) {
+    var key = dirT + ':' + dirS;
+    if (dirVisited[key]) break;
+    dirVisited[key] = true;
+    allocated[key] = true;
+
+    var off = sectorOffset(dirT, dirS);
+    if (off < 0) break;
+
+    for (var i = 0; i < fmt.entriesPerSector; i++) {
+      dirEntries.push(off + i * fmt.entrySize);
+    }
+
+    dirT = data[off]; dirS = data[off + 1];
+  }
+
+  // Follow every file's sector chain (including deleted/splat files that have data)
+  for (var di = 0; di < dirEntries.length; di++) {
+    var entOff = dirEntries[di];
+    var typeByte = data[entOff + 2];
+    var typeIdx = typeByte & 0x07;
+    if (typeIdx === 0 && !(typeByte & 0x80)) continue; // empty slot
+
+    var ft = data[entOff + 3], fs = data[entOff + 4];
+    var fileVisited = {};
+    while (ft !== 0) {
+      if (ft < 1 || ft > currentTracks) break;
+      if (fs >= fmt.sectorsPerTrack(ft)) break;
+      var fkey = ft + ':' + fs;
+      if (fileVisited[fkey]) break;
+      fileVisited[fkey] = true;
+      allocated[fkey] = true;
+      var foff = sectorOffset(ft, fs);
+      if (foff < 0) break;
+      ft = data[foff]; fs = data[foff + 1];
+    }
+
+    // REL files: also follow side sector chain
+    if (typeIdx === 4) {
+      var sst = data[entOff + 0x15], sss = data[entOff + 0x16];
+      var ssVisited = {};
+      while (sst !== 0) {
+        var sskey = sst + ':' + sss;
+        if (ssVisited[sskey]) break;
+        ssVisited[sskey] = true;
+        if (sst < 1 || sst > currentTracks) break;
+        if (sss >= fmt.sectorsPerTrack(sst)) break;
+        allocated[sskey] = true;
+        var ssoff = sectorOffset(sst, sss);
+        if (ssoff < 0) break;
+        sst = data[ssoff]; sss = data[ssoff + 1];
+      }
+    }
+  }
+
+  return allocated;
+}
+
+// Allocate sectors using the same strategy as a real CBM drive:
+// - 1541/1571: tracks below dir track first (descending), then above (ascending), interleave 10
+// - 1581: tracks below dir track first (descending), then above (ascending), interleave 1
+function allocateSectors(allocated, numSectors) {
+  var fmt = currentFormat;
+  var dirTrack = fmt.dirTrack;
+
+  // Build track search order: below dir track first, then above
+  // Only include tracks covered by the BAM (e.g. D64 40-track: BAM only covers 1-35)
+  var maxBamTrack = fmt.bamTracksRange(currentTracks);
+  var trackOrder = [];
+  for (var t = dirTrack - 1; t >= 1; t--) trackOrder.push(t);
+  for (var t2 = dirTrack + 1; t2 <= maxBamTrack; t2++) trackOrder.push(t2);
+
+  var interleave = (fmt === DISK_FORMATS.d81) ? 1 : 10;
+  var sectorList = [];
+  var lastSector = 0;
+
+  for (var ti = 0; ti < trackOrder.length && sectorList.length < numSectors; ti++) {
+    var track = trackOrder[ti];
+    var spt = fmt.sectorsPerTrack(track);
+
+    // On a new track, apply interleave from the last allocated sector
+    var startS = (lastSector + interleave) % spt;
+
+    // Find first free sector starting from startS, scanning forward
+    var s = startS;
+    var foundFirst = false;
+    for (var attempt = 0; attempt < spt; attempt++) {
+      if (!allocated[track + ':' + s]) {
+        sectorList.push({ track: track, sector: s });
+        allocated[track + ':' + s] = true;
+        lastSector = s;
+        foundFirst = true;
+        break;
+      }
+      s = (s + 1) % spt;
+    }
+
+    // Continue allocating more sectors on this same track
+    if (foundFirst) {
+      while (sectorList.length < numSectors) {
+        var nextS = (lastSector + interleave) % spt;
+        var foundMore = false;
+        for (var a2 = 0; a2 < spt; a2++) {
+          if (!allocated[track + ':' + nextS]) {
+            sectorList.push({ track: track, sector: nextS });
+            allocated[track + ':' + nextS] = true;
+            lastSector = nextS;
+            foundMore = true;
+            break;
+          }
+          nextS = (nextS + 1) % spt;
+        }
+        if (!foundMore) break; // track full
+      }
+    }
+  }
+
+  return sectorList;
+}
+
+function importFileToDisk(fileName, fileData) {
+  var errors = [];
+
+  // Determine file type from extension
+  var dotIdx = fileName.lastIndexOf('.');
+  var ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1).toLowerCase() : '';
+  var typeMap = { prg: 2, seq: 1, usr: 3, rel: 4 };
+  var typeIdx = typeMap[ext];
+  if (typeIdx === undefined) {
+    showModal('Import Error', ['Unsupported file type: .' + ext]);
+    return;
+  }
+
+  // Take snapshot for rollback
+  var snapshot = currentBuffer.slice(0);
+
+  var data = new Uint8Array(currentBuffer);
+  var fmt = currentFormat;
+
+  // Build true allocation map (don't trust BAM)
+  var allocated = buildTrueAllocationMap(currentBuffer);
+
+  // Calculate required sectors
+  // Like a real 1541: if file size is an exact multiple of 254, an extra sector is
+  // needed because the last-sector byte count (N+2) would wrap from 256 to 0
+  var dataLen = fileData.length;
+  var numSectors = dataLen === 0 ? 1 : Math.ceil(dataLen / 254);
+  if (dataLen > 0 && dataLen % 254 === 0) numSectors++;
+
+  // Allocate sectors using real drive algorithm
+  var sectorList = allocateSectors(allocated, numSectors);
+
+  if (sectorList.length < numSectors) {
+    errors.push('Not enough free sectors. Need ' + numSectors + ', have ' + sectorList.length + '.');
+    showModal('Import Error', errors);
+    return;
+  }
+
+  // Reserve a directory entry before writing any data (fail early)
+  var entryOff = findFreeDirEntry(currentBuffer);
+  if (entryOff < 0) {
+    errors.push('No free directory entry available.');
+    showModal('Import Error', errors);
+    return;
+  }
+
+  // Write file data into the sector chain
+  var dataPos = 0;
+  for (var si = 0; si < sectorList.length; si++) {
+    var sec = sectorList[si];
+    var soff = sectorOffset(sec.track, sec.sector);
+
+    if (si < sectorList.length - 1) {
+      // Not last sector: link to next, write 254 data bytes
+      var nextSec = sectorList[si + 1];
+      data[soff] = nextSec.track;
+      data[soff + 1] = nextSec.sector;
+      for (var b = 2; b < 256; b++) {
+        data[soff + b] = dataPos < dataLen ? fileData[dataPos++] : 0x00;
+      }
+    } else {
+      // Last sector: track=0, byte 1 = offset after last data byte
+      // readFileData reads bytes 2..(byte1-1), so byte1 = dataBytes + 2
+      data[soff] = 0x00;
+      var bytesInLast = dataLen - dataPos;
+      if (bytesInLast <= 0) bytesInLast = 0;
+      data[soff + 1] = bytesInLast + 2;
+      for (var b2 = 2; b2 < 256; b2++) {
+        data[soff + b2] = dataPos < dataLen ? fileData[dataPos++] : 0x00;
+      }
+    }
+  }
+
+  // Fill directory entry
+  // File type byte: closed (0x80) | type index
+  data[entryOff + 2] = 0x80 | typeIdx;
+  // First track/sector of file data
+  data[entryOff + 3] = sectorList[0].track;
+  data[entryOff + 4] = sectorList[0].sector;
+
+  // Write filename (strip extension, convert to uppercase PETSCII)
+  var baseName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
+  baseName = baseName.toUpperCase().substring(0, 16);
+  for (var ni = 0; ni < 16; ni++) {
+    if (ni < baseName.length) {
+      var ch = baseName.charCodeAt(ni);
+      // Map printable ASCII to PETSCII (uppercase letters and common symbols)
+      if (ch >= 0x41 && ch <= 0x5A) data[entryOff + 5 + ni] = ch; // A-Z
+      else if (ch >= 0x30 && ch <= 0x39) data[entryOff + 5 + ni] = ch; // 0-9
+      else if (ch === 0x20) data[entryOff + 5 + ni] = 0x20; // space
+      else if (ch === 0x2D) data[entryOff + 5 + ni] = 0x2D; // hyphen
+      else if (ch === 0x2E) data[entryOff + 5 + ni] = 0x2E; // dot
+      else if (ch === 0x21) data[entryOff + 5 + ni] = 0x21; // !
+      else if (ch === 0x23) data[entryOff + 5 + ni] = 0x23; // #
+      else if (ch === 0x24) data[entryOff + 5 + ni] = 0x24; // $
+      else if (ch === 0x25) data[entryOff + 5 + ni] = 0x25; // %
+      else if (ch === 0x26) data[entryOff + 5 + ni] = 0x26; // &
+      else if (ch === 0x28) data[entryOff + 5 + ni] = 0x28; // (
+      else if (ch === 0x29) data[entryOff + 5 + ni] = 0x29; // )
+      else data[entryOff + 5 + ni] = 0x20; // fallback to space
+    } else {
+      data[entryOff + 5 + ni] = 0xA0; // pad with shifted space
+    }
+  }
+
+  // Clear unused bytes (side sectors, GEOS fields)
+  for (var ui = 21; ui < 30; ui++) data[entryOff + ui] = 0x00;
+  // Block count
+  data[entryOff + 30] = numSectors & 0xFF;
+  data[entryOff + 31] = (numSectors >> 8) & 0xFF;
+
+  // Update BAM: mark our allocated sectors as used
+  // Work at byte level to handle D81's 40 sectors (bitwise ops are 32-bit in JS)
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var touchedTracks = {};
+  for (var bi = 0; bi < sectorList.length; bi++) {
+    var bsec = sectorList[bi];
+    var byteIdx = Math.floor(bsec.sector / 8);
+    var bitIdx = bsec.sector % 8;
+
+    // Find the base offset of the bitmap bytes for this track
+    var bamByteBase;
+    if (fmt === DISK_FORMATS.d81) {
+      bamByteBase = fmt._bamBase(bamOff, bsec.track) + 1;
+    } else if (fmt === DISK_FORMATS.d71 && bsec.track > 35) {
+      bamByteBase = fmt._bam2Off(bamOff) + 0xDD + (bsec.track - 36) * 3;
+    } else {
+      bamByteBase = bamOff + 4 * bsec.track + 1;
+    }
+
+    data[bamByteBase + byteIdx] &= ~(1 << bitIdx); // clear bit = mark as used
+    touchedTracks[bsec.track] = true;
+  }
+
+  // Recalculate free count for each touched track by counting bitmap bits
+  for (var trackStr in touchedTracks) {
+    var btrack = parseInt(trackStr, 10);
+    var spt = fmt.sectorsPerTrack(btrack);
+    var numBytes = Math.ceil(spt / 8);
+
+    var bamByteBase2;
+    if (fmt === DISK_FORMATS.d81) {
+      bamByteBase2 = fmt._bamBase(bamOff, btrack) + 1;
+    } else if (fmt === DISK_FORMATS.d71 && btrack > 35) {
+      bamByteBase2 = fmt._bam2Off(bamOff) + 0xDD + (btrack - 36) * 3;
+    } else {
+      bamByteBase2 = bamOff + 4 * btrack + 1;
+    }
+
+    var free = 0;
+    for (var bci = 0; bci < numBytes; bci++) {
+      var bval = data[bamByteBase2 + bci];
+      var maxBit = Math.min(8, spt - bci * 8);
+      for (var bit = 0; bit < maxBit; bit++) {
+        if (bval & (1 << bit)) free++;
+      }
+    }
+    fmt.writeTrackFree(data, bamOff, btrack, free);
+  }
+
+  // Verify the write by reading back the file data
+  var verify = readFileData(currentBuffer, entryOff);
+  if (verify.error) {
+    currentBuffer = snapshot;
+    errors.push('Verification failed: ' + verify.error);
+    showModal('Import Error', errors);
+    return;
+  }
+  if (verify.data.length !== fileData.length) {
+    currentBuffer = snapshot;
+    errors.push('Verification failed: read back ' + verify.data.length + ' bytes, expected ' + fileData.length + '.');
+    showModal('Import Error', errors);
+    return;
+  }
+  for (var vi = 0; vi < fileData.length; vi++) {
+    if (verify.data[vi] !== fileData[vi]) {
+      currentBuffer = snapshot;
+      errors.push('Verification failed: data mismatch at byte ' + vi + '.');
+      showModal('Import Error', errors);
+      return;
+    }
+  }
+
+  // Success — refresh display
+  selectedEntryIndex = entryOff;
+  var info = parseD64(currentBuffer);
+  renderDisk(info);
+  showModal('Import Successful', ['File "' + baseName + '" imported successfully.', numSectors + ' block(s) written.']);
+}
+
+// Find a free directory entry (typeByte === 0x00 with all entry bytes zeroed)
+// Also allocates a new directory sector if needed (like insertFileEntry but without writing an entry)
+function findFreeDirEntry(buffer) {
+  var data = new Uint8Array(buffer);
+  var fmt = currentFormat;
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var t = fmt.dirTrack, s = fmt.dirSector;
+  var visited = {};
+  var lastOff = -1;
+
+  while (t !== 0) {
+    var key = t + ':' + s;
+    if (visited[key]) break;
+    visited[key] = true;
+    var off = sectorOffset(t, s);
+    if (off < 0) break;
+    lastOff = off;
+
+    for (var i = 0; i < fmt.entriesPerSector; i++) {
+      var eo = off + i * fmt.entrySize;
+      var isEmpty = true;
+      for (var j = 2; j < 32; j++) {
+        if (data[eo + j] !== 0x00) { isEmpty = false; break; }
+      }
+      if (isEmpty) return eo;
+    }
+
+    t = data[off]; s = data[off + 1];
+  }
+
+  // No empty slot — allocate new directory sector
+  var dirTrk = fmt.dirTrack;
+  var spt = sectorsPerTrack(dirTrk);
+  var newSector = -1;
+  for (var cs = 1; cs < spt; cs++) {
+    if (visited[dirTrk + ':' + cs]) continue;
+    newSector = cs;
+    break;
+  }
+  if (newSector === -1) return -1;
+
+  // Link new sector from last sector in chain
+  if (lastOff >= 0) {
+    data[lastOff] = dirTrk;
+    data[lastOff + 1] = newSector;
+  }
+
+  // Initialize new directory sector
+  var newOff = sectorOffset(dirTrk, newSector);
+  data[newOff] = 0x00;
+  data[newOff + 1] = 0xFF;
+  for (var zi = 2; zi < 256; zi++) data[newOff + zi] = 0x00;
+
+  // Mark sector as used in BAM
+  var bm = fmt.readTrackBitmap(data, bamOff, dirTrk);
+  var newBm = bm & ~(1 << newSector);
+  fmt.writeTrackBitmap(data, bamOff, dirTrk, newBm);
+  var free = 0;
+  for (var fcs = 0; fcs < spt; fcs++) {
+    if (newBm & (1 << fcs)) free++;
+  }
+  fmt.writeTrackFree(data, bamOff, dirTrk, free);
+
+  return newOff;
+}
 
 document.getElementById('opt-lock').addEventListener('click', (e) => {
   e.stopPropagation();

@@ -61,7 +61,7 @@
     user-select: none;
   }
 
-  .editable, .dir-name.editing, .blocks-input, .name-input, .header-input, .hex-input {
+  .editable, .dir-name.editing, .blocks-input, .name-input, .header-input, .hex-input, .sep-editor-input {
     -webkit-user-select: text;
     user-select: text;
   }
@@ -169,6 +169,13 @@
     height: 1px;
     background: var(--border);
     margin: 4px 0;
+  }
+
+  .context-menu {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 200;
   }
 
   .spacer { flex: 1; }
@@ -282,7 +289,7 @@
     line-height: 1;
     overflow-y: auto;
     flex: 1;
-    min-height: 0;
+    min-height: 200px;
     padding: 8px 0;
     border-left: 1px solid var(--border);
     border-right: 1px solid var(--border);
@@ -321,13 +328,17 @@
     background: none;
   }
 
-  .dir-entry:not(.dir-header-row):hover {
+  .dir-entry:not(.dir-header-row):not(.selected):hover {
     background: var(--hover);
   }
 
   .dir-entry.selected {
     background: var(--accent);
     color: var(--bg);
+  }
+
+  .dir-entry.selected:hover {
+    filter: brightness(1.2);
   }
 
   .dir-entry.selected .dir-blocks,
@@ -704,7 +715,7 @@
   }
 
   .petscii-key.disabled {
-    opacity: 0.2;
+    opacity: 0.5;
     cursor: not-allowed;
   }
 
@@ -1115,6 +1126,59 @@
     opacity: 0.8;
   }
 
+  /* --- Separator Editor --- */
+  .sep-editor-list {
+    margin-bottom: 12px;
+  }
+
+  .sep-editor-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sep-editor-preview {
+    font-family: 'C64 Pro Mono', monospace;
+    font-size: 13px;
+    flex: 1;
+    white-space: pre;
+  }
+
+  .sep-editor-btn {
+    padding: 2px 8px;
+    font-size: 11px;
+    font-family: inherit;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .sep-editor-btn:hover {
+    background: var(--hover);
+  }
+
+  .sep-editor-btn.danger:hover {
+    background: #f38ba8;
+    color: var(--bg);
+    border-color: #f38ba8;
+  }
+
+  .sep-editor-input {
+    font-family: 'C64 Pro Mono', monospace;
+    font-size: 14px;
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 4px 8px;
+    color: var(--text);
+    outline: none;
+  }
+
   .hex-nav-field {
     cursor: pointer;
     padding: 2px 4px;
@@ -1242,6 +1306,9 @@
     <div class="menu-dropdown">
       <div class="option disabled" id="opt-rename">Rename</div>
       <div class="option disabled" id="opt-insert">Insert File</div>
+      <div class="option disabled has-submenu" id="opt-insert-sep">Insert Separator
+        <div class="submenu" id="sep-submenu"></div>
+      </div>
       <div class="option disabled" id="opt-remove">Remove Entry</div>
       <div class="option disabled has-submenu" id="opt-align">Align
         <div class="submenu">
@@ -1266,11 +1333,16 @@
           <div class="option" data-typeidx="4"><span class="check" id="check-type-4"></span>REL</div>
         </div>
       </div>
+      <div class="separator"></div>
+      <div class="option disabled" id="opt-export">Export File</div>
+      <div class="option disabled" id="opt-import">Import File</div>
     </div>
   </div>
   <div class="menu-item" id="menu-edit">
     Edit
     <div class="menu-dropdown">
+      <div class="option" id="opt-edit-separators">Edit Separators</div>
+      <div class="separator"></div>
       <div class="option disabled" id="opt-edit-sector">Edit Current Sector</div>
       <div class="option disabled" id="opt-edit-file-sector">Edit File Sector</div>
     </div>
@@ -1311,6 +1383,8 @@
 </div>
 
 <div class="petscii-picker" id="petscii-picker"></div>
+
+<div class="menu-dropdown context-menu" id="context-menu"></div>
 
 <div class="modal-overlay" id="input-modal-overlay">
   <div class="modal">
