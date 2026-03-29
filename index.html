@@ -314,6 +314,17 @@
     margin-bottom: 4px;
   }
 
+  .dir-parent-row {
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 4px;
+    margin-bottom: 4px;
+  }
+
+  .dir-parent-row:hover {
+    background: var(--hover);
+  }
+
   .dir-header-row .dir-blocks,
   .dir-header-row .dir-name,
   .dir-header-row .dir-type,
@@ -1331,11 +1342,13 @@
           <div class="option" data-typeidx="2"><span class="check" id="check-type-2"></span>PRG</div>
           <div class="option" data-typeidx="3"><span class="check" id="check-type-3"></span>USR</div>
           <div class="option" data-typeidx="4"><span class="check" id="check-type-4"></span>REL</div>
+          <div class="option" data-typeidx="5"><span class="check" id="check-type-5"></span>CBM</div>
         </div>
       </div>
       <div class="separator"></div>
       <div class="option disabled" id="opt-export">Export File</div>
       <div class="option disabled" id="opt-import">Import File</div>
+      <div class="option disabled" id="opt-add-partition">Add Directory</div>
     </div>
   </div>
   <div class="menu-item" id="menu-edit">

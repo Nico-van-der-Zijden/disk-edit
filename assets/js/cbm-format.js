@@ -135,25 +135,22 @@ const DISK_FORMATS = {
       return 17;
     },
     // Side 1 BAM: same as D64 at T18/S0 (4 bytes per track, tracks 1-35)
-    // Side 2 BAM: at T53/S0 — free counts at bytes 0-34, bitmaps at bytes 0xDD-0xFF
-    // Side 2 free count for track t (36-70) at byte (t - 36)
-    // Side 2 bitmap for track t at byte 0xDD + (t - 36) * 3
+    // Side 2 free counts: at T18/S0 bytes $DD-$FF (1 byte per track, tracks 36-70)
+    // Side 2 bitmaps: at T53/S0 bytes $00-$68 (3 bytes per track, tracks 36-70)
     bamTracksRange(numTracks) { return Math.min(numTracks, 70); },
     readTrackFree(data, bamOff, track) {
       if (track <= 35) {
         return data[bamOff + 4 * track];
       } else {
-        // Side 2 BAM at T53/S0
-        const bam2Off = this._bam2Off(bamOff);
-        return data[bam2Off + (track - 36)];
+        // Side 2 free counts at T18/S0 bytes $DD + (track - 36)
+        return data[bamOff + 0xDD + (track - 36)];
       }
     },
     writeTrackFree(data, bamOff, track, free) {
       if (track <= 35) {
         data[bamOff + 4 * track] = free;
       } else {
-        const bam2Off = this._bam2Off(bamOff);
-        data[bam2Off + (track - 36)] = free;
+        data[bamOff + 0xDD + (track - 36)] = free;
       }
     },
     readTrackBitmap(data, bamOff, track) {
@@ -161,8 +158,9 @@ const DISK_FORMATS = {
         const base = bamOff + 4 * track;
         return data[base + 1] | (data[base + 2] << 8) | (data[base + 3] << 16);
       } else {
+        // Side 2 bitmaps at T53/S0 bytes $00 + (track - 36) * 3
         const bam2Off = this._bam2Off(bamOff);
-        const base = bam2Off + 0xDD + (track - 36) * 3;
+        const base = bam2Off + (track - 36) * 3;
         return data[base] | (data[base + 1] << 8) | (data[base + 2] << 16);
       }
     },
@@ -174,7 +172,7 @@ const DISK_FORMATS = {
         data[base + 3] = (bm >> 16) & 0xFF;
       } else {
         const bam2Off = this._bam2Off(bamOff);
-        const base = bam2Off + 0xDD + (track - 36) * 3;
+        const base = bam2Off + (track - 36) * 3;
         data[base] = bm & 0xFF;
         data[base + 1] = (bm >> 8) & 0xFF;
         data[base + 2] = (bm >> 16) & 0xFF;
@@ -225,19 +223,18 @@ const DISK_FORMATS = {
       data[bamOff + 0xA6] = this.dosType.charCodeAt(1);
       for (let i = 0xA7; i <= 0xAA; i++) data[bamOff + i] = 0xA0;
 
-      // Side 2 BAM at T53/S0
+      // Side 2 BAM: free counts at T18/S0 $DD-$FF, bitmaps at T53/S0 $00-$68
       const bam2Off = this._bam2Off(bamOff);
       for (let t = 36; t <= numTracks; t++) {
         const spt = this.sectorsPerTrack(t);
-        // Free count
+        // Free count at T18/S0 byte $DD + (t - 36)
         if (t === 53) {
-          // T53 has BAM sector used
-          data[bam2Off + (t - 36)] = spt - 1;
+          data[bamOff + 0xDD + (t - 36)] = spt - 1;
         } else {
-          data[bam2Off + (t - 36)] = spt;
+          data[bamOff + 0xDD + (t - 36)] = spt;
         }
-        // Bitmap
-        const bmBase = bam2Off + 0xDD + (t - 36) * 3;
+        // Bitmap at T53/S0 byte (t - 36) * 3
+        const bmBase = bam2Off + (t - 36) * 3;
         let bm = (1 << spt) - 1;
         if (t === 53) bm &= ~(1 << 0); // T53/S0 used for BAM2
         data[bmBase] = bm & 0xFF;
@@ -264,7 +261,7 @@ const DISK_FORMATS = {
     nameLength: 16,
     idOffset: 0x16,     // offset within HEADER sector for disk ID
     idLength: 5,
-    maxDirSectors: 39,
+    maxDirSectors: 37,   // sectors 3-39 on track 40 (0=header, 1-2=BAM)
     entriesPerSector: 8,
     entrySize: 32,
     doubleSidedFlag: 0x00,
@@ -805,7 +802,7 @@ function escHtml(s) {
 }
 
 // ── File type names (shared across all CBM formats) ──────────────────
-const FILE_TYPES = ['DEL', 'SEQ', 'PRG', 'USR', 'REL'];
+const FILE_TYPES = ['DEL', 'SEQ', 'PRG', 'USR', 'REL', 'CBM'];
 
 function fileTypeName(typeByte) {
   const closed = (typeByte & 0x80) !== 0;
@@ -890,6 +887,90 @@ function parseDisk(buffer) {
   }
 
   return { diskName, diskId, freeBlocks, entries, format: fmt.name, tracks: currentTracks };
+}
+
+// ── Parse a D81 partition/subdirectory ────────────────────────────────
+// startTrack = first track of the partition (header at sector 0, BAM at 1-2, dir at 3+)
+// partSize = size in sectors from directory entry bytes 30-31
+function parsePartition(buffer, startTrack, partSize) {
+  const data = new Uint8Array(buffer);
+  const fmt = currentFormat;
+
+  // Partition header is at (startTrack, 0) — same layout as D81 root header
+  const headerOff = sectorOffset(startTrack, 0);
+  if (headerOff < 0) return null;
+
+  const diskName = readPetsciiString(data, headerOff + fmt.nameOffset, fmt.nameLength);
+  const diskId = readPetsciiString(data, headerOff + fmt.idOffset, fmt.idLength, false);
+
+  // Partition BAM is at (startTrack, 1) and (startTrack, 2)
+  // Count free blocks from the partition's own BAM
+  const partBamOff = sectorOffset(startTrack, 1);
+  const numPartTracks = Math.floor(partSize / 40);
+  let freeBlocks = 0;
+  for (let t = 1; t <= numPartTracks; t++) {
+    // Skip the partition's own system track (track 1 = first track of partition)
+    if (t === 1) continue;
+    var base;
+    if (t <= 40) {
+      base = partBamOff + 0x10 + (t - 1) * 6;
+    } else {
+      base = partBamOff + 256 + 0x10 + (t - 41) * 6;
+    }
+    freeBlocks += data[base];
+  }
+
+  // Directory chain starts at (startTrack, 3)
+  const entries = [];
+  let dirTrack = startTrack;
+  let dirSector = 3;
+  const visited = new Set();
+
+  while (dirTrack !== 0) {
+    const key = `${dirTrack}:${dirSector}`;
+    if (visited.has(key)) break;
+    visited.add(key);
+
+    const off = sectorOffset(dirTrack, dirSector);
+    if (off < 0) break;
+
+    for (let i = 0; i < fmt.entriesPerSector; i++) {
+      const entryOff = off + i * fmt.entrySize;
+      const typeByte = data[entryOff + 2];
+
+      if (typeByte === 0x00) {
+        const fileTrack = data[entryOff + 3];
+        const fileSector = data[entryOff + 4];
+        const blocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
+        let hasName = false;
+        for (let j = 0; j < 16; j++) {
+          if (data[entryOff + 5 + j] !== 0x00 && data[entryOff + 5 + j] !== 0xA0) {
+            hasName = true; break;
+          }
+        }
+        if (!hasName && fileTrack === 0 && fileSector === 0 && blocks === 0) continue;
+      }
+
+      const name = readPetsciiString(data, entryOff + 5, 16);
+      const blocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
+      const closed = (typeByte & 0x80) !== 0;
+      const deleted = !closed;
+
+      if (deleted) {
+        const idx = typeByte & 0x07;
+        const typeName = FILE_TYPES[idx] || 'DEL';
+        const locked = (typeByte & 0x40) !== 0;
+        entries.push({ name, type: '*' + typeName + (locked ? '<' : ' '), blocks, deleted: true, entryOff });
+      } else {
+        entries.push({ name, type: fileTypeName(typeByte), blocks, deleted: false, entryOff });
+      }
+    }
+
+    dirTrack = data[off + 0];
+    dirSector = data[off + 1];
+  }
+
+  return { diskName, diskId, freeBlocks, entries, format: fmt.name, tracks: currentTracks, isPartition: true };
 }
 
 // Backward-compatible alias

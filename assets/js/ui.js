@@ -38,6 +38,46 @@ document.getElementById('modal-close').addEventListener('click', () => {
   document.getElementById('modal-overlay').classList.remove('open');
 });
 
+// Show a modal with custom buttons, returns a promise resolving to the button value
+// Optional items array shows a list below the message
+function showChoiceModal(title, message, buttons, items) {
+  return new Promise(function(resolve) {
+    document.getElementById('modal-title').textContent = title;
+    var body = document.getElementById('modal-body');
+    body.innerHTML = '';
+    var p = document.createElement('div');
+    p.textContent = message;
+    body.appendChild(p);
+
+    if (items && items.length) {
+      var ul = document.createElement('ul');
+      ul.style.maxHeight = '150px';
+      ul.style.overflowY = 'auto';
+      ul.style.margin = '8px 0';
+      for (var ii = 0; ii < items.length; ii++) {
+        var li = document.createElement('li');
+        li.textContent = items[ii];
+        ul.appendChild(li);
+      }
+      body.appendChild(ul);
+    }
+
+    var footer = document.querySelector('#modal-overlay .modal-footer');
+    footer.innerHTML = '';
+    buttons.forEach(function(btn) {
+      var el = document.createElement('button');
+      el.textContent = btn.label;
+      if (btn.secondary) el.className = 'modal-btn-secondary';
+      el.addEventListener('click', function() {
+        document.getElementById('modal-overlay').classList.remove('open');
+        resolve(btn.value);
+      });
+      footer.appendChild(el);
+    });
+    document.getElementById('modal-overlay').classList.add('open');
+  });
+}
+
 document.getElementById('modal-overlay').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) {
     document.getElementById('modal-overlay').classList.remove('open');
@@ -136,6 +176,20 @@ function renderDisk(info) {
           <span class="dir-icons"></span>
         </div>`;
 
+  // Show parent directory link when inside a partition
+  if (currentPartition) {
+    html += `
+        <div class="dir-entry dir-parent-row" id="dir-parent">
+          <span class="dir-grip"></span>
+          <span class="dir-blocks"><i class="fa-solid fa-arrow-left" style="font-size:11px"></i></span>
+          <span class="dir-name"><i class="fa-solid fa-folder-open" style="font-size:11px;margin-right:4px"></i>..</span>
+          <span class="dir-type"></span>
+          <span class="dir-ts"></span>
+          <span class="dir-addr"></span>
+          <span class="dir-icons"></span>
+        </div>`;
+  }
+
   let entries = info.entries.filter(e => !e.deleted || showDeleted);
 
   for (const e of entries) {
@@ -178,6 +232,8 @@ function renderDisk(info) {
             if (!currentBuffer || e.deleted) return icons;
             var d = new Uint8Array(currentBuffer);
             var ft = d[e.entryOff + 2] & 0x07;
+            // CBM partition/directory icon
+            if (ft === 5) icons += '<span class="dir-icon-partition" data-offset="' + e.entryOff + '" title="Partition — double-click to open"><i class="fa-solid fa-folder"></i></span>';
             // File viewer icon for SEQ(1), USR(3), REL(4)
             if (ft === 1 || ft === 3 || ft === 4) icons += '<span class="file-viewer-icon" data-offset="' + e.entryOff + '" title="View file contents"><i class="fa-solid fa-file-lines"></i></span>';
             // GEOS icon
@@ -248,6 +304,13 @@ function bindDirSelection() {
     // Click to select/deselect
     el.addEventListener('click', (e) => {
       if (e.target.tagName === 'INPUT' || e.target.classList.contains('editing') || e.target.closest('.editing')) return;
+      // Partition icon click — navigate into partition
+      var partIcon = e.target.closest('.dir-icon-partition');
+      if (partIcon) {
+        var pOff = parseInt(partIcon.getAttribute('data-offset'), 10);
+        enterPartition(pOff);
+        return;
+      }
       // File viewer icon click
       var fileIcon = e.target.closest('.file-viewer-icon');
       if (fileIcon) {
@@ -282,10 +345,19 @@ function bindDirSelection() {
       updateEntryMenuState();
     });
 
-    // Double-click to edit
+    // Double-click to edit (or navigate into partition)
     el.addEventListener('dblclick', (e) => {
+      // Check if this is a CBM partition — navigate into it
+      var entryOff = parseInt(el.dataset.offset, 10);
+      if (currentBuffer && !currentPartition) {
+        var d = new Uint8Array(currentBuffer);
+        var tb = d[entryOff + 2];
+        if ((tb & 0x87) === 0x85) { // closed CBM type
+          enterPartition(entryOff);
+          return;
+        }
+      }
       if (e.target.classList.contains('dir-type')) {
-        const entryOff = parseInt(el.dataset.offset, 10);
         showTypeDropdown(e.target, entryOff);
       } else if (e.target.classList.contains('dir-blocks')) {
         startEditBlockSize(el);
@@ -354,11 +426,62 @@ function bindDirSelection() {
       }
 
       selectedEntryIndex = slots[targetIdx];
-      const info = parseD64(currentBuffer);
+      const info = parseCurrentDir(currentBuffer);
       renderDisk(info);
     });
   });
 
+  // Parent directory row — click to go back to root
+  var parentRow = document.getElementById('dir-parent');
+  if (parentRow) {
+    parentRow.addEventListener('click', () => leavePartition());
+    parentRow.addEventListener('dblclick', () => leavePartition());
+  }
+}
+
+// ── Partition navigation ──────────────────────────────────────────────
+function enterPartition(entryOff) {
+  if (!currentBuffer) return;
+  var data = new Uint8Array(currentBuffer);
+  var startTrack = data[entryOff + 3];
+  var startSector = data[entryOff + 4];
+  var partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+
+  // Validate: partition must start at sector 0 and be a valid size
+  if (startSector !== 0) {
+    showModal('Partition Error', ['Partition does not start at sector 0 (not a subdirectory).']);
+    return;
+  }
+  if (partSize < 120 || partSize % 40 !== 0) {
+    showModal('Partition Error', ['Invalid partition size (' + partSize + ' sectors). Must be at least 120 and a multiple of 40.']);
+    return;
+  }
+
+  // Check that the partition header looks formatted
+  var headerOff = sectorOffset(startTrack, 0);
+  if (headerOff < 0) {
+    showModal('Partition Error', ['Invalid partition start track ' + startTrack + '.']);
+    return;
+  }
+
+  currentPartition = { entryOff: entryOff, startTrack: startTrack, partSize: partSize, name: name };
+  selectedEntryIndex = -1;
+
+  var info = parsePartition(currentBuffer, startTrack, partSize);
+  if (!info) {
+    currentPartition = null;
+    showModal('Partition Error', ['Failed to parse partition directory.']);
+    return;
+  }
+  renderDisk(info);
+}
+
+function leavePartition() {
+  currentPartition = null;
+  selectedEntryIndex = -1;
+  var info = parseDisk(currentBuffer);
+  renderDisk(info);
 }
 
 // ── Context menu on directory entries ─────────────────────────────────
@@ -469,12 +592,12 @@ document.getElementById('content').addEventListener('contextmenu', function(e) {
   // Only show context menu when a disk is loaded
   if (!currentBuffer) return;
 
-  var entry = e.target.closest('.dir-entry:not(.dir-header-row)');
+  var entry = e.target.closest('.dir-entry:not(.dir-header-row):not(.dir-parent-row)');
   var dirListing = e.target.closest('.dir-listing');
   if (!entry && !dirListing) return;
   e.preventDefault();
 
-  if (entry) {
+  if (entry && entry.dataset.offset) {
     // Right-click on a file entry — select it
     var offset = parseInt(entry.dataset.offset, 10);
     if (selectedEntryIndex !== offset) {
@@ -522,7 +645,7 @@ document.addEventListener('keydown', (e) => {
     const slots = getDirSlotOffsets(currentBuffer);
     const idx = slots.indexOf(selectedEntryIndex);
     removeFileEntry(currentBuffer, selectedEntryIndex);
-    const info = parseD64(currentBuffer);
+    const info = parseCurrentDir(currentBuffer);
     // Select next entry, or previous if at end
     const visibleEntries = info.entries.filter(en => !en.deleted || showDeleted);
     if (visibleEntries.length > 0) {
@@ -575,6 +698,8 @@ document.addEventListener('keydown', (e) => {
 
 function updateEntryMenuState() {
   const hasSelection = selectedEntryIndex >= 0 && currentBuffer;
+  const inPartition = currentPartition !== null;
+  // Most editing is disabled inside a partition (read-only view)
   document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-insert').classList.toggle('disabled', !currentBuffer || !canInsertFile());
   document.getElementById('opt-insert-sep').classList.toggle('disabled', !currentBuffer || !canInsertFile());
@@ -596,6 +721,7 @@ function updateEntryMenuState() {
   }
   document.getElementById('opt-export').classList.toggle('disabled', !exportEnabled);
   document.getElementById('opt-import').classList.toggle('disabled', !currentBuffer || !canInsertFile());
+  document.getElementById('opt-add-partition').classList.toggle('disabled', inPartition || !currentBuffer || currentFormat !== DISK_FORMATS.d81 || !canInsertFile());
   document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection);
 
@@ -616,13 +742,13 @@ function updateEntryMenuState() {
     const currentTypeIdx = typeByte & 0x07;
     lockEl.textContent = locked ? 'Unlock File' : 'Lock File';
     splatEl.textContent = closed ? 'Scratch File' : 'Unscratch File';
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 6; i++) {
       document.getElementById('check-type-' + i).innerHTML = i === currentTypeIdx ? '<i class="fa-solid fa-check"></i>' : '';
     }
   } else {
     lockEl.textContent = 'Lock File';
     splatEl.textContent = 'Scratch File';
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 6; i++) {
       document.getElementById('check-type-' + i).textContent = '';
     }
   }
@@ -812,6 +938,7 @@ document.querySelectorAll('#opt-new .submenu .option').forEach(el => {
     const buf = createEmptyDisk(formatKey, tracks);
     currentBuffer = buf;
     currentFileName = null;
+    currentPartition = null;
     const info = parseDisk(buf);
     renderDisk(info);
     updateMenuState();
@@ -831,6 +958,7 @@ document.getElementById('opt-close').addEventListener('click', (e) => {
   currentBuffer = null;
   currentFileName = null;
   selectedEntryIndex = -1;
+  currentPartition = null;
   document.getElementById('content').innerHTML = `
     <div class="empty-state">
       No disk loaded.<br>
@@ -865,8 +993,13 @@ document.getElementById('opt-validate').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
-  const log = validateD64(currentBuffer);
-  const info = parseD64(currentBuffer);
+  var log;
+  if (currentPartition) {
+    log = validatePartition(currentBuffer, currentPartition.startTrack, currentPartition.partSize);
+  } else {
+    log = validateD64(currentBuffer);
+  }
+  const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
   showModal('Validate', log);
 });
@@ -878,7 +1011,7 @@ document.getElementById('opt-show-deleted').addEventListener('click', (e) => {
   showDeleted = !showDeleted;
   localStorage.setItem('d64-showDeleted', showDeleted);
   document.getElementById('check-deleted').innerHTML = showDeleted ? '<i class="fa-solid fa-check"></i>' : '';
-  const info = parseD64(currentBuffer);
+  const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 });
 
@@ -888,7 +1021,7 @@ document.querySelectorAll('#opt-sort .submenu .option').forEach(el => {
     if (!currentBuffer) return;
     closeMenus();
     sortDirectory(currentBuffer, el.dataset.sort);
-    const info = parseD64(currentBuffer);
+    const info = parseCurrentDir(currentBuffer);
     renderDisk(info);
   });
 });
@@ -902,7 +1035,7 @@ document.getElementById('opt-charset-mode').addEventListener('click', (e) => {
   document.getElementById('opt-charset-mode').textContent = newMode === 'lowercase' ? 'Switch to Uppercase' : 'Switch to Lowercase';
   buildSepSubmenu();
   if (currentBuffer) {
-    var info = parseD64(currentBuffer);
+    var info = parseCurrentDir(currentBuffer);
     renderDisk(info);
   }
   if (pickerTarget) renderPicker();
@@ -915,7 +1048,7 @@ document.getElementById('opt-show-addr').addEventListener('click', (e) => {
   localStorage.setItem('d64-showAddresses', showAddresses);
   document.getElementById('check-addr').innerHTML = showAddresses ? '<i class="fa-solid fa-check"></i>' : '';
   if (currentBuffer) {
-    const info = parseD64(currentBuffer);
+    const info = parseCurrentDir(currentBuffer);
     renderDisk(info);
   }
 });
@@ -927,7 +1060,7 @@ document.getElementById('opt-show-ts').addEventListener('click', (e) => {
   localStorage.setItem('d64-showTrackSector', showTrackSector);
   document.getElementById('check-ts').innerHTML = showTrackSector ? '<i class="fa-solid fa-check"></i>' : '';
   if (currentBuffer) {
-    const info = parseD64(currentBuffer);
+    const info = parseCurrentDir(currentBuffer);
     renderDisk(info);
   }
 });
@@ -1208,6 +1341,198 @@ document.getElementById('opt-convert-geos').addEventListener('click', function(e
   writeGeosSignature(currentBuffer);
   updateMenuState();
   showModal('Convert to GEOS', ['Disk has been marked as GEOS format.']);
+});
+
+// ── Disk menu: Add Directory (D81 partition) ─────────────────────────
+document.getElementById('opt-add-partition').addEventListener('click', async function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || currentFormat !== DISK_FORMATS.d81 || currentPartition) return;
+  closeMenus();
+
+  // Ask for partition name
+  var name = await showInputModal('Directory Name', 'SUBDIR');
+  if (!name) return;
+  name = name.toUpperCase().substring(0, 16);
+
+  // Ask for desired blocks free (minimum 80 = 2 data tracks + 1 system track)
+  var blocksStr = await showInputModal('Blocks Free (min 80, multiples of 40)', '80');
+  if (!blocksStr) return;
+  var desiredBlocks = parseInt(blocksStr, 10);
+  if (isNaN(desiredBlocks) || desiredBlocks < 80) {
+    showModal('Add Directory Error', ['Minimum is 80 blocks (2 data tracks).']);
+    return;
+  }
+  // Round up to next multiple of 40
+  var dataTracks = Math.ceil(desiredBlocks / 40);
+  var numTracks = dataTracks + 1; // +1 for system track (header, BAM, dir)
+  var partSectors = numTracks * 40;
+  var actualBlocks = dataTracks * 40;
+
+  // Build true allocation map to find contiguous free tracks
+  var allocated = buildTrueAllocationMap(currentBuffer);
+  var fmt = currentFormat;
+
+  // Find contiguous free tracks (must not include track 40, must start at sector 0)
+  // Search for a contiguous run of numTracks tracks that are completely free
+  var startTrack = -1;
+  for (var t = 1; t <= currentTracks - numTracks + 1; t++) {
+    // Skip ranges that include track 40 (system track)
+    var endTrack = t + numTracks - 1;
+    if (t <= fmt.dirTrack && endTrack >= fmt.dirTrack) continue;
+
+    var allFree = true;
+    for (var ct = t; ct <= endTrack; ct++) {
+      var spt = fmt.sectorsPerTrack(ct);
+      for (var cs = 0; cs < spt; cs++) {
+        if (allocated[ct + ':' + cs]) { allFree = false; break; }
+      }
+      if (!allFree) break;
+    }
+    if (allFree) { startTrack = t; break; }
+  }
+
+  if (startTrack < 0) {
+    showModal('Add Directory Error', ['Not enough contiguous free space. Need ' + numTracks + ' tracks (' + actualBlocks + ' blocks + 1 system track).']);
+    return;
+  }
+
+  // Check we have a free directory entry
+  if (!canInsertFile()) {
+    showModal('Add Directory Error', ['No free directory entry available.']);
+    return;
+  }
+
+  // Take snapshot for rollback
+  var snapshot = currentBuffer.slice(0);
+  var data = new Uint8Array(currentBuffer);
+
+  // Create directory entry for the partition
+  var entryOff = findFreeDirEntry(currentBuffer);
+  if (entryOff < 0) {
+    currentBuffer = snapshot;
+    showModal('Add Directory Error', ['Failed to allocate directory entry.']);
+    return;
+  }
+
+  // Type: CBM ($85), closed
+  data[entryOff + 2] = 0x85;
+  // Start track/sector (sector must be 0)
+  data[entryOff + 3] = startTrack;
+  data[entryOff + 4] = 0;
+  // Name
+  for (var ni = 0; ni < 16; ni++) {
+    if (ni < name.length) {
+      var ch = name.charCodeAt(ni);
+      if (ch >= 0x41 && ch <= 0x5A) data[entryOff + 5 + ni] = ch;
+      else if (ch >= 0x30 && ch <= 0x39) data[entryOff + 5 + ni] = ch;
+      else if (ch === 0x20) data[entryOff + 5 + ni] = 0x20;
+      else data[entryOff + 5 + ni] = 0x20;
+    } else {
+      data[entryOff + 5 + ni] = 0xA0;
+    }
+  }
+  // Clear unused bytes
+  for (var ui = 21; ui < 30; ui++) data[entryOff + ui] = 0x00;
+  // Partition size in sectors
+  data[entryOff + 30] = partSectors & 0xFF;
+  data[entryOff + 31] = (partSectors >> 8) & 0xFF;
+
+  // Format the partition: header (sector 0), BAM (sectors 1-2), directory (sector 3)
+  var headerOff = sectorOffset(startTrack, 0);
+
+  // Header sector — mirrors D81 root header layout
+  data[headerOff + 0x00] = startTrack; // dir track (self-referencing)
+  data[headerOff + 0x01] = 3;          // dir sector
+  data[headerOff + 0x02] = 0x44;       // DOS version 'D'
+  data[headerOff + 0x03] = 0xBB;
+  // Disk name at offset 0x04
+  for (var hi = 0; hi < 16; hi++) data[headerOff + 0x04 + hi] = data[entryOff + 5 + hi];
+  data[headerOff + 0x14] = 0xA0;
+  data[headerOff + 0x15] = 0xA0;
+  // Disk ID
+  data[headerOff + 0x16] = 0x31; // '1'
+  data[headerOff + 0x17] = 0x41; // 'A'
+  data[headerOff + 0x18] = 0xA0;
+  // DOS type
+  data[headerOff + 0x19] = 0x33; // '3'
+  data[headerOff + 0x1A] = 0x44; // 'D'
+  for (var fi = 0x1B; fi < 0x100; fi++) data[headerOff + fi] = 0x00;
+
+  // BAM sector 1 (startTrack, 1) — covers tracks 1..40 of the partition
+  var bam1Off = sectorOffset(startTrack, 1);
+  data[bam1Off + 0x00] = startTrack;
+  data[bam1Off + 0x01] = 2;        // link to BAM sector 2
+  data[bam1Off + 0x02] = 0x44;     // DOS version
+  data[bam1Off + 0x03] = 0xBB;
+  data[bam1Off + 0x04] = 0x31;     // ID copy
+  data[bam1Off + 0x05] = 0x41;
+  for (var b1 = 0x06; b1 < 0x10; b1++) data[bam1Off + b1] = 0x00;
+
+  // BAM sector 2 (startTrack, 2) — covers tracks 41..80 of the partition
+  var bam2Off = sectorOffset(startTrack, 2);
+  data[bam2Off + 0x00] = 0x00;     // end of chain
+  data[bam2Off + 0x01] = 0xFF;
+  data[bam2Off + 0x02] = 0x44;
+  data[bam2Off + 0x03] = 0xBB;
+  data[bam2Off + 0x04] = 0x31;
+  data[bam2Off + 0x05] = 0x41;
+  for (var b2 = 0x06; b2 < 0x10; b2++) data[bam2Off + b2] = 0x00;
+
+  // Initialize BAM entries for each track in the partition
+  for (var pt = 1; pt <= numTracks; pt++) {
+    var base;
+    if (pt <= 40) {
+      base = bam1Off + 0x10 + (pt - 1) * 6;
+    } else {
+      base = bam2Off + 0x10 + (pt - 41) * 6;
+    }
+
+    if (pt === 1) {
+      // First track: sectors 0-3 used (header, BAM1, BAM2, first dir sector)
+      data[base] = 40 - 4; // 36 free
+      for (var bb = 0; bb < 5; bb++) data[base + 1 + bb] = 0xFF;
+      data[base + 1] &= ~(1 << 0); // sector 0
+      data[base + 1] &= ~(1 << 1); // sector 1
+      data[base + 1] &= ~(1 << 2); // sector 2
+      data[base + 1] &= ~(1 << 3); // sector 3
+    } else {
+      // Other tracks: all 40 sectors free
+      data[base] = 40;
+      for (var bb2 = 0; bb2 < 5; bb2++) data[base + 1 + bb2] = 0xFF;
+    }
+  }
+
+  // Initialize first directory sector (startTrack, 3)
+  var dirOff = sectorOffset(startTrack, 3);
+  data[dirOff + 0] = 0x00; // end of chain
+  data[dirOff + 1] = 0xFF;
+  for (var di = 2; di < 256; di++) data[dirOff + di] = 0x00;
+
+  // Mark all partition sectors as allocated in the root BAM
+  var rootBamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  for (var rt = startTrack; rt < startTrack + numTracks; rt++) {
+    var spt = fmt.sectorsPerTrack(rt);
+    // Clear all bits (mark all sectors as used)
+    var rbase;
+    if (rt <= 40) {
+      rbase = rootBamOff + 0x10 + (rt - 1) * 6;
+    } else {
+      rbase = rootBamOff + 256 + 0x10 + (rt - 41) * 6;
+    }
+    data[rbase] = 0; // 0 free
+    for (var rb = 0; rb < 5; rb++) data[rbase + 1 + rb] = 0x00; // all bits clear = all used
+  }
+
+  // Success
+  selectedEntryIndex = entryOff;
+  var info = parseDisk(currentBuffer);
+  renderDisk(info);
+  updateMenuState();
+  showModal('Directory Created', [
+    'Directory "' + name + '" created.',
+    numTracks + ' tracks (' + startTrack + '-' + (startTrack + numTracks - 1) + '), ' + actualBlocks + ' blocks free.',
+    'Double-click to enter the directory.'
+  ]);
 });
 
 // ── File Content Viewer ───────────────────────────────────────────────
@@ -1664,7 +1989,7 @@ function showSectorHexEditor(track, sector) {
       // Write working copy back to disk buffer
       for (var i = 0; i < 256; i++) data[off + i] = working[i];
       // Re-render disk view
-      var info = parseD64(currentBuffer);
+      var info = parseCurrentDir(currentBuffer);
       renderDisk(info);
     }
     document.getElementById('modal-overlay').classList.remove('open');
@@ -1760,7 +2085,7 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
   }
 
   // Follow each closed file's sector chain
-  const info = parseD64(currentBuffer);
+  const info = parseCurrentDir(currentBuffer);
   for (const entry of info.entries) {
     if (entry.deleted) continue;
     let ft = data[entry.entryOff + 3];
@@ -1780,7 +2105,7 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
   }
 
   // Read old total
-  const oldInfo = parseD64(currentBuffer);
+  const oldInfo = parseCurrentDir(currentBuffer);
   const oldFree = oldInfo.freeBlocks;
 
   // Update only the free block counts per track, leave BAM bitmaps untouched
@@ -1795,7 +2120,7 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
     currentFormat.writeTrackFree(data, bamOff, t, free);
   }
 
-  const updatedInfo = parseD64(currentBuffer);
+  const updatedInfo = parseCurrentDir(currentBuffer);
   renderDisk(updatedInfo);
 
   const newFree = updatedInfo.freeBlocks;
@@ -1808,10 +2133,39 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
 
 // ── Move directory entry ──────────────────────────────────────────────
 // Get ordered list of directory entry offsets from the chain
+// ── Partition-aware parse helper ──────────────────────────────────────
+function parseCurrentDir(buffer) {
+  if (currentPartition) {
+    return parsePartition(buffer, currentPartition.startTrack, currentPartition.partSize);
+  }
+  return parseDisk(buffer);
+}
+
+// ── Partition-aware directory helpers ──────────────────────────────────
+// Returns { dirTrack, dirSector, dirTrackNum, bamOff, maxDirSectors }
+// for the current context (root or partition)
+function getDirContext() {
+  if (currentPartition) {
+    var st = currentPartition.startTrack;
+    return {
+      dirTrack: st, dirSector: 3, dirTrackNum: st,
+      bamOff: sectorOffset(st, 1),
+      maxDirSectors: 37 // same as D81 root (sectors 3-39 on the partition's first track)
+    };
+  }
+  return {
+    dirTrack: currentFormat.dirTrack, dirSector: currentFormat.dirSector,
+    dirTrackNum: currentFormat.dirTrack,
+    bamOff: sectorOffset(currentFormat.bamTrack, currentFormat.bamSector),
+    maxDirSectors: currentFormat.maxDirSectors
+  };
+}
+
 function getDirSlotOffsets(buffer) {
   const data = new Uint8Array(buffer);
   const offsets = [];
-  let t = currentFormat.dirTrack, s = currentFormat.dirSector;
+  var ctx = getDirContext();
+  let t = ctx.dirTrack, s = ctx.dirSector;
   const visited = new Set();
   while (t !== 0) {
     const key = `${t}:${s}`;
@@ -1849,7 +2203,7 @@ function moveEntry(direction) {
   swapDirEntries(currentBuffer, slots[currentIdx], slots[targetIdx]);
   // Update selection to follow the moved entry
   selectedEntryIndex = slots[targetIdx];
-  const info = parseD64(currentBuffer);
+  const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 }
 
@@ -2018,6 +2372,29 @@ function removeFileEntry(buffer, entryOff) {
   const idx = slots.indexOf(entryOff);
   if (idx < 0) return;
 
+  // If removing a CBM partition, free its tracks in the root BAM
+  var typeByte = data[entryOff + 2];
+  if ((typeByte & 0x07) === 5 && currentFormat === DISK_FORMATS.d81) {
+    var partStart = data[entryOff + 3];
+    var partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
+    var partTracks = Math.floor(partSize / 40);
+    var fmt = currentFormat;
+    var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+
+    for (var pt = partStart; pt < partStart + partTracks; pt++) {
+      var spt = fmt.sectorsPerTrack(pt);
+      var rbase;
+      if (pt <= 40) {
+        rbase = bamOff + 0x10 + (pt - 1) * 6;
+      } else {
+        rbase = bamOff + 256 + 0x10 + (pt - 41) * 6;
+      }
+      // Mark all sectors as free
+      data[rbase] = spt; // free count = all sectors
+      for (var rb = 0; rb < 5; rb++) data[rbase + 1 + rb] = 0xFF;
+    }
+  }
+
   // Shift all entries after the removed one up by one slot
   for (let i = idx; i < slots.length - 1; i++) {
     const src = slots[i + 1];
@@ -2037,14 +2414,16 @@ function removeFileEntry(buffer, entryOff) {
 
 // ── Insert file entry ─────────────────────────────────────────────────
 function getMaxDirEntries() {
-  return currentFormat.maxDirSectors * currentFormat.entriesPerSector;
+  var ctx = getDirContext();
+  return ctx.maxDirSectors * currentFormat.entriesPerSector;
 }
 
 function countDirEntries() {
   if (!currentBuffer) return 0;
   const data = new Uint8Array(currentBuffer);
+  var ctx = getDirContext();
   let count = 0;
-  let t = currentFormat.dirTrack, s = currentFormat.dirSector;
+  let t = ctx.dirTrack, s = ctx.dirSector;
   const visited = new Set();
   while (t !== 0) {
     const key = `${t}:${s}`;
@@ -2054,7 +2433,6 @@ function countDirEntries() {
     if (off < 0) break;
     for (let i = 0; i < 8; i++) {
       const eo = off + i * 32;
-      // Count non-empty slots (any slot that isn't fully zeroed)
       const typeByte = data[eo + 2];
       if (typeByte !== 0x00) { count++; continue; }
       let hasData = false;
@@ -2077,10 +2455,11 @@ function canInsertFile() {
 function insertFileEntry() {
   if (!currentBuffer) return -1;
   const data = new Uint8Array(currentBuffer);
-  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  var ctx = getDirContext();
+  const bamOff = ctx.bamOff;
 
   // Walk directory chain, find first empty slot
-  let t = currentFormat.dirTrack, s = currentFormat.dirSector;
+  let t = ctx.dirTrack, s = ctx.dirSector;
   const visited = new Set();
   let lastOff = -1;
 
@@ -2094,13 +2473,11 @@ function insertFileEntry() {
 
     for (let i = 0; i < 8; i++) {
       const eo = off + i * 32;
-      // Check if slot is fully zeroed (unused)
       let isEmpty = true;
       for (let j = 2; j < 32; j++) {
         if (data[eo + j] !== 0x00) { isEmpty = false; break; }
       }
       if (isEmpty) {
-        // Found empty slot — write new entry
         writeNewEntry(data, eo);
         return eo;
       }
@@ -2110,8 +2487,8 @@ function insertFileEntry() {
     s = data[off + 1];
   }
 
-  // No empty slots in existing chain — allocate a new directory sector
-  const dirTrk = currentFormat.dirTrack;
+  // No empty slots — allocate a new directory sector on the directory track
+  const dirTrk = ctx.dirTrackNum;
   const spt = sectorsPerTrack(dirTrk);
   let newSector = -1;
   for (let cs = 1; cs < spt; cs++) {
@@ -2120,34 +2497,50 @@ function insertFileEntry() {
     break;
   }
 
-  if (newSector === -1) return -1; // directory track full
+  if (newSector === -1) return -1;
 
-  // Link the new sector from the last sector in the chain
   if (lastOff >= 0) {
     data[lastOff] = dirTrk;
     data[lastOff + 1] = newSector;
   }
 
-  // Initialize new directory sector
   const newOff = sectorOffset(dirTrk, newSector);
-  data[newOff] = 0x00; // end of chain
+  data[newOff] = 0x00;
   data[newOff + 1] = 0xFF;
-  // Zero out all 8 entries
   for (let i = 2; i < 256; i++) data[newOff + i] = 0x00;
 
-  // Write new entry in first slot
   writeNewEntry(data, newOff);
 
-  // Mark sector as used in BAM
-  const fmt = currentFormat;
-  const bm = fmt.readTrackBitmap(data, bamOff, dirTrk);
-  const newBm = bm & ~(1 << newSector);
-  fmt.writeTrackBitmap(data, bamOff, dirTrk, newBm);
-  let free = 0;
-  for (let cs = 0; cs < spt; cs++) {
-    if (newBm & (1 << cs)) free++;
+  // Mark sector as used in BAM (partition or root)
+  if (currentPartition) {
+    // Partition BAM: byte-level update (D81 layout relative to partition BAM)
+    var partTrack = 1; // first track of partition = track 1 in partition's address space
+    var byteIdx = Math.floor(newSector / 8);
+    var bitIdx = newSector % 8;
+    var bamBase = bamOff + 0x10 + (partTrack - 1) * 6 + 1;
+    data[bamBase + byteIdx] &= ~(1 << bitIdx);
+    // Recalculate free count
+    var numBytes = Math.ceil(spt / 8);
+    var freeCount = 0;
+    for (var bci = 0; bci < numBytes; bci++) {
+      var bval = data[bamBase + bci];
+      var maxBit = Math.min(8, spt - bci * 8);
+      for (var bit = 0; bit < maxBit; bit++) {
+        if (bval & (1 << bit)) freeCount++;
+      }
+    }
+    data[bamOff + 0x10 + (partTrack - 1) * 6] = freeCount;
+  } else {
+    const fmt = currentFormat;
+    const bm = fmt.readTrackBitmap(data, bamOff, dirTrk);
+    const newBm = bm & ~(1 << newSector);
+    fmt.writeTrackBitmap(data, bamOff, dirTrk, newBm);
+    let free = 0;
+    for (let cs = 0; cs < spt; cs++) {
+      if (newBm & (1 << cs)) free++;
+    }
+    fmt.writeTrackFree(data, bamOff, dirTrk, free);
   }
-  fmt.writeTrackFree(data, bamOff, dirTrk, free);
 
   return newOff;
 }
@@ -2178,7 +2571,7 @@ function changeFileType(entryOff, newTypeIdx) {
   const data = new Uint8Array(currentBuffer);
   // Preserve closed (bit 7) and locked (bit 6), replace type bits (0-2)
   data[entryOff + 2] = (data[entryOff + 2] & 0xC0) | (newTypeIdx & 0x07);
-  const info = parseD64(currentBuffer);
+  const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 }
 
@@ -2578,7 +2971,7 @@ function startEditTrackSector(entryEl) {
     data[entryOff + 4] = newSector;
     cleanup();
     // Re-render to update address column
-    const info = parseD64(currentBuffer);
+    const info = parseCurrentDir(currentBuffer);
     renderDisk(info);
   }
 
@@ -2723,7 +3116,7 @@ function startRenameEntry(entryEl) {
     }
     cleanup();
     // Re-render to show reversed chars properly
-    const info = parseD64(currentBuffer);
+    const info = parseCurrentDir(currentBuffer);
     renderDisk(info);
   }
 
@@ -2783,7 +3176,7 @@ document.getElementById('opt-insert').addEventListener('click', (e) => {
   var newOff = insertAndPosition();
   if (newOff < 0) return;
   selectedEntryIndex = newOff;
-  var info = parseD64(currentBuffer);
+  var info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 });
 
@@ -3019,7 +3412,7 @@ function insertSeparator(pattern) {
   data[newOff + 31] = 0x00;
 
   selectedEntryIndex = newOff;
-  var info = parseD64(currentBuffer);
+  var info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 }
 
@@ -3037,14 +3430,86 @@ document.getElementById('sep-submenu').addEventListener('click', function(e) {
   insertSeparator(all[idx]);
 });
 
-document.getElementById('opt-remove').addEventListener('click', (e) => {
+document.getElementById('opt-remove').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+
+  var removeEntryOff = selectedEntryIndex;
+  var data = new Uint8Array(currentBuffer);
+  var typeByte = data[removeEntryOff + 2];
+  var isCBM = (typeByte & 0x07) === 5 && currentFormat === DISK_FORMATS.d81;
+
+  // Check if this is a CBM partition with files inside
+  if (isCBM) {
+    var partStart = data[removeEntryOff + 3];
+    var partSize = data[removeEntryOff + 30] | (data[removeEntryOff + 31] << 8);
+    var partInfo = parsePartition(currentBuffer, partStart, partSize);
+    var fileEntries = partInfo ? partInfo.entries.filter(function(en) { return !en.deleted; }) : [];
+
+    if (fileEntries.length > 0) {
+      var choice = await showChoiceModal(
+        'Remove Directory',
+        'This directory contains ' + fileEntries.length + ' file(s). What would you like to do?',
+        [
+          { label: 'Cancel', value: 'cancel', secondary: true },
+          { label: 'Move to Root', value: 'move' },
+          { label: 'Remove All', value: 'remove' }
+        ]
+      );
+
+      if (choice === 'cancel') return;
+
+      if (choice === 'move') {
+        // Take snapshot before any changes
+        var snapshot = currentBuffer.slice(0);
+
+        // Count available root directory slots
+        var freeSlots = getMaxDirEntries() - countDirEntries();
+        // We'll also free one slot by removing the partition entry itself
+        freeSlots += 1;
+
+        if (freeSlots < fileEntries.length) {
+          // Not enough room — show which files can't be moved
+          var canMove = freeSlots;
+          var cantMove = fileEntries.slice(canMove);
+          var lostNames = cantMove.map(function(en) {
+            return '"' + petsciiToReadable(en.name).trim() + '"';
+          });
+          var msg = 'Only ' + canMove + ' of ' + fileEntries.length +
+            ' files can be moved to root. The following ' + cantMove.length +
+            ' file(s) will be lost:';
+          var choice2 = await showChoiceModal(
+            'Not Enough Directory Entries',
+            msg,
+            [
+              { label: 'Revert', value: 'revert', secondary: true },
+              { label: 'Continue', value: 'continue' }
+            ],
+            lostNames
+          );
+
+          if (choice2 === 'revert') return;
+        }
+
+        // Move files from partition to root directory
+        var moveCount = Math.min(fileEntries.length, freeSlots);
+        for (var fi = 0; fi < moveCount; fi++) {
+          var srcOff = fileEntries[fi].entryOff;
+          var dstOff = findFreeDirEntry(currentBuffer);
+          if (dstOff < 0) break;
+          data = new Uint8Array(currentBuffer);
+          for (var j = 2; j < 32; j++) data[dstOff + j] = data[srcOff + j];
+        }
+      }
+      // For both 'move' and 'remove': proceed to remove the partition entry
+    }
+  }
+
   const slots = getDirSlotOffsets(currentBuffer);
-  const idx = slots.indexOf(selectedEntryIndex);
-  removeFileEntry(currentBuffer, selectedEntryIndex);
-  const info = parseD64(currentBuffer);
+  const idx = slots.indexOf(removeEntryOff);
+  removeFileEntry(currentBuffer, removeEntryOff);
+  const info = parseCurrentDir(currentBuffer);
   const visibleEntries = info.entries.filter(en => !en.deleted || showDeleted);
   if (visibleEntries.length > 0) {
     const newIdx = Math.min(idx, visibleEntries.length - 1);
@@ -3053,6 +3518,7 @@ document.getElementById('opt-remove').addEventListener('click', (e) => {
     selectedEntryIndex = -1;
   }
   renderDisk(info);
+  updateMenuState();
 });
 
 document.querySelectorAll('#opt-align .submenu .option').forEach(el => {
@@ -3061,7 +3527,7 @@ document.querySelectorAll('#opt-align .submenu .option').forEach(el => {
     if (!currentBuffer || selectedEntryIndex < 0) return;
     closeMenus();
     alignFilename(currentBuffer, selectedEntryIndex, el.dataset.align);
-    const info = parseD64(currentBuffer);
+    const info = parseCurrentDir(currentBuffer);
     renderDisk(info);
   });
 });
@@ -3080,7 +3546,7 @@ document.getElementById('opt-recalc-size').addEventListener('click', (e) => {
   closeMenus();
   const actual = countActualBlocks(currentBuffer, selectedEntryIndex);
   writeBlockSize(currentBuffer, selectedEntryIndex, actual);
-  const info = parseD64(currentBuffer);
+  const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 });
 
@@ -3147,20 +3613,28 @@ function buildTrueAllocationMap(buffer) {
   var fmt = currentFormat;
   var allocated = {}; // "t:s" -> true
 
-  // Mark BAM sector(s) as allocated
-  allocated[fmt.bamTrack + ':' + fmt.bamSector] = true;
-  if (fmt.bamSector2 !== undefined) allocated[fmt.bamTrack + ':' + fmt.bamSector2] = true;
-  if (fmt.bamTrack2) allocated[fmt.bamTrack2 + ':' + (fmt.bamSector2 || 0)] = true;
-  // D81 header sector
-  if (fmt.headerTrack && fmt.headerSector !== undefined &&
-      (fmt.headerTrack !== fmt.bamTrack || fmt.headerSector !== fmt.bamSector)) {
-    allocated[fmt.headerTrack + ':' + fmt.headerSector] = true;
+  if (currentPartition) {
+    // Inside a partition: mark partition system sectors (header, BAM1, BAM2, dir sectors)
+    var st = currentPartition.startTrack;
+    allocated[st + ':0'] = true; // header
+    allocated[st + ':1'] = true; // BAM1
+    allocated[st + ':2'] = true; // BAM2
+  } else {
+    // Root: mark BAM sector(s) as allocated
+    allocated[fmt.bamTrack + ':' + fmt.bamSector] = true;
+    if (fmt.bamSector2 !== undefined) allocated[fmt.bamTrack + ':' + fmt.bamSector2] = true;
+    if (fmt.bamTrack2) allocated[fmt.bamTrack2 + ':' + (fmt.bamSector2 || 0)] = true;
+    if (fmt.headerTrack && fmt.headerSector !== undefined &&
+        (fmt.headerTrack !== fmt.bamTrack || fmt.headerSector !== fmt.bamSector)) {
+      allocated[fmt.headerTrack + ':' + fmt.headerSector] = true;
+    }
   }
 
   // Follow directory chain
-  var dirT = fmt.dirTrack, dirS = fmt.dirSector;
+  var ctx = getDirContext();
+  var dirT = ctx.dirTrack, dirS = ctx.dirSector;
   var dirVisited = {};
-  var dirEntries = []; // all entry offsets in the directory
+  var dirEntries = [];
 
   while (dirT !== 0) {
     var key = dirT + ':' + dirS;
@@ -3183,7 +3657,7 @@ function buildTrueAllocationMap(buffer) {
     var entOff = dirEntries[di];
     var typeByte = data[entOff + 2];
     var typeIdx = typeByte & 0x07;
-    if (typeIdx === 0 && !(typeByte & 0x80)) continue; // empty slot
+    if (typeIdx === 0 && !(typeByte & 0x80)) continue;
 
     var ft = data[entOff + 3], fs = data[entOff + 4];
     var fileVisited = {};
@@ -3199,7 +3673,6 @@ function buildTrueAllocationMap(buffer) {
       ft = data[foff]; fs = data[foff + 1];
     }
 
-    // REL files: also follow side sector chain
     if (typeIdx === 4) {
       var sst = data[entOff + 0x15], sss = data[entOff + 0x16];
       var ssVisited = {};
@@ -3225,16 +3698,25 @@ function buildTrueAllocationMap(buffer) {
 // - 1581: tracks below dir track first (descending), then above (ascending), interleave 1
 function allocateSectors(allocated, numSectors) {
   var fmt = currentFormat;
-  var dirTrack = fmt.dirTrack;
 
-  // Build track search order: below dir track first, then above
-  // Only include tracks covered by the BAM (e.g. D64 40-track: BAM only covers 1-35)
-  var maxBamTrack = fmt.bamTracksRange(currentTracks);
   var trackOrder = [];
-  for (var t = dirTrack - 1; t >= 1; t--) trackOrder.push(t);
-  for (var t2 = dirTrack + 1; t2 <= maxBamTrack; t2++) trackOrder.push(t2);
+  var interleave;
 
-  var interleave = (fmt === DISK_FORMATS.d81) ? 1 : 10;
+  if (currentPartition) {
+    // Inside a partition: use partition's tracks (skip track 1 = system track)
+    var st = currentPartition.startTrack;
+    var numPartTracks = Math.floor(currentPartition.partSize / 40);
+    // Partition's "directory track" is the start track; data goes on tracks 2+ (absolute: st+1, st+2, ...)
+    for (var pt = 2; pt <= numPartTracks; pt++) trackOrder.push(st + pt - 1);
+    interleave = 1; // D81 interleave
+  } else {
+    var dirTrack = fmt.dirTrack;
+    // Only include tracks covered by the BAM (e.g. D64 40-track: BAM only covers 1-35)
+    var maxBamTrack = fmt.bamTracksRange(currentTracks);
+    for (var t = dirTrack - 1; t >= 1; t--) trackOrder.push(t);
+    for (var t2 = dirTrack + 1; t2 <= maxBamTrack; t2++) trackOrder.push(t2);
+    interleave = (fmt === DISK_FORMATS.d81) ? 1 : 10;
+  }
   var sectorList = [];
   var lastSector = 0;
 
@@ -3395,7 +3877,8 @@ function importFileToDisk(fileName, fileData) {
 
   // Update BAM: mark our allocated sectors as used
   // Work at byte level to handle D81's 40 sectors (bitwise ops are 32-bit in JS)
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var ctx = getDirContext();
+  var bamOff = ctx.bamOff;
   var touchedTracks = {};
   for (var bi = 0; bi < sectorList.length; bi++) {
     var bsec = sectorList[bi];
@@ -3404,15 +3887,23 @@ function importFileToDisk(fileName, fileData) {
 
     // Find the base offset of the bitmap bytes for this track
     var bamByteBase;
-    if (fmt === DISK_FORMATS.d81) {
+    if (currentPartition) {
+      // Partition BAM: D81 layout, track number relative to partition
+      var relTrack = bsec.track - currentPartition.startTrack + 1;
+      if (relTrack <= 40) {
+        bamByteBase = bamOff + 0x10 + (relTrack - 1) * 6 + 1;
+      } else {
+        bamByteBase = bamOff + 256 + 0x10 + (relTrack - 41) * 6 + 1;
+      }
+    } else if (fmt === DISK_FORMATS.d81) {
       bamByteBase = fmt._bamBase(bamOff, bsec.track) + 1;
     } else if (fmt === DISK_FORMATS.d71 && bsec.track > 35) {
-      bamByteBase = fmt._bam2Off(bamOff) + 0xDD + (bsec.track - 36) * 3;
+      bamByteBase = fmt._bam2Off(bamOff) + (bsec.track - 36) * 3;
     } else {
       bamByteBase = bamOff + 4 * bsec.track + 1;
     }
 
-    data[bamByteBase + byteIdx] &= ~(1 << bitIdx); // clear bit = mark as used
+    data[bamByteBase + byteIdx] &= ~(1 << bitIdx);
     touchedTracks[bsec.track] = true;
   }
 
@@ -3423,10 +3914,17 @@ function importFileToDisk(fileName, fileData) {
     var numBytes = Math.ceil(spt / 8);
 
     var bamByteBase2;
-    if (fmt === DISK_FORMATS.d81) {
+    if (currentPartition) {
+      var relTrack2 = btrack - currentPartition.startTrack + 1;
+      if (relTrack2 <= 40) {
+        bamByteBase2 = bamOff + 0x10 + (relTrack2 - 1) * 6 + 1;
+      } else {
+        bamByteBase2 = bamOff + 256 + 0x10 + (relTrack2 - 41) * 6 + 1;
+      }
+    } else if (fmt === DISK_FORMATS.d81) {
       bamByteBase2 = fmt._bamBase(bamOff, btrack) + 1;
     } else if (fmt === DISK_FORMATS.d71 && btrack > 35) {
-      bamByteBase2 = fmt._bam2Off(bamOff) + 0xDD + (btrack - 36) * 3;
+      bamByteBase2 = fmt._bam2Off(bamOff) + (btrack - 36) * 3;
     } else {
       bamByteBase2 = bamOff + 4 * btrack + 1;
     }
@@ -3439,7 +3937,17 @@ function importFileToDisk(fileName, fileData) {
         if (bval & (1 << bit)) free++;
       }
     }
-    fmt.writeTrackFree(data, bamOff, btrack, free);
+    if (currentPartition) {
+      // Write free count to partition BAM
+      var relTrack3 = btrack - currentPartition.startTrack + 1;
+      if (relTrack3 <= 40) {
+        data[bamOff + 0x10 + (relTrack3 - 1) * 6] = free;
+      } else {
+        data[bamOff + 256 + 0x10 + (relTrack3 - 41) * 6] = free;
+      }
+    } else {
+      fmt.writeTrackFree(data, bamOff, btrack, free);
+    }
   }
 
   // Verify the write by reading back the file data
@@ -3467,7 +3975,7 @@ function importFileToDisk(fileName, fileData) {
 
   // Success — refresh display
   selectedEntryIndex = entryOff;
-  var info = parseD64(currentBuffer);
+  var info = parseCurrentDir(currentBuffer);
   renderDisk(info);
   showModal('Import Successful', ['File "' + baseName + '" imported successfully.', numSectors + ' block(s) written.']);
 }
@@ -3477,8 +3985,9 @@ function importFileToDisk(fileName, fileData) {
 function findFreeDirEntry(buffer) {
   var data = new Uint8Array(buffer);
   var fmt = currentFormat;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
-  var t = fmt.dirTrack, s = fmt.dirSector;
+  var ctx = getDirContext();
+  var bamOff = ctx.bamOff;
+  var t = ctx.dirTrack, s = ctx.dirSector;
   var visited = {};
   var lastOff = -1;
 
@@ -3503,7 +4012,7 @@ function findFreeDirEntry(buffer) {
   }
 
   // No empty slot — allocate new directory sector
-  var dirTrk = fmt.dirTrack;
+  var dirTrk = ctx.dirTrackNum;
   var spt = sectorsPerTrack(dirTrk);
   var newSector = -1;
   for (var cs = 1; cs < spt; cs++) {
@@ -3513,27 +4022,43 @@ function findFreeDirEntry(buffer) {
   }
   if (newSector === -1) return -1;
 
-  // Link new sector from last sector in chain
   if (lastOff >= 0) {
     data[lastOff] = dirTrk;
     data[lastOff + 1] = newSector;
   }
 
-  // Initialize new directory sector
   var newOff = sectorOffset(dirTrk, newSector);
   data[newOff] = 0x00;
   data[newOff + 1] = 0xFF;
   for (var zi = 2; zi < 256; zi++) data[newOff + zi] = 0x00;
 
-  // Mark sector as used in BAM
-  var bm = fmt.readTrackBitmap(data, bamOff, dirTrk);
-  var newBm = bm & ~(1 << newSector);
-  fmt.writeTrackBitmap(data, bamOff, dirTrk, newBm);
-  var free = 0;
-  for (var fcs = 0; fcs < spt; fcs++) {
-    if (newBm & (1 << fcs)) free++;
+  // Mark sector as used in BAM (partition or root)
+  if (currentPartition) {
+    var partTrack = 1;
+    var byteIdx = Math.floor(newSector / 8);
+    var bitIdx = newSector % 8;
+    var bamBase = bamOff + 0x10 + (partTrack - 1) * 6 + 1;
+    data[bamBase + byteIdx] &= ~(1 << bitIdx);
+    var numBytes = Math.ceil(spt / 8);
+    var freeCount = 0;
+    for (var bci = 0; bci < numBytes; bci++) {
+      var bval = data[bamBase + bci];
+      var maxBit = Math.min(8, spt - bci * 8);
+      for (var bit = 0; bit < maxBit; bit++) {
+        if (bval & (1 << bit)) freeCount++;
+      }
+    }
+    data[bamOff + 0x10 + (partTrack - 1) * 6] = freeCount;
+  } else {
+    var bm = fmt.readTrackBitmap(data, bamOff, dirTrk);
+    var newBm = bm & ~(1 << newSector);
+    fmt.writeTrackBitmap(data, bamOff, dirTrk, newBm);
+    var free = 0;
+    for (var fcs = 0; fcs < spt; fcs++) {
+      if (newBm & (1 << fcs)) free++;
+    }
+    fmt.writeTrackFree(data, bamOff, dirTrk, free);
   }
-  fmt.writeTrackFree(data, bamOff, dirTrk, free);
 
   return newOff;
 }
@@ -3544,7 +4069,7 @@ document.getElementById('opt-lock').addEventListener('click', (e) => {
   closeMenus();
   const data = new Uint8Array(currentBuffer);
   data[selectedEntryIndex + 2] ^= 0x40; // toggle lock bit
-  const info = parseD64(currentBuffer);
+  const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 });
 
@@ -3554,7 +4079,7 @@ document.getElementById('opt-splat').addEventListener('click', (e) => {
   closeMenus();
   const data = new Uint8Array(currentBuffer);
   data[selectedEntryIndex + 2] ^= 0x80; // toggle closed bit
-  const info = parseD64(currentBuffer);
+  const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 });
 
@@ -3571,11 +4096,12 @@ fileInput.addEventListener('change', () => {
   const file = fileInput.files[0];
   if (!file) return;
   currentFileName = file.name;
+  currentPartition = null;
   const reader = new FileReader();
   reader.onload = () => {
     try {
       currentBuffer = reader.result;
-      const info = parseD64(currentBuffer);
+      const info = parseCurrentDir(currentBuffer);
       renderDisk(info);
       updateMenuState();
     } catch (err) {
