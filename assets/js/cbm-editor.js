@@ -76,6 +76,9 @@ function checkBAMIntegrity(buffer) {
 
 // ── Allowed C64 characters ────────────────────────────────────────────
 function isValidPetscii(ch) {
+  var cp = ch.charCodeAt(0);
+  if (cp >= 0xE000 && cp <= 0xE0FF) return true;
+  if (cp >= 0xE100 && cp <= 0xE1FF) return true;
   return UNICODE_TO_PETSCII.has(ch);
 }
 

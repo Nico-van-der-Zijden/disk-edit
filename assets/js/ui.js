@@ -173,7 +173,17 @@ function renderDisk(info) {
           <span class="dir-type">${escHtml(e.type)}</span>
           <span class="dir-ts">${currentBuffer ? ('$' + new Uint8Array(currentBuffer)[e.entryOff + 3].toString(16).toUpperCase().padStart(2, '0') + ' $' + new Uint8Array(currentBuffer)[e.entryOff + 4].toString(16).toUpperCase().padStart(2, '0')) : ''}</span>
           <span class="dir-addr">${addrHtml}</span>
-          <span class="dir-icons">${currentBuffer && new Uint8Array(currentBuffer)[e.entryOff + 0x18] > 0 ? '<span class="dir-icon-geos" data-offset="' + e.entryOff + '" title="GEOS file — click for info"><i class="fa-solid fa-globe"></i></span>' : ''}</span>
+          <span class="dir-icons">${(function() {
+            var icons = '';
+            if (!currentBuffer || e.deleted) return icons;
+            var d = new Uint8Array(currentBuffer);
+            var ft = d[e.entryOff + 2] & 0x07;
+            // File viewer icon for SEQ(1), USR(3), REL(4)
+            if (ft === 1 || ft === 3 || ft === 4) icons += '<span class="file-viewer-icon" data-offset="' + e.entryOff + '" title="View file contents"><i class="fa-solid fa-file-lines"></i></span>';
+            // GEOS icon
+            if (d[e.entryOff + 0x18] > 0) icons += '<span class="dir-icon-geos" data-offset="' + e.entryOff + '" title="GEOS file — click for info"><i class="fa-solid fa-globe"></i></span>';
+            return icons;
+          })()}</span>
         </div>`;
   }
 
@@ -238,6 +248,17 @@ function bindDirSelection() {
     // Click to select/deselect
     el.addEventListener('click', (e) => {
       if (e.target.tagName === 'INPUT' || e.target.classList.contains('editing') || e.target.closest('.editing')) return;
+      // File viewer icon click
+      var fileIcon = e.target.closest('.file-viewer-icon');
+      if (fileIcon) {
+        var fOff = parseInt(fileIcon.getAttribute('data-offset'), 10);
+        selectedEntryIndex = fOff;
+        entries.forEach(ent => ent.classList.remove('selected'));
+        el.classList.add('selected');
+        updateEntryMenuState();
+        showFileViewer(fOff);
+        return;
+      }
       // GEOS icon click
       var geosIcon = e.target.closest('.dir-icon-geos');
       if (geosIcon) {
@@ -729,6 +750,19 @@ document.querySelectorAll('#opt-sort .submenu .option').forEach(el => {
 });
 
 // ── View menu ─────────────────────────────────────────────────────────
+document.getElementById('opt-charset-mode').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeMenus();
+  var newMode = charsetMode === 'uppercase' ? 'lowercase' : 'uppercase';
+  setCharsetMode(newMode);
+  document.getElementById('opt-charset-mode').textContent = newMode === 'lowercase' ? 'Switch to Uppercase' : 'Switch to Lowercase';
+  if (currentBuffer) {
+    var info = parseD64(currentBuffer);
+    renderDisk(info);
+  }
+  if (pickerTarget) renderPicker();
+});
+
 document.getElementById('opt-show-addr').addEventListener('click', (e) => {
   e.stopPropagation();
   closeMenus();
@@ -1031,6 +1065,137 @@ document.getElementById('opt-convert-geos').addEventListener('click', function(e
   showModal('Convert to GEOS', ['Disk has been marked as GEOS format.']);
 });
 
+// ── File Content Viewer ───────────────────────────────────────────────
+function showFileViewer(entryOff) {
+  if (!currentBuffer) return;
+  var data = new Uint8Array(currentBuffer);
+  var typeByte = data[entryOff + 2];
+  var fileType = typeByte & 0x07;
+  var typeName = FILE_TYPES[fileType] || '???';
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16));
+  var result = readFileData(currentBuffer, entryOff);
+  var fileData = result.data;
+
+  // For PRG files, first 2 bytes are load address
+  var loadAddr = null;
+  var contentStart = 0;
+  if (fileType === 2 && fileData.length >= 2) { // PRG
+    loadAddr = fileData[0] | (fileData[1] << 8);
+    contentStart = 2;
+  }
+
+  // For REL files, get record length
+  var relRecordLen = 0;
+  if (fileType === 4) { // REL
+    relRecordLen = data[entryOff + 0x15];
+  }
+
+  var currentTab = 'text';
+
+  function renderContent() {
+    var html = '';
+
+    // Tabs
+    html += '<div class="file-viewer-tabs">';
+    html += '<div class="file-viewer-tab' + (currentTab === 'text' ? ' active' : '') + '" data-tab="text">Text</div>';
+    html += '<div class="file-viewer-tab' + (currentTab === 'hex' ? ' active' : '') + '" data-tab="hex">Hex</div>';
+    if (fileType === 4 && relRecordLen > 0) {
+      html += '<div class="file-viewer-tab' + (currentTab === 'records' ? ' active' : '') + '" data-tab="records">Records</div>';
+    }
+    html += '</div>';
+
+    if (currentTab === 'text') {
+      // PETSCII text view using C64 font
+      html += '<div class="file-viewer-text">';
+      for (var i = contentStart; i < fileData.length; i++) {
+        var b = fileData[i];
+        if (b === 0x0D) { html += '\n'; continue; } // CR → newline
+        html += escHtml(PETSCII_MAP[b]);
+      }
+      html += '</div>';
+
+    } else if (currentTab === 'hex') {
+      // Hex dump with PETSCII
+      html += '<div class="file-viewer-hex">';
+      var offset = contentStart;
+      var rowSize = 8;
+      while (offset < fileData.length) {
+        var addr = offset - contentStart;
+        if (loadAddr !== null) addr += loadAddr;
+        html += '<div class="hex-row">';
+        html += '<span class="hex-offset">' + addr.toString(16).toUpperCase().padStart(4, '0') + '</span>';
+        html += '<span class="hex-bytes">';
+        for (var c = 0; c < rowSize; c++) {
+          if (offset + c < fileData.length) {
+            html += '<span class="hex-byte">' + fileData[offset + c].toString(16).toUpperCase().padStart(2, '0') + '</span>';
+          } else {
+            html += '<span class="hex-byte">  </span>';
+          }
+        }
+        html += '</span>';
+        html += '<span class="hex-separator"></span>';
+        html += '<span class="hex-ascii">';
+        for (var c2 = 0; c2 < rowSize; c2++) {
+          if (offset + c2 < fileData.length) {
+            html += escHtml(PETSCII_MAP[fileData[offset + c2]]);
+          }
+        }
+        html += '</span>';
+        html += '</div>';
+        offset += rowSize;
+      }
+      html += '</div>';
+
+    } else if (currentTab === 'records') {
+      // REL records view
+      html += '<div class="file-viewer-hex">';
+      var recNum = 0;
+      for (var ri = 0; ri < fileData.length; ri += relRecordLen) {
+        recNum++;
+        var recEnd = Math.min(ri + relRecordLen, fileData.length);
+        html += '<div class="hex-row">';
+        html += '<span class="hex-offset">#' + recNum + '</span>';
+        html += '<span class="hex-bytes">';
+        for (var rb = ri; rb < recEnd; rb++) {
+          html += '<span class="hex-byte">' + fileData[rb].toString(16).toUpperCase().padStart(2, '0') + '</span>';
+        }
+        html += '</span>';
+        html += '<span class="hex-separator"></span>';
+        html += '<span class="hex-ascii">';
+        for (var rb2 = ri; rb2 < recEnd; rb2++) {
+          html += escHtml(PETSCII_MAP[fileData[rb2]]);
+        }
+        html += '</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    // Info line
+    html += '<div class="file-viewer-info">';
+    html += fileData.length + ' bytes';
+    if (loadAddr !== null) html += ' | Load: $' + loadAddr.toString(16).toUpperCase().padStart(4, '0');
+    if (relRecordLen > 0) html += ' | Record length: ' + relRecordLen + ' bytes';
+    if (result.error) html += ' | <span style="color:#f38ba8">' + escHtml(result.error) + '</span>';
+    html += '</div>';
+
+    return html;
+  }
+
+  var title = typeName + ': ' + name;
+  showModal(title, []);
+  var body = document.getElementById('modal-body');
+  body.innerHTML = renderContent();
+
+  // Tab click handler
+  body.addEventListener('click', function(ev) {
+    var tab = ev.target.closest('.file-viewer-tab');
+    if (!tab) return;
+    currentTab = tab.getAttribute('data-tab');
+    body.innerHTML = renderContent();
+  });
+}
+
 // ── Options menu ──────────────────────────────────────────────────────
 document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
   e.stopPropagation();
@@ -1047,6 +1212,14 @@ document.getElementById('opt-picker-all').addEventListener('click', (e) => {
   pickerDefaultAll = !pickerDefaultAll;
   localStorage.setItem('d64-pickerAll', pickerDefaultAll);
   document.getElementById('check-picker-all').innerHTML = pickerDefaultAll ? '<i class="fa-solid fa-check"></i>' : '';
+});
+
+document.getElementById('opt-picker-stick').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeMenus();
+  pickerStick = !pickerStick;
+  localStorage.setItem('d64-pickerStick', pickerStick);
+  document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i class="fa-solid fa-check"></i>' : '';
 });
 
 // ── Hex sector editor ─────────────────────────────────────────────────
@@ -2558,8 +2731,10 @@ updateThemeIcon();
 document.getElementById('check-deleted').innerHTML = showDeleted ? '<i class="fa-solid fa-check"></i>' : '';
 document.getElementById('check-addr').innerHTML = showAddresses ? '<i class="fa-solid fa-check"></i>' : '';
 document.getElementById('check-ts').innerHTML = showTrackSector ? '<i class="fa-solid fa-check"></i>' : '';
+document.getElementById('opt-charset-mode').textContent = charsetMode === 'lowercase' ? 'Switch to Uppercase' : 'Switch to Lowercase';
 document.getElementById('check-unsafe').innerHTML = allowUnsafeChars ? '<i class="fa-solid fa-check"></i>' : '';
 document.getElementById('check-picker-all').innerHTML = pickerDefaultAll ? '<i class="fa-solid fa-check"></i>' : '';
+document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i class="fa-solid fa-check"></i>' : '';
 
 themeToggle.addEventListener('click', () => {
   const current = document.documentElement.getAttribute('data-theme');

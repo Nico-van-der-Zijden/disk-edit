@@ -6,6 +6,7 @@ var pickerClicking = false;
 var pickerModifier = 'normal'; // 'normal', 'shift', 'cbm', 'all'
 var pickerReverse = false;
 var pickerDefaultAll = localStorage.getItem('d64-pickerAll') === 'true';
+var pickerStick = localStorage.getItem('d64-pickerStick') === 'true';
 
 // C64 keyboard layout: [label, normal, shift, cbm] per key
 const KB_ROWS = [
@@ -190,17 +191,29 @@ function showPetsciiPicker(targetEl, maxLen) {
   var rect = targetEl.getBoundingClientRect();
   el.classList.add('open');
 
-  var top = rect.bottom + 4;
-  var left = rect.left;
-  var pickerRect = el.getBoundingClientRect();
-  if (top + pickerRect.height > window.innerHeight) {
-    top = rect.top - pickerRect.height - 4;
+  if (pickerStick) {
+    // Position directly below the edit field, allow overflow
+    el.style.position = 'absolute';
+    // Find the input's offset parent for absolute positioning
+    var parent = targetEl.offsetParent || document.body;
+    var parentRect = parent.getBoundingClientRect();
+    el.style.top = (rect.bottom - parentRect.top + parent.scrollTop + 4) + 'px';
+    el.style.left = (rect.left - parentRect.left + parent.scrollLeft) + 'px';
+  } else {
+    // Position within viewport
+    el.style.position = 'fixed';
+    var top = rect.bottom + 4;
+    var left = rect.left;
+    var pickerRect = el.getBoundingClientRect();
+    if (top + pickerRect.height > window.innerHeight) {
+      top = rect.top - pickerRect.height - 4;
+    }
+    if (left + pickerRect.width > window.innerWidth) {
+      left = window.innerWidth - pickerRect.width - 8;
+    }
+    el.style.top = Math.max(0, top) + 'px';
+    el.style.left = Math.max(0, left) + 'px';
   }
-  if (left + pickerRect.width > window.innerWidth) {
-    left = window.innerWidth - pickerRect.width - 8;
-  }
-  el.style.top = Math.max(0, top) + 'px';
-  el.style.left = Math.max(0, left) + 'px';
 }
 
 function hidePetsciiPicker() {

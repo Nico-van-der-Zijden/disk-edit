@@ -426,29 +426,37 @@ function totalSectors(format, numTracks) {
 }
 
 // ── PETSCII → Unicode ─────────────────────────────────────────────────
-// Shared across all CBM disk formats (D64, D71, D81 all use PETSCII)
-// Complete PETSCII to Unicode mapping for C64 uppercase/graphics mode.
-// Uses C64 Pro font's PUA (U+E0xx) for all displayable characters ($20-$7F, $A0-$FF).
-// $00-$1F and $80-$9F are control codes with no PUA glyph — use standard chars + inverse.
-const PETSCII_MAP = (() => {
+// C64 Pro font PUA ranges:
+// E000-E0FF = uppercase/graphics mode (default)
+// E100-E1FF = lowercase/uppercase mode
+var charsetMode = localStorage.getItem('d64-charsetMode') === 'lowercase' ? 'lowercase' : 'uppercase';
+
+function buildPetsciiMap(mode) {
   var m = new Array(256).fill('\u00B7');
+  var base = mode === 'lowercase' ? 0xE100 : 0xE000;
 
-  // $00-$1F: same as $40-$5F (screen codes 0-31: @, A-Z, specials)
-  // No PUA glyph at E000-E01F, so use the E040-E05F glyphs (same visuals)
-  for (var i = 0x00; i <= 0x1F; i++) m[i] = String.fromCharCode(0xE040 + i);
+  // $00-$1F: reversed chars — use $40-$5F glyphs from the chosen charset
+  for (var i = 0x00; i <= 0x1F; i++) m[i] = String.fromCharCode(base + 0x40 + i);
 
-  // $20-$7F: all use PUA for pixel-perfect C64 Pro font rendering
-  for (i = 0x20; i <= 0x7F; i++) m[i] = String.fromCharCode(0xE000 + i);
+  // $20-$7F: displayable characters
+  for (i = 0x20; i <= 0x7F; i++) m[i] = String.fromCharCode(base + i);
 
-  // $80-$9F: same graphics as $C0-$DF (screen codes 64-95)
-  // No PUA glyph at E080-E09F, so use the E0C0-E0DF glyphs (same visuals)
-  for (i = 0x80; i <= 0x9F; i++) m[i] = String.fromCharCode(0xE0C0 + (i - 0x80));
+  // $80-$9F: reversed chars — use $C0-$DF glyphs from the chosen charset
+  for (i = 0x80; i <= 0x9F; i++) m[i] = String.fromCharCode(base + 0xC0 + (i - 0x80));
 
-  // $A0-$FF: all use PUA for pixel-perfect C64 Pro font rendering
-  for (i = 0xA0; i <= 0xFF; i++) m[i] = String.fromCharCode(0xE000 + i);
+  // $A0-$FF: displayable characters
+  for (i = 0xA0; i <= 0xFF; i++) m[i] = String.fromCharCode(base + i);
 
   return m;
-})();
+}
+
+var PETSCII_MAP = buildPetsciiMap(charsetMode);
+
+function setCharsetMode(mode) {
+  charsetMode = mode;
+  localStorage.setItem('d64-charsetMode', mode);
+  PETSCII_MAP = buildPetsciiMap(mode);
+}
 
 function petsciiToAscii(byte) {
   return PETSCII_MAP[byte & 0xFF];
@@ -499,6 +507,44 @@ const UNICODE_TO_PETSCII = (() => {
 
 // Convert PUA PETSCII string to readable ASCII (for tooltips, logs, etc.)
 // Get the offset of the header sector (disk name/ID)
+// Read all data bytes from a file's sector chain
+// Returns { data: Uint8Array, error: string|null }
+function readFileData(buffer, entryOff) {
+  var disk = new Uint8Array(buffer);
+  var t = disk[entryOff + 3];
+  var s = disk[entryOff + 4];
+  if (t === 0) return { data: new Uint8Array(0), error: 'No file data (T/S = 0/0)' };
+
+  var bytes = [];
+  var visited = {};
+  while (t !== 0) {
+    if (t < 1 || t > currentTracks) return { data: new Uint8Array(bytes), error: 'Illegal track ' + t };
+    if (s < 0 || s >= currentFormat.sectorsPerTrack(t)) return { data: new Uint8Array(bytes), error: 'Illegal sector ' + s + ' on track ' + t };
+    var key = t + ':' + s;
+    if (visited[key]) return { data: new Uint8Array(bytes), error: 'Circular reference at T:' + t + ' S:' + s };
+    visited[key] = true;
+
+    var off = sectorOffset(t, s);
+    if (off < 0) return { data: new Uint8Array(bytes), error: 'Invalid sector offset' };
+
+    var nextT = disk[off];
+    var nextS = disk[off + 1];
+
+    if (nextT === 0) {
+      // Last sector: nextS = number of bytes used (1-based, includes the 2 pointer bytes? No — it's bytes used in this sector starting from byte 2)
+      // Actually: nextS = offset of last byte + 1, so data is bytes 2..nextS
+      for (var i = 2; i < nextS && i < 256; i++) bytes.push(disk[off + i]);
+    } else {
+      // Full sector: data is bytes 2-255 (254 bytes)
+      for (var j = 2; j < 256; j++) bytes.push(disk[off + j]);
+    }
+
+    t = nextT;
+    s = nextS;
+  }
+  return { data: new Uint8Array(bytes), error: null };
+}
+
 function getHeaderOffset() {
   var fmt = currentFormat;
   return sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector);
@@ -508,11 +554,19 @@ function petsciiToReadable(str) {
   var out = '';
   for (var i = 0; i < str.length; i++) {
     var cp = str.charCodeAt(i);
-    if (cp >= 0xE041 && cp <= 0xE05A) out += String.fromCharCode(cp - 0xE000); // A-Z
-    else if (cp >= 0xE020 && cp <= 0xE03F) out += String.fromCharCode(cp - 0xE000); // space, punct, digits
-    else if (cp === 0xE040) out += '@';
-    else if (cp >= 0xE000 && cp <= 0xE0FF) out += '.'; // graphics → dot
-    else out += str[i];
+    // Handle both uppercase (E0xx) and lowercase (E1xx) PUA ranges
+    var petscii = -1;
+    if (cp >= 0xE000 && cp <= 0xE0FF) petscii = cp - 0xE000;
+    else if (cp >= 0xE100 && cp <= 0xE1FF) petscii = cp - 0xE100;
+
+    if (petscii >= 0) {
+      if (petscii >= 0x41 && petscii <= 0x5A) out += String.fromCharCode(petscii); // A-Z
+      else if (petscii >= 0x20 && petscii <= 0x3F) out += String.fromCharCode(petscii); // space, punct, digits
+      else if (petscii === 0x40) out += '@';
+      else out += '.'; // graphics → dot
+    } else {
+      out += str[i];
+    }
   }
   return out;
 }
@@ -726,6 +780,7 @@ function readGeosInfoBlock(buffer, track, sector) {
 function unicodeToPetscii(char) {
   var cp = char.charCodeAt(0);
   if (cp >= 0xE000 && cp <= 0xE0FF) return cp - 0xE000;
+  if (cp >= 0xE100 && cp <= 0xE1FF) return cp - 0xE100;
   return UNICODE_TO_PETSCII.get(char) || 0x20;
 }
 
