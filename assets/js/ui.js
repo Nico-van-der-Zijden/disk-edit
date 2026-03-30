@@ -515,8 +515,10 @@ function showContextMenu(x, y) {
     if (orig) {
       if (orig.classList.contains('disabled')) el.classList.add('disabled');
       else el.classList.remove('disabled');
-      // Copy dynamic text (Lock/Unlock, Scratch/Unscratch) for non-submenu items
-      if (!el.classList.contains('has-submenu')) el.textContent = orig.textContent;
+      // Copy dynamic text (Lock/Unlock, Scratch/Unscratch) for simple menu items only
+      if (!el.classList.contains('has-submenu') && !el.classList.contains('submenu')) {
+        el.textContent = orig.textContent;
+      }
       // Copy check marks for file type submenu
       var origChecks = orig.querySelectorAll('.check');
       var cloneChecks = el.querySelectorAll('.check');
@@ -560,9 +562,9 @@ contextMenu.addEventListener('click', function(e) {
     }
     return;
   }
-  // Handle top-level menu items via data-ctx-for
+  // Handle top-level menu items via data-ctx-for (skip submenu containers)
   var option = e.target.closest('[data-ctx-for]');
-  if (option && !option.classList.contains('disabled')) {
+  if (option && !option.classList.contains('disabled') && !option.classList.contains('has-submenu')) {
     var origId = option.getAttribute('data-ctx-for');
     var orig = document.getElementById(origId);
     if (orig) {
@@ -704,6 +706,7 @@ function updateEntryMenuState() {
   document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection);
+  document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection);
   // Export: enabled when selected file is PRG, SEQ, USR or REL (types 1-4)
   var exportEnabled = false;
   if (hasSelection) {
@@ -2051,6 +2054,62 @@ document.getElementById('opt-picker-stick').addEventListener('click', (e) => {
   document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i class="fa-solid fa-check"></i>' : '';
 });
 
+// ── File hex viewer (read-only) ───────────────────────────────────────
+function showFileHexViewer(entryOff) {
+  if (!currentBuffer) return;
+  var data = new Uint8Array(currentBuffer);
+  var result = readFileData(currentBuffer, entryOff);
+  var fileData = result.data;
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+
+  var html = '<div class="hex-editor" style="max-height:400px;overflow-y:auto">';
+  var totalBytes = fileData.length;
+  var rows = Math.ceil(totalBytes / 8) || 1;
+
+  for (var row = 0; row < rows; row++) {
+    var rowOff = row * 8;
+    html += '<div class="hex-row">';
+    html += '<span class="hex-offset">' + rowOff.toString(16).toUpperCase().padStart(4, '0') + '</span>';
+    html += '<span class="hex-bytes">';
+    for (var col = 0; col < 8; col++) {
+      var idx = rowOff + col;
+      if (idx < totalBytes) {
+        html += '<span class="hex-byte">' + fileData[idx].toString(16).toUpperCase().padStart(2, '0') + '</span>';
+      } else {
+        html += '<span class="hex-byte" style="opacity:0.2">--</span>';
+      }
+    }
+    html += '</span>';
+    html += '<span class="hex-separator"></span>';
+    html += '<span class="hex-ascii">';
+    for (var col2 = 0; col2 < 8; col2++) {
+      var idx2 = rowOff + col2;
+      if (idx2 < totalBytes) {
+        html += '<span class="hex-char">' + escHtml(PETSCII_MAP[fileData[idx2]]) + '</span>';
+      } else {
+        html += '<span class="hex-char" style="opacity:0.2">.</span>';
+      }
+    }
+    html += '</span>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  var titleText = 'Hex View \u2014 "' + name + '" (' + totalBytes + ' bytes)';
+  if (result.error) titleText += ' \u2014 ' + result.error;
+
+  document.getElementById('modal-title').textContent = titleText;
+  var body = document.getElementById('modal-body');
+  body.innerHTML = html;
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
 // ── Hex sector editor ─────────────────────────────────────────────────
 function showSectorHexEditor(track, sector) {
   if (!currentBuffer) return;
@@ -2398,6 +2457,13 @@ document.getElementById('opt-edit-file-sector').addEventListener('click', functi
   if (ft === 0) return; // no file data
 
   showSectorHexEditor(ft, fs);
+});
+
+document.getElementById('opt-view-hex').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  showFileHexViewer(selectedEntryIndex);
 });
 
 document.getElementById('opt-edit-free').addEventListener('click', (e) => {
