@@ -246,9 +246,14 @@ function renderDisk(info) {
   html += `
       </div>
       <div class="dir-footer">
-        <span class="dir-footer-blocks">${info.freeBlocks}</span>
-        <span class="dir-footer-label">blocks free.</span>
-        <span class="dir-footer-tracks"><span id="footer-ts"></span>${currentFormat.name} ${currentTracks} tracks</span>
+        <div class="dir-footer-row">
+          <span class="dir-footer-blocks">${info.freeBlocks}</span>
+          <span class="dir-footer-label">blocks free.</span>
+          <span class="dir-footer-ts" id="footer-ts"></span>
+        </div>
+        <div class="dir-footer-row dir-footer-status">
+          <span class="dir-footer-tracks">${currentFileName ? escHtml(currentFileName) + ' | ' : ''}${currentFormat.name} ${currentTracks} tracks</span>
+        </div>
       </div>
     </div>`;
 
@@ -764,7 +769,8 @@ function updateEntryMenuState() {
       var entryInSector = slotIdx % currentFormat.entriesPerSector;
       // Walk the directory chain to find the actual T/S
       var data2 = new Uint8Array(currentBuffer);
-      var dt = currentFormat.dirTrack, ds = currentFormat.dirSector;
+      var dctx = getDirContext();
+      var dt = dctx.dirTrack, ds = dctx.dirSector;
       var dVisited = new Set();
       for (var di = 0; di < dirSectorIdx && dt !== 0; di++) {
         var dk = dt + ':' + ds;
@@ -774,8 +780,7 @@ function updateEntryMenuState() {
         dt = data2[doff]; ds = data2[doff + 1];
       }
       footerTs.textContent = 'T:$' + dt.toString(16).toUpperCase().padStart(2, '0') +
-        ' S:$' + ds.toString(16).toUpperCase().padStart(2, '0') +
-        ' E:' + entryInSector + ' | ';
+        ' S:$' + ds.toString(16).toUpperCase().padStart(2, '0');
     } else {
       footerTs.textContent = '';
     }
@@ -892,6 +897,7 @@ function updateMenuState() {
   document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || !hasErrorBytes(currentBuffer));
   document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || hasGeosSignature(currentBuffer));
+  document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk);
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -1013,6 +1019,207 @@ document.getElementById('opt-show-deleted').addEventListener('click', (e) => {
   document.getElementById('check-deleted').innerHTML = showDeleted ? '<i class="fa-solid fa-check"></i>' : '';
   const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
+});
+
+// ── Disk menu: Scan for Lost Files ───────────────────────────────────
+document.getElementById('opt-scan-orphans').addEventListener('click', async function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+
+  var results = scanOrphanedChains(currentBuffer);
+
+  if (results.length === 0) {
+    showModal('Scan for Lost Files', ['No lost files found.']);
+    return;
+  }
+
+  // Build modal content
+  document.getElementById('modal-title').textContent = 'Scan for Lost Files';
+  var body = document.getElementById('modal-body');
+  body.innerHTML = '';
+
+  var summary = document.createElement('div');
+  summary.textContent = 'Found ' + results.length + ' lost file(s):';
+  summary.style.marginBottom = '12px';
+  body.appendChild(summary);
+
+  var list = document.createElement('div');
+  list.style.maxHeight = '400px';
+  list.style.overflowY = 'auto';
+
+  for (var ri = 0; ri < results.length; ri++) {
+    (function(r, idx) {
+      var card = document.createElement('div');
+      card.style.cssText = 'border:1px solid var(--border);border-radius:4px;padding:10px;margin-bottom:8px;';
+
+      var typeStr = r.suggestedType;
+      if (r.suggestedType === 'PRG' && r.loadAddress !== null) {
+        typeStr += ' ($' + r.loadAddress.toString(16).toUpperCase().padStart(4, '0') + ')';
+      }
+
+      var integrityIcon = '';
+      if (r.integrity === 'ok') integrityIcon = '<span style="color:#4c4">&#10003;</span> ';
+      else if (r.integrity === 'broken') integrityIcon = '<span style="color:#ca4">&#9888;</span> ';
+      else integrityIcon = '<span style="color:#c44">&#9888;</span> ';
+
+      card.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+          '<strong>#' + (idx + 1) + '</strong>' +
+          '<span style="font-size:12px;color:var(--text-muted)">' + integrityIcon + r.integrity + '</span>' +
+        '</div>' +
+        '<div style="font-size:12px;margin-bottom:6px">' +
+          'Start: T:$' + r.startTrack.toString(16).toUpperCase().padStart(2, '0') +
+          ' S:$' + r.startSector.toString(16).toUpperCase().padStart(2, '0') +
+          ' &mdash; ' + r.sectors.length + ' block(s), ' + r.dataSize + ' bytes' +
+          ' &mdash; ' + typeStr +
+        '</div>' +
+        '<div style="display:flex;gap:6px"></div>';
+
+      var btnRow = card.lastElementChild;
+
+      var exportBtn = document.createElement('button');
+      exportBtn.textContent = 'Export';
+      exportBtn.style.cssText = 'font-size:12px;padding:3px 12px;cursor:pointer;border:1px solid var(--border);border-radius:3px;background:var(--hover);color:var(--text);';
+      exportBtn.addEventListener('click', function() {
+        var ext = r.suggestedType === 'PRG' ? '.prg' : r.suggestedType === 'SEQ' ? '.seq' : '.bin';
+        var blob = new Blob([r.data], { type: 'application/octet-stream' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'recovered_' + String(idx + 1).padStart(3, '0') + ext;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      });
+      btnRow.appendChild(exportBtn);
+
+      var restoreBtn = document.createElement('button');
+      restoreBtn.textContent = 'Restore';
+      restoreBtn.style.cssText = 'font-size:12px;padding:3px 12px;cursor:pointer;border:1px solid var(--border);border-radius:3px;background:var(--hover);color:var(--text);';
+      restoreBtn.addEventListener('click', async function() {
+        document.getElementById('modal-overlay').classList.remove('open');
+        var name = await showInputModal('Filename for Recovered File', 'RECOVERED');
+        if (!name) return;
+        name = name.toUpperCase().substring(0, 16);
+
+        var typeIdx = r.suggestedType === 'PRG' ? 2 : r.suggestedType === 'SEQ' ? 1 : 3;
+
+        var snapshot = currentBuffer.slice(0);
+        var entryOff = findFreeDirEntry(currentBuffer);
+        if (entryOff < 0) {
+          currentBuffer = snapshot;
+          showModal('Restore Error', ['No free directory entry available.']);
+          return;
+        }
+
+        var wd = new Uint8Array(currentBuffer);
+        // File type: closed
+        wd[entryOff + 2] = 0x80 | typeIdx;
+        // First track/sector
+        wd[entryOff + 3] = r.startTrack;
+        wd[entryOff + 4] = r.startSector;
+        // Filename
+        for (var ni = 0; ni < 16; ni++) {
+          if (ni < name.length) {
+            var ch = name.charCodeAt(ni);
+            if (ch >= 0x41 && ch <= 0x5A) wd[entryOff + 5 + ni] = ch;
+            else if (ch >= 0x30 && ch <= 0x39) wd[entryOff + 5 + ni] = ch;
+            else if (ch === 0x20) wd[entryOff + 5 + ni] = 0x20;
+            else wd[entryOff + 5 + ni] = 0x20;
+          } else {
+            wd[entryOff + 5 + ni] = 0xA0;
+          }
+        }
+        // Clear unused
+        for (var ui = 21; ui < 30; ui++) wd[entryOff + ui] = 0x00;
+        // Block count
+        wd[entryOff + 30] = r.sectors.length & 0xFF;
+        wd[entryOff + 31] = (r.sectors.length >> 8) & 0xFF;
+
+        // Mark chain sectors as allocated in BAM (byte-level, partition-aware)
+        var ctx = getDirContext();
+        var bamOff = ctx.bamOff;
+        var touchedTracks = {};
+
+        for (var si = 0; si < r.sectors.length; si++) {
+          var sec = r.sectors[si];
+          var byteIdx = Math.floor(sec.s / 8);
+          var bitIdx = sec.s % 8;
+          var bamByteBase;
+
+          if (currentPartition) {
+            var relTrack = sec.t - currentPartition.startTrack + 1;
+            if (relTrack <= 40) bamByteBase = bamOff + 0x10 + (relTrack - 1) * 6 + 1;
+            else bamByteBase = bamOff + 256 + 0x10 + (relTrack - 41) * 6 + 1;
+          } else if (currentFormat === DISK_FORMATS.d81) {
+            bamByteBase = currentFormat._bamBase(bamOff, sec.t) + 1;
+          } else if (currentFormat === DISK_FORMATS.d71 && sec.t > 35) {
+            bamByteBase = currentFormat._bam2Off(bamOff) + (sec.t - 36) * 3;
+          } else {
+            bamByteBase = bamOff + 4 * sec.t + 1;
+          }
+
+          wd[bamByteBase + byteIdx] &= ~(1 << bitIdx);
+          touchedTracks[sec.t] = true;
+        }
+
+        // Recalculate free counts
+        for (var trackStr in touchedTracks) {
+          var btrack = parseInt(trackStr, 10);
+          var spt = currentFormat.sectorsPerTrack(btrack);
+          var numBytes = Math.ceil(spt / 8);
+          var bamByteBase2;
+
+          if (currentPartition) {
+            var relTrack2 = btrack - currentPartition.startTrack + 1;
+            if (relTrack2 <= 40) bamByteBase2 = bamOff + 0x10 + (relTrack2 - 1) * 6 + 1;
+            else bamByteBase2 = bamOff + 256 + 0x10 + (relTrack2 - 41) * 6 + 1;
+          } else if (currentFormat === DISK_FORMATS.d81) {
+            bamByteBase2 = currentFormat._bamBase(bamOff, btrack) + 1;
+          } else if (currentFormat === DISK_FORMATS.d71 && btrack > 35) {
+            bamByteBase2 = currentFormat._bam2Off(bamOff) + (btrack - 36) * 3;
+          } else {
+            bamByteBase2 = bamOff + 4 * btrack + 1;
+          }
+
+          var free = 0;
+          for (var bci = 0; bci < numBytes; bci++) {
+            var bval = wd[bamByteBase2 + bci];
+            var maxBit = Math.min(8, spt - bci * 8);
+            for (var bit = 0; bit < maxBit; bit++) {
+              if (bval & (1 << bit)) free++;
+            }
+          }
+
+          if (currentPartition) {
+            var relTrack3 = btrack - currentPartition.startTrack + 1;
+            if (relTrack3 <= 40) wd[bamOff + 0x10 + (relTrack3 - 1) * 6] = free;
+            else wd[bamOff + 256 + 0x10 + (relTrack3 - 41) * 6] = free;
+          } else {
+            currentFormat.writeTrackFree(wd, bamOff, btrack, free);
+          }
+        }
+
+        selectedEntryIndex = entryOff;
+        var info = parseCurrentDir(currentBuffer);
+        renderDisk(info);
+        updateMenuState();
+        showModal('File Restored', ['"' + name + '" restored with ' + r.sectors.length + ' block(s).']);
+      });
+      btnRow.appendChild(restoreBtn);
+
+      list.appendChild(card);
+    })(results[ri], ri);
+  }
+
+  body.appendChild(list);
+
+  // Set footer to just OK
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
 });
 
 document.querySelectorAll('#opt-sort .submenu .option').forEach(el => {

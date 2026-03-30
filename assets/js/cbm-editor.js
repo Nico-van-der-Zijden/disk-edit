@@ -453,3 +453,182 @@ function validatePartition(buffer, startTrack, partSize) {
 
 // Backward-compatible alias
 function validateD64(buffer) { return validateDisk(buffer); }
+
+// ── Scan for orphaned sector chains (lost files) ─────────────────────
+// Finds file data remaining on disk after directory entries have been
+// completely removed. Read-only — does not modify the buffer.
+function scanOrphanedChains(buffer) {
+  var data = new Uint8Array(buffer);
+  var fmt = currentFormat;
+
+  // Step 1: Build set of all owned sectors
+  var owned = buildTrueAllocationMap(buffer);
+
+  // Determine scan range (partition-aware)
+  var minTrack = 1, maxTrack = currentTracks;
+  if (currentPartition) {
+    minTrack = currentPartition.startTrack;
+    maxTrack = currentPartition.startTrack + Math.floor(currentPartition.partSize / 40) - 1;
+  }
+
+  // Step 2: Classify unowned sectors
+  var unowned = {}; // "t:s" -> { nextT, nextS, isEnd }
+  var pointedTo = {}; // "t:s" -> true
+
+  for (var t = minTrack; t <= maxTrack; t++) {
+    var spt = fmt.sectorsPerTrack(t);
+    for (var s = 0; s < spt; s++) {
+      var key = t + ':' + s;
+      if (owned[key]) continue;
+
+      var off = sectorOffset(t, s);
+      if (off < 0) continue;
+
+      // Skip all-zero sectors (never written)
+      var allZero = true;
+      for (var zi = 0; zi < 256; zi++) {
+        if (data[off + zi] !== 0) { allZero = false; break; }
+      }
+      if (allZero) continue;
+
+      var nextT = data[off];
+      var nextS = data[off + 1];
+
+      if (nextT === 0 && nextS >= 2) {
+        // End-of-chain marker
+        unowned[key] = { nextT: 0, nextS: nextS, isEnd: true };
+      } else if (nextT >= minTrack && nextT <= maxTrack &&
+                 nextS < fmt.sectorsPerTrack(nextT)) {
+        // Valid chain link
+        unowned[key] = { nextT: nextT, nextS: nextS, isEnd: false };
+        // Only build pointedTo from unowned→unowned links (for chain start detection)
+        var targetKey = nextT + ':' + nextS;
+        if (!owned[targetKey]) pointedTo[targetKey] = true;
+      }
+      // else: garbage link bytes — not part of a chain
+    }
+  }
+
+  // Step 3: Find chain starts (unowned sectors not pointed to by another unowned sector)
+  var chainStarts = [];
+  for (var sk in unowned) {
+    if (!pointedTo[sk]) chainStarts.push(sk);
+  }
+
+  // Handle circular orphan chains: any unowned sectors still unvisited after chain following
+  var globalVisited = {};
+
+  // Step 4: Follow each chain and collect data
+  var results = [];
+
+  for (var ci = 0; ci < chainStarts.length; ci++) {
+    var parts = chainStarts[ci].split(':');
+    followOrphanChain(parseInt(parts[0], 10), parseInt(parts[1], 10));
+  }
+
+  // Check for circular orphans (sectors in unowned but not visited by any chain)
+  for (var uk in unowned) {
+    if (!globalVisited[uk] && !unowned[uk].isEnd) {
+      var uparts = uk.split(':');
+      followOrphanChain(parseInt(uparts[0], 10), parseInt(uparts[1], 10));
+    }
+  }
+
+  function followOrphanChain(startT, startS) {
+    var sectors = [];
+    var bytes = [];
+    var visited = {};
+    var integrity = 'ok';
+    var ct = startT, cs = startS;
+
+    while (true) {
+      var ck = ct + ':' + cs;
+
+      // Circular reference
+      if (visited[ck]) { integrity = 'circular'; break; }
+
+      // Hit an owned sector (chain crosses into live data)
+      if (owned[ck] && sectors.length > 0) { integrity = 'cross-linked'; break; }
+
+      // Cross-linked with another orphan chain
+      if (globalVisited[ck]) { integrity = 'cross-linked'; break; }
+
+      visited[ck] = true;
+      globalVisited[ck] = true;
+
+      var coff = sectorOffset(ct, cs);
+      if (coff < 0) { integrity = 'broken'; break; }
+
+      sectors.push({ t: ct, s: cs });
+
+      var nt = data[coff];
+      var ns = data[coff + 1];
+
+      if (nt === 0) {
+        // Last sector: collect bytes 2..ns-1
+        for (var i = 2; i < ns && i < 256; i++) bytes.push(data[coff + i]);
+        break;
+      } else {
+        // Full sector: collect bytes 2-255
+        for (var j = 2; j < 256; j++) bytes.push(data[coff + j]);
+      }
+
+      // Validate next link
+      if (nt < minTrack || nt > maxTrack || ns >= fmt.sectorsPerTrack(nt)) {
+        integrity = 'broken';
+        break;
+      }
+
+      ct = nt;
+      cs = ns;
+    }
+
+    if (sectors.length === 0) return;
+    // Skip single-sector results with broken chains — likely false positives
+    if (sectors.length === 1 && integrity === 'broken') return;
+    // Skip single-sector results where all data bytes are zero (wiped sectors like 00 FF 00 00...)
+    if (sectors.length === 1 && bytes.length > 0) {
+      var allDataZero = true;
+      for (var az = 0; az < bytes.length; az++) {
+        if (bytes[az] !== 0) { allDataZero = false; break; }
+      }
+      if (allDataZero) return;
+    }
+
+    var fileData = new Uint8Array(bytes);
+    var result = {
+      startTrack: startT,
+      startSector: startS,
+      sectors: sectors,
+      dataSize: fileData.length,
+      data: fileData,
+      integrity: integrity,
+      suggestedType: 'unknown',
+      loadAddress: null
+    };
+
+    // Step 5: Type detection heuristics
+    if (fileData.length >= 2) {
+      var addr = fileData[0] | (fileData[1] << 8);
+      var knownAddrs = [0x0401, 0x0801, 0x1001, 0x1C01, 0x2000, 0x4000, 0x6000, 0x8000, 0xA000, 0xC000];
+      if (knownAddrs.indexOf(addr) >= 0 || (addr >= 0x0200 && addr <= 0xFFFF && (addr & 0xFF) === 0)) {
+        result.suggestedType = 'PRG';
+        result.loadAddress = addr;
+      }
+    }
+
+    if (result.suggestedType === 'unknown' && fileData.length > 0) {
+      // Check for SEQ (mostly printable PETSCII)
+      var printable = 0;
+      for (var pi = 0; pi < fileData.length; pi++) {
+        var b = fileData[pi];
+        if ((b >= 0x20 && b <= 0x7E) || (b >= 0xA0 && b <= 0xFE) || b === 0x0D) printable++;
+      }
+      if (printable / fileData.length > 0.7) result.suggestedType = 'SEQ';
+    }
+
+    results.push(result);
+  }
+
+  return results;
+}

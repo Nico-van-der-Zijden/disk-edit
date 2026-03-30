@@ -6,7 +6,7 @@
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <title>CBM Disk Editor</title>
 <link rel="stylesheet" href="assets/fontawesome/all.min.css">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='2' width='56' height='60' rx='3' fill='%23222' stroke='%23555' stroke-width='2'/%3E%3Crect x='18' y='2' width='28' height='14' rx='1' fill='%23888'/%3E%3Crect x='24' y='4' width='16' height='10' rx='1' fill='%23222'/%3E%3Ccircle cx='32' cy='36' r='14' fill='none' stroke='%23555' stroke-width='2'/%3E%3Ccircle cx='32' cy='36' r='6' fill='%23555'/%3E%3Crect x='30' y='30' width='4' height='12' rx='1' fill='%23888' transform='rotate(45 32 36)'/%3E%3Crect x='8' y='52' width='20' height='6' rx='1' fill='%23444'/%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='2' width='56' height='60' rx='4' fill='%231a1a2e' stroke='%23666' stroke-width='2'/%3E%3Crect x='20' y='2' width='24' height='16' rx='2' fill='%23999'/%3E%3Crect x='26' y='4' width='12' height='12' rx='1' fill='%231a1a2e'/%3E%3Ccircle cx='32' cy='35' r='13' fill='none' stroke='%23555' stroke-width='1.5'/%3E%3Ccircle cx='32' cy='35' r='5' fill='%23666'/%3E%3Crect x='8' y='50' width='48' height='10' rx='2' fill='%23e8e8e8'/%3E%3Cline x1='12' y1='53' x2='40' y2='53' stroke='%234a6fa5' stroke-width='1.5'/%3E%3Cline x1='12' y1='56' x2='32' y2='56' stroke='%234a6fa5' stroke-width='1.5'/%3E%3C/svg%3E">
 <style>
   @font-face {
     font-family: 'C64 Pro Mono';
@@ -576,7 +576,8 @@
 
   .dir-footer {
     display: flex;
-    gap: 8px;
+    flex-direction: column;
+    gap: 4px;
     padding: 10px 16px;
     background: var(--bg-menu);
     border: 1px solid var(--border);
@@ -585,6 +586,12 @@
     color: var(--text-muted);
     font-size: 13px;
     flex-shrink: 0;
+  }
+
+  .dir-footer-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
   }
 
   .dir-footer-blocks {
@@ -600,6 +607,16 @@
   .dir-footer-tracks {
     font-size: 11px;
     opacity: 0.6;
+  }
+
+  .dir-footer-status {
+    font-size: 11px;
+    opacity: 0.6;
+    justify-content: flex-end;
+  }
+
+  .dir-footer-ts {
+    flex-shrink: 0;
   }
 
   .dir-entry.deleted {
@@ -1296,6 +1313,7 @@
       <div class="separator"></div>
       <div class="option disabled" id="opt-validate">Validate</div>
       <div class="option disabled" id="opt-show-deleted"><span class="check" id="check-deleted"></span>Show Deleted Files</div>
+      <div class="option disabled" id="opt-scan-orphans">Scan for Lost Files</div>
       <div class="option disabled has-submenu" id="opt-sort">Sort
         <div class="submenu">
           <div class="option" data-sort="name-asc">Name Ascending</div>
