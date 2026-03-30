@@ -886,6 +886,27 @@
   }
 
   /* --- Hex Editor --- */
+  .c64-screen {
+    background: #352879;
+    padding: 8px;
+    border-radius: 4px;
+    font-family: 'C64 Pro Mono', monospace;
+    font-size: 12px;
+    line-height: 1;
+    overflow: auto;
+    max-height: 450px;
+  }
+
+  .c64-screen-row {
+    white-space: pre;
+    height: 1.2em;
+  }
+
+  .c64-screen-char {
+    display: inline-block;
+    width: 1ch;
+  }
+
   .hex-editor {
     font-family: 'C64 Pro Mono', "Cascadia Code", "Consolas", monospace;
     font-size: 13px;
@@ -1373,6 +1394,7 @@
       <div class="option disabled has-submenu" id="opt-view-as">View As
         <div class="submenu">
           <div class="option" id="opt-view-hex">Hex</div>
+          <div class="option" id="opt-view-petscii">PETSCII</div>
         </div>
       </div>
       <div class="separator"></div>

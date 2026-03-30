@@ -2054,6 +2054,189 @@ document.getElementById('opt-picker-stick').addEventListener('click', (e) => {
   document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i class="fa-solid fa-check"></i>' : '';
 });
 
+// ── C64 screen renderer (CHROUT $FFD2 simulation) ────────────────────
+// Pepto's VIC-II palette (https://www.pepto.de/projects/colorvic/2001/)
+var C64_COLORS = [
+  '#000000', '#FFFFFF', '#683726', '#70A4B2', '#6F3D86', '#588D43',
+  '#352879', '#B8C76F', '#6F4F25', '#433900', '#9A6759', '#444444',
+  '#6C6C6C', '#9AD284', '#6C5EB5', '#959595'
+];
+
+// Map PETSCII control codes to color indices
+var PETSCII_COLOR_MAP = {
+  0x05: 1,  // white
+  0x1C: 2,  // red
+  0x1E: 5,  // green
+  0x1F: 6,  // blue
+  0x81: 8,  // orange
+  0x90: 0,  // black
+  0x95: 9,  // brown
+  0x96: 10, // light red
+  0x97: 11, // dark grey
+  0x98: 12, // medium grey
+  0x99: 13, // light green
+  0x9A: 14, // light blue
+  0x9B: 15, // light grey
+  0x9C: 4,  // purple
+  0x9E: 7,  // yellow
+  0x9F: 3   // cyan
+};
+
+function showFilePetsciiViewer(entryOff) {
+  if (!currentBuffer) return;
+  var data = new Uint8Array(currentBuffer);
+  var result = readFileData(currentBuffer, entryOff);
+  var fileData = result.data;
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+
+  // Virtual 40x25 screen
+  var W = 40, H = 25;
+  var screen = [];
+  for (var i = 0; i < W * H; i++) {
+    screen[i] = { ch: 0x20, color: 14, reverse: false }; // light blue on blue, like C64 default
+  }
+
+  var curX = 0, curY = 0, curColor = 14, reverseOn = false;
+  var lowercase = false;
+
+  function putChar(petscii) {
+    if (curY >= H) return; // off screen
+    var idx = curY * W + curX;
+    screen[idx] = { ch: petscii, color: curColor, reverse: reverseOn };
+    curX++;
+    if (curX >= W) {
+      curX = 0;
+      curY++;
+    }
+  }
+
+  // Process each byte through CHROUT
+  for (var bi = 0; bi < fileData.length; bi++) {
+    var b = fileData[bi];
+
+    // Color control codes
+    if (PETSCII_COLOR_MAP[b] !== undefined) {
+      curColor = PETSCII_COLOR_MAP[b];
+      continue;
+    }
+
+    switch (b) {
+      case 0x00: break; // null — ignored
+      case 0x0D: // carriage return
+        curX = 0;
+        curY++;
+        break;
+      case 0x0E: // switch to lowercase
+        lowercase = true;
+        break;
+      case 0x11: // cursor down
+        curY++;
+        break;
+      case 0x12: // reverse on
+        reverseOn = true;
+        break;
+      case 0x13: // home
+        curX = 0;
+        curY = 0;
+        break;
+      case 0x14: // delete (backspace)
+        if (curX > 0) curX--;
+        else if (curY > 0) { curY--; curX = W - 1; }
+        screen[curY * W + curX] = { ch: 0x20, color: curColor, reverse: false };
+        break;
+      case 0x8E: // switch to uppercase
+        lowercase = false;
+        break;
+      case 0x91: // cursor up
+        if (curY > 0) curY--;
+        break;
+      case 0x92: // reverse off
+        reverseOn = false;
+        break;
+      case 0x93: // clear screen
+        for (var ci = 0; ci < W * H; ci++) {
+          screen[ci] = { ch: 0x20, color: curColor, reverse: false };
+        }
+        curX = 0;
+        curY = 0;
+        break;
+      case 0x1D: // cursor right
+        curX++;
+        if (curX >= W) { curX = 0; curY++; }
+        break;
+      case 0x9D: // cursor left
+        if (curX > 0) curX--;
+        else if (curY > 0) { curY--; curX = W - 1; }
+        break;
+      default:
+        // Printable character ranges
+        if ((b >= 0x20 && b <= 0x7F) || (b >= 0xA0 && b <= 0xFF)) {
+          putChar(b);
+        }
+        // Other control codes (F-keys, etc.) — ignored
+        break;
+    }
+
+    // Scroll if cursor past bottom
+    if (curY >= H) {
+      // Scroll screen up
+      for (var si = 0; si < W * (H - 1); si++) {
+        screen[si] = screen[si + W];
+      }
+      for (var si2 = W * (H - 1); si2 < W * H; si2++) {
+        screen[si2] = { ch: 0x20, color: curColor, reverse: false };
+      }
+      curY = H - 1;
+    }
+  }
+
+  // Render screen to HTML
+  // Use uppercase or lowercase PETSCII map based on charset mode
+  var html = '<div class="c64-screen">';
+  for (var row = 0; row < H; row++) {
+    html += '<div class="c64-screen-row">';
+    for (var col = 0; col < W; col++) {
+      var cell = screen[row * W + col];
+      var fg = C64_COLORS[cell.color];
+      var bg = 'transparent';
+      if (cell.reverse) {
+        bg = fg;
+        fg = '#352879'; // screen background color (C64 blue)
+      }
+      // Use the appropriate PETSCII map character
+      var displayChar;
+      if (lowercase && cell.ch >= 0x41 && cell.ch <= 0x5A) {
+        // Uppercase PETSCII → lowercase display (E1xx range)
+        displayChar = String.fromCharCode(0xE100 + cell.ch);
+      } else if (lowercase && cell.ch >= 0xC1 && cell.ch <= 0xDA) {
+        // Shifted uppercase in lowercase mode → uppercase display (E0xx range)
+        displayChar = String.fromCharCode(0xE000 + cell.ch);
+      } else {
+        displayChar = PETSCII_MAP[cell.ch] || ' ';
+      }
+      html += '<span class="c64-screen-char" style="color:' + fg +
+        (bg !== 'transparent' ? ';background:' + bg : '') +
+        '">' + escHtml(displayChar) + '</span>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+
+  var titleText = 'PETSCII View \u2014 "' + name + '"';
+  if (result.error) titleText += ' \u2014 ' + result.error;
+
+  document.getElementById('modal-title').textContent = titleText;
+  var body = document.getElementById('modal-body');
+  body.innerHTML = html;
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
 // ── File hex viewer (read-only) ───────────────────────────────────────
 function showFileHexViewer(entryOff) {
   if (!currentBuffer) return;
@@ -2464,6 +2647,13 @@ document.getElementById('opt-view-hex').addEventListener('click', function(e) {
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
   showFileHexViewer(selectedEntryIndex);
+});
+
+document.getElementById('opt-view-petscii').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  showFilePetsciiViewer(selectedEntryIndex);
 });
 
 document.getElementById('opt-edit-free').addEventListener('click', (e) => {
