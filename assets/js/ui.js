@@ -505,16 +505,7 @@ function showContextMenu(x, y) {
   // Refresh enable/disable state
   updateEntryMenuState();
 
-  // Copy disabled state from original menu items to cloned ones
-  var origOptions = source.querySelectorAll('[id]');
-  origOptions.forEach(function(orig) {
-    var clone = contextMenu.querySelector('#' + orig.id);
-    if (!clone) {
-      // IDs can't be duplicated — use data attribute instead
-    }
-  });
-
-  // Since we can't duplicate IDs, replace IDs with data-ctx-for and mirror state
+  // Replace IDs with data-ctx-for (avoid duplicates) and mirror state from originals
   contextMenu.querySelectorAll('[id]').forEach(function(el) {
     var origId = el.id;
     el.removeAttribute('id');
@@ -523,11 +514,8 @@ function showContextMenu(x, y) {
     if (orig) {
       if (orig.classList.contains('disabled')) el.classList.add('disabled');
       else el.classList.remove('disabled');
-      // Copy dynamic text (Lock/Unlock, Scratch/Unscratch)
-      if (!el.children.length || el.classList.contains('has-submenu')) {
-        // For items without submenus, copy text
-        if (!el.classList.contains('has-submenu')) el.textContent = orig.textContent;
-      }
+      // Copy dynamic text (Lock/Unlock, Scratch/Unscratch) for non-submenu items
+      if (!el.classList.contains('has-submenu')) el.textContent = orig.textContent;
       // Copy check marks for file type submenu
       var origChecks = orig.querySelectorAll('.check');
       var cloneChecks = el.querySelectorAll('.check');
@@ -1135,68 +1123,11 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
         wd[entryOff + 30] = r.sectors.length & 0xFF;
         wd[entryOff + 31] = (r.sectors.length >> 8) & 0xFF;
 
-        // Mark chain sectors as allocated in BAM (byte-level, partition-aware)
+        // Mark chain sectors as allocated in BAM
         var ctx = getDirContext();
         var bamOff = ctx.bamOff;
-        var touchedTracks = {};
-
         for (var si = 0; si < r.sectors.length; si++) {
-          var sec = r.sectors[si];
-          var byteIdx = Math.floor(sec.s / 8);
-          var bitIdx = sec.s % 8;
-          var bamByteBase;
-
-          if (currentPartition) {
-            var relTrack = sec.t - currentPartition.startTrack + 1;
-            if (relTrack <= 40) bamByteBase = bamOff + 0x10 + (relTrack - 1) * 6 + 1;
-            else bamByteBase = bamOff + 256 + 0x10 + (relTrack - 41) * 6 + 1;
-          } else if (currentFormat === DISK_FORMATS.d81) {
-            bamByteBase = currentFormat._bamBase(bamOff, sec.t) + 1;
-          } else if (currentFormat === DISK_FORMATS.d71 && sec.t > 35) {
-            bamByteBase = currentFormat._bam2Off(bamOff) + (sec.t - 36) * 3;
-          } else {
-            bamByteBase = bamOff + 4 * sec.t + 1;
-          }
-
-          wd[bamByteBase + byteIdx] &= ~(1 << bitIdx);
-          touchedTracks[sec.t] = true;
-        }
-
-        // Recalculate free counts
-        for (var trackStr in touchedTracks) {
-          var btrack = parseInt(trackStr, 10);
-          var spt = currentFormat.sectorsPerTrack(btrack);
-          var numBytes = Math.ceil(spt / 8);
-          var bamByteBase2;
-
-          if (currentPartition) {
-            var relTrack2 = btrack - currentPartition.startTrack + 1;
-            if (relTrack2 <= 40) bamByteBase2 = bamOff + 0x10 + (relTrack2 - 1) * 6 + 1;
-            else bamByteBase2 = bamOff + 256 + 0x10 + (relTrack2 - 41) * 6 + 1;
-          } else if (currentFormat === DISK_FORMATS.d81) {
-            bamByteBase2 = currentFormat._bamBase(bamOff, btrack) + 1;
-          } else if (currentFormat === DISK_FORMATS.d71 && btrack > 35) {
-            bamByteBase2 = currentFormat._bam2Off(bamOff) + (btrack - 36) * 3;
-          } else {
-            bamByteBase2 = bamOff + 4 * btrack + 1;
-          }
-
-          var free = 0;
-          for (var bci = 0; bci < numBytes; bci++) {
-            var bval = wd[bamByteBase2 + bci];
-            var maxBit = Math.min(8, spt - bci * 8);
-            for (var bit = 0; bit < maxBit; bit++) {
-              if (bval & (1 << bit)) free++;
-            }
-          }
-
-          if (currentPartition) {
-            var relTrack3 = btrack - currentPartition.startTrack + 1;
-            if (relTrack3 <= 40) wd[bamOff + 0x10 + (relTrack3 - 1) * 6] = free;
-            else wd[bamOff + 256 + 0x10 + (relTrack3 - 41) * 6] = free;
-          } else {
-            currentFormat.writeTrackFree(wd, bamOff, btrack, free);
-          }
+          bamMarkSectorUsed(wd, r.sectors[si].t, r.sectors[si].s, bamOff);
         }
 
         selectedEntryIndex = entryOff;
@@ -2718,36 +2649,8 @@ function insertFileEntry() {
 
   writeNewEntry(data, newOff);
 
-  // Mark sector as used in BAM (partition or root)
-  if (currentPartition) {
-    // Partition BAM: byte-level update (D81 layout relative to partition BAM)
-    var partTrack = 1; // first track of partition = track 1 in partition's address space
-    var byteIdx = Math.floor(newSector / 8);
-    var bitIdx = newSector % 8;
-    var bamBase = bamOff + 0x10 + (partTrack - 1) * 6 + 1;
-    data[bamBase + byteIdx] &= ~(1 << bitIdx);
-    // Recalculate free count
-    var numBytes = Math.ceil(spt / 8);
-    var freeCount = 0;
-    for (var bci = 0; bci < numBytes; bci++) {
-      var bval = data[bamBase + bci];
-      var maxBit = Math.min(8, spt - bci * 8);
-      for (var bit = 0; bit < maxBit; bit++) {
-        if (bval & (1 << bit)) freeCount++;
-      }
-    }
-    data[bamOff + 0x10 + (partTrack - 1) * 6] = freeCount;
-  } else {
-    const fmt = currentFormat;
-    const bm = fmt.readTrackBitmap(data, bamOff, dirTrk);
-    const newBm = bm & ~(1 << newSector);
-    fmt.writeTrackBitmap(data, bamOff, dirTrk, newBm);
-    let free = 0;
-    for (let cs = 0; cs < spt; cs++) {
-      if (newBm & (1 << cs)) free++;
-    }
-    fmt.writeTrackFree(data, bamOff, dirTrk, free);
-  }
+  // Mark sector as used in BAM
+  bamMarkSectorUsed(data, dirTrk, newSector, bamOff);
 
   return newOff;
 }
@@ -3705,8 +3608,8 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
           var srcOff = fileEntries[fi].entryOff;
           var dstOff = findFreeDirEntry(currentBuffer);
           if (dstOff < 0) break;
-          data = new Uint8Array(currentBuffer);
-          for (var j = 2; j < 32; j++) data[dstOff + j] = data[srcOff + j];
+          var moveData = new Uint8Array(currentBuffer);
+          for (var j = 2; j < 32; j++) moveData[dstOff + j] = moveData[srcOff + j];
         }
       }
       // For both 'move' and 'remove': proceed to remove the partition entry
@@ -4083,78 +3986,10 @@ function importFileToDisk(fileName, fileData) {
   data[entryOff + 31] = (numSectors >> 8) & 0xFF;
 
   // Update BAM: mark our allocated sectors as used
-  // Work at byte level to handle D81's 40 sectors (bitwise ops are 32-bit in JS)
   var ctx = getDirContext();
   var bamOff = ctx.bamOff;
-  var touchedTracks = {};
   for (var bi = 0; bi < sectorList.length; bi++) {
-    var bsec = sectorList[bi];
-    var byteIdx = Math.floor(bsec.sector / 8);
-    var bitIdx = bsec.sector % 8;
-
-    // Find the base offset of the bitmap bytes for this track
-    var bamByteBase;
-    if (currentPartition) {
-      // Partition BAM: D81 layout, track number relative to partition
-      var relTrack = bsec.track - currentPartition.startTrack + 1;
-      if (relTrack <= 40) {
-        bamByteBase = bamOff + 0x10 + (relTrack - 1) * 6 + 1;
-      } else {
-        bamByteBase = bamOff + 256 + 0x10 + (relTrack - 41) * 6 + 1;
-      }
-    } else if (fmt === DISK_FORMATS.d81) {
-      bamByteBase = fmt._bamBase(bamOff, bsec.track) + 1;
-    } else if (fmt === DISK_FORMATS.d71 && bsec.track > 35) {
-      bamByteBase = fmt._bam2Off(bamOff) + (bsec.track - 36) * 3;
-    } else {
-      bamByteBase = bamOff + 4 * bsec.track + 1;
-    }
-
-    data[bamByteBase + byteIdx] &= ~(1 << bitIdx);
-    touchedTracks[bsec.track] = true;
-  }
-
-  // Recalculate free count for each touched track by counting bitmap bits
-  for (var trackStr in touchedTracks) {
-    var btrack = parseInt(trackStr, 10);
-    var spt = fmt.sectorsPerTrack(btrack);
-    var numBytes = Math.ceil(spt / 8);
-
-    var bamByteBase2;
-    if (currentPartition) {
-      var relTrack2 = btrack - currentPartition.startTrack + 1;
-      if (relTrack2 <= 40) {
-        bamByteBase2 = bamOff + 0x10 + (relTrack2 - 1) * 6 + 1;
-      } else {
-        bamByteBase2 = bamOff + 256 + 0x10 + (relTrack2 - 41) * 6 + 1;
-      }
-    } else if (fmt === DISK_FORMATS.d81) {
-      bamByteBase2 = fmt._bamBase(bamOff, btrack) + 1;
-    } else if (fmt === DISK_FORMATS.d71 && btrack > 35) {
-      bamByteBase2 = fmt._bam2Off(bamOff) + (btrack - 36) * 3;
-    } else {
-      bamByteBase2 = bamOff + 4 * btrack + 1;
-    }
-
-    var free = 0;
-    for (var bci = 0; bci < numBytes; bci++) {
-      var bval = data[bamByteBase2 + bci];
-      var maxBit = Math.min(8, spt - bci * 8);
-      for (var bit = 0; bit < maxBit; bit++) {
-        if (bval & (1 << bit)) free++;
-      }
-    }
-    if (currentPartition) {
-      // Write free count to partition BAM
-      var relTrack3 = btrack - currentPartition.startTrack + 1;
-      if (relTrack3 <= 40) {
-        data[bamOff + 0x10 + (relTrack3 - 1) * 6] = free;
-      } else {
-        data[bamOff + 256 + 0x10 + (relTrack3 - 41) * 6] = free;
-      }
-    } else {
-      fmt.writeTrackFree(data, bamOff, btrack, free);
-    }
+    bamMarkSectorUsed(data, sectorList[bi].track, sectorList[bi].sector, bamOff);
   }
 
   // Verify the write by reading back the file data
@@ -4239,33 +4074,8 @@ function findFreeDirEntry(buffer) {
   data[newOff + 1] = 0xFF;
   for (var zi = 2; zi < 256; zi++) data[newOff + zi] = 0x00;
 
-  // Mark sector as used in BAM (partition or root)
-  if (currentPartition) {
-    var partTrack = 1;
-    var byteIdx = Math.floor(newSector / 8);
-    var bitIdx = newSector % 8;
-    var bamBase = bamOff + 0x10 + (partTrack - 1) * 6 + 1;
-    data[bamBase + byteIdx] &= ~(1 << bitIdx);
-    var numBytes = Math.ceil(spt / 8);
-    var freeCount = 0;
-    for (var bci = 0; bci < numBytes; bci++) {
-      var bval = data[bamBase + bci];
-      var maxBit = Math.min(8, spt - bci * 8);
-      for (var bit = 0; bit < maxBit; bit++) {
-        if (bval & (1 << bit)) freeCount++;
-      }
-    }
-    data[bamOff + 0x10 + (partTrack - 1) * 6] = freeCount;
-  } else {
-    var bm = fmt.readTrackBitmap(data, bamOff, dirTrk);
-    var newBm = bm & ~(1 << newSector);
-    fmt.writeTrackBitmap(data, bamOff, dirTrk, newBm);
-    var free = 0;
-    for (var fcs = 0; fcs < spt; fcs++) {
-      if (newBm & (1 << fcs)) free++;
-    }
-    fmt.writeTrackFree(data, bamOff, dirTrk, free);
-  }
+  // Mark sector as used in BAM
+  bamMarkSectorUsed(data, dirTrk, newSector, bamOff);
 
   return newOff;
 }

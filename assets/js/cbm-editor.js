@@ -59,16 +59,7 @@ function checkBAMIntegrity(buffer) {
     var spt = fmt.sectorsPerTrack(t);
     var storedFree = fmt.readTrackFree(data, bamOff, t);
     var actualFree = 0;
-
-    // Find bitmap byte base for this track
-    var bbBase;
-    if (fmt === DISK_FORMATS.d81) {
-      bbBase = fmt._bamBase(bamOff, t) + 1;
-    } else if (fmt === DISK_FORMATS.d71 && t > 35) {
-      bbBase = fmt._bam2Off(bamOff) + (t - 36) * 3;
-    } else {
-      bbBase = bamOff + 4 * t + 1;
-    }
+    var bbBase = getBamBitmapBase(t, bamOff);
     var numBytes = Math.ceil(spt / 8);
     for (var bi = 0; bi < numBytes; bi++) {
       var bval = data[bbBase + bi];
@@ -91,14 +82,7 @@ function checkBAMIntegrity(buffer) {
   for (t = 1; t <= bamTracks; t++) {
     if (t === fmt.dirTrack) continue;
     var spt2 = fmt.sectorsPerTrack(t);
-    var bbBase2;
-    if (fmt === DISK_FORMATS.d81) {
-      bbBase2 = fmt._bamBase(bamOff, t) + 1;
-    } else if (fmt === DISK_FORMATS.d71 && t > 35) {
-      bbBase2 = fmt._bam2Off(bamOff) + (t - 36) * 3;
-    } else {
-      bbBase2 = bamOff + 4 * t + 1;
-    }
+    var bbBase2 = getBamBitmapBase(t, bamOff);
     for (var s2 = 0; s2 < spt2; s2++) {
       var byteIdx = Math.floor(s2 / 8);
       var bitIdx = s2 % 8;
@@ -269,15 +253,7 @@ function validateDisk(buffer) {
       }
     }
 
-    // Find the bitmap byte base for this track
-    let bamByteBase;
-    if (fmt === DISK_FORMATS.d81) {
-      bamByteBase = fmt._bamBase(bamOff, t) + 1;
-    } else if (fmt === DISK_FORMATS.d71 && t > 35) {
-      bamByteBase = fmt._bam2Off(bamOff) + (t - 36) * 3;
-    } else {
-      bamByteBase = bamOff + 4 * t + 1;
-    }
+    let bamByteBase = getBamBitmapBase(t, bamOff);
 
     // Check if anything changed
     const oldFree = fmt.readTrackFree(data, bamOff, t);

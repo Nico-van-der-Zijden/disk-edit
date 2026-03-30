@@ -36,8 +36,6 @@ const DISK_FORMATS = {
     },
     // BAM: 4 bytes per track (free count + 3 bitmap bytes), tracks 1-35
     bamTracksRange(numTracks) { return Math.min(numTracks, 35); },
-    bamEntryOffset(bamOff, track) { return bamOff + 4 * track; },
-    bamEntrySize: 4,
     readTrackFree(data, bamOff, track) {
       return data[bamOff + 4 * track];
     },
@@ -416,6 +414,51 @@ function sectorOffset(track, sector) {
   return offsets[track] + sector * 256;
 }
 
+// ── BAM byte-level helpers (partition-aware, handles D81 >32 sectors) ─
+// Returns the byte offset of the bitmap bytes for a given track.
+// For partitions, track is absolute (disk-level) and bamOff is the partition BAM offset.
+function getBamBitmapBase(track, bamOff) {
+  if (currentPartition) {
+    var relTrack = track - currentPartition.startTrack + 1;
+    if (relTrack <= 40) return bamOff + 0x10 + (relTrack - 1) * 6 + 1;
+    return bamOff + 256 + 0x10 + (relTrack - 41) * 6 + 1;
+  }
+  var fmt = currentFormat;
+  if (fmt === DISK_FORMATS.d81) return fmt._bamBase(bamOff, track) + 1;
+  if (fmt === DISK_FORMATS.d71 && track > 35) return fmt._bam2Off(bamOff) + (track - 36) * 3;
+  return bamOff + 4 * track + 1;
+}
+
+// Clear a sector's bit in the BAM (mark as used) and recalculate the track's free count.
+function bamMarkSectorUsed(data, track, sector, bamOff) {
+  var base = getBamBitmapBase(track, bamOff);
+  data[base + Math.floor(sector / 8)] &= ~(1 << (sector % 8));
+  bamRecalcFree(data, track, bamOff);
+}
+
+// Recalculate and write the free count for a track by counting bitmap bits.
+function bamRecalcFree(data, track, bamOff) {
+  var spt = currentFormat.sectorsPerTrack(track);
+  var numBytes = Math.ceil(spt / 8);
+  var base = getBamBitmapBase(track, bamOff);
+  var free = 0;
+  for (var i = 0; i < numBytes; i++) {
+    var bval = data[base + i];
+    var maxBit = Math.min(8, spt - i * 8);
+    for (var bit = 0; bit < maxBit; bit++) {
+      if (bval & (1 << bit)) free++;
+    }
+  }
+  // Write free count
+  if (currentPartition) {
+    var relTrack = track - currentPartition.startTrack + 1;
+    if (relTrack <= 40) data[bamOff + 0x10 + (relTrack - 1) * 6] = free;
+    else data[bamOff + 256 + 0x10 + (relTrack - 41) * 6] = free;
+  } else {
+    currentFormat.writeTrackFree(data, bamOff, track, free);
+  }
+}
+
 function totalSectors(format, numTracks) {
   let s = 0;
   for (let t = 1; t <= numTracks; t++) s += format.sectorsPerTrack(t);
@@ -528,8 +571,7 @@ function readFileData(buffer, entryOff) {
     var nextS = disk[off + 1];
 
     if (nextT === 0) {
-      // Last sector: nextS = number of bytes used (1-based, includes the 2 pointer bytes? No — it's bytes used in this sector starting from byte 2)
-      // Actually: nextS = offset of last byte + 1, so data is bytes 2..nextS
+      // Last sector: nextS = position after last data byte, data is bytes 2..nextS-1
       for (var i = 2; i < nextS && i < 256; i++) bytes.push(disk[off + i]);
     } else {
       // Full sector: data is bytes 2-255 (254 bytes)
