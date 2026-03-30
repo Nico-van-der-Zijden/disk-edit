@@ -221,9 +221,12 @@ const DISK_FORMATS = {
       data[bamOff + 0xA6] = this.dosType.charCodeAt(1);
       for (let i = 0xA7; i <= 0xAA; i++) data[bamOff + i] = 0xA0;
 
-      // Side 2 BAM: free counts at T18/S0 $DD-$FF, bitmaps at T53/S0 $00-$68
+      // Side 2 BAM: free counts at T18/S0 $DD-$FF (35 bytes, tracks 36-70)
+      // Bitmaps at T53/S0 $00-$68 (105 bytes, tracks 36-70)
+      // Tracks 71-80 on extended disks are outside the BAM
       const bam2Off = this._bam2Off(bamOff);
-      for (let t = 36; t <= numTracks; t++) {
+      const maxBamTrack = Math.min(numTracks, 70);
+      for (let t = 36; t <= maxBamTrack; t++) {
         const spt = this.sectorsPerTrack(t);
         // Free count at T18/S0 byte $DD + (t - 36)
         if (t === 53) {

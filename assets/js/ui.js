@@ -143,6 +143,7 @@ document.addEventListener('selectstart', e => {
 });
 if (navigator.userAgent.includes('Edg')) {
   document.addEventListener('pointerup', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     const sel = window.getSelection();
     if (sel && !e.target.isContentEditable && !e.target.closest('.editing')) sel.removeAllRanges();
   });
@@ -886,6 +887,7 @@ function updateMenuState() {
   document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || !hasErrorBytes(currentBuffer));
   document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || hasGeosSignature(currentBuffer));
   document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk);
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -1479,6 +1481,225 @@ document.getElementById('opt-convert-geos').addEventListener('click', function(e
   writeGeosSignature(currentBuffer);
   updateMenuState();
   showModal('Convert to GEOS', ['Disk has been marked as GEOS format.']);
+});
+
+// ── Disk menu: Fill Free Sectors ─────────────────────────────────────
+document.getElementById('opt-fill-free').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+
+  document.getElementById('modal-title').textContent = 'Fill Free Sectors';
+  var body = document.getElementById('modal-body');
+  body.innerHTML = '';
+
+  var hint = document.createElement('div');
+  hint.style.cssText = 'font-size:12px;color:var(--text-muted);margin-bottom:10px';
+  hint.textContent = 'Enter hex bytes (00-FF). Up to 8 bytes, pattern repeats across each sector.';
+  body.appendChild(hint);
+
+  var row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px';
+  body.appendChild(row);
+
+  var preview = document.createElement('div');
+  preview.style.cssText = 'font-size:12px;color:var(--text-muted);font-family:monospace';
+  body.appendChild(preview);
+
+  function updatePreview() {
+    if (fillBytes.length === 0) {
+      preview.textContent = '';
+      return;
+    }
+    preview.textContent = 'Pattern: ' + fillBytes.map(function(b) {
+      return '$' + b.toString(16).toUpperCase().padStart(2, '0');
+    }).join(' ');
+  }
+
+  var inputStyle = 'width:32px;padding:4px 6px;font-family:monospace;font-size:14px;text-align:center;text-transform:uppercase;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text)';
+
+  function readAllBytes(includePending) {
+    var bytes = [];
+    var inputs = row.querySelectorAll('input');
+    for (var i = 0; i < inputs.length; i++) {
+      var v = inputs[i].value.replace(/[^0-9a-fA-F]/g, '');
+      if (v.length === 2) {
+        var val = parseInt(v, 16);
+        if (!isNaN(val) && val >= 0 && val <= 255) bytes.push(val);
+      } else if (v.length === 1 && includePending) {
+        var val2 = parseInt('0' + v, 16);
+        if (!isNaN(val2)) bytes.push(val2);
+      }
+    }
+    return bytes;
+  }
+
+  var fillBtn; // declared here so refreshPreview can access it
+
+  function refreshPreview() {
+    var confirmed = readAllBytes(false);
+    var withPending = readAllBytes(true);
+    if (fillBtn) fillBtn.disabled = confirmed.length === 0;
+    if (withPending.length === 0) { preview.textContent = ''; return; }
+    preview.textContent = 'Pattern: ' + withPending.map(function(b) {
+      return '$' + b.toString(16).toUpperCase().padStart(2, '0');
+    }).join(' ');
+  }
+
+  function ensureEmptyInput() {
+    // Make sure there's exactly one empty input at the end (if under 8 total)
+    var inputs = row.querySelectorAll('input');
+    var last = inputs.length > 0 ? inputs[inputs.length - 1] : null;
+    var filledCount = 0;
+    for (var i = 0; i < inputs.length; i++) {
+      if (inputs[i].value.replace(/[^0-9a-fA-F]/g, '').length === 2) filledCount++;
+    }
+    if (last && last.value === '' && filledCount < 8) return; // already have one
+    if (filledCount >= 8) return;
+    addByteInput('', false);
+  }
+
+  function addByteInput(value, doFocus) {
+    var inp = document.createElement('input');
+    inp.type = 'text';
+    inp.maxLength = 2;
+    inp.style.cssText = inputStyle;
+    inp.value = value || '';
+    row.appendChild(inp);
+
+    inp.addEventListener('keydown', function(ev) {
+      if (ev.key === 'Backspace' && inp.value === '') {
+        // Focus previous input, but don't remove this one yet
+        var prev = inp.previousElementSibling;
+        if (prev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          prev.focus();
+          var len = prev.value.length;
+          prev.setSelectionRange(len, len);
+          return;
+        }
+      }
+      if (ev.key === 'Tab' && !ev.shiftKey) {
+        var v = inp.value.replace(/[^0-9a-fA-F]/g, '');
+        if (v.length > 0 && v.length < 2) inp.value = '0' + v.toUpperCase();
+        if (inp.value.length === 2 && row.querySelectorAll('input').length < 8) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          ensureEmptyInput();
+          var next = inp.nextElementSibling;
+          if (next) next.focus();
+          refreshPreview();
+          return;
+        }
+      }
+      if (ev.key !== 'Escape') ev.stopPropagation();
+    });
+
+    inp.addEventListener('input', function() {
+      inp.value = inp.value.replace(/[^0-9a-fA-F]/g, '').substring(0, 2);
+      // If this input now has <2 chars, remove any trailing empty inputs
+      if (inp.value.length < 2) {
+        var next = inp.nextElementSibling;
+        while (next && next.value === '') {
+          var toRemove = next;
+          next = next.nextElementSibling;
+          row.removeChild(toRemove);
+        }
+      }
+      refreshPreview();
+      if (inp.value.length === 2) {
+        // Auto-advance: ensure there's a next input and focus it
+        ensureEmptyInput();
+        var next = inp.nextElementSibling;
+        if (next) setTimeout(function() { next.focus(); }, 0);
+      }
+    });
+
+    inp.addEventListener('focus', function() {
+      inp.select();
+    });
+
+    inp.addEventListener('blur', function() {
+      var v = inp.value.replace(/[^0-9a-fA-F]/g, '');
+      if (v.length === 0) {
+        // Empty input: remove it (unless it's the only one)
+        if (row.querySelectorAll('input').length > 1) {
+          row.removeChild(inp);
+          refreshPreview();
+          ensureEmptyInput();
+        }
+      } else if (v.length === 1) {
+        // Single digit: pad with leading zero
+        inp.value = '0' + v.toUpperCase();
+        refreshPreview();
+        ensureEmptyInput();
+      }
+    });
+
+    if (doFocus) setTimeout(function() { inp.focus(); inp.select(); }, 50);
+  }
+
+  addByteInput('00', true);
+  refreshPreview();
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '';
+
+  var cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.className = 'modal-btn-secondary';
+  cancelBtn.addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  footer.appendChild(cancelBtn);
+
+  fillBtn = document.createElement('button');
+  fillBtn.textContent = 'Fill';
+  fillBtn.addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+
+    // Read all valid bytes from inputs (ignore empty ones)
+    var fillBytes = readAllBytes();
+    if (fillBytes.length === 0) return;
+
+    // Build true allocation map (don't trust BAM)
+    var allocated = buildTrueAllocationMap(currentBuffer);
+    var data = new Uint8Array(currentBuffer);
+    var fmt = currentFormat;
+    var filled = 0;
+
+    for (var t = 1; t <= currentTracks; t++) {
+      var spt = fmt.sectorsPerTrack(t);
+      for (var s = 0; s < spt; s++) {
+        if (allocated[t + ':' + s]) continue;
+        var off = sectorOffset(t, s);
+        if (off < 0) continue;
+
+        // Set track/sector link to 00 00 (no chain)
+        data[off] = 0x00;
+        data[off + 1] = 0x00;
+
+        // Fill bytes 2-255 with the repeating pattern
+        var pi = 0;
+        for (var b = 2; b < 256; b++) {
+          data[off + b] = fillBytes[pi];
+          pi = (pi + 1) % fillBytes.length;
+        }
+        filled++;
+      }
+    }
+
+    var info = parseCurrentDir(currentBuffer);
+    renderDisk(info);
+    updateMenuState();
+    showModal('Fill Free Sectors', [
+      filled + ' sector(s) filled with pattern: ' + fillBytes.map(function(b) { return '$' + b.toString(16).toUpperCase().padStart(2, '0'); }).join(' ')
+    ]);
+  });
+  footer.appendChild(fillBtn);
+
+  document.getElementById('modal-overlay').classList.add('open');
 });
 
 // ── Disk menu: Add Directory (D81 partition) ─────────────────────────

@@ -851,8 +851,13 @@
     cursor: pointer;
   }
 
-  .modal-footer button:hover {
+  .modal-footer button:hover:not(:disabled) {
     background: var(--menu-hover);
+  }
+
+  .modal-footer button:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   .modal-btn-secondary {
@@ -1328,6 +1333,8 @@
       <div class="option disabled" id="opt-recalc-free">Recalculate Blocks Free</div>
       <div class="separator"></div>
       <div class="option disabled" id="opt-convert-geos">Convert to GEOS Format</div>
+      <div class="separator"></div>
+      <div class="option disabled" id="opt-fill-free">Fill Free Sectors</div>
     </div>
   </div>
   <div class="menu-item" id="menu-entry">
