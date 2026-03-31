@@ -203,11 +203,66 @@
     line-height: 2;
   }
 
+  /* --- Tab Bar --- */
+  .tab-bar {
+    display: flex;
+    gap: 2px;
+    padding: 4px 10px 0;
+    background: var(--bg);
+    overflow-x: auto;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tab-bar:empty { display: none; }
+
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    color: var(--text-muted);
+    white-space: nowrap;
+    max-width: 180px;
+    overflow: hidden;
+  }
+
+  .tab.active {
+    background: var(--hover);
+    color: var(--text);
+  }
+
+  .tab:hover:not(.active) {
+    background: var(--hover);
+  }
+
+  .tab-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tab-close {
+    font-size: 10px;
+    opacity: 0.5;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .tab-close:hover {
+    opacity: 1;
+  }
+
   /* --- Disk Panel --- */
   .disk-panel {
     display: flex;
     flex-direction: column;
-    max-height: calc(100vh - 80px);
+    max-height: calc(100vh - 110px);
   }
 
   /* --- Disk Header --- */
@@ -1138,67 +1193,6 @@
   }
 
   /* --- File Viewer --- */
-  .file-viewer-tabs {
-    display: flex;
-    gap: 0;
-    margin-bottom: 8px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .file-viewer-tab {
-    padding: 6px 16px;
-    cursor: pointer;
-    font-size: 12px;
-    color: var(--text-muted);
-    border-bottom: 2px solid transparent;
-  }
-
-  .file-viewer-tab:hover {
-    color: var(--text);
-  }
-
-  .file-viewer-tab.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-  }
-
-  .file-viewer-text {
-    font-family: 'C64 Pro Mono', monospace;
-    font-size: 14px;
-    line-height: 1.2;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-
-  .file-viewer-hex {
-    font-size: 13px;
-    line-height: 1.4;
-  }
-
-  .file-viewer-info {
-    font-size: 11px;
-    color: var(--text-muted);
-    padding-top: 6px;
-    border-top: 1px solid var(--border);
-    margin-top: 8px;
-  }
-
-  .file-viewer-icon {
-    cursor: pointer;
-    color: var(--text-muted);
-    opacity: 0.7;
-  }
-
-  .file-viewer-icon:hover {
-    color: var(--accent);
-    opacity: 1;
-  }
-
-  .dir-entry.selected .file-viewer-icon:hover {
-    color: var(--bg);
-    opacity: 0.8;
-  }
-
   /* --- Separator Editor --- */
   .sep-editor-list {
     margin-bottom: 12px;
@@ -1385,6 +1379,8 @@
       <div class="option disabled has-submenu" id="opt-insert-sep">Insert Separator
         <div class="submenu" id="sep-submenu"></div>
       </div>
+      <div class="option disabled" id="opt-copy">Copy File</div>
+      <div class="option disabled" id="opt-paste">Paste File</div>
       <div class="option disabled" id="opt-remove">Remove Entry</div>
       <div class="option disabled has-submenu" id="opt-align">Align
         <div class="submenu">
@@ -1458,6 +1454,8 @@
 </div>
 
 <input type="file" id="file-input" accept=".d64,.d71,.d81">
+
+<div class="tab-bar" id="tab-bar"></div>
 
 <div class="content" id="content">
   <div class="empty-state">

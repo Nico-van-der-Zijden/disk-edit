@@ -6,6 +6,108 @@ var selectedEntryIndex = -1;
 var showAddresses = localStorage.getItem('d64-showAddresses') === 'true';
 var showTrackSector = localStorage.getItem('d64-showTrackSector') === 'true';
 var currentPartition = null; // null = root, or { entryOff, startTrack, partSize, name }
+var clipboard = null; // { typeIdx, nameBytes: Uint8Array(16), data: Uint8Array }
+
+// ── Tab management ────────────────────────────────────────────────────
+var tabs = [];        // array of { id, name, buffer, fileName, format, tracks, partition, selectedEntry }
+var activeTabId = null;
+var nextTabId = 1;
+var newDiskCount = 0;
+
+function createTab(name, buffer, fileName) {
+  var tab = {
+    id: nextTabId++,
+    name: name,
+    buffer: buffer,
+    fileName: fileName,
+    format: currentFormat,
+    tracks: currentTracks,
+    partition: null,
+    selectedEntry: -1
+  };
+  tabs.push(tab);
+  return tab;
+}
+
+function saveActiveTab() {
+  if (activeTabId === null) return;
+  var tab = tabs.find(function(t) { return t.id === activeTabId; });
+  if (!tab) return;
+  tab.buffer = currentBuffer;
+  tab.fileName = currentFileName;
+  tab.format = currentFormat;
+  tab.tracks = currentTracks;
+  tab.partition = currentPartition;
+  tab.selectedEntry = selectedEntryIndex;
+}
+
+function loadTab(tab) {
+  currentBuffer = tab.buffer;
+  currentFileName = tab.fileName;
+  currentFormat = tab.format;
+  currentTracks = tab.tracks;
+  currentPartition = tab.partition;
+  selectedEntryIndex = tab.selectedEntry;
+  activeTabId = tab.id;
+}
+
+function switchToTab(tabId) {
+  if (tabId === activeTabId) return;
+  saveActiveTab();
+  var tab = tabs.find(function(t) { return t.id === tabId; });
+  if (!tab) return;
+  loadTab(tab);
+  var info = parseCurrentDir(currentBuffer);
+  renderDisk(info);
+  renderTabs();
+  updateMenuState();
+  updateEntryMenuState();
+}
+
+function closeTab(tabId) {
+  var idx = tabs.findIndex(function(t) { return t.id === tabId; });
+  if (idx < 0) return;
+  tabs.splice(idx, 1);
+
+  if (tabs.length === 0) {
+    activeTabId = null;
+    currentBuffer = null;
+    currentFileName = null;
+    selectedEntryIndex = -1;
+    currentPartition = null;
+    document.getElementById('content').innerHTML =
+      '<div class="empty-state">No disk loaded.<br>' +
+      'Use Disk &gt; New to create an empty disk,<br>' +
+      'or Disk &gt; Open to load a disk image.</div>';
+    renderTabs();
+    updateMenuState();
+    updateEntryMenuState();
+    return;
+  }
+
+  // Switch to adjacent tab
+  var newIdx = Math.min(idx, tabs.length - 1);
+  loadTab(tabs[newIdx]);
+  var info = parseCurrentDir(currentBuffer);
+  renderDisk(info);
+  renderTabs();
+  updateMenuState();
+  updateEntryMenuState();
+}
+
+function getActiveTab() {
+  if (activeTabId === null) return null;
+  return tabs.find(function(t) { return t.id === activeTabId; });
+}
+
+function updateTabName() {
+  var tab = getActiveTab();
+  if (!tab) return;
+  if (tab.fileName) {
+    tab.name = tab.fileName;
+  }
+  renderTabs();
+}
 
 // ── BAM integrity check (read-only, doesn't modify disk) ─────────────
 // Returns { sectorOwner: {}, bamErrors: [], allocMismatch: number }

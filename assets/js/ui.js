@@ -235,8 +235,6 @@ function renderDisk(info) {
             var ft = d[e.entryOff + 2] & 0x07;
             // CBM partition/directory icon
             if (ft === 5) icons += '<span class="dir-icon-partition" data-offset="' + e.entryOff + '" title="Partition — double-click to open"><i class="fa-solid fa-folder"></i></span>';
-            // File viewer icon for SEQ(1), USR(3), REL(4)
-            if (ft === 1 || ft === 3 || ft === 4) icons += '<span class="file-viewer-icon" data-offset="' + e.entryOff + '" title="View file contents"><i class="fa-solid fa-file-lines"></i></span>';
             // GEOS icon
             if (d[e.entryOff + 0x18] > 0) icons += '<span class="dir-icon-geos" data-offset="' + e.entryOff + '" title="GEOS file — click for info"><i class="fa-solid fa-globe"></i></span>';
             return icons;
@@ -315,17 +313,6 @@ function bindDirSelection() {
       if (partIcon) {
         var pOff = parseInt(partIcon.getAttribute('data-offset'), 10);
         enterPartition(pOff);
-        return;
-      }
-      // File viewer icon click
-      var fileIcon = e.target.closest('.file-viewer-icon');
-      if (fileIcon) {
-        var fOff = parseInt(fileIcon.getAttribute('data-offset'), 10);
-        selectedEntryIndex = fOff;
-        entries.forEach(ent => ent.classList.remove('selected'));
-        el.classList.add('selected');
-        updateEntryMenuState();
-        showFileViewer(fOff);
         return;
       }
       // GEOS icon click
@@ -654,6 +641,20 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
+  // Ctrl+C: copy file
+  if (e.ctrlKey && e.key === 'c' && selectedEntryIndex >= 0 && currentBuffer) {
+    e.preventDefault();
+    document.getElementById('opt-copy').click();
+    return;
+  }
+
+  // Ctrl+V: paste file
+  if (e.ctrlKey && e.key === 'v' && clipboard && currentBuffer) {
+    e.preventDefault();
+    document.getElementById('opt-paste').click();
+    return;
+  }
+
   if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
   e.preventDefault();
 
@@ -707,8 +708,10 @@ function updateEntryMenuState() {
   document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection);
-  // Export: enabled when selected file is PRG, SEQ, USR or REL (types 1-4)
+  // Copy: enabled for closed file types 1-4 (same as export)
+  // Paste: enabled when clipboard has data and disk has room
   var exportEnabled = false;
+  var copyEnabled = false;
   var basicEnabled = false;
   if (hasSelection) {
     var edata = new Uint8Array(currentBuffer);
@@ -716,6 +719,7 @@ function updateEntryMenuState() {
     var eClosed = (eType & 0x80) !== 0;
     var eIdx = eType & 0x07;
     exportEnabled = eClosed && eIdx >= 1 && eIdx <= 4;
+    copyEnabled = exportEnabled;
     // BASIC: PRG file — check first 2 bytes (load address) from first data sector
     if (eClosed && eIdx === 2) {
       var ft = edata[selectedEntryIndex + 3];
@@ -730,6 +734,8 @@ function updateEntryMenuState() {
     }
   }
   document.getElementById('opt-export').classList.toggle('disabled', !exportEnabled);
+  document.getElementById('opt-copy').classList.toggle('disabled', !copyEnabled);
+  document.getElementById('opt-paste').classList.toggle('disabled', !clipboard || !currentBuffer || !canInsertFile());
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
   document.getElementById('opt-import').classList.toggle('disabled', !currentBuffer || !canInsertFile());
   document.getElementById('opt-add-partition').classList.toggle('disabled', inPartition || !currentBuffer || currentFormat !== DISK_FORMATS.d81 || !canInsertFile());
@@ -942,18 +948,52 @@ document.addEventListener('click', () => {
   closeMenus();
 });
 
+// ── Tab bar rendering ────────────────────────────────────────────────
+function renderTabs() {
+  var bar = document.getElementById('tab-bar');
+  var html = '';
+  for (var i = 0; i < tabs.length; i++) {
+    var t = tabs[i];
+    html += '<div class="tab' + (t.id === activeTabId ? ' active' : '') + '" data-tab-id="' + t.id + '">' +
+      '<span class="tab-name">' + escHtml(t.name) + '</span>' +
+      '<span class="tab-close" data-tab-close="' + t.id + '"><i class="fa-solid fa-xmark"></i></span>' +
+    '</div>';
+  }
+  bar.innerHTML = html;
+
+  // Tab click handlers
+  bar.querySelectorAll('.tab').forEach(function(el) {
+    el.addEventListener('click', function(e) {
+      if (e.target.closest('.tab-close')) return;
+      switchToTab(parseInt(el.dataset.tabId, 10));
+    });
+  });
+  bar.querySelectorAll('.tab-close').forEach(function(el) {
+    el.addEventListener('click', function(e) {
+      e.stopPropagation();
+      closeTab(parseInt(el.dataset.tabClose, 10));
+    });
+  });
+}
+
 document.querySelectorAll('#opt-new .submenu .option').forEach(el => {
   el.addEventListener('click', (e) => {
     e.stopPropagation();
     closeMenus();
+    saveActiveTab();
     const tracks = parseInt(el.dataset.tracks, 10);
     const formatKey = el.dataset.format || 'd64';
     const buf = createEmptyDisk(formatKey, tracks);
     currentBuffer = buf;
     currentFileName = null;
     currentPartition = null;
+    selectedEntryIndex = -1;
+    newDiskCount++;
+    var tab = createTab('New Disk ' + newDiskCount, buf, null);
+    activeTabId = tab.id;
     const info = parseDisk(buf);
     renderDisk(info);
+    renderTabs();
     updateMenuState();
   });
 });
@@ -968,18 +1008,9 @@ document.getElementById('opt-close').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
-  currentBuffer = null;
-  currentFileName = null;
-  selectedEntryIndex = -1;
-  currentPartition = null;
-  document.getElementById('content').innerHTML = `
-    <div class="empty-state">
-      No disk loaded.<br>
-      Use Disk &gt; New to create an empty disk,<br>
-      or Disk &gt; Open to load a disk image.
-    </div>`;
-  updateMenuState();
-  updateEntryMenuState();
+  if (activeTabId !== null) {
+    closeTab(activeTabId);
+  }
 });
 
 document.getElementById('opt-save').addEventListener('click', (e) => {
@@ -999,6 +1030,7 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
   if (!fileName) return;
   currentFileName = fileName.endsWith(ext) ? fileName : fileName + ext;
   downloadD64(currentBuffer, currentFileName);
+  updateTabName();
   updateMenuState();
 });
 
@@ -1912,135 +1944,6 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
 });
 
 // ── File Content Viewer ───────────────────────────────────────────────
-function showFileViewer(entryOff) {
-  if (!currentBuffer) return;
-  var data = new Uint8Array(currentBuffer);
-  var typeByte = data[entryOff + 2];
-  var fileType = typeByte & 0x07;
-  var typeName = FILE_TYPES[fileType] || '???';
-  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16));
-  var result = readFileData(currentBuffer, entryOff);
-  var fileData = result.data;
-
-  // For PRG files, first 2 bytes are load address
-  var loadAddr = null;
-  var contentStart = 0;
-  if (fileType === 2 && fileData.length >= 2) { // PRG
-    loadAddr = fileData[0] | (fileData[1] << 8);
-    contentStart = 2;
-  }
-
-  // For REL files, get record length
-  var relRecordLen = 0;
-  if (fileType === 4) { // REL
-    relRecordLen = data[entryOff + 0x15];
-  }
-
-  var currentTab = 'text';
-
-  function renderContent() {
-    var html = '';
-
-    // Tabs
-    html += '<div class="file-viewer-tabs">';
-    html += '<div class="file-viewer-tab' + (currentTab === 'text' ? ' active' : '') + '" data-tab="text">Text</div>';
-    html += '<div class="file-viewer-tab' + (currentTab === 'hex' ? ' active' : '') + '" data-tab="hex">Hex</div>';
-    if (fileType === 4 && relRecordLen > 0) {
-      html += '<div class="file-viewer-tab' + (currentTab === 'records' ? ' active' : '') + '" data-tab="records">Records</div>';
-    }
-    html += '</div>';
-
-    if (currentTab === 'text') {
-      // PETSCII text view using C64 font
-      html += '<div class="file-viewer-text">';
-      for (var i = contentStart; i < fileData.length; i++) {
-        var b = fileData[i];
-        if (b === 0x0D) { html += '\n'; continue; } // CR → newline
-        html += escHtml(PETSCII_MAP[b]);
-      }
-      html += '</div>';
-
-    } else if (currentTab === 'hex') {
-      // Hex dump with PETSCII
-      html += '<div class="file-viewer-hex">';
-      var offset = contentStart;
-      var rowSize = 8;
-      while (offset < fileData.length) {
-        var addr = offset - contentStart;
-        if (loadAddr !== null) addr += loadAddr;
-        html += '<div class="hex-row">';
-        html += '<span class="hex-offset">' + addr.toString(16).toUpperCase().padStart(4, '0') + '</span>';
-        html += '<span class="hex-bytes">';
-        for (var c = 0; c < rowSize; c++) {
-          if (offset + c < fileData.length) {
-            html += '<span class="hex-byte">' + fileData[offset + c].toString(16).toUpperCase().padStart(2, '0') + '</span>';
-          } else {
-            html += '<span class="hex-byte">  </span>';
-          }
-        }
-        html += '</span>';
-        html += '<span class="hex-separator"></span>';
-        html += '<span class="hex-ascii">';
-        for (var c2 = 0; c2 < rowSize; c2++) {
-          if (offset + c2 < fileData.length) {
-            html += escHtml(PETSCII_MAP[fileData[offset + c2]]);
-          }
-        }
-        html += '</span>';
-        html += '</div>';
-        offset += rowSize;
-      }
-      html += '</div>';
-
-    } else if (currentTab === 'records') {
-      // REL records view
-      html += '<div class="file-viewer-hex">';
-      var recNum = 0;
-      for (var ri = 0; ri < fileData.length; ri += relRecordLen) {
-        recNum++;
-        var recEnd = Math.min(ri + relRecordLen, fileData.length);
-        html += '<div class="hex-row">';
-        html += '<span class="hex-offset">#' + recNum + '</span>';
-        html += '<span class="hex-bytes">';
-        for (var rb = ri; rb < recEnd; rb++) {
-          html += '<span class="hex-byte">' + fileData[rb].toString(16).toUpperCase().padStart(2, '0') + '</span>';
-        }
-        html += '</span>';
-        html += '<span class="hex-separator"></span>';
-        html += '<span class="hex-ascii">';
-        for (var rb2 = ri; rb2 < recEnd; rb2++) {
-          html += escHtml(PETSCII_MAP[fileData[rb2]]);
-        }
-        html += '</span>';
-        html += '</div>';
-      }
-      html += '</div>';
-    }
-
-    // Info line
-    html += '<div class="file-viewer-info">';
-    html += fileData.length + ' bytes';
-    if (loadAddr !== null) html += ' | Load: $' + loadAddr.toString(16).toUpperCase().padStart(4, '0');
-    if (relRecordLen > 0) html += ' | Record length: ' + relRecordLen + ' bytes';
-    if (result.error) html += ' | <span style="color:#f38ba8">' + escHtml(result.error) + '</span>';
-    html += '</div>';
-
-    return html;
-  }
-
-  var title = typeName + ': ' + name;
-  showModal(title, []);
-  var body = document.getElementById('modal-body');
-  body.innerHTML = renderContent();
-
-  // Tab click handler
-  body.addEventListener('click', function(ev) {
-    var tab = ev.target.closest('.file-viewer-tab');
-    if (!tab) return;
-    currentTab = tab.getAttribute('data-tab');
-    body.innerHTML = renderContent();
-  });
-}
 
 // ── Options menu ──────────────────────────────────────────────────────
 document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
@@ -4447,6 +4350,87 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
   URL.revokeObjectURL(a.href);
 });
 
+// ── File menu: Copy / Paste ──────────────────────────────────────────
+document.getElementById('opt-copy').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  var data = new Uint8Array(currentBuffer);
+  var typeByte = data[selectedEntryIndex + 2];
+  var typeIdx = typeByte & 0x07;
+  if (typeIdx < 1 || typeIdx > 4) return;
+
+  var result = readFileData(currentBuffer, selectedEntryIndex);
+  if (result.error) {
+    showModal('Copy Error', ['Failed to read file: ' + result.error]);
+    return;
+  }
+
+  // Copy the 16 PETSCII name bytes and GEOS metadata (bytes 21-29)
+  var nameBytes = new Uint8Array(16);
+  for (var i = 0; i < 16; i++) nameBytes[i] = data[selectedEntryIndex + 5 + i];
+  var geosBytes = new Uint8Array(9); // bytes 21-29 of directory entry
+  for (var g = 0; g < 9; g++) geosBytes[g] = data[selectedEntryIndex + 21 + g];
+
+  // Copy GEOS info block if present (byte 24 = GEOS file type, >0 means GEOS)
+  var geosInfoBlock = null;
+  var infoTrack = data[selectedEntryIndex + 0x15]; // byte 21
+  var infoSector = data[selectedEntryIndex + 0x16]; // byte 22
+  if (data[selectedEntryIndex + 0x18] > 0 && infoTrack > 0) {
+    var infoOff = sectorOffset(infoTrack, infoSector);
+    if (infoOff >= 0) {
+      geosInfoBlock = new Uint8Array(256);
+      for (var ib = 0; ib < 256; ib++) geosInfoBlock[ib] = data[infoOff + ib];
+    }
+  }
+
+  clipboard = {
+    typeIdx: typeIdx,
+    nameBytes: nameBytes,
+    geosBytes: geosBytes,
+    geosInfoBlock: geosInfoBlock,
+    data: new Uint8Array(result.data)
+  };
+  updateEntryMenuState();
+});
+
+document.getElementById('opt-paste').addEventListener('click', async (e) => {
+  e.stopPropagation();
+  if (!clipboard || !currentBuffer || !canInsertFile()) return;
+  closeMenus();
+
+  var isGeosFile = clipboard.geosInfoBlock !== null;
+  var geosData = null;
+  if (clipboard.geosBytes || clipboard.geosInfoBlock) {
+    geosData = { geosBytes: clipboard.geosBytes, geosInfoBlock: clipboard.geosInfoBlock };
+  }
+
+  // If pasting a GEOS file to a non-GEOS disk, ask to convert
+  if (isGeosFile && !hasGeosSignature(currentBuffer)) {
+    var choice = await showChoiceModal(
+      'GEOS File',
+      'This is a GEOS file but the disk is not in GEOS format. Convert disk to GEOS format?',
+      [
+        { label: 'Cancel', value: 'cancel', secondary: true },
+        { label: 'Paste Anyway', value: 'paste' },
+        { label: 'Convert & Paste', value: 'convert' }
+      ]
+    );
+    if (choice === 'cancel') return;
+    if (choice === 'convert') {
+      writeGeosSignature(currentBuffer);
+      updateMenuState();
+    }
+  }
+
+  if (writeFileToDisk(clipboard.typeIdx, clipboard.nameBytes, clipboard.data, geosData)) {
+    var info = parseCurrentDir(currentBuffer);
+    renderDisk(info);
+    var name = petsciiToReadable(readPetsciiString(clipboard.nameBytes, 0, 16)).trim();
+    showModal('Paste Successful', ['"' + name + '" pasted successfully.']);
+  }
+});
+
 // ── File menu: Import File ────────────────────────────────────────────
 var importFileInput = document.createElement('input');
 importFileInput.type = 'file';
@@ -4630,69 +4614,68 @@ function allocateSectors(allocated, numSectors) {
   return sectorList;
 }
 
-function importFileToDisk(fileName, fileData) {
-  var errors = [];
-
-  // Determine file type from extension
-  var dotIdx = fileName.lastIndexOf('.');
-  var ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1).toLowerCase() : '';
-  var typeMap = { prg: 2, seq: 1, usr: 3, rel: 4 };
-  var typeIdx = typeMap[ext];
-  if (typeIdx === undefined) {
-    showModal('Import Error', ['Unsupported file type: .' + ext]);
-    return;
-  }
-
-  // Take snapshot for rollback
+// Core write: writes file data to disk with sector chain, directory entry, BAM update, and verification.
+// nameBytes = 16-byte Uint8Array of PETSCII filename (already padded with $A0)
+// Returns true on success, false on failure (with rollback).
+// geosData is optional: { geosBytes: Uint8Array(9), geosInfoBlock: Uint8Array(256)|null }
+function writeFileToDisk(typeIdx, nameBytes, fileData, geosData) {
   var snapshot = currentBuffer.slice(0);
-
   var data = new Uint8Array(currentBuffer);
-  var fmt = currentFormat;
 
   // Build true allocation map (don't trust BAM)
   var allocated = buildTrueAllocationMap(currentBuffer);
 
-  // Calculate required sectors
-  // Like a real 1541: if file size is an exact multiple of 254, an extra sector is
-  // needed because the last-sector byte count (N+2) would wrap from 256 to 0
+  // Calculate required sectors for file data
   var dataLen = fileData.length;
   var numSectors = dataLen === 0 ? 1 : Math.ceil(dataLen / 254);
   if (dataLen > 0 && dataLen % 254 === 0) numSectors++;
 
+  // If GEOS info block present, need one extra sector for it
+  var needsInfoBlock = geosData && geosData.geosInfoBlock;
+  if (needsInfoBlock) numSectors++;
+
   // Allocate sectors using real drive algorithm
   var sectorList = allocateSectors(allocated, numSectors);
-
   if (sectorList.length < numSectors) {
-    errors.push('Not enough free sectors. Need ' + numSectors + ', have ' + sectorList.length + '.');
-    showModal('Import Error', errors);
-    return;
+    showModal('Write Error', ['Not enough free sectors. Need ' + numSectors + ', have ' + sectorList.length + '.']);
+    return false;
   }
 
   // Reserve a directory entry before writing any data (fail early)
   var entryOff = findFreeDirEntry(currentBuffer);
   if (entryOff < 0) {
-    errors.push('No free directory entry available.');
-    showModal('Import Error', errors);
-    return;
+    showModal('Write Error', ['No free directory entry available.']);
+    return false;
   }
 
-  // Write file data into the sector chain
+  // If GEOS, write the info block to the first allocated sector
+  var infoSec = null;
+  var dataSectorStart = 0;
+  if (needsInfoBlock) {
+    infoSec = sectorList[0];
+    var infoOff = sectorOffset(infoSec.track, infoSec.sector);
+    for (var ib = 0; ib < 256; ib++) data[infoOff + ib] = geosData.geosInfoBlock[ib];
+    // Info block bytes 0-1 should be 00 FF (standard GEOS info block marker)
+    data[infoOff] = 0x00;
+    data[infoOff + 1] = 0xFF;
+    dataSectorStart = 1; // file data starts from sector index 1
+  }
+
+  // Write file data into the sector chain (starting after info block if GEOS)
+  var fileSectors = sectorList.slice(dataSectorStart);
   var dataPos = 0;
-  for (var si = 0; si < sectorList.length; si++) {
-    var sec = sectorList[si];
+  for (var si = 0; si < fileSectors.length; si++) {
+    var sec = fileSectors[si];
     var soff = sectorOffset(sec.track, sec.sector);
 
-    if (si < sectorList.length - 1) {
-      // Not last sector: link to next, write 254 data bytes
-      var nextSec = sectorList[si + 1];
+    if (si < fileSectors.length - 1) {
+      var nextSec = fileSectors[si + 1];
       data[soff] = nextSec.track;
       data[soff + 1] = nextSec.sector;
       for (var b = 2; b < 256; b++) {
         data[soff + b] = dataPos < dataLen ? fileData[dataPos++] : 0x00;
       }
     } else {
-      // Last sector: track=0, byte 1 = offset after last data byte
-      // readFileData reads bytes 2..(byte1-1), so byte1 = dataBytes + 2
       data[soff] = 0x00;
       var bytesInLast = dataLen - dataPos;
       if (bytesInLast <= 0) bytesInLast = 0;
@@ -4704,44 +4687,27 @@ function importFileToDisk(fileName, fileData) {
   }
 
   // Fill directory entry
-  // File type byte: closed (0x80) | type index
   data[entryOff + 2] = 0x80 | typeIdx;
-  // First track/sector of file data
-  data[entryOff + 3] = sectorList[0].track;
-  data[entryOff + 4] = sectorList[0].sector;
+  data[entryOff + 3] = fileSectors[0].track;
+  data[entryOff + 4] = fileSectors[0].sector;
+  for (var ni = 0; ni < 16; ni++) data[entryOff + 5 + ni] = nameBytes[ni];
 
-  // Write filename (strip extension, convert to uppercase PETSCII)
-  var baseName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
-  baseName = baseName.toUpperCase().substring(0, 16);
-  for (var ni = 0; ni < 16; ni++) {
-    if (ni < baseName.length) {
-      var ch = baseName.charCodeAt(ni);
-      // Map printable ASCII to PETSCII (uppercase letters and common symbols)
-      if (ch >= 0x41 && ch <= 0x5A) data[entryOff + 5 + ni] = ch; // A-Z
-      else if (ch >= 0x30 && ch <= 0x39) data[entryOff + 5 + ni] = ch; // 0-9
-      else if (ch === 0x20) data[entryOff + 5 + ni] = 0x20; // space
-      else if (ch === 0x2D) data[entryOff + 5 + ni] = 0x2D; // hyphen
-      else if (ch === 0x2E) data[entryOff + 5 + ni] = 0x2E; // dot
-      else if (ch === 0x21) data[entryOff + 5 + ni] = 0x21; // !
-      else if (ch === 0x23) data[entryOff + 5 + ni] = 0x23; // #
-      else if (ch === 0x24) data[entryOff + 5 + ni] = 0x24; // $
-      else if (ch === 0x25) data[entryOff + 5 + ni] = 0x25; // %
-      else if (ch === 0x26) data[entryOff + 5 + ni] = 0x26; // &
-      else if (ch === 0x28) data[entryOff + 5 + ni] = 0x28; // (
-      else if (ch === 0x29) data[entryOff + 5 + ni] = 0x29; // )
-      else data[entryOff + 5 + ni] = 0x20; // fallback to space
-    } else {
-      data[entryOff + 5 + ni] = 0xA0; // pad with shifted space
+  // GEOS metadata (bytes 21-29) or zeroed
+  if (geosData && geosData.geosBytes) {
+    for (var gi = 0; gi < 9; gi++) data[entryOff + 21 + gi] = geosData.geosBytes[gi];
+    // Update info block T/S to point to the newly allocated sector
+    if (infoSec) {
+      data[entryOff + 0x15] = infoSec.track;
+      data[entryOff + 0x16] = infoSec.sector;
     }
+  } else {
+    for (var ui = 21; ui < 30; ui++) data[entryOff + ui] = 0x00;
   }
 
-  // Clear unused bytes (side sectors, GEOS fields)
-  for (var ui = 21; ui < 30; ui++) data[entryOff + ui] = 0x00;
-  // Block count
-  data[entryOff + 30] = numSectors & 0xFF;
-  data[entryOff + 31] = (numSectors >> 8) & 0xFF;
+  data[entryOff + 30] = fileSectors.length & 0xFF;
+  data[entryOff + 31] = (fileSectors.length >> 8) & 0xFF;
 
-  // Update BAM: mark our allocated sectors as used
+  // Update BAM for all sectors (file data + info block)
   var ctx = getDirContext();
   var bamOff = ctx.bamOff;
   for (var bi = 0; bi < sectorList.length; bi++) {
@@ -4750,32 +4716,62 @@ function importFileToDisk(fileName, fileData) {
 
   // Verify the write by reading back the file data
   var verify = readFileData(currentBuffer, entryOff);
-  if (verify.error) {
+  if (verify.error || verify.data.length !== fileData.length) {
     currentBuffer = snapshot;
-    errors.push('Verification failed: ' + verify.error);
-    showModal('Import Error', errors);
-    return;
-  }
-  if (verify.data.length !== fileData.length) {
-    currentBuffer = snapshot;
-    errors.push('Verification failed: read back ' + verify.data.length + ' bytes, expected ' + fileData.length + '.');
-    showModal('Import Error', errors);
-    return;
+    showModal('Write Error', ['Verification failed: ' + (verify.error || 'size mismatch')]);
+    return false;
   }
   for (var vi = 0; vi < fileData.length; vi++) {
     if (verify.data[vi] !== fileData[vi]) {
       currentBuffer = snapshot;
-      errors.push('Verification failed: data mismatch at byte ' + vi + '.');
-      showModal('Import Error', errors);
-      return;
+      showModal('Write Error', ['Verification failed: data mismatch at byte ' + vi + '.']);
+      return false;
     }
   }
 
-  // Success — refresh display
   selectedEntryIndex = entryOff;
-  var info = parseCurrentDir(currentBuffer);
-  renderDisk(info);
-  showModal('Import Successful', ['File "' + baseName + '" imported successfully.', numSectors + ' block(s) written.']);
+  return true;
+}
+
+// Convert ASCII filename to 16-byte PETSCII name padded with $A0
+function asciiToNameBytes(name) {
+  var bytes = new Uint8Array(16);
+  name = name.toUpperCase().substring(0, 16);
+  for (var i = 0; i < 16; i++) {
+    if (i < name.length) {
+      var ch = name.charCodeAt(i);
+      if (ch >= 0x41 && ch <= 0x5A) bytes[i] = ch;
+      else if (ch >= 0x30 && ch <= 0x39) bytes[i] = ch;
+      else if (ch === 0x20) bytes[i] = 0x20;
+      else if (ch >= 0x21 && ch <= 0x3F) bytes[i] = ch;
+      else bytes[i] = 0x20;
+    } else {
+      bytes[i] = 0xA0;
+    }
+  }
+  return bytes;
+}
+
+function importFileToDisk(fileName, fileData) {
+  var dotIdx = fileName.lastIndexOf('.');
+  var ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1).toLowerCase() : '';
+  var typeMap = { prg: 2, seq: 1, usr: 3, rel: 4 };
+  var typeIdx = typeMap[ext];
+  if (typeIdx === undefined) {
+    showModal('Import Error', ['Unsupported file type: .' + ext]);
+    return;
+  }
+
+  var baseName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
+  var nameBytes = asciiToNameBytes(baseName);
+
+  if (writeFileToDisk(typeIdx, nameBytes, fileData)) {
+    var info = parseCurrentDir(currentBuffer);
+    renderDisk(info);
+    var numSectors = fileData.length === 0 ? 1 : Math.ceil(fileData.length / 254);
+    if (fileData.length > 0 && fileData.length % 254 === 0) numSectors++;
+    showModal('Import Successful', ['"' + baseName.toUpperCase() + '" imported successfully.', numSectors + ' block(s) written.']);
+  }
 }
 
 // Find a free directory entry (typeByte === 0x00 with all entry bytes zeroed)
@@ -4868,14 +4864,19 @@ document.querySelectorAll('#opt-change-type .submenu .option').forEach(el => {
 fileInput.addEventListener('change', () => {
   const file = fileInput.files[0];
   if (!file) return;
-  currentFileName = file.name;
-  currentPartition = null;
   const reader = new FileReader();
   reader.onload = () => {
     try {
+      saveActiveTab();
       currentBuffer = reader.result;
-      const info = parseCurrentDir(currentBuffer);
+      currentFileName = file.name;
+      currentPartition = null;
+      selectedEntryIndex = -1;
+      const info = parseDisk(currentBuffer);
+      var tab = createTab(file.name, currentBuffer, file.name);
+      activeTabId = tab.id;
       renderDisk(info);
+      renderTabs();
       updateMenuState();
     } catch (err) {
       showModal('Error', ['Error reading disk image: ' + err.message]);
