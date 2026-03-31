@@ -709,14 +709,28 @@ function updateEntryMenuState() {
   document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection);
   // Export: enabled when selected file is PRG, SEQ, USR or REL (types 1-4)
   var exportEnabled = false;
+  var basicEnabled = false;
   if (hasSelection) {
     var edata = new Uint8Array(currentBuffer);
     var eType = edata[selectedEntryIndex + 2];
     var eClosed = (eType & 0x80) !== 0;
     var eIdx = eType & 0x07;
     exportEnabled = eClosed && eIdx >= 1 && eIdx <= 4;
+    // BASIC: PRG file — check first 2 bytes (load address) from first data sector
+    if (eClosed && eIdx === 2) {
+      var ft = edata[selectedEntryIndex + 3];
+      var fs = edata[selectedEntryIndex + 4];
+      if (ft > 0) {
+        var foff = sectorOffset(ft, fs);
+        if (foff >= 0) {
+          var addr = edata[foff + 2] | (edata[foff + 3] << 8); // first 2 data bytes
+          basicEnabled = BASIC_LOAD_ADDRS[addr] !== undefined;
+        }
+      }
+    }
   }
   document.getElementById('opt-export').classList.toggle('disabled', !exportEnabled);
+  document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
   document.getElementById('opt-import').classList.toggle('disabled', !currentBuffer || !canInsertFile());
   document.getElementById('opt-add-partition').classList.toggle('disabled', inPartition || !currentBuffer || currentFormat !== DISK_FORMATS.d81 || !canInsertFile());
   document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection);
@@ -2054,6 +2068,264 @@ document.getElementById('opt-picker-stick').addEventListener('click', (e) => {
   document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i class="fa-solid fa-check"></i>' : '';
 });
 
+// ── BASIC detokenizer ─────────────────────────────────────────────────
+// BASIC V2 tokens ($80-$CB) — C64, VIC-20, C128 (shared base)
+var BASIC_V2_TOKENS = [
+  'END','FOR','NEXT','DATA','INPUT#','INPUT','DIM','READ',       // $80-$87
+  'LET','GOTO','RUN','IF','RESTORE','GOSUB','RETURN','REM',      // $88-$8F
+  'STOP','ON','WAIT','LOAD','SAVE','VERIFY','DEF','POKE',        // $90-$97
+  'PRINT#','PRINT','CONT','LIST','CLR','CMD','SYS','OPEN',       // $98-$9F
+  'CLOSE','GET','NEW','TAB(','TO','FN','SPC(','THEN',             // $A0-$A7
+  'NOT','STEP','+','-','*','/','^','AND',                         // $A8-$AF
+  'OR','>','=','<','SGN','INT','ABS','USR',                       // $B0-$B7
+  'FRE','POS','SQR','RND','LOG','EXP','COS','SIN',               // $B8-$BF
+  'TAN','ATN','PEEK','LEN','STR$','VAL','ASC','CHR$',            // $C0-$C7
+  'LEFT$','RIGHT$','MID$','GO'                                    // $C8-$CB
+];
+
+// BASIC V7 extended single-byte tokens ($CC-$FD) — C128
+var BASIC_V7_TOKENS = [
+  'RGR','RCLR',                                                   // $CC-$CD
+  null,                                                            // $CE = prefix
+  'JOY','RDOT','DEC','HEX$','ERR$','INSTR',                      // $CF-$D4
+  'ELSE','RESUME','TRAP','TRON','TROFF','SOUND',                  // $D5-$DA
+  'VOL','AUTO','PUDEF','GRAPHIC','PAINT','CHAR',                  // $DB-$E0
+  'BOX','CIRCLE','GSHAPE','SSHAPE','DRAW','LOCATE',              // $E1-$E6
+  'COLOR','SCNCLR','SCALE','HELP','DO','LOOP',                   // $E7-$EC
+  'EXIT','DIRECTORY','DSAVE','DLOAD','HEADER','SCRATCH',          // $ED-$F2
+  'COLLECT','COPY','RENAME','BACKUP','DELETE','RENUMBER',         // $F3-$F8
+  'KEY','MONITOR','USING','UNTIL','WHILE',                        // $F9-$FD
+  null                                                             // $FE = prefix
+];
+
+// BASIC V7 $CE prefix tokens (functions)
+var BASIC_V7_CE_TOKENS = {
+  0x02: 'POT', 0x03: 'BUMP', 0x04: 'PEN', 0x05: 'RSPPOS',
+  0x06: 'RSPRITE', 0x07: 'RCOLOR', 0x08: 'XOR', 0x09: 'RWINDOW',
+  0x0A: 'POINTER'
+};
+
+// BASIC V7 $FE prefix tokens (commands)
+var BASIC_V7_FE_TOKENS = {
+  0x02: 'BANK', 0x03: 'FILTER', 0x04: 'PLAY', 0x05: 'TEMPO',
+  0x06: 'MOVSPR', 0x07: 'SPRITE', 0x08: 'SPRCOLOR', 0x09: 'RREG',
+  0x0A: 'ENVELOPE', 0x0B: 'SLEEP', 0x0C: 'CATALOG', 0x0D: 'DOPEN',
+  0x0E: 'APPEND', 0x0F: 'DCLOSE', 0x10: 'BSAVE', 0x11: 'BLOAD',
+  0x12: 'RECORD', 0x13: 'CONCAT', 0x14: 'DVERIFY', 0x15: 'DCLEAR',
+  0x16: 'SPRSAV', 0x17: 'COLLISION', 0x18: 'BEGIN', 0x19: 'BEND',
+  0x1A: 'WINDOW', 0x1B: 'BOOT', 0x1C: 'WIDTH', 0x1D: 'SPRDEF',
+  0x1E: 'QUIT', 0x1F: 'STASH', 0x21: 'FETCH', 0x23: 'SWAP',
+  0x24: 'OFF', 0x25: 'FAST', 0x26: 'SLOW'
+};
+
+// Known BASIC load addresses → version
+var BASIC_LOAD_ADDRS = {
+  0x0401: 'V2',   // VIC-20 unexpanded
+  0x0801: 'V2',   // C64
+  0x1001: 'V2',   // VIC-20 +8K, C16/Plus4
+  0x1201: 'V2',   // VIC-20 +16K
+  0x1C01: 'V7'    // C128
+};
+
+// Control code names for display in strings/REM
+var PETSCII_CTRL_NAMES = {
+  0x03: 'stop', 0x05: 'wht', 0x07: 'bell', 0x0A: 'lf', 0x0D: 'cr',
+  0x0E: 'lower', 0x11: 'down', 0x12: 'rvon', 0x13: 'home',
+  0x14: 'del', 0x1C: 'red', 0x1D: 'right', 0x1E: 'grn', 0x1F: 'blu',
+  0x81: 'orng', 0x8E: 'upper', 0x90: 'blk', 0x91: 'up',
+  0x92: 'rvof', 0x93: 'clr', 0x95: 'brn', 0x96: 'lred',
+  0x97: 'dgry', 0x98: 'mgry', 0x99: 'lgrn', 0x9A: 'lblu',
+  0x9B: 'lgry', 0x9C: 'pur', 0x9D: 'left', 0x9E: 'yel', 0x9F: 'cyn'
+};
+
+// Check if file data looks like a BASIC program
+function isBasicProgram(fileData) {
+  if (!fileData || fileData.length < 6) return false;
+  var addr = fileData[0] | (fileData[1] << 8);
+  return BASIC_LOAD_ADDRS[addr] !== undefined;
+}
+
+function emitLiteral(parts, b, type) {
+  if (b >= 0x20 && b <= 0x7E) {
+    parts.push({ type: type, text: String.fromCharCode(b) });
+  } else if (PETSCII_CTRL_NAMES[b]) {
+    parts.push({ type: 'ctrl', text: '{' + PETSCII_CTRL_NAMES[b] + '}' });
+  } else if (b >= 0xA0 || (b >= 0x01 && b <= 0x1F)) {
+    parts.push({ type: type, text: PETSCII_MAP[b] || '?' });
+  } else {
+    parts.push({ type: 'ctrl', text: '{$' + b.toString(16).toUpperCase().padStart(2, '0') + '}' });
+  }
+}
+
+function detokenizeBasic(fileData) {
+  if (fileData.length < 4) return null;
+
+  var loadAddr = fileData[0] | (fileData[1] << 8);
+  var version = BASIC_LOAD_ADDRS[loadAddr] || 'V2';
+  var isV7 = version === 'V7';
+  var lines = [];
+  var pos = 2;
+
+  while (pos < fileData.length - 1) {
+    var nextPtr = fileData[pos] | (fileData[pos + 1] << 8);
+    if (nextPtr === 0) break;
+
+    var lineNum = fileData[pos + 2] | (fileData[pos + 3] << 8);
+    pos += 4;
+
+    var parts = [];
+    var inQuotes = false;
+    var inRem = false;
+    var inData = false;
+
+    while (pos < fileData.length && fileData[pos] !== 0x00) {
+      var b = fileData[pos];
+
+      // Inside REM: everything is literal
+      if (inRem) {
+        emitLiteral(parts, b, 'rem');
+        pos++;
+        continue;
+      }
+
+      // Quote toggle
+      if (b === 0x22) {
+        inQuotes = !inQuotes;
+        parts.push({ type: 'string', text: '"' });
+        pos++;
+        continue;
+      }
+
+      // Inside quotes or DATA: literal characters
+      if (inQuotes) {
+        emitLiteral(parts, b, 'string');
+        pos++;
+        continue;
+      }
+
+      // Colon ends DATA mode
+      if (inData && b === 0x3A) inData = false;
+
+      // Inside DATA values: treat as literal (no token expansion)
+      if (inData) {
+        emitLiteral(parts, b, 'text');
+        pos++;
+        continue;
+      }
+
+      // V7 prefix tokens
+      if (isV7 && b === 0xCE && pos + 1 < fileData.length) {
+        var ceToken = BASIC_V7_CE_TOKENS[fileData[pos + 1]];
+        if (ceToken) {
+          parts.push({ type: 'keyword', text: ceToken });
+          pos += 2;
+          continue;
+        }
+      }
+      if (isV7 && b === 0xFE && pos + 1 < fileData.length) {
+        var feToken = BASIC_V7_FE_TOKENS[fileData[pos + 1]];
+        if (feToken) {
+          parts.push({ type: 'keyword', text: feToken });
+          pos += 2;
+          continue;
+        }
+      }
+
+      // V7 single-byte extended tokens ($CC-$FD)
+      if (isV7 && b >= 0xCC && b <= 0xFD) {
+        var v7kw = BASIC_V7_TOKENS[b - 0xCC];
+        if (v7kw) {
+          parts.push({ type: 'keyword', text: v7kw });
+          pos++;
+          continue;
+        }
+      }
+
+      // V2 tokens ($80-$CB)
+      if (b >= 0x80 && b <= 0xCB) {
+        var keyword = BASIC_V2_TOKENS[b - 0x80];
+        parts.push({ type: 'keyword', text: keyword });
+        if (keyword === 'REM') inRem = true;
+        if (keyword === 'DATA') inData = true;
+        pos++;
+        continue;
+      }
+
+      // Literal character
+      if (b >= 0x20 && b <= 0x7E) {
+        parts.push({ type: 'text', text: String.fromCharCode(b) });
+      } else {
+        parts.push({ type: 'ctrl', text: '{$' + b.toString(16).toUpperCase().padStart(2, '0') + '}' });
+      }
+      pos++;
+    }
+
+    if (pos < fileData.length) pos++;
+    lines.push({ lineNum: lineNum, parts: parts });
+  }
+
+  return { loadAddr: loadAddr, version: version, lines: lines };
+}
+
+function showFileBasicViewer(entryOff) {
+  if (!currentBuffer) return;
+  var data = new Uint8Array(currentBuffer);
+  var result = readFileData(currentBuffer, entryOff);
+  var fileData = result.data;
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+
+  var basic = detokenizeBasic(fileData);
+  if (!basic || basic.lines.length === 0) {
+    showModal('BASIC View', ['Not a valid BASIC program or empty file.']);
+    return;
+  }
+
+  var html = '<div class="basic-listing">';
+  for (var li = 0; li < basic.lines.length; li++) {
+    var line = basic.lines[li];
+    html += '<div class="basic-line">';
+    html += '<span class="basic-linenum">' + line.lineNum + ' </span>';
+    for (var pi = 0; pi < line.parts.length; pi++) {
+      var part = line.parts[pi];
+      switch (part.type) {
+        case 'keyword':
+          html += '<span class="basic-keyword">' + escHtml(part.text) + '</span>';
+          break;
+        case 'string':
+          html += '<span class="basic-string">' + escHtml(part.text) + '</span>';
+          break;
+        case 'rem':
+          html += '<span class="basic-rem">' + escHtml(part.text) + '</span>';
+          break;
+        case 'ctrl':
+          html += '<span class="basic-ctrl">' + escHtml(part.text) + '</span>';
+          break;
+        default:
+          html += escHtml(part.text);
+          break;
+      }
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+
+  var versionLabel = basic.version === 'V7' ? 'BASIC V7 (C128)' : 'BASIC V2';
+  var titleText = versionLabel + ' \u2014 "' + name + '" (load: $' +
+    basic.loadAddr.toString(16).toUpperCase().padStart(4, '0') + ')';
+  if (result.error) titleText += ' \u2014 ' + result.error;
+
+  document.getElementById('modal-title').textContent = titleText;
+  var body = document.getElementById('modal-body');
+  body.innerHTML = html;
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
 // ── C64 screen renderer (CHROUT $FFD2 simulation) ────────────────────
 // Pepto's VIC-II palette (https://www.pepto.de/projects/colorvic/2001/)
 var C64_COLORS = [
@@ -2654,6 +2926,13 @@ document.getElementById('opt-view-petscii').addEventListener('click', function(e
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
   showFilePetsciiViewer(selectedEntryIndex);
+});
+
+document.getElementById('opt-view-basic').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  showFileBasicViewer(selectedEntryIndex);
 });
 
 document.getElementById('opt-edit-free').addEventListener('click', (e) => {

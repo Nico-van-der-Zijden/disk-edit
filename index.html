@@ -907,6 +907,25 @@
     width: 1ch;
   }
 
+  .basic-listing {
+    font-family: 'C64 Pro Mono', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    max-height: 450px;
+    overflow-y: auto;
+    background: #352879;
+    color: #6C5EB5;
+    padding: 10px 12px;
+    border-radius: 4px;
+  }
+
+  .basic-line { white-space: pre-wrap; word-break: break-all; }
+  .basic-linenum { color: #6C5EB5; }
+  .basic-keyword { color: #6C5EB5; }
+  .basic-string { color: #588D43; }
+  .basic-rem { color: #6C6C6C; }
+  .basic-ctrl { color: #9A6759; font-family: inherit; font-size: 10px; }
+
   .hex-editor {
     font-family: 'C64 Pro Mono', "Cascadia Code", "Consolas", monospace;
     font-size: 13px;
@@ -1395,6 +1414,7 @@
         <div class="submenu">
           <div class="option" id="opt-view-hex">Hex</div>
           <div class="option" id="opt-view-petscii">PETSCII</div>
+          <div class="option" id="opt-view-basic">BASIC</div>
         </div>
       </div>
       <div class="separator"></div>
