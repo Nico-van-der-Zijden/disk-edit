@@ -22,6 +22,7 @@ const DISK_FORMATS = {
     entriesPerSector: 8,
     entrySize: 32,
     doubleSidedFlag: 0x00,
+    fileTypes: [0, 1, 2, 3, 4],  // DEL, SEQ, PRG, USR, REL
     sizes: [
       { tracks: 35, bytes: 174848, label: '35 Tracks' },
       { tracks: 35, bytes: 175531, label: '35 Tracks + Errors' },
@@ -118,6 +119,7 @@ const DISK_FORMATS = {
     entriesPerSector: 8,
     entrySize: 32,
     doubleSidedFlag: 0x80,
+    fileTypes: [0, 1, 2, 3, 4],  // DEL, SEQ, PRG, USR, REL
     sizes: [
       { tracks: 70, bytes: 349696, label: '70 Tracks' },
       { tracks: 70, bytes: 351062, label: '70 Tracks + Errors' },
@@ -266,6 +268,7 @@ const DISK_FORMATS = {
     entriesPerSector: 8,
     entrySize: 32,
     doubleSidedFlag: 0x00,
+    fileTypes: [0, 1, 2, 3, 4, 5],  // DEL, SEQ, PRG, USR, REL, CBM
     sizes: [
       { tracks: 80, bytes: 819200, label: '80 Tracks' },
       { tracks: 80, bytes: 822400, label: '80 Tracks + Errors' },

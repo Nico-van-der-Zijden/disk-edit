@@ -176,6 +176,7 @@
     top: 0;
     left: 0;
     z-index: 200;
+    font-size: 13px;
   }
 
   .spacer { flex: 1; }
@@ -664,12 +665,6 @@
     opacity: 0.6;
   }
 
-  .dir-footer-status {
-    font-size: 11px;
-    opacity: 0.6;
-    justify-content: flex-end;
-  }
-
   .dir-footer-ts {
     flex-shrink: 0;
   }
@@ -948,8 +943,6 @@
     font-family: 'C64 Pro Mono', monospace;
     font-size: 12px;
     line-height: 1;
-    overflow: auto;
-    max-height: 450px;
   }
 
   .c64-screen-row {
@@ -966,8 +959,6 @@
     font-family: 'C64 Pro Mono', monospace;
     font-size: 13px;
     line-height: 1.6;
-    max-height: 450px;
-    overflow-y: auto;
     background: #352879;
     color: #6C5EB5;
     padding: 10px 12px;
@@ -980,6 +971,15 @@
   .basic-string { color: #588D43; }
   .basic-rem { color: #6C6C6C; }
   .basic-ctrl { color: #9A6759; font-family: inherit; font-size: 10px; }
+
+  .gfx-canvas {
+    display: block;
+    margin: 0 auto;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border: 1px solid var(--border);
+    max-width: 100%;
+  }
 
   .hex-editor {
     font-family: 'C64 Pro Mono', "Cascadia Code", "Consolas", monospace;
@@ -1411,6 +1411,7 @@
           <div class="option" id="opt-view-hex">Hex</div>
           <div class="option" id="opt-view-petscii">PETSCII</div>
           <div class="option" id="opt-view-basic">BASIC</div>
+          <div class="option disabled" id="opt-view-gfx">Graphics</div>
         </div>
       </div>
       <div class="separator"></div>
@@ -1453,7 +1454,7 @@
   <div class="theme-toggle" id="theme-toggle" title="Toggle theme"></div>
 </div>
 
-<input type="file" id="file-input" accept=".d64,.d71,.d81">
+<input type="file" id="file-input" accept=".d64,.d71,.d81" multiple>
 
 <div class="tab-bar" id="tab-bar"></div>
 

@@ -249,9 +249,7 @@ function renderDisk(info) {
           <span class="dir-footer-blocks">${info.freeBlocks}</span>
           <span class="dir-footer-label">blocks free.</span>
           <span class="dir-footer-ts" id="footer-ts"></span>
-        </div>
-        <div class="dir-footer-row dir-footer-status">
-          <span class="dir-footer-tracks">${currentFileName ? escHtml(currentFileName) + ' | ' : ''}${currentFormat.name} ${currentTracks} tracks</span>
+          <span class="dir-footer-tracks">${currentFormat.name} ${currentTracks} tracks</span>
         </div>
       </div>
     </div>`;
@@ -520,10 +518,15 @@ function showContextMenu(x, y) {
   contextMenu.style.left = x + 'px';
   contextMenu.style.top = y + 'px';
 
-  // Adjust if off-screen
+  // Adjust if off-screen, clamp to viewport
   var rect = contextMenu.getBoundingClientRect();
-  if (rect.right > window.innerWidth) contextMenu.style.left = (x - rect.width) + 'px';
-  if (rect.bottom > window.innerHeight) contextMenu.style.top = (y - rect.height) + 'px';
+  var newX = x, newY = y;
+  if (rect.right > window.innerWidth) newX = Math.max(0, x - rect.width);
+  if (rect.bottom > window.innerHeight) newY = Math.max(0, y - rect.height);
+  if (newX < 0) newX = 0;
+  if (newY < 0) newY = 0;
+  contextMenu.style.left = newX + 'px';
+  contextMenu.style.top = newY + 'px';
 }
 
 // Delegate clicks from context menu to the real menu items
@@ -707,12 +710,19 @@ function updateEntryMenuState() {
   document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection);
+  // Disable file types not supported by the current format
+  var supportedTypes = currentFormat.fileTypes || [0, 1, 2, 3, 4];
+  for (var ti = 0; ti <= 5; ti++) {
+    var typeEl = document.querySelector('[data-typeidx="' + ti + '"]');
+    if (typeEl) typeEl.classList.toggle('disabled', supportedTypes.indexOf(ti) < 0);
+  }
   document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection);
   // Copy: enabled for closed file types 1-4 (same as export)
   // Paste: enabled when clipboard has data and disk has room
   var exportEnabled = false;
   var copyEnabled = false;
   var basicEnabled = false;
+  var gfxEnabled = false;
   if (hasSelection) {
     var edata = new Uint8Array(currentBuffer);
     var eType = edata[selectedEntryIndex + 2];
@@ -729,6 +739,9 @@ function updateEntryMenuState() {
         if (foff >= 0) {
           var addr = edata[foff + 2] | (edata[foff + 3] << 8); // first 2 data bytes
           basicEnabled = BASIC_LOAD_ADDRS[addr] !== undefined;
+          // Graphics: check if block count suggests a graphics file size
+          var blocks = edata[selectedEntryIndex + 30] | (edata[selectedEntryIndex + 31] << 8);
+          gfxEnabled = couldBeGfx(blocks * 254);
         }
       }
     }
@@ -737,6 +750,7 @@ function updateEntryMenuState() {
   document.getElementById('opt-copy').classList.toggle('disabled', !copyEnabled);
   document.getElementById('opt-paste').classList.toggle('disabled', !clipboard || !currentBuffer || !canInsertFile());
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
+  document.getElementById('opt-view-gfx').classList.toggle('disabled', !gfxEnabled);
   document.getElementById('opt-import').classList.toggle('disabled', !currentBuffer || !canInsertFile());
   document.getElementById('opt-add-partition').classList.toggle('disabled', inPartition || !currentBuffer || currentFormat !== DISK_FORMATS.d81 || !canInsertFile());
   document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection);
@@ -955,7 +969,7 @@ function renderTabs() {
   for (var i = 0; i < tabs.length; i++) {
     var t = tabs[i];
     html += '<div class="tab' + (t.id === activeTabId ? ' active' : '') + '" data-tab-id="' + t.id + '">' +
-      '<span class="tab-name">' + escHtml(t.name) + '</span>' +
+      '<span class="tab-name" title="' + escHtml(t.name) + '">' + escHtml(t.name) + '</span>' +
       '<span class="tab-close" data-tab-close="' + t.id + '"><i class="fa-solid fa-xmark"></i></span>' +
     '</div>';
   }
@@ -1084,8 +1098,6 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
   body.appendChild(summary);
 
   var list = document.createElement('div');
-  list.style.maxHeight = '400px';
-  list.style.overflowY = 'auto';
 
   for (var ri = 0; ri < results.length; ri++) {
     (function(r, idx) {
@@ -1971,6 +1983,383 @@ document.getElementById('opt-picker-stick').addEventListener('click', (e) => {
   document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i class="fa-solid fa-check"></i>' : '';
 });
 
+// ── C64 color palette ─────────────────────────────────────────────────
+// Pepto's VIC-II palette (https://www.pepto.de/projects/colorvic/2001/)
+var C64_COLORS = [
+  '#000000', '#FFFFFF', '#683726', '#70A4B2', '#6F3D86', '#588D43',
+  '#352879', '#B8C76F', '#6F4F25', '#433900', '#9A6759', '#444444',
+  '#6C6C6C', '#9AD284', '#6C5EB5', '#959595'
+];
+
+// ── C64 Graphics format viewer ────────────────────────────────────────
+
+// Known formats: exact match by load address + file size
+var GFX_FORMATS = [
+  // Multicolor — Koala-style layout (bm+scr+col+bg) at specific addresses
+  { name: 'Koala Painter', addr: 0x6000, size: 10003, mode: 'mc', layout: 'koala' },
+  { name: 'Gun Paint', addr: 0x4000, size: 10003, mode: 'mc', layout: 'koala' },
+  { name: 'Zoomatic', addr: 0x5800, size: 10003, mode: 'mc', layout: 'koala' },
+  { name: 'Micro Illustrator', addr: 0x1800, size: 10003, mode: 'mc', layout: 'koala' },
+  { name: 'Amica Paint', addr: 0x4000, size: 10018, mode: 'mc', layout: 'koala' },
+  // Multicolor — other layouts
+  { name: 'Drazpaint', addr: 0x5800, size: 10051, mode: 'mc', layout: 'drp' },
+  { name: 'Vidcom 64', addr: 0x5800, size: 10050, mode: 'mc', layout: 'vidcom' },
+  // Hires — bitmap+screen layout
+  { name: 'Art Studio', addr: 0x2000, size: 9009, mode: 'hires', layout: 'bmscr' },
+  { name: 'Hires Manager', addr: 0x4000, size: 9002, mode: 'hires', layout: 'bmscr' },
+  { name: 'Blazing Paddles', addr: 0xA000, size: 10242, mode: 'hires', layout: 'bmscr' },
+  { name: 'Face Painter', addr: 0x6000, size: 9332, mode: 'hires', layout: 'bmscr' },
+  // Hires — screen+bitmap layout (Doodle-style)
+  { name: 'Doodle', addr: 0x5C00, size: 9218, mode: 'hires', layout: 'scrbm' },
+  { name: 'Artist 64', addr: 0x2000, size: 9218, mode: 'hires', layout: 'scrbm' },
+  // FLI
+  { name: 'FLI (Blackmail)', addr: 0x3C00, size: 17409, mode: 'fli', layout: 'fli' },
+  { name: 'FLI Graph 2.2', addr: 0x3C00, size: 17474, mode: 'fli', layout: 'fli' },
+  { name: 'AFLI', addr: 0x4000, size: 16386, mode: 'afli', layout: 'afli' },
+  // Interlaced
+  { name: 'Drazlace', addr: 0x5800, size: 18242, mode: 'mc', layout: 'drazlace' },
+  { name: 'ECI', addr: 0x4000, size: 32770, mode: 'fli', layout: 'eci' },
+];
+
+// Layout parsers — reusable for both exact and generic detection
+var GFX_PARSERS = {
+  koala: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002), col: d.subarray(9002, 10002), bg: d[10002] }; },
+  drp: function(d) { return { col: d.subarray(2, 1002), bg: d[1002], bm: d.subarray(1026, 9026), scr: d.subarray(9026, 10026), rowBg: d.subarray(10026, 10051) }; },
+  vidcom: function(d) { return { scr: d.subarray(2, 1002), bm: d.subarray(1026, 9026), col: d.subarray(9026, 10026), bg: d[10050] }; },
+  bmscr: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002) }; },
+  scrbm: function(d) { return { scr: d.subarray(2, 1026), bm: d.subarray(1026, 9218) }; },
+  fli: function(d) { return { col: d.subarray(2, 1026), scrBanks: d.subarray(1026, 9218), bm: d.subarray(9218, 17410), bg: d[17410] || 0 }; },
+  afli: function(d) { return { scrBanks: d.subarray(2, 8194), bm: d.subarray(8194, 16386) }; },
+  drazlace: function(d) { return { col: d.subarray(2, 1002), bg: d[1002], bm: d.subarray(1026, 9026), scr: d.subarray(9026, 10026), rowBg: d.subarray(10026, 10051) }; },
+  eci: function(d) { return { col: d.subarray(2, 1026), scrBanks: d.subarray(1026, 9218), bm: d.subarray(9218, 17410), bg: 0 }; },
+  printshop: function(d) {
+    var bmData = d.subarray(2);
+    var bpr = 11; // 11 bytes = 88 pixels wide
+    var h = Math.floor(bmData.length / bpr);
+    return { bm: bmData, width: 88, height: h, bytesPerRow: bpr };
+  },
+};
+
+// Detect all matching formats for a file (returns array of { name, mode, layout })
+function detectGfxFormats(fileData) {
+  if (!fileData || fileData.length < 4) return [];
+  var addr = fileData[0] | (fileData[1] << 8);
+  var size = fileData.length;
+  var matches = [];
+
+  // 1. Exact matches (address + size)
+  for (var i = 0; i < GFX_FORMATS.length; i++) {
+    if (GFX_FORMATS[i].addr === addr && GFX_FORMATS[i].size === size) {
+      matches.push(GFX_FORMATS[i]);
+    }
+  }
+
+  // 2. Generic layout detection by size (any load address)
+  if (matches.length === 0) {
+    if (size === 10003) {
+      matches.push({ name: 'Multicolor (Koala-style)', addr: addr, size: size, mode: 'mc', layout: 'koala' });
+    } else if (size >= 10002 && size <= 10018) {
+      matches.push({ name: 'Multicolor', addr: addr, size: size, mode: 'mc', layout: 'koala' });
+    } else if (size === 9009 || size === 9002) {
+      matches.push({ name: 'Hires (Art Studio-style)', addr: addr, size: size, mode: 'hires', layout: 'bmscr' });
+    } else if (size === 9218) {
+      // Could be either layout — try both
+      matches.push({ name: 'Hires (Doodle-style)', addr: addr, size: size, mode: 'hires', layout: 'scrbm' });
+      matches.push({ name: 'Hires (bitmap+screen)', addr: addr, size: size, mode: 'hires', layout: 'bmscr' });
+    } else if (size === 17409 || size === 17474) {
+      matches.push({ name: 'Multicolor FLI', addr: addr, size: size, mode: 'fli', layout: 'fli' });
+    } else if (size === 16386) {
+      matches.push({ name: 'Hires FLI (AFLI)', addr: addr, size: size, mode: 'afli', layout: 'afli' });
+    } else if (size === 10051) {
+      matches.push({ name: 'Multicolor (Drazpaint-style)', addr: addr, size: size, mode: 'mc', layout: 'drp' });
+    }
+
+    // Print Shop: small files at common load addresses with bitmap-like data
+    if (matches.length === 0 && size >= 13 && size <= 1500) {
+      matches.push({ name: 'Print Shop', addr: addr, size: size, mode: 'printshop', layout: 'printshop' });
+    }
+  }
+
+  return matches;
+}
+
+// Quick check: could this file size be a graphics format?
+function couldBeGfx(fileSize) {
+  return fileSize >= 10 && fileSize <= 34000;
+}
+
+// Parse C64_COLORS hex to [r,g,b] arrays for canvas
+var C64_RGB = C64_COLORS.map(function(hex) {
+  return [parseInt(hex.substr(1,2),16), parseInt(hex.substr(3,2),16), parseInt(hex.substr(5,2),16)];
+});
+
+function renderC64Multicolor(ctx, gfx) {
+  var img = ctx.createImageData(320, 200);
+  var px = img.data;
+  var bg = C64_RGB[gfx.bg & 0x0F];
+
+  for (var cellRow = 0; cellRow < 25; cellRow++) {
+    for (var cellCol = 0; cellCol < 40; cellCol++) {
+      var cellIdx = cellRow * 40 + cellCol;
+      var scrHi = (gfx.scr[cellIdx] >> 4) & 0x0F;
+      var scrLo = gfx.scr[cellIdx] & 0x0F;
+      var colLo = gfx.col[cellIdx] & 0x0F;
+      var colors = [bg, C64_RGB[scrHi], C64_RGB[scrLo], C64_RGB[colLo]];
+
+      for (var line = 0; line < 8; line++) {
+        var byt = gfx.bm[cellIdx * 8 + line];
+        var y = cellRow * 8 + line;
+        for (var px2 = 0; px2 < 4; px2++) {
+          var bits = (byt >> (6 - px2 * 2)) & 3;
+          var rgb = colors[bits];
+          var x = cellCol * 8 + px2 * 2;
+          var off = (y * 320 + x) * 4;
+          px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2]; px[off+3] = 255;
+          px[off+4] = rgb[0]; px[off+5] = rgb[1]; px[off+6] = rgb[2]; px[off+7] = 255;
+        }
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function renderC64MulticolorDrp(ctx, gfx) {
+  var img = ctx.createImageData(320, 200);
+  var px = img.data;
+
+  for (var cellRow = 0; cellRow < 25; cellRow++) {
+    var rowBg = gfx.rowBg ? C64_RGB[gfx.rowBg[cellRow] & 0x0F] : C64_RGB[gfx.bg & 0x0F];
+    for (var cellCol = 0; cellCol < 40; cellCol++) {
+      var cellIdx = cellRow * 40 + cellCol;
+      var scrHi = (gfx.scr[cellIdx] >> 4) & 0x0F;
+      var scrLo = gfx.scr[cellIdx] & 0x0F;
+      var colLo = gfx.col[cellIdx] & 0x0F;
+      var colors = [rowBg, C64_RGB[scrHi], C64_RGB[scrLo], C64_RGB[colLo]];
+
+      for (var line = 0; line < 8; line++) {
+        var byt = gfx.bm[cellIdx * 8 + line];
+        var y = cellRow * 8 + line;
+        for (var px2 = 0; px2 < 4; px2++) {
+          var bits = (byt >> (6 - px2 * 2)) & 3;
+          var rgb = colors[bits];
+          var x = cellCol * 8 + px2 * 2;
+          var off = (y * 320 + x) * 4;
+          px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2]; px[off+3] = 255;
+          px[off+4] = rgb[0]; px[off+5] = rgb[1]; px[off+6] = rgb[2]; px[off+7] = 255;
+        }
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function renderC64Hires(ctx, gfx) {
+  var img = ctx.createImageData(320, 200);
+  var px = img.data;
+
+  for (var cellRow = 0; cellRow < 25; cellRow++) {
+    for (var cellCol = 0; cellCol < 40; cellCol++) {
+      var cellIdx = cellRow * 40 + cellCol;
+      var fgColor = C64_RGB[(gfx.scr[cellIdx] >> 4) & 0x0F];
+      var bgColor = C64_RGB[gfx.scr[cellIdx] & 0x0F];
+
+      for (var line = 0; line < 8; line++) {
+        var byt = gfx.bm[cellIdx * 8 + line];
+        var y = cellRow * 8 + line;
+        for (var bit = 7; bit >= 0; bit--) {
+          var rgb = (byt & (1 << bit)) ? fgColor : bgColor;
+          var x = cellCol * 8 + (7 - bit);
+          var off = (y * 320 + x) * 4;
+          px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2]; px[off+3] = 255;
+        }
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function renderC64FLI(ctx, gfx) {
+  var img = ctx.createImageData(320, 200);
+  var px = img.data;
+  var bg = C64_RGB[(gfx.bg || 0) & 0x0F];
+
+  for (var cellRow = 0; cellRow < 25; cellRow++) {
+    for (var cellCol = 0; cellCol < 40; cellCol++) {
+      var cellIdx = cellRow * 40 + cellCol;
+      var colLo = gfx.col[cellIdx] & 0x0F;
+
+      for (var line = 0; line < 8; line++) {
+        var scrByte = gfx.scrBanks[line * 1024 + cellIdx];
+        var scrHi = (scrByte >> 4) & 0x0F;
+        var scrLo = scrByte & 0x0F;
+        var colors = [bg, C64_RGB[scrHi], C64_RGB[scrLo], C64_RGB[colLo]];
+
+        // FLI bug: first 3 columns show background
+        if (cellCol < 3) colors = [bg, bg, bg, bg];
+
+        var byt = gfx.bm[cellIdx * 8 + line];
+        var y = cellRow * 8 + line;
+        for (var px2 = 0; px2 < 4; px2++) {
+          var bits = (byt >> (6 - px2 * 2)) & 3;
+          var rgb = colors[bits];
+          var x = cellCol * 8 + px2 * 2;
+          var off = (y * 320 + x) * 4;
+          px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2]; px[off+3] = 255;
+          px[off+4] = rgb[0]; px[off+5] = rgb[1]; px[off+6] = rgb[2]; px[off+7] = 255;
+        }
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function renderC64AFLI(ctx, gfx) {
+  var img = ctx.createImageData(320, 200);
+  var px = img.data;
+
+  for (var cellRow = 0; cellRow < 25; cellRow++) {
+    for (var cellCol = 0; cellCol < 40; cellCol++) {
+      var cellIdx = cellRow * 40 + cellCol;
+
+      for (var line = 0; line < 8; line++) {
+        var scrByte = gfx.scrBanks[line * 1024 + cellIdx];
+        var fgColor = C64_RGB[(scrByte >> 4) & 0x0F];
+        var bgColor = C64_RGB[scrByte & 0x0F];
+
+        if (cellCol < 3) { fgColor = C64_RGB[0]; bgColor = C64_RGB[0]; }
+
+        var byt = gfx.bm[cellIdx * 8 + line];
+        var y = cellRow * 8 + line;
+        for (var bit = 7; bit >= 0; bit--) {
+          var rgb = (byt & (1 << bit)) ? fgColor : bgColor;
+          var x = cellCol * 8 + (7 - bit);
+          var off = (y * 320 + x) * 4;
+          px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2]; px[off+3] = 255;
+        }
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function renderC64PrintShop(ctx, gfx) {
+  var w = gfx.width || 88;
+  var h = gfx.height || 52;
+  var bpr = gfx.bytesPerRow || 11;
+  ctx.canvas.width = w;
+  ctx.canvas.height = h;
+  var img = ctx.createImageData(w, h);
+  var px = img.data;
+  var fg = C64_RGB[0]; // black
+  var bg = C64_RGB[1]; // white
+
+  for (var y = 0; y < h && y * bpr < gfx.bm.length; y++) {
+    for (var x = 0; x < w; x++) {
+      var byteIdx = y * bpr + Math.floor(x / 8);
+      var bitIdx = 7 - (x % 8);
+      var set = byteIdx < gfx.bm.length && (gfx.bm[byteIdx] & (1 << bitIdx));
+      var rgb = set ? fg : bg;
+      var off = (y * w + x) * 4;
+      px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2]; px[off+3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+function renderGfxToCanvas(ctx, fmt, fileData) {
+  var parser = GFX_PARSERS[fmt.layout];
+  if (!parser) return;
+  var gfx = parser(fileData);
+
+  if (fmt.mode === 'printshop') {
+    renderC64PrintShop(ctx, gfx);
+  } else if (fmt.layout === 'drp' || fmt.layout === 'drazlace') {
+    renderC64MulticolorDrp(ctx, gfx);
+  } else if (fmt.mode === 'mc') {
+    renderC64Multicolor(ctx, gfx);
+  } else if (fmt.mode === 'hires') {
+    renderC64Hires(ctx, gfx);
+  } else if (fmt.mode === 'fli') {
+    renderC64FLI(ctx, gfx);
+  } else if (fmt.mode === 'afli') {
+    renderC64AFLI(ctx, gfx);
+  }
+}
+
+function showFileGfxViewer(entryOff) {
+  if (!currentBuffer) return;
+  var data = new Uint8Array(currentBuffer);
+  var result = readFileData(currentBuffer, entryOff);
+  var fileData = result.data;
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+
+  var matches = detectGfxFormats(fileData);
+  if (matches.length === 0) {
+    showModal('Graphics View', ['Unrecognized graphics format (' + fileData.length + ' bytes).']);
+    return;
+  }
+
+  var activeFmt = matches[0];
+
+  function render() {
+    var psH = activeFmt.mode === 'printshop' ? Math.floor((fileData.length - 2) / 11) : 0;
+    var dims = activeFmt.mode === 'printshop' ? '88\u00D7' + psH :
+      (activeFmt.mode === 'hires' || activeFmt.mode === 'afli' ? '320\u00D7200' : '160\u00D7200');
+    document.getElementById('modal-title').textContent = activeFmt.name + ' \u2014 "' + name + '" (' + dims + ')';
+    var body = document.getElementById('modal-body');
+    body.innerHTML = '';
+
+    // Format selector if multiple matches
+    if (matches.length > 1) {
+      var sel = document.createElement('div');
+      sel.style.cssText = 'margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap';
+      for (var mi = 0; mi < matches.length; mi++) {
+        (function(m, idx) {
+          var btn = document.createElement('button');
+          btn.textContent = m.name;
+          btn.style.cssText = 'font-size:11px;padding:3px 10px;cursor:pointer;border:1px solid var(--border);border-radius:3px;background:' +
+            (m === activeFmt ? 'var(--accent);color:var(--bg)' : 'var(--hover);color:var(--text)');
+          btn.addEventListener('click', function() {
+            activeFmt = m;
+            render();
+          });
+          sel.appendChild(btn);
+        })(matches[mi], mi);
+      }
+      body.appendChild(sel);
+    }
+
+    var canvas = document.createElement('canvas');
+    if (activeFmt.mode === 'printshop') {
+      var psData = GFX_PARSERS.printshop(fileData);
+      canvas.width = psData.width;
+      canvas.height = psData.height;
+      canvas.className = 'gfx-canvas';
+      var scale = 4;
+      canvas.style.width = (psData.width * scale) + 'px';
+      canvas.style.height = (psData.height * scale) + 'px';
+    } else {
+      canvas.width = 320;
+      canvas.height = 200;
+      canvas.className = 'gfx-canvas';
+      canvas.style.width = '640px';
+      canvas.style.height = '400px';
+    }
+    body.appendChild(canvas);
+
+    renderGfxToCanvas(canvas.getContext('2d'), activeFmt, fileData);
+  }
+
+  render();
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
 // ── BASIC detokenizer ─────────────────────────────────────────────────
 // BASIC V2 tokens ($80-$CB) — C64, VIC-20, C128 (shared base)
 var BASIC_V2_TOKENS = [
@@ -2230,12 +2619,6 @@ function showFileBasicViewer(entryOff) {
 }
 
 // ── C64 screen renderer (CHROUT $FFD2 simulation) ────────────────────
-// Pepto's VIC-II palette (https://www.pepto.de/projects/colorvic/2001/)
-var C64_COLORS = [
-  '#000000', '#FFFFFF', '#683726', '#70A4B2', '#6F3D86', '#588D43',
-  '#352879', '#B8C76F', '#6F4F25', '#433900', '#9A6759', '#444444',
-  '#6C6C6C', '#9AD284', '#6C5EB5', '#959595'
-];
 
 // Map PETSCII control codes to color indices
 var PETSCII_COLOR_MAP = {
@@ -2420,7 +2803,7 @@ function showFileHexViewer(entryOff) {
   var fileData = result.data;
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
 
-  var html = '<div class="hex-editor" style="max-height:400px;overflow-y:auto">';
+  var html = '<div class="hex-editor">';
   var totalBytes = fileData.length;
   var rows = Math.ceil(totalBytes / 8) || 1;
 
@@ -2836,6 +3219,13 @@ document.getElementById('opt-view-basic').addEventListener('click', function(e) 
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
   showFileBasicViewer(selectedEntryIndex);
+});
+
+document.getElementById('opt-view-gfx').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  showFileGfxViewer(selectedEntryIndex);
 });
 
 document.getElementById('opt-edit-free').addEventListener('click', (e) => {
@@ -4862,31 +5252,41 @@ document.querySelectorAll('#opt-change-type .submenu .option').forEach(el => {
 });
 
 fileInput.addEventListener('change', () => {
-  const file = fileInput.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    try {
-      saveActiveTab();
-      currentBuffer = reader.result;
-      currentFileName = file.name;
-      currentPartition = null;
-      selectedEntryIndex = -1;
-      const info = parseDisk(currentBuffer);
-      var tab = createTab(file.name, currentBuffer, file.name);
-      activeTabId = tab.id;
-      renderDisk(info);
-      renderTabs();
-      updateMenuState();
-    } catch (err) {
-      showModal('Error', ['Error reading disk image: ' + err.message]);
-    }
-  };
-  reader.onerror = () => {
-    showModal('Error', ['Failed to read file: ' + (reader.error ? reader.error.message : 'Unknown error')]);
-  };
-  reader.readAsArrayBuffer(file);
+  var files = Array.from(fileInput.files);
+  if (files.length === 0) return;
   fileInput.value = '';
+
+  function openFile(file) {
+    return new Promise(function(resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function() { resolve({ name: file.name, buffer: reader.result }); };
+      reader.onerror = function() { reject(file.name); };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  Promise.all(files.map(openFile)).then(function(results) {
+    saveActiveTab();
+    for (var i = 0; i < results.length; i++) {
+      try {
+        currentBuffer = results[i].buffer;
+        currentFileName = results[i].name;
+        currentPartition = null;
+        selectedEntryIndex = -1;
+        parseDisk(currentBuffer);
+        var tab = createTab(results[i].name, currentBuffer, results[i].name);
+        activeTabId = tab.id;
+      } catch (err) {
+        showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
+      }
+    }
+    var info = parseCurrentDir(currentBuffer);
+    renderDisk(info);
+    renderTabs();
+    updateMenuState();
+  }).catch(function(name) {
+    showModal('Error', ['Failed to read file: ' + name]);
+  });
 });
 
 // ── Theme toggle ─────────────────────────────────────────────────────
