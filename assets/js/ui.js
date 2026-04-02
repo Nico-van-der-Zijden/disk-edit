@@ -235,6 +235,8 @@ function renderDisk(info) {
             var ft = d[e.entryOff + 2] & 0x07;
             // CBM partition/directory icon
             if (ft === 5) icons += '<span class="dir-icon-partition" data-offset="' + e.entryOff + '" title="Partition — double-click to open"><i class="fa-solid fa-folder"></i></span>';
+            // Info icon for files with data
+            if (ft >= 1 && ft <= 4 && d[e.entryOff + 3] > 0) icons += '<span class="dir-icon-info" data-offset="' + e.entryOff + '" title="File info"><i class="fa-solid fa-circle-info"></i></span>';
             // GEOS icon
             if (d[e.entryOff + 0x18] > 0) icons += '<span class="dir-icon-geos" data-offset="' + e.entryOff + '" title="GEOS file — click for info"><i class="fa-solid fa-globe"></i></span>';
             return icons;
@@ -311,6 +313,17 @@ function bindDirSelection() {
       if (partIcon) {
         var pOff = parseInt(partIcon.getAttribute('data-offset'), 10);
         enterPartition(pOff);
+        return;
+      }
+      // Info icon click
+      var infoIcon = e.target.closest('.dir-icon-info');
+      if (infoIcon) {
+        var infoOff = parseInt(infoIcon.getAttribute('data-offset'), 10);
+        selectedEntryIndex = infoOff;
+        entries.forEach(ent => ent.classList.remove('selected'));
+        el.classList.add('selected');
+        updateEntryMenuState();
+        showFileInfo(infoOff);
         return;
       }
       // GEOS icon click
@@ -1982,6 +1995,206 @@ document.getElementById('opt-picker-stick').addEventListener('click', (e) => {
   document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i class="fa-solid fa-check"></i>' : '';
 });
 
+// ── File Info viewer ──────────────────────────────────────────────────
+// Detect common C64 packers by examining the decruncher code
+function detectPacker(fileData) {
+  if (fileData.length < 20) return null;
+  var d = fileData;
+
+  // Check for BASIC SYS line first
+  var loadAddr = d[0] | (d[1] << 8);
+  if (loadAddr !== 0x0801) return null;
+
+  // Parse SYS address from BASIC line
+  // Format: [next_ptr_lo] [next_ptr_hi] [line_lo] [line_hi] [token...] [0x00]
+  // SYS token = 0x9E, followed by address digits
+  var sysAddr = 0;
+  var pos = 2; // skip load address
+  // Skip next-line pointer (2 bytes) and line number (2 bytes)
+  pos += 4;
+  // Find SYS token (0x9E)
+  var foundSys = false;
+  while (pos < Math.min(d.length, 40)) {
+    if (d[pos] === 0x9E) { foundSys = true; pos++; break; }
+    if (d[pos] === 0x00) break;
+    pos++;
+  }
+  if (foundSys) {
+    // Skip spaces
+    while (pos < d.length && d[pos] === 0x20) pos++;
+    // Parse decimal digits
+    var digits = '';
+    while (pos < d.length && d[pos] >= 0x30 && d[pos] <= 0x39) {
+      digits += String.fromCharCode(d[pos]);
+      pos++;
+    }
+    sysAddr = parseInt(digits, 10) || 0;
+  }
+  if (!sysAddr) return { sysAddr: 0, packer: null };
+
+  // Calculate offset of SYS target within file data
+  var sysOff = sysAddr - loadAddr + 2; // +2 for the load address bytes in data
+
+  // Search for packer signatures in the code area
+  function findString(str, start, end) {
+    start = start || 0;
+    end = Math.min(end || d.length, d.length);
+    for (var i = start; i <= end - str.length; i++) {
+      var match = true;
+      for (var j = 0; j < str.length; j++) {
+        if (d[i + j] !== str.charCodeAt(j)) { match = false; break; }
+      }
+      if (match) return i;
+    }
+    return -1;
+  }
+
+  function findBytes(pattern, start, end) {
+    start = start || 0;
+    end = Math.min(end || d.length, d.length);
+    for (var i = start; i <= end - pattern.length; i++) {
+      var match = true;
+      for (var j = 0; j < pattern.length; j++) {
+        if (pattern[j] !== null && d[i + j] !== pattern[j]) { match = false; break; }
+      }
+      if (match) return i;
+    }
+    return -1;
+  }
+
+  var packer = null;
+  var searchEnd = Math.min(d.length, 1024);
+
+  // Exact byte signatures (highest confidence, checked first)
+
+  // Exomizer v1: SYS2059, specific stub bytes
+  if (!packer && sysAddr === 2059 && findBytes([0xA0, 0x00, 0x78, 0xE6, 0x01, 0xBA, 0xBD], 13, 22) >= 0) packer = 'Exomizer v1';
+
+  // ByteBoozer 2: SEI + LDA #$34 + STA $01 + LDX #$B7 at offset 12
+  if (!packer && findBytes([0x78, 0xA9, 0x34, 0x85, 0x01, 0xA2, 0xB7], 12, 22) >= 0) packer = 'ByteBoozer 2';
+
+  // PuCrunch: BASIC line number 239 ($EF $00) at offset 4-5
+  if (!packer && d.length > 16 && d[4] === 0xEF && d[5] === 0x00 && findBytes([0x78, 0xA9, 0x38, 0x85, 0x01], 14, 22) >= 0) packer = 'PuCrunch';
+
+  // Dali: BASIC line number 1602 ($42 $06) at offset 4-5
+  if (!packer && d.length > 16 && d[4] === 0x42 && d[5] === 0x06) packer = 'Dali';
+
+  // Exomizer v2/v3: decrunch table at $0334, memory restore A9 37 85 01
+  if (!packer && findBytes([0xA9, 0x37, 0x85, 0x01], sysOff, searchEnd) >= 0) {
+    // Check for $0334 table reference
+    if (findBytes([0x34, 0x03], sysOff, searchEnd) >= 0) packer = 'Exomizer v2/v3';
+  }
+
+  // ByteBoozer 1: BB string + SEI + LDX #0
+  if (!packer && findString('BB', 2, searchEnd) >= 0 && findBytes([0xA2, 0x00, 0x78], sysOff, searchEnd) >= 0) packer = 'ByteBoozer v1';
+
+  // TSCrunch: uses ZP $F8, first decrunch reads LDA ($F8),Y
+  if (!packer && findBytes([0xB1, 0xF8], sysOff, sysOff + 64) >= 0) packer = 'TSCrunch';
+
+  // String-based signatures
+  if (!packer && (findString('exo', 2, searchEnd) >= 0 || findString('Exo', 2, searchEnd) >= 0)) packer = 'Exomizer';
+  if (!packer && findString('PuCr', 2, searchEnd) >= 0) packer = 'PuCrunch';
+  if (!packer && findString('IRC', 2, searchEnd) >= 0) packer = 'IRCrunch';
+  if (!packer && findString('Sub', 2, searchEnd) >= 0 && findBytes([0x4C], sysOff, sysOff + 3) >= 0) packer = 'Subsizer';
+  if (!packer && findString('LC', 2, searchEnd) >= 0 && findBytes([0xA9, null, 0x85], sysOff, searchEnd) >= 0) packer = 'Level Crusher';
+  if (!packer && findString('AB', 2, searchEnd) >= 0 && sysAddr >= 0x080D && sysAddr <= 0x0830) packer = 'Cruncher AB';
+
+  // Code pattern signatures
+  // MegaLZ / Doynax / Doynamite
+  if (!packer && findBytes([0xA2, 0x00, 0xA0, 0x00, 0xB1], sysOff, searchEnd) >= 0) packer = 'MegaLZ/Doynax';
+
+  // Common decruncher init: SEI + memory config change
+  if (!packer && sysOff > 0 && sysOff < d.length) {
+    var initByte = d[sysOff];
+    if (initByte === 0x78) { // SEI
+      // Check memory config: LDA #$34 (all RAM)
+      if (findBytes([0xA9, 0x34, 0x85, 0x01], sysOff, sysOff + 16) >= 0) packer = 'Unknown packer (all-RAM)';
+      // LDA #$35 (I/O + RAM)
+      else if (findBytes([0xA9, 0x35, 0x85, 0x01], sysOff, sysOff + 16) >= 0) packer = 'Unknown packer';
+    }
+  }
+
+  // Generic heuristic: SYS points past standard BASIC stub
+  if (!packer && sysAddr > 0x080D) {
+    // Check for common decruncher patterns near SYS target
+    if (sysOff > 0 && sysOff < d.length && (d[sysOff] === 0x78 || d[sysOff] === 0x4C || d[sysOff] === 0xA9)) {
+      packer = 'Packed (unknown)';
+    }
+  }
+
+  return { sysAddr: sysAddr, packer: packer };
+}
+
+function showFileInfo(entryOff) {
+  if (!currentBuffer) return;
+  var data = new Uint8Array(currentBuffer);
+  var typeByte = data[entryOff + 2];
+  var typeIdx = typeByte & 0x07;
+  var closed = (typeByte & 0x80) !== 0;
+  var locked = (typeByte & 0x40) !== 0;
+  var typeName = FILE_TYPES[typeIdx] || '???';
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+  var blocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
+  var startTrack = data[entryOff + 3];
+  var startSector = data[entryOff + 4];
+
+  var addr = getFileAddresses(currentBuffer, entryOff);
+  var result = readFileData(currentBuffer, entryOff);
+  var fileData = result.data;
+
+  var lines = [];
+  lines.push('Type: ' + typeName + (closed ? '' : ' (scratched)') + (locked ? ' (locked)' : ''));
+  lines.push('Blocks: ' + blocks);
+  lines.push('Size: ' + fileData.length + ' bytes');
+  lines.push('Start T:$' + startTrack.toString(16).toUpperCase().padStart(2, '0') +
+    ' S:$' + startSector.toString(16).toUpperCase().padStart(2, '0'));
+
+  if (addr) {
+    lines.push('Load: $' + addr.start.toString(16).toUpperCase().padStart(4, '0'));
+    lines.push('End:  $' + addr.end.toString(16).toUpperCase().padStart(4, '0'));
+  }
+
+  // PRG-specific: SYS line and packer detection
+  if (typeIdx === 2 && fileData.length >= 10) {
+    var loadAddr = fileData[0] | (fileData[1] << 8);
+    if (loadAddr === 0x0801) {
+      var packerInfo = detectPacker(fileData);
+      if (packerInfo) {
+        if (packerInfo.sysAddr) {
+          lines.push('SYS: ' + packerInfo.sysAddr + ' ($' + packerInfo.sysAddr.toString(16).toUpperCase().padStart(4, '0') + ')');
+        }
+        if (packerInfo.packer) {
+          lines.push('Packer: ' + packerInfo.packer);
+        }
+      }
+    }
+
+    // Check for BASIC program
+    if (isBasicProgram(fileData)) {
+      var basic = detokenizeBasic(fileData);
+      if (basic && basic.lines.length > 0) {
+        lines.push('BASIC: ' + basic.lines.length + ' line(s), ' + basic.version);
+      }
+    }
+  }
+
+  // Graphics format detection
+  var gfxMatches = detectGfxFormats(fileData);
+  if (gfxMatches.length > 0) {
+    var exact = gfxMatches.filter(function(m) {
+      for (var i = 0; i < GFX_FORMATS.length; i++) {
+        if (GFX_FORMATS[i].name === m.name) return true;
+      }
+      return false;
+    });
+    if (exact.length > 0) {
+      lines.push('Graphics: ' + exact.map(function(m) { return m.name; }).join(', '));
+    }
+  }
+
+  showModal('File Info \u2014 "' + name + '"', lines);
+}
+
 // ── C64 color palette ─────────────────────────────────────────────────
 // Pepto's VIC-II palette (https://www.pepto.de/projects/colorvic/2001/)
 var C64_COLORS = [
@@ -2136,6 +2349,7 @@ var C64_RGB = C64_COLORS.map(function(hex) {
 });
 
 function renderC64Multicolor(ctx, gfx) {
+  ctx.canvas.width = 320; ctx.canvas.height = 200;
   var img = ctx.createImageData(320, 200);
   var px = img.data;
   var bg = C64_RGB[gfx.bg & 0x0F];
@@ -2166,6 +2380,7 @@ function renderC64Multicolor(ctx, gfx) {
 }
 
 function renderC64MulticolorDrp(ctx, gfx) {
+  ctx.canvas.width = 320; ctx.canvas.height = 200;
   var img = ctx.createImageData(320, 200);
   var px = img.data;
 
@@ -2196,6 +2411,7 @@ function renderC64MulticolorDrp(ctx, gfx) {
 }
 
 function renderC64Hires(ctx, gfx) {
+  ctx.canvas.width = 320; ctx.canvas.height = 200;
   var img = ctx.createImageData(320, 200);
   var px = img.data;
 
@@ -2221,6 +2437,7 @@ function renderC64Hires(ctx, gfx) {
 }
 
 function renderC64FLI(ctx, gfx) {
+  ctx.canvas.width = 320; ctx.canvas.height = 200;
   var img = ctx.createImageData(320, 200);
   var px = img.data;
   var bg = C64_RGB[(gfx.bg || 0) & 0x0F];
@@ -2256,6 +2473,7 @@ function renderC64FLI(ctx, gfx) {
 }
 
 function renderC64AFLI(ctx, gfx) {
+  ctx.canvas.width = 320; ctx.canvas.height = 200;
   var img = ctx.createImageData(320, 200);
   var px = img.data;
 

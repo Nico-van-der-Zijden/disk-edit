@@ -425,17 +425,18 @@
     gap: 6px;
   }
 
-  .dir-icon-geos {
+  .dir-icon-info, .dir-icon-geos {
     cursor: pointer;
     color: var(--text-muted);
     opacity: 0.7;
   }
 
-  .dir-icon-geos:hover {
+  .dir-icon-info:hover, .dir-icon-geos:hover {
     color: var(--accent);
     opacity: 1;
   }
 
+  .dir-entry.selected .dir-icon-info:hover,
   .dir-entry.selected .dir-icon-geos:hover {
     color: var(--bg);
     opacity: 0.8;
