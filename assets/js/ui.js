@@ -5773,9 +5773,11 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'About CBM Disk Editor';
   var body = document.getElementById('modal-body');
   body.innerHTML =
-    '<div style="text-align:center;margin-bottom:16px">' +
-      '<div style="font-size:18px;font-weight:bold;margin-bottom:4px">CBM Disk Editor</div>' +
-      '<div style="font-size:12px;color:var(--text-muted)">Web-based Commodore Disk Image Editor</div>' +
+    '<div style="text-align:center;margin-bottom:16px;font-family:\'C64 Pro Mono\',monospace">' +
+      '<div style="font-size:20px;color:' + C64_COLORS[14] + ';margin-bottom:8px">CBM DISK EDITOR</div>' +
+      '<div style="font-size:12px;color:' + C64_COLORS[15] + '">VERSION ' + APP_VERSION_STRING + '</div>' +
+      '<div style="font-size:11px;color:' + C64_COLORS[7] + ';margin-top:12px">CODED BY VAI OF SLASH DESIGN</div>' +
+      '<div style="font-size:11px;color:' + C64_COLORS[13] + ';margin-top:4px"><i class="fa-solid fa-cannabis"></i> OOK EEN TREKJE? <i class="fa-solid fa-joint"></i></div>' +
     '</div>' +
     '<div style="font-size:13px;line-height:1.8">' +
       '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581)<br>' +
@@ -5819,18 +5821,11 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '<b>Fonts:</b><br>' +
       '&bull; <a href="https://style64.org/c64-truetype" target="_blank" style="color:var(--accent)">C64 Pro Mono</a> by Style64 — TrueType PETSCII font<br>' +
       '<br>' +
-      '<b>Icons:</b><br>' +
-      '&bull; <a href="https://fontawesome.com/" target="_blank" style="color:var(--accent)">Font Awesome 6</a> — UI icons<br>' +
-      '<br>' +
       '<b>Technical references:</b><br>' +
       '&bull; <a href="https://vice-emu.sourceforge.io/vice_17.html" target="_blank" style="color:var(--accent)">VICE Manual</a> — disk image format documentation<br>' +
       '&bull; <a href="https://c64-wiki.com/" target="_blank" style="color:var(--accent)">C64-Wiki</a> — Commodore 64 technical reference<br>' +
       '&bull; <a href="https://sta.c64.org/" target="_blank" style="color:var(--accent)">STA\'s C64 pages</a> — disk format details<br>' +
       '&bull; <a href="https://csdb.dk/" target="_blank" style="color:var(--accent)">CSDb</a> — C64 Scene Database<br>' +
-      '<br>' +
-      '<b>Built with:</b><br>' +
-      '&bull; Vanilla JavaScript, HTML, CSS — no frameworks, no dependencies<br>' +
-      '&bull; Claude Code by Anthropic<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
