@@ -730,6 +730,8 @@ function updateEntryMenuState() {
     var eIdx = eType & 0x07;
     exportEnabled = eClosed && eIdx >= 1 && eIdx <= 4;
     copyEnabled = exportEnabled;
+    // Graphics: enabled for closed PRG files with data
+    gfxEnabled = eClosed && eIdx === 2 && edata[selectedEntryIndex + 3] > 0;
     // BASIC: PRG file — check first 2 bytes (load address) from first data sector
     if (eClosed && eIdx === 2) {
       var ft = edata[selectedEntryIndex + 3];
@@ -739,9 +741,6 @@ function updateEntryMenuState() {
         if (foff >= 0) {
           var addr = edata[foff + 2] | (edata[foff + 3] << 8); // first 2 data bytes
           basicEnabled = BASIC_LOAD_ADDRS[addr] !== undefined;
-          // Graphics: check if block count suggests a graphics file size
-          var blocks = edata[selectedEntryIndex + 30] | (edata[selectedEntryIndex + 31] << 8);
-          gfxEnabled = couldBeGfx(blocks * 254);
         }
       }
     }
@@ -2023,10 +2022,15 @@ var GFX_FORMATS = [
 
 // Layout parsers — reusable for both exact and generic detection
 var GFX_PARSERS = {
-  koala: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002), col: d.subarray(9002, 10002), bg: d[10002] }; },
+  koala: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002), col: d.subarray(9002, Math.min(d.length, 10002)), bg: d.length > 10002 ? d[10002] & 0x0F : 0 }; },
   drp: function(d) { return { col: d.subarray(2, 1002), bg: d[1002], bm: d.subarray(1026, 9026), scr: d.subarray(9026, 10026), rowBg: d.subarray(10026, 10051) }; },
   vidcom: function(d) { return { scr: d.subarray(2, 1002), bm: d.subarray(1026, 9026), col: d.subarray(9026, 10026), bg: d[10050] }; },
   bmscr: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002) }; },
+  bmonly: function(d) {
+    var scr = new Uint8Array(1000);
+    for (var i = 0; i < 1000; i++) scr[i] = 0x10; // white on black
+    return { bm: d.subarray(2, 8002), scr: scr };
+  },
   scrbm: function(d) { return { scr: d.subarray(2, 1026), bm: d.subarray(1026, 9218) }; },
   fli: function(d) { return { col: d.subarray(2, 1026), scrBanks: d.subarray(1026, 9218), bm: d.subarray(9218, 17410), bg: d[17410] || 0 }; },
   afli: function(d) { return { scrBanks: d.subarray(2, 8194), bm: d.subarray(8194, 16386) }; },
@@ -2034,58 +2038,88 @@ var GFX_PARSERS = {
   eci: function(d) { return { col: d.subarray(2, 1026), scrBanks: d.subarray(1026, 9218), bm: d.subarray(9218, 17410), bg: 0 }; },
   printshop: function(d) {
     var bmData = d.subarray(2);
-    var bpr = 11; // 11 bytes = 88 pixels wide
+    var bpr = 11;
     var h = Math.floor(bmData.length / bpr);
     return { bm: bmData, width: 88, height: h, bytesPerRow: bpr };
   },
+  sprites: function(d) {
+    var bmData = d.subarray(2);
+    var count = Math.floor(bmData.length / 64);
+    return { bm: bmData, count: count };
+  },
+  charset: function(d) {
+    var bmData = d.subarray(2);
+    var count = Math.floor(bmData.length / 8);
+    return { bm: bmData, count: count };
+  },
 };
 
-// Detect all matching formats for a file (returns array of { name, mode, layout })
+// Detect all plausible formats for a file (returns array of { name, mode, layout })
 function detectGfxFormats(fileData) {
   if (!fileData || fileData.length < 4) return [];
   var addr = fileData[0] | (fileData[1] << 8);
   var size = fileData.length;
+  var dataBytes = size - 2;
   var matches = [];
+  var added = {};
+
+  function add(name, mode, layout) {
+    var key = mode + ':' + layout;
+    if (added[key]) return;
+    added[key] = true;
+    matches.push({ name: name, addr: addr, size: size, mode: mode, layout: layout });
+  }
 
   // 1. Exact matches (address + size)
   for (var i = 0; i < GFX_FORMATS.length; i++) {
     if (GFX_FORMATS[i].addr === addr && GFX_FORMATS[i].size === size) {
-      matches.push(GFX_FORMATS[i]);
+      add(GFX_FORMATS[i].name, GFX_FORMATS[i].mode, GFX_FORMATS[i].layout);
     }
   }
 
-  // 2. Generic layout detection by size (any load address)
-  if (matches.length === 0) {
-    if (size === 10003) {
-      matches.push({ name: 'Multicolor (Koala-style)', addr: addr, size: size, mode: 'mc', layout: 'koala' });
-    } else if (size >= 10002 && size <= 10018) {
-      matches.push({ name: 'Multicolor', addr: addr, size: size, mode: 'mc', layout: 'koala' });
-    } else if (size === 9009 || size === 9002) {
-      matches.push({ name: 'Hires (Art Studio-style)', addr: addr, size: size, mode: 'hires', layout: 'bmscr' });
-    } else if (size === 9218) {
-      // Could be either layout — try both
-      matches.push({ name: 'Hires (Doodle-style)', addr: addr, size: size, mode: 'hires', layout: 'scrbm' });
-      matches.push({ name: 'Hires (bitmap+screen)', addr: addr, size: size, mode: 'hires', layout: 'bmscr' });
-    } else if (size === 17409 || size === 17474) {
-      matches.push({ name: 'Multicolor FLI', addr: addr, size: size, mode: 'fli', layout: 'fli' });
-    } else if (size === 16386) {
-      matches.push({ name: 'Hires FLI (AFLI)', addr: addr, size: size, mode: 'afli', layout: 'afli' });
-    } else if (size === 10051) {
-      matches.push({ name: 'Multicolor (Drazpaint-style)', addr: addr, size: size, mode: 'mc', layout: 'drp' });
-    }
+  // 2. Generic bitmap formats by data size (any load address)
+  // Hires: bitmap only (8000-8192 bytes, no screen RAM)
+  if (dataBytes >= 8000 && dataBytes <= 8192) add('Hires (bitmap only)', 'hires', 'bmonly');
+  // Hires: bitmap + screen RAM (9000-9218 bytes)
+  if (dataBytes >= 9000 && dataBytes <= 9216) {
+    add('Hires (bitmap+screen)', 'hires', 'bmscr');
+    add('Hires (screen+bitmap)', 'hires', 'scrbm');
+  }
+  // Multicolor: bitmap + screen + color + optional bg (10000-10050 bytes)
+  if (dataBytes >= 10000 && dataBytes <= 10050) add('Multicolor (Koala-style)', 'mc', 'koala');
+  // FLI formats
+  if (dataBytes >= 17400 && dataBytes <= 17472) add('Multicolor FLI', 'fli', 'fli');
+  if (dataBytes >= 16384 && dataBytes <= 16384) add('Hires FLI (AFLI)', 'afli', 'afli');
+  // Interlaced
+  if (dataBytes >= 18200 && dataBytes <= 18250) add('Multicolor Interlace', 'mc', 'drazlace');
+  if (dataBytes >= 32760 && dataBytes <= 32780) add('Multicolor IFLI', 'fli', 'eci');
 
-    // Print Shop: small files at common load addresses with bitmap-like data
-    if (matches.length === 0 && size >= 13 && size <= 1500) {
-      matches.push({ name: 'Print Shop', addr: addr, size: size, mode: 'printshop', layout: 'printshop' });
+  // 3. Sprites: data bytes divisible by 64
+  if (dataBytes >= 64 && dataBytes <= 16384 && dataBytes % 64 === 0) {
+    var numSprites = dataBytes / 64;
+    add('Sprites (' + numSprites + ')', 'sprites', 'sprites');
+    add('Sprites MC (' + numSprites + ')', 'sprites-mc', 'sprites');
+  }
+
+  // 4. Charset/tile: data divisible by 8
+  if (dataBytes >= 8 && dataBytes % 8 === 0) {
+    var numChars = dataBytes / 8;
+    add('Charset 1\u00D71 (' + numChars + ' chars)', 'charset', 'charset');
+    // Multi-char tiles: 1x2, 2x1, 2x2, 4x4 (if enough chars)
+    if (numChars >= 2 && numChars % 2 === 0) {
+      add('Charset 1\u00D72', 'charset-1x2', 'charset');
+      add('Charset 2\u00D71', 'charset-2x1', 'charset');
     }
+    if (numChars >= 4 && numChars % 4 === 0) add('Charset 2\u00D72', 'charset-2x2', 'charset');
+    if (numChars >= 16 && numChars % 16 === 0) add('Charset 4\u00D74', 'charset-4x4', 'charset');
+  }
+
+  // 5. Print Shop: small monochrome bitmap
+  if (dataBytes >= 11 && dataBytes <= 1500) {
+    add('Print Shop', 'printshop', 'printshop');
   }
 
   return matches;
-}
-
-// Quick check: could this file size be a graphics format?
-function couldBeGfx(fileSize) {
-  return fileSize >= 10 && fileSize <= 34000;
 }
 
 // Parse C64_COLORS hex to [r,g,b] arrays for canvas
@@ -2242,6 +2276,116 @@ function renderC64AFLI(ctx, gfx) {
   ctx.putImageData(img, 0, 0);
 }
 
+function renderC64Sprites(ctx, gfx, multicolor) {
+  var count = gfx.count;
+  var cols = Math.min(count, 8);
+  var rows = Math.ceil(count / cols);
+  var sprW = multicolor ? 12 : 24; // pixels per sprite
+  var w = cols * (sprW + 1) - 1;
+  var h = rows * 22 - 1;
+  ctx.canvas.width = w;
+  ctx.canvas.height = h;
+  var img = ctx.createImageData(w, h);
+  var px = img.data;
+  // Fill transparent
+  for (var fi = 3; fi < px.length; fi += 4) px[fi] = 255;
+  var fg = C64_RGB[1]; // white
+  var bg = C64_RGB[0]; // black
+  var mc1 = C64_RGB[2]; // red for MC color 1
+  var mc2 = C64_RGB[3]; // cyan for MC color 2
+
+  for (var si = 0; si < count; si++) {
+    var col = si % cols;
+    var row = Math.floor(si / cols);
+    var xOff = col * (sprW + 1);
+    var yOff = row * 22;
+    var base = si * 64;
+
+    for (var line = 0; line < 21; line++) {
+      for (var byteIdx = 0; byteIdx < 3; byteIdx++) {
+        var byt = gfx.bm[base + line * 3 + byteIdx];
+        if (multicolor) {
+          for (var px2 = 0; px2 < 4; px2++) {
+            var bits = (byt >> (6 - px2 * 2)) & 3;
+            var rgb = bits === 0 ? bg : bits === 1 ? mc1 : bits === 2 ? fg : mc2;
+            var x = xOff + byteIdx * 4 + px2;
+            var y = yOff + line;
+            if (x < w && y < h) {
+              var off = (y * w + x) * 4;
+              px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2];
+            }
+          }
+        } else {
+          for (var bit = 7; bit >= 0; bit--) {
+            var rgb2 = (byt & (1 << bit)) ? fg : bg;
+            var x2 = xOff + byteIdx * 8 + (7 - bit);
+            var y2 = yOff + line;
+            if (x2 < w && y2 < h) {
+              var off2 = (y2 * w + x2) * 4;
+              px[off2] = rgb2[0]; px[off2+1] = rgb2[1]; px[off2+2] = rgb2[2];
+            }
+          }
+        }
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// tileW/tileH = chars per tile (e.g. 2x2 = tile of 4 chars arranged 2 wide, 2 tall)
+function renderC64Charset(ctx, gfx, tileW, tileH) {
+  tileW = tileW || 1;
+  tileH = tileH || 1;
+  var charsPerTile = tileW * tileH;
+  var numChars = gfx.count;
+  var numTiles = Math.floor(numChars / charsPerTile);
+  var tilePxW = tileW * 8;
+  var tilePxH = tileH * 8;
+  var gap = 1;
+  var gridCols = Math.min(numTiles, Math.max(1, Math.floor(320 / (tilePxW + gap))));
+  var gridRows = Math.ceil(numTiles / gridCols);
+  var w = gridCols * (tilePxW + gap) - gap;
+  var h = gridRows * (tilePxH + gap) - gap;
+  if (w < 1 || h < 1) return;
+  ctx.canvas.width = w;
+  ctx.canvas.height = h;
+  var img = ctx.createImageData(w, h);
+  var px = img.data;
+  for (var fi = 3; fi < px.length; fi += 4) px[fi] = 255;
+  var fg = C64_RGB[14]; // light blue
+  var bg = C64_RGB[6];  // blue
+
+  for (var ti = 0; ti < numTiles; ti++) {
+    var gridCol = ti % gridCols;
+    var gridRow = Math.floor(ti / gridCols);
+    var tileXOff = gridCol * (tilePxW + gap);
+    var tileYOff = gridRow * (tilePxH + gap);
+
+    // Each tile is tileW × tileH chars, arranged left-to-right, top-to-bottom
+    for (var cy = 0; cy < tileH; cy++) {
+      for (var cx = 0; cx < tileW; cx++) {
+        var charIdx = ti * charsPerTile + cy * tileW + cx;
+        if (charIdx >= numChars) continue;
+        var base = charIdx * 8;
+
+        for (var line = 0; line < 8; line++) {
+          var byt = gfx.bm[base + line];
+          for (var bit = 7; bit >= 0; bit--) {
+            var rgb = (byt & (1 << bit)) ? fg : bg;
+            var x = tileXOff + cx * 8 + (7 - bit);
+            var y = tileYOff + cy * 8 + line;
+            if (x < w && y < h) {
+              var off = (y * w + x) * 4;
+              px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2];
+            }
+          }
+        }
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
 function renderC64PrintShop(ctx, gfx) {
   var w = gfx.width || 88;
   var h = gfx.height || 52;
@@ -2266,12 +2410,35 @@ function renderC64PrintShop(ctx, gfx) {
   ctx.putImageData(img, 0, 0);
 }
 
-function renderGfxToCanvas(ctx, fmt, fileData) {
+function renderGfxToCanvas(ctx, fmt, fileData, overrideBg) {
   var parser = GFX_PARSERS[fmt.layout];
   if (!parser) return;
   var gfx = parser(fileData);
 
-  if (fmt.mode === 'printshop') {
+  // Apply background color override
+  if (overrideBg !== null && overrideBg !== undefined) {
+    gfx.bg = overrideBg;
+    if (gfx.rowBg) {
+      gfx.rowBg = new Uint8Array(gfx.rowBg.length);
+      for (var ri = 0; ri < gfx.rowBg.length; ri++) gfx.rowBg[ri] = overrideBg;
+    }
+  }
+
+  if (fmt.mode === 'sprites') {
+    renderC64Sprites(ctx, gfx, false);
+  } else if (fmt.mode === 'sprites-mc') {
+    renderC64Sprites(ctx, gfx, true);
+  } else if (fmt.mode === 'charset') {
+    renderC64Charset(ctx, gfx, 1, 1);
+  } else if (fmt.mode === 'charset-1x2') {
+    renderC64Charset(ctx, gfx, 1, 2);
+  } else if (fmt.mode === 'charset-2x1') {
+    renderC64Charset(ctx, gfx, 2, 1);
+  } else if (fmt.mode === 'charset-2x2') {
+    renderC64Charset(ctx, gfx, 2, 2);
+  } else if (fmt.mode === 'charset-4x4') {
+    renderC64Charset(ctx, gfx, 4, 4);
+  } else if (fmt.mode === 'printshop') {
     renderC64PrintShop(ctx, gfx);
   } else if (fmt.layout === 'drp' || fmt.layout === 'drazlace') {
     renderC64MulticolorDrp(ctx, gfx);
@@ -2300,12 +2467,10 @@ function showFileGfxViewer(entryOff) {
   }
 
   var activeFmt = matches[0];
+  var overrideBg = null; // null = use file's bg byte, 0-15 = user override
 
   function render() {
-    var psH = activeFmt.mode === 'printshop' ? Math.floor((fileData.length - 2) / 11) : 0;
-    var dims = activeFmt.mode === 'printshop' ? '88\u00D7' + psH :
-      (activeFmt.mode === 'hires' || activeFmt.mode === 'afli' ? '320\u00D7200' : '160\u00D7200');
-    document.getElementById('modal-title').textContent = activeFmt.name + ' \u2014 "' + name + '" (' + dims + ')';
+    document.getElementById('modal-title').textContent = activeFmt.name + ' \u2014 "' + name + '"';
     var body = document.getElementById('modal-body');
     body.innerHTML = '';
 
@@ -2330,24 +2495,55 @@ function showFileGfxViewer(entryOff) {
     }
 
     var canvas = document.createElement('canvas');
+    canvas.className = 'gfx-canvas';
+
+    // Render first to set canvas dimensions, then scale
+    renderGfxToCanvas(canvas.getContext('2d'), activeFmt, fileData, overrideBg);
+
+    // Scale based on content type
+    var scale;
     if (activeFmt.mode === 'printshop') {
-      var psData = GFX_PARSERS.printshop(fileData);
-      canvas.width = psData.width;
-      canvas.height = psData.height;
-      canvas.className = 'gfx-canvas';
-      var scale = 4;
-      canvas.style.width = (psData.width * scale) + 'px';
-      canvas.style.height = (psData.height * scale) + 'px';
+      scale = 4;
+    } else if (activeFmt.mode === 'sprites' || activeFmt.mode === 'sprites-mc') {
+      scale = Math.max(2, Math.min(4, Math.floor(600 / (canvas.width || 1))));
+    } else if (activeFmt.mode === 'charset') {
+      scale = Math.max(2, Math.min(4, Math.floor(600 / (canvas.width || 1))));
     } else {
-      canvas.width = 320;
-      canvas.height = 200;
-      canvas.className = 'gfx-canvas';
-      canvas.style.width = '640px';
-      canvas.style.height = '400px';
+      scale = 2;
     }
+    canvas.style.width = (canvas.width * scale) + 'px';
+    canvas.style.height = (canvas.height * scale) + 'px';
     body.appendChild(canvas);
 
-    renderGfxToCanvas(canvas.getContext('2d'), activeFmt, fileData);
+    // Background color picker for multicolor images
+    if (activeFmt.mode === 'mc' || activeFmt.layout === 'drp' || activeFmt.layout === 'drazlace') {
+      var parser = GFX_PARSERS[activeFmt.layout];
+      var gfx = parser ? parser(fileData) : null;
+      var currentBg = overrideBg !== null ? overrideBg : (gfx && gfx.bg !== undefined ? gfx.bg & 0x0F : 0);
+
+      var bgRow = document.createElement('div');
+      bgRow.style.cssText = 'margin-top:8px;display:flex;gap:2px;align-items:center';
+      var bgLabel = document.createElement('span');
+      bgLabel.textContent = 'Background color:';
+      bgLabel.style.cssText = 'font-size:11px;color:var(--text-muted);margin-right:4px';
+      bgRow.appendChild(bgLabel);
+
+      for (var ci = 0; ci < 16; ci++) {
+        (function(colorIdx) {
+          var swatch = document.createElement('div');
+          swatch.style.cssText = 'width:16px;height:16px;cursor:pointer;border:2px solid ' +
+            (colorIdx === currentBg ? 'var(--text)' : 'transparent') +
+            ';border-radius:2px;background:' + C64_COLORS[colorIdx];
+          swatch.title = 'Color ' + colorIdx;
+          swatch.addEventListener('click', function() {
+            overrideBg = colorIdx;
+            render();
+          });
+          bgRow.appendChild(swatch);
+        })(ci);
+      }
+      body.appendChild(bgRow);
+    }
   }
 
   render();
