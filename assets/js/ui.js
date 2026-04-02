@@ -2032,6 +2032,16 @@ function detectPacker(fileData) {
   }
   if (!sysAddr) return { sysAddr: 0, packer: null };
 
+  // Try restore64 scanner database (377 packers) first
+  if (typeof detectPackerRestore64 === 'function') {
+    var r64 = detectPackerRestore64(d);
+    if (r64 && r64.name) {
+      var versionStr = r64.name + (r64.version ? ' ' + r64.version : '');
+      return { sysAddr: sysAddr, packer: versionStr };
+    }
+  }
+
+  // Fallback: our own signature detection
   // Calculate offset of SYS target within file data
   var sysOff = sysAddr - loadAddr + 2; // +2 for the load address bytes in data
 
@@ -5754,6 +5764,56 @@ fileInput.addEventListener('change', () => {
   }).catch(function(name) {
     showModal('Error', ['Failed to read file: ' + name]);
   });
+});
+
+// ── Help menu ────────────────────────────────────────────────────────
+document.getElementById('opt-about').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  showModal('About CBM Disk Editor', [
+    'CBM Disk Editor — a web-based Commodore disk image editor.',
+    'Supports D64 (1541), D71 (1571), and D81 (1581) disk images.',
+    'Features: directory editing, hex sector editor, BAM viewer,',
+    'file import/export/copy, BASIC/PETSCII/graphics viewers,',
+    'D81 subdirectories, GEOS support, lost file recovery.',
+    'Packer detection: 370+ signatures (Restore64/UNP64 database).'
+  ]);
+});
+
+document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  document.getElementById('modal-title').textContent = 'Keyboard Shortcuts';
+  var body = document.getElementById('modal-body');
+  var shortcuts = [
+    ['Arrow Up/Down', 'Select previous/next file'],
+    ['Ctrl + Arrow Up/Down', 'Move file up/down in directory'],
+    ['Enter', 'Rename selected file'],
+    ['Delete', 'Remove selected file'],
+    ['Ctrl + C', 'Copy file'],
+    ['Ctrl + V', 'Paste file'],
+    ['Double-click name', 'Rename file'],
+    ['Double-click type', 'Change file type'],
+    ['Double-click blocks', 'Edit block count'],
+    ['Double-click T/S', 'Edit track/sector'],
+    ['Double-click header', 'Edit disk name/ID'],
+    ['Right-click', 'Context menu'],
+    ['Escape', 'Close modal/menu']
+  ];
+  var html = '<table style="width:100%;border-collapse:collapse">';
+  for (var i = 0; i < shortcuts.length; i++) {
+    html += '<tr><td style="padding:4px 12px 4px 0;white-space:nowrap;font-weight:bold;font-size:12px">' +
+      escHtml(shortcuts[i][0]) + '</td><td style="padding:4px 0;font-size:12px;color:var(--text-muted)">' +
+      escHtml(shortcuts[i][1]) + '</td></tr>';
+  }
+  html += '</table>';
+  body.innerHTML = html;
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
 });
 
 // ── Theme toggle ─────────────────────────────────────────────────────
