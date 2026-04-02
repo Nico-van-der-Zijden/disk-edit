@@ -577,8 +577,8 @@ function readFileData(buffer, entryOff) {
     var nextS = disk[off + 1];
 
     if (nextT === 0) {
-      // Last sector: nextS = position after last data byte, data is bytes 2..nextS-1
-      for (var i = 2; i < nextS && i < 256; i++) bytes.push(disk[off + i]);
+      // Last sector: nextS = index of last data byte, data is bytes 2..nextS
+      for (var i = 2; i <= nextS && i < 256; i++) bytes.push(disk[off + i]);
     } else {
       // Full sector: data is bytes 2-255 (254 bytes)
       for (var j = 2; j < 256; j++) bytes.push(disk[off + j]);

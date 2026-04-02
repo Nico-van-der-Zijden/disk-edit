@@ -2032,7 +2032,12 @@ var GFX_PARSERS = {
     return { bm: d.subarray(2, 8002), scr: scr };
   },
   scrbm: function(d) { return { scr: d.subarray(2, 1026), bm: d.subarray(1026, 9218) }; },
-  fli: function(d) { return { col: d.subarray(2, 1026), scrBanks: d.subarray(1026, 9218), bm: d.subarray(9218, 17410), bg: d[17410] || 0 }; },
+  fli: function(d) {
+    // Color RAM (1024), Screen banks (8×1024=8192), Bitmap (8000-8192), optional bg
+    var bmStart = 2 + 1024 + 8192; // = 9218
+    var bmEnd = Math.min(bmStart + 8192, d.length);
+    return { col: d.subarray(2, 1026), scrBanks: d.subarray(1026, 9218), bm: d.subarray(bmStart, bmEnd), bg: d.length > bmEnd ? d[bmEnd] & 0x0F : 0 };
+  },
   afli: function(d) { return { scrBanks: d.subarray(2, 8194), bm: d.subarray(8194, 16386) }; },
   drazlace: function(d) { return { col: d.subarray(2, 1002), bg: d[1002], bm: d.subarray(1026, 9026), scr: d.subarray(9026, 10026), rowBg: d.subarray(10026, 10051) }; },
   eci: function(d) { return { col: d.subarray(2, 1026), scrBanks: d.subarray(1026, 9218), bm: d.subarray(9218, 17410), bg: 0 }; },
@@ -2078,19 +2083,14 @@ function detectGfxFormats(fileData) {
   }
 
   // 2. Generic bitmap formats by data size (any load address)
-  // Hires: bitmap only (8000-8192 bytes, no screen RAM)
   if (dataBytes >= 8000 && dataBytes <= 8192) add('Hires (bitmap only)', 'hires', 'bmonly');
-  // Hires: bitmap + screen RAM (9000-9218 bytes)
   if (dataBytes >= 9000 && dataBytes <= 9216) {
     add('Hires (bitmap+screen)', 'hires', 'bmscr');
     add('Hires (screen+bitmap)', 'hires', 'scrbm');
   }
-  // Multicolor: bitmap + screen + color + optional bg (10000-10050 bytes)
   if (dataBytes >= 10000 && dataBytes <= 10050) add('Multicolor (Koala-style)', 'mc', 'koala');
-  // FLI formats
-  if (dataBytes >= 17400 && dataBytes <= 17472) add('Multicolor FLI', 'fli', 'fli');
+  if (dataBytes >= 17200 && dataBytes <= 17472) add('Multicolor FLI', 'fli', 'fli');
   if (dataBytes >= 16384 && dataBytes <= 16384) add('Hires FLI (AFLI)', 'afli', 'afli');
-  // Interlaced
   if (dataBytes >= 18200 && dataBytes <= 18250) add('Multicolor Interlace', 'mc', 'drazlace');
   if (dataBytes >= 32760 && dataBytes <= 32780) add('Multicolor IFLI', 'fli', 'eci');
 
@@ -2104,14 +2104,22 @@ function detectGfxFormats(fileData) {
   // 4. Charset/tile: data divisible by 8
   if (dataBytes >= 8 && dataBytes % 8 === 0) {
     var numChars = dataBytes / 8;
-    add('Charset 1\u00D71 (' + numChars + ' chars)', 'charset', 'charset');
-    // Multi-char tiles: 1x2, 2x1, 2x2, 4x4 (if enough chars)
+    add('Charset 1\u00D71 (' + numChars + ')', 'charset', 'charset');
+    add('Charset MC 1\u00D71 (' + numChars + ')', 'charset-mc', 'charset');
     if (numChars >= 2 && numChars % 2 === 0) {
       add('Charset 1\u00D72', 'charset-1x2', 'charset');
+      add('Charset MC 1\u00D72', 'charset-mc-1x2', 'charset');
       add('Charset 2\u00D71', 'charset-2x1', 'charset');
+      add('Charset MC 2\u00D71', 'charset-mc-2x1', 'charset');
     }
-    if (numChars >= 4 && numChars % 4 === 0) add('Charset 2\u00D72', 'charset-2x2', 'charset');
-    if (numChars >= 16 && numChars % 16 === 0) add('Charset 4\u00D74', 'charset-4x4', 'charset');
+    if (numChars >= 4 && numChars % 4 === 0) {
+      add('Charset 2\u00D72', 'charset-2x2', 'charset');
+      add('Charset MC 2\u00D72', 'charset-mc-2x2', 'charset');
+    }
+    if (numChars >= 16 && numChars % 16 === 0) {
+      add('Charset 4\u00D74', 'charset-4x4', 'charset');
+      add('Charset MC 4\u00D74', 'charset-mc-4x4', 'charset');
+    }
   }
 
   // 5. Print Shop: small monochrome bitmap
@@ -2276,23 +2284,23 @@ function renderC64AFLI(ctx, gfx) {
   ctx.putImageData(img, 0, 0);
 }
 
-function renderC64Sprites(ctx, gfx, multicolor) {
+// colors = { bg, fg, mc1, mc2 } — color indices 0-15
+function renderC64Sprites(ctx, gfx, multicolor, colors) {
   var count = gfx.count;
   var cols = Math.min(count, 8);
   var rows = Math.ceil(count / cols);
-  var sprW = multicolor ? 12 : 24; // pixels per sprite
+  var sprW = multicolor ? 12 : 24;
   var w = cols * (sprW + 1) - 1;
   var h = rows * 22 - 1;
   ctx.canvas.width = w;
   ctx.canvas.height = h;
   var img = ctx.createImageData(w, h);
   var px = img.data;
-  // Fill transparent
   for (var fi = 3; fi < px.length; fi += 4) px[fi] = 255;
-  var fg = C64_RGB[1]; // white
-  var bg = C64_RGB[0]; // black
-  var mc1 = C64_RGB[2]; // red for MC color 1
-  var mc2 = C64_RGB[3]; // cyan for MC color 2
+  var bgRgb = C64_RGB[colors.bg];
+  var fgRgb = C64_RGB[colors.fg];
+  var mc1Rgb = C64_RGB[colors.mc1];
+  var mc2Rgb = C64_RGB[colors.mc2];
 
   for (var si = 0; si < count; si++) {
     var col = si % cols;
@@ -2300,14 +2308,13 @@ function renderC64Sprites(ctx, gfx, multicolor) {
     var xOff = col * (sprW + 1);
     var yOff = row * 22;
     var base = si * 64;
-
     for (var line = 0; line < 21; line++) {
       for (var byteIdx = 0; byteIdx < 3; byteIdx++) {
         var byt = gfx.bm[base + line * 3 + byteIdx];
         if (multicolor) {
           for (var px2 = 0; px2 < 4; px2++) {
             var bits = (byt >> (6 - px2 * 2)) & 3;
-            var rgb = bits === 0 ? bg : bits === 1 ? mc1 : bits === 2 ? fg : mc2;
+            var rgb = bits === 0 ? bgRgb : bits === 1 ? mc1Rgb : bits === 2 ? fgRgb : mc2Rgb;
             var x = xOff + byteIdx * 4 + px2;
             var y = yOff + line;
             if (x < w && y < h) {
@@ -2317,7 +2324,7 @@ function renderC64Sprites(ctx, gfx, multicolor) {
           }
         } else {
           for (var bit = 7; bit >= 0; bit--) {
-            var rgb2 = (byt & (1 << bit)) ? fg : bg;
+            var rgb2 = (byt & (1 << bit)) ? fgRgb : bgRgb;
             var x2 = xOff + byteIdx * 8 + (7 - bit);
             var y2 = yOff + line;
             if (x2 < w && y2 < h) {
@@ -2332,14 +2339,15 @@ function renderC64Sprites(ctx, gfx, multicolor) {
   ctx.putImageData(img, 0, 0);
 }
 
-// tileW/tileH = chars per tile (e.g. 2x2 = tile of 4 chars arranged 2 wide, 2 tall)
-function renderC64Charset(ctx, gfx, tileW, tileH) {
+// colors = { bg, fg, mc1, mc2 }, multicolor flag
+function renderC64Charset(ctx, gfx, tileW, tileH, colors, multicolor) {
   tileW = tileW || 1;
   tileH = tileH || 1;
   var charsPerTile = tileW * tileH;
   var numChars = gfx.count;
   var numTiles = Math.floor(numChars / charsPerTile);
-  var tilePxW = tileW * 8;
+  var charPxW = multicolor ? 4 : 8;
+  var tilePxW = tileW * charPxW;
   var tilePxH = tileH * 8;
   var gap = 1;
   var gridCols = Math.min(numTiles, Math.max(1, Math.floor(320 / (tilePxW + gap))));
@@ -2352,8 +2360,10 @@ function renderC64Charset(ctx, gfx, tileW, tileH) {
   var img = ctx.createImageData(w, h);
   var px = img.data;
   for (var fi = 3; fi < px.length; fi += 4) px[fi] = 255;
-  var fg = C64_RGB[14]; // light blue
-  var bg = C64_RGB[6];  // blue
+  var bgRgb = C64_RGB[colors.bg];
+  var fgRgb = C64_RGB[colors.fg];
+  var mc1Rgb = C64_RGB[colors.mc1];
+  var mc2Rgb = C64_RGB[colors.mc2];
 
   for (var ti = 0; ti < numTiles; ti++) {
     var gridCol = ti % gridCols;
@@ -2361,7 +2371,6 @@ function renderC64Charset(ctx, gfx, tileW, tileH) {
     var tileXOff = gridCol * (tilePxW + gap);
     var tileYOff = gridRow * (tilePxH + gap);
 
-    // Each tile is tileW × tileH chars, arranged left-to-right, top-to-bottom
     for (var cy = 0; cy < tileH; cy++) {
       for (var cx = 0; cx < tileW; cx++) {
         var charIdx = ti * charsPerTile + cy * tileW + cx;
@@ -2370,13 +2379,26 @@ function renderC64Charset(ctx, gfx, tileW, tileH) {
 
         for (var line = 0; line < 8; line++) {
           var byt = gfx.bm[base + line];
-          for (var bit = 7; bit >= 0; bit--) {
-            var rgb = (byt & (1 << bit)) ? fg : bg;
-            var x = tileXOff + cx * 8 + (7 - bit);
-            var y = tileYOff + cy * 8 + line;
-            if (x < w && y < h) {
-              var off = (y * w + x) * 4;
-              px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2];
+          if (multicolor) {
+            for (var px2 = 0; px2 < 4; px2++) {
+              var bits = (byt >> (6 - px2 * 2)) & 3;
+              var rgb = bits === 0 ? bgRgb : bits === 1 ? mc1Rgb : bits === 2 ? fgRgb : mc2Rgb;
+              var x = tileXOff + cx * charPxW + px2;
+              var y = tileYOff + cy * 8 + line;
+              if (x < w && y < h) {
+                var off = (y * w + x) * 4;
+                px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2];
+              }
+            }
+          } else {
+            for (var bit = 7; bit >= 0; bit--) {
+              var rgb2 = (byt & (1 << bit)) ? fgRgb : bgRgb;
+              var x2 = tileXOff + cx * 8 + (7 - bit);
+              var y2 = tileYOff + cy * 8 + line;
+              if (x2 < w && y2 < h) {
+                var off2 = (y2 * w + x2) * 4;
+                px[off2] = rgb2[0]; px[off2+1] = rgb2[1]; px[off2+2] = rgb2[2];
+              }
             }
           }
         }
@@ -2410,34 +2432,31 @@ function renderC64PrintShop(ctx, gfx) {
   ctx.putImageData(img, 0, 0);
 }
 
-function renderGfxToCanvas(ctx, fmt, fileData, overrideBg) {
+function renderGfxToCanvas(ctx, fmt, fileData, colors) {
   var parser = GFX_PARSERS[fmt.layout];
   if (!parser) return;
   var gfx = parser(fileData);
 
-  // Apply background color override
-  if (overrideBg !== null && overrideBg !== undefined) {
-    gfx.bg = overrideBg;
+  // Apply background color override for bitmap modes
+  if (colors && colors.bg !== undefined && (fmt.mode === 'mc' || fmt.layout === 'drp' || fmt.layout === 'drazlace')) {
+    gfx.bg = colors.bg;
     if (gfx.rowBg) {
       gfx.rowBg = new Uint8Array(gfx.rowBg.length);
-      for (var ri = 0; ri < gfx.rowBg.length; ri++) gfx.rowBg[ri] = overrideBg;
+      for (var ri = 0; ri < gfx.rowBg.length; ri++) gfx.rowBg[ri] = colors.bg;
     }
   }
 
-  if (fmt.mode === 'sprites') {
-    renderC64Sprites(ctx, gfx, false);
-  } else if (fmt.mode === 'sprites-mc') {
-    renderC64Sprites(ctx, gfx, true);
-  } else if (fmt.mode === 'charset') {
-    renderC64Charset(ctx, gfx, 1, 1);
-  } else if (fmt.mode === 'charset-1x2') {
-    renderC64Charset(ctx, gfx, 1, 2);
-  } else if (fmt.mode === 'charset-2x1') {
-    renderC64Charset(ctx, gfx, 2, 1);
-  } else if (fmt.mode === 'charset-2x2') {
-    renderC64Charset(ctx, gfx, 2, 2);
-  } else if (fmt.mode === 'charset-4x4') {
-    renderC64Charset(ctx, gfx, 4, 4);
+  var mode = fmt.mode;
+  // Parse tile dimensions and MC flag from mode string
+  var isMC = mode.indexOf('-mc') >= 0 || mode === 'sprites-mc';
+  var tileMatch = mode.match(/(\d+)x(\d+)/);
+  var tileW = tileMatch ? parseInt(tileMatch[1]) : 1;
+  var tileH = tileMatch ? parseInt(tileMatch[2]) : 1;
+
+  if (mode === 'sprites' || mode === 'sprites-mc') {
+    renderC64Sprites(ctx, gfx, mode === 'sprites-mc', colors);
+  } else if (mode.indexOf('charset') === 0) {
+    renderC64Charset(ctx, gfx, tileW, tileH, colors, isMC);
   } else if (fmt.mode === 'printshop') {
     renderC64PrintShop(ctx, gfx);
   } else if (fmt.layout === 'drp' || fmt.layout === 'drazlace') {
@@ -2467,46 +2486,108 @@ function showFileGfxViewer(entryOff) {
   }
 
   var activeFmt = matches[0];
-  var overrideBg = null; // null = use file's bg byte, 0-15 = user override
+  // Color state for sprites/charset/bitmap
+  var gfxColors = { bg: 0, fg: 1, mc1: 2, mc2: 3 };
+
+  // For multicolor bitmaps, try to read bg from file
+  var needsColorPicker = false;
+  var colorLabels = null;
+
+  function updateColorContext() {
+    var mode = activeFmt.mode;
+    if (mode === 'mc' || activeFmt.layout === 'drp' || activeFmt.layout === 'drazlace') {
+      needsColorPicker = true;
+      colorLabels = [{ key: 'bg', label: 'Background' }];
+      var parser = GFX_PARSERS[activeFmt.layout];
+      if (parser) {
+        var gfx = parser(fileData);
+        if (gfx.bg !== undefined) gfxColors.bg = gfx.bg & 0x0F;
+      }
+    } else if (mode.indexOf('sprite') >= 0 || mode.indexOf('charset') >= 0) {
+      needsColorPicker = true;
+      var isMC = mode.indexOf('-mc') >= 0;
+      colorLabels = [{ key: 'bg', label: 'BG' }, { key: 'fg', label: 'FG' }];
+      if (isMC) {
+        colorLabels.push({ key: 'mc1', label: 'MC1' });
+        colorLabels.push({ key: 'mc2', label: 'MC2' });
+      }
+    } else {
+      needsColorPicker = false;
+      colorLabels = null;
+    }
+  }
+
+  updateColorContext();
+
+  function buildColorPicker(body) {
+    if (!needsColorPicker || !colorLabels) return;
+    var row = document.createElement('div');
+    row.style.cssText = 'margin-top:8px;display:flex;gap:12px;align-items:center;flex-wrap:wrap';
+
+    for (var li = 0; li < colorLabels.length; li++) {
+      (function(lbl) {
+        var group = document.createElement('div');
+        group.style.cssText = 'display:flex;gap:2px;align-items:center';
+        var label = document.createElement('span');
+        label.textContent = lbl.label + ':';
+        label.style.cssText = 'font-size:11px;color:var(--text-muted);margin-right:2px';
+        group.appendChild(label);
+
+        for (var ci = 0; ci < 16; ci++) {
+          (function(colorIdx) {
+            var swatch = document.createElement('div');
+            var isActive = gfxColors[lbl.key] === colorIdx;
+            swatch.style.cssText = 'width:14px;height:14px;cursor:pointer;border:2px solid ' +
+              (isActive ? 'var(--text)' : 'transparent') +
+              ';border-radius:2px;background:' + C64_COLORS[colorIdx];
+            swatch.title = lbl.label + ': ' + colorIdx;
+            swatch.addEventListener('click', function() {
+              gfxColors[lbl.key] = colorIdx;
+              render();
+            });
+            group.appendChild(swatch);
+          })(ci);
+        }
+        row.appendChild(group);
+      })(colorLabels[li]);
+    }
+    body.appendChild(row);
+  }
 
   function render() {
-    document.getElementById('modal-title').textContent = activeFmt.name + ' \u2014 "' + name + '"';
+    document.getElementById('modal-title').textContent = activeFmt.name + ' \u2014 "' + name + '" (' + (fileData.length - 2) + ' bytes)';
     var body = document.getElementById('modal-body');
     body.innerHTML = '';
 
     // Format selector if multiple matches
     if (matches.length > 1) {
       var sel = document.createElement('div');
-      sel.style.cssText = 'margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap';
+      sel.style.cssText = 'margin-bottom:8px;display:flex;gap:4px;flex-wrap:wrap';
       for (var mi = 0; mi < matches.length; mi++) {
-        (function(m, idx) {
+        (function(m) {
           var btn = document.createElement('button');
           btn.textContent = m.name;
-          btn.style.cssText = 'font-size:11px;padding:3px 10px;cursor:pointer;border:1px solid var(--border);border-radius:3px;background:' +
+          btn.style.cssText = 'font-size:11px;padding:2px 8px;cursor:pointer;border:1px solid var(--border);border-radius:3px;background:' +
             (m === activeFmt ? 'var(--accent);color:var(--bg)' : 'var(--hover);color:var(--text)');
           btn.addEventListener('click', function() {
             activeFmt = m;
+            updateColorContext();
             render();
           });
           sel.appendChild(btn);
-        })(matches[mi], mi);
+        })(matches[mi]);
       }
       body.appendChild(sel);
     }
 
     var canvas = document.createElement('canvas');
     canvas.className = 'gfx-canvas';
+    renderGfxToCanvas(canvas.getContext('2d'), activeFmt, fileData, gfxColors);
 
-    // Render first to set canvas dimensions, then scale
-    renderGfxToCanvas(canvas.getContext('2d'), activeFmt, fileData, overrideBg);
-
-    // Scale based on content type
     var scale;
     if (activeFmt.mode === 'printshop') {
       scale = 4;
-    } else if (activeFmt.mode === 'sprites' || activeFmt.mode === 'sprites-mc') {
-      scale = Math.max(2, Math.min(4, Math.floor(600 / (canvas.width || 1))));
-    } else if (activeFmt.mode === 'charset') {
+    } else if (activeFmt.mode.indexOf('sprite') >= 0 || activeFmt.mode.indexOf('charset') >= 0) {
       scale = Math.max(2, Math.min(4, Math.floor(600 / (canvas.width || 1))));
     } else {
       scale = 2;
@@ -2515,35 +2596,7 @@ function showFileGfxViewer(entryOff) {
     canvas.style.height = (canvas.height * scale) + 'px';
     body.appendChild(canvas);
 
-    // Background color picker for multicolor images
-    if (activeFmt.mode === 'mc' || activeFmt.layout === 'drp' || activeFmt.layout === 'drazlace') {
-      var parser = GFX_PARSERS[activeFmt.layout];
-      var gfx = parser ? parser(fileData) : null;
-      var currentBg = overrideBg !== null ? overrideBg : (gfx && gfx.bg !== undefined ? gfx.bg & 0x0F : 0);
-
-      var bgRow = document.createElement('div');
-      bgRow.style.cssText = 'margin-top:8px;display:flex;gap:2px;align-items:center';
-      var bgLabel = document.createElement('span');
-      bgLabel.textContent = 'Background color:';
-      bgLabel.style.cssText = 'font-size:11px;color:var(--text-muted);margin-right:4px';
-      bgRow.appendChild(bgLabel);
-
-      for (var ci = 0; ci < 16; ci++) {
-        (function(colorIdx) {
-          var swatch = document.createElement('div');
-          swatch.style.cssText = 'width:16px;height:16px;cursor:pointer;border:2px solid ' +
-            (colorIdx === currentBg ? 'var(--text)' : 'transparent') +
-            ';border-radius:2px;background:' + C64_COLORS[colorIdx];
-          swatch.title = 'Color ' + colorIdx;
-          swatch.addEventListener('click', function() {
-            overrideBg = colorIdx;
-            render();
-          });
-          bgRow.appendChild(swatch);
-        })(ci);
-      }
-      body.appendChild(bgRow);
-    }
+    buildColorPicker(body);
   }
 
   render();
@@ -5214,7 +5267,7 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData) {
   // Calculate required sectors for file data
   var dataLen = fileData.length;
   var numSectors = dataLen === 0 ? 1 : Math.ceil(dataLen / 254);
-  if (dataLen > 0 && dataLen % 254 === 0) numSectors++;
+  // No extra sector needed: byte 1 = 255 correctly represents 254 data bytes
 
   // If GEOS info block present, need one extra sector for it
   var needsInfoBlock = geosData && geosData.geosInfoBlock;
@@ -5265,7 +5318,7 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData) {
       data[soff] = 0x00;
       var bytesInLast = dataLen - dataPos;
       if (bytesInLast <= 0) bytesInLast = 0;
-      data[soff + 1] = bytesInLast + 2;
+      data[soff + 1] = bytesInLast + 1;
       for (var b2 = 2; b2 < 256; b2++) {
         data[soff + b2] = dataPos < dataLen ? fileData[dataPos++] : 0x00;
       }
