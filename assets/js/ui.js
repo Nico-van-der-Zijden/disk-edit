@@ -5770,14 +5770,74 @@ fileInput.addEventListener('change', () => {
 document.getElementById('opt-about').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
-  showModal('About CBM Disk Editor', [
-    'CBM Disk Editor — a web-based Commodore disk image editor.',
-    'Supports D64 (1541), D71 (1571), and D81 (1581) disk images.',
-    'Features: directory editing, hex sector editor, BAM viewer,',
-    'file import/export/copy, BASIC/PETSCII/graphics viewers,',
-    'D81 subdirectories, GEOS support, lost file recovery.',
-    'Packer detection: 370+ signatures (Restore64/UNP64 database).'
-  ]);
+  document.getElementById('modal-title').textContent = 'About CBM Disk Editor';
+  var body = document.getElementById('modal-body');
+  body.innerHTML =
+    '<div style="text-align:center;margin-bottom:16px">' +
+      '<div style="font-size:18px;font-weight:bold;margin-bottom:4px">CBM Disk Editor</div>' +
+      '<div style="font-size:12px;color:var(--text-muted)">Web-based Commodore Disk Image Editor</div>' +
+    '</div>' +
+    '<div style="font-size:13px;line-height:1.8">' +
+      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581)<br>' +
+      '<b>Features:</b><br>' +
+      '&bull; Directory editing: rename, insert, remove, sort, align, lock, scratch<br>' +
+      '&bull; Hex sector editor with track/sector navigation<br>' +
+      '&bull; BAM viewer with integrity checking<br>' +
+      '&bull; File import/export/copy/paste across disk images<br>' +
+      '&bull; View As: Hex, PETSCII (C64 screen), BASIC (V2/V7), Graphics<br>' +
+      '&bull; Graphics: 17+ formats (Koala, Art Studio, FLI, sprites, charset, Print Shop)<br>' +
+      '&bull; Packer detection: 370+ signatures<br>' +
+      '&bull; D81 subdirectories (partitions)<br>' +
+      '&bull; GEOS file support<br>' +
+      '&bull; Lost file recovery (orphaned sector chain scanning)<br>' +
+      '&bull; Fill free sectors, validate disk, recalculate BAM<br>' +
+      '&bull; Multi-tab interface for working with multiple disks<br>' +
+      '&bull; Dark and light themes<br>' +
+    '</div>';
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+});
+
+document.getElementById('opt-credits').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  document.getElementById('modal-title').textContent = 'Credits & Thanks';
+  var body = document.getElementById('modal-body');
+  body.innerHTML =
+    '<div style="font-size:13px;line-height:1.8">' +
+      '<b>Packer detection:</b><br>' +
+      '&bull; <a href="https://restore64.dev/" target="_blank" style="color:var(--accent)">Restore64</a> — 370+ packer signatures<br>' +
+      '&bull; <a href="https://csdb.dk/release/?id=235681" target="_blank" style="color:var(--accent)">UNP64</a> by iAN CooG — signature architecture (GPL)<br>' +
+      '<br>' +
+      '<b>C64 color palette:</b><br>' +
+      '&bull; <a href="https://www.pepto.de/projects/colorvic/2001/" target="_blank" style="color:var(--accent)">Pepto\'s VIC-II palette</a> — accurate VIC-II color reproduction<br>' +
+      '<br>' +
+      '<b>Fonts:</b><br>' +
+      '&bull; <a href="https://style64.org/c64-truetype" target="_blank" style="color:var(--accent)">C64 Pro Mono</a> by Style64 — TrueType PETSCII font<br>' +
+      '<br>' +
+      '<b>Icons:</b><br>' +
+      '&bull; <a href="https://fontawesome.com/" target="_blank" style="color:var(--accent)">Font Awesome 6</a> — UI icons<br>' +
+      '<br>' +
+      '<b>Technical references:</b><br>' +
+      '&bull; <a href="https://vice-emu.sourceforge.io/vice_17.html" target="_blank" style="color:var(--accent)">VICE Manual</a> — disk image format documentation<br>' +
+      '&bull; <a href="https://c64-wiki.com/" target="_blank" style="color:var(--accent)">C64-Wiki</a> — Commodore 64 technical reference<br>' +
+      '&bull; <a href="https://sta.c64.org/" target="_blank" style="color:var(--accent)">STA\'s C64 pages</a> — disk format details<br>' +
+      '&bull; <a href="https://csdb.dk/" target="_blank" style="color:var(--accent)">CSDb</a> — C64 Scene Database<br>' +
+      '<br>' +
+      '<b>Built with:</b><br>' +
+      '&bull; Vanilla JavaScript, HTML, CSS — no frameworks, no dependencies<br>' +
+      '&bull; Claude Code by Anthropic<br>' +
+    '</div>';
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
 });
 
 document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
@@ -5785,28 +5845,43 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
   closeMenus();
   document.getElementById('modal-title').textContent = 'Keyboard Shortcuts';
   var body = document.getElementById('modal-body');
-  var shortcuts = [
-    ['Arrow Up/Down', 'Select previous/next file'],
-    ['Ctrl + Arrow Up/Down', 'Move file up/down in directory'],
-    ['Enter', 'Rename selected file'],
-    ['Delete', 'Remove selected file'],
-    ['Ctrl + C', 'Copy file'],
-    ['Ctrl + V', 'Paste file'],
-    ['Double-click name', 'Rename file'],
-    ['Double-click type', 'Change file type'],
-    ['Double-click blocks', 'Edit block count'],
-    ['Double-click T/S', 'Edit track/sector'],
-    ['Double-click header', 'Edit disk name/ID'],
-    ['Right-click', 'Context menu'],
-    ['Escape', 'Close modal/menu']
+  var sections = [
+    { title: 'File Navigation', shortcuts: [
+      ['Arrow Up / Down', 'Select previous/next file'],
+      ['Ctrl + Arrow Up / Down', 'Move file up/down in directory'],
+      ['Enter', 'Rename selected file'],
+      ['Delete', 'Remove selected file'],
+    ]},
+    { title: 'Clipboard', shortcuts: [
+      ['Ctrl + C', 'Copy selected file'],
+      ['Ctrl + V', 'Paste file (works across tabs)'],
+    ]},
+    { title: 'Editing (double-click)', shortcuts: [
+      ['Filename', 'Rename file (PETSCII keyboard available)'],
+      ['Type column', 'Change file type'],
+      ['Blocks column', 'Edit block count'],
+      ['T/S column', 'Edit track/sector'],
+      ['Disk name / ID', 'Edit disk header'],
+      ['Blocks free', 'Edit free block count'],
+    ]},
+    { title: 'General', shortcuts: [
+      ['Right-click', 'Context menu on file entry or empty area'],
+      ['Escape', 'Close modal or menu'],
+      ['Tab', 'Next input (fill pattern, hex editor)'],
+    ]},
   ];
-  var html = '<table style="width:100%;border-collapse:collapse">';
-  for (var i = 0; i < shortcuts.length; i++) {
-    html += '<tr><td style="padding:4px 12px 4px 0;white-space:nowrap;font-weight:bold;font-size:12px">' +
-      escHtml(shortcuts[i][0]) + '</td><td style="padding:4px 0;font-size:12px;color:var(--text-muted)">' +
-      escHtml(shortcuts[i][1]) + '</td></tr>';
+  var html = '';
+  for (var si = 0; si < sections.length; si++) {
+    html += '<div style="font-weight:bold;font-size:12px;margin:' + (si > 0 ? '12px' : '0') + ' 0 6px;color:var(--text-muted)">' + escHtml(sections[si].title) + '</div>';
+    html += '<table style="width:100%;border-collapse:collapse">';
+    for (var ki = 0; ki < sections[si].shortcuts.length; ki++) {
+      var sc = sections[si].shortcuts[ki];
+      html += '<tr><td style="padding:3px 12px 3px 8px;white-space:nowrap;font-size:12px"><code style="background:var(--hover);padding:2px 6px;border-radius:3px;font-size:11px">' +
+        escHtml(sc[0]) + '</code></td><td style="padding:3px 0;font-size:12px;color:var(--text-muted)">' +
+        escHtml(sc[1]) + '</td></tr>';
+    }
+    html += '</table>';
   }
-  html += '</table>';
   body.innerHTML = html;
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
