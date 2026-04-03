@@ -838,6 +838,8 @@ function updateEntryMenuState() {
   document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !currentBuffer || !canInsertFile());
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
   document.getElementById('opt-view-gfx').classList.toggle('disabled', !gfxEnabled);
+  // TASS: PRG file, not BASIC load address — enable for any PRG with data
+  document.getElementById('opt-view-tass').classList.toggle('disabled', !gfxEnabled);
   document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile());
   document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect);
   document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection);
@@ -3094,6 +3096,160 @@ function showFileGfxViewer(entryOff) {
   document.getElementById('modal-overlay').classList.add('open');
 }
 
+// ── Turbo Assembler viewer ────────────────────────────────────────────
+// 6502 mnemonics in alphabetical order (TASS token $30-$67)
+var TASS_MNEMONICS = [
+  'ADC','AND','ASL','BCC','BCS','BEQ','BIT','BMI','BNE','BPL', // $30-$39
+  'BRK','BVC','BVS','CLC','CLD','CLI','CLV','CMP','CPX','CPY', // $3A-$43
+  'DEC','DEX','DEY','EOR','INC','INX','INY','JMP','JSR','LDA', // $44-$4D
+  'LDX','LDY','LSR','NOP','ORA','PHA','PHP','PLA','PLP','ROL', // $4E-$57
+  'ROR','RTI','RTS','SBC','SEC','SED','SEI','STA','STX','STY', // $58-$61
+  'TAX','TAY','TSX','TXA','TXS','TYA'                          // $62-$67
+];
+
+// Detect TASS source file: not BASIC, has TASS-like header with line padding pattern
+function isTassSource(fileData) {
+  if (!fileData || fileData.length < 100) return false;
+  var addr = fileData[0] | (fileData[1] << 8);
+  // TASS files don't load at standard BASIC addresses
+  if (addr === 0x0801) return false;
+  // Look for the .TEXT/.BYTE signatures that TASS embeds
+  for (var i = 0x50; i < Math.min(fileData.length, 0x80); i++) {
+    if (fileData[i] === 0x2E && i + 4 < fileData.length) {
+      var str = String.fromCharCode(fileData[i+1], fileData[i+2], fileData[i+3], fileData[i+4]);
+      if (str === 'TEXT' || str === 'BYTE') return true;
+    }
+  }
+  // Check for $C0 padding pattern (line fill bytes)
+  var c0Count = 0;
+  for (var j = 0x100; j < Math.min(fileData.length, 0x300); j++) {
+    if (fileData[j] === 0xC0) c0Count++;
+  }
+  if (c0Count > 50) return true;
+  return false;
+}
+
+function showFileTassViewer(entryOff) {
+  if (!currentBuffer) return;
+  var data = new Uint8Array(currentBuffer);
+  var result = readFileData(currentBuffer, entryOff);
+  var fileData = result.data;
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+
+  // TASS source: lines separated by $80, padded with $C0
+  // Scan for line boundaries
+  var lines = [];
+  var lineStart = -1;
+
+  // Find where source data begins (skip header, ~$100 area)
+  var srcStart = 0x100;
+  // Scan back from srcStart to find actual beginning
+  for (var si = 0x5A; si < Math.min(fileData.length, 0x200); si++) {
+    if (fileData[si] === 0x80 || (fileData[si] >= 0x30 && fileData[si] <= 0x67)) {
+      srcStart = si;
+      break;
+    }
+  }
+
+  var currentLine = [];
+  for (var pos = srcStart; pos < fileData.length; pos++) {
+    var b = fileData[pos];
+
+    if (b === 0x80) {
+      // Line separator — flush current line
+      if (currentLine.length > 0) lines.push(currentLine);
+      currentLine = [];
+      // Skip $C0 padding
+      while (pos + 1 < fileData.length && fileData[pos + 1] === 0xC0) pos++;
+      continue;
+    }
+
+    if (b === 0xC0) continue; // padding within line
+
+    if (b === 0x00) {
+      // End of meaningful data in this region
+      if (currentLine.length > 0) lines.push(currentLine);
+      currentLine = [];
+      // Skip zero block
+      while (pos + 1 < fileData.length && fileData[pos + 1] === 0x00) pos++;
+      continue;
+    }
+
+    currentLine.push(b);
+  }
+  if (currentLine.length > 0) lines.push(currentLine);
+
+  // Render lines
+  var html = '<div class="basic-listing">';
+
+  if (lines.length === 0) {
+    html += '<div class="basic-line">No source lines found.</div>';
+  }
+
+  for (var li = 0; li < lines.length; li++) {
+    var line = lines[li];
+    html += '<div class="basic-line">';
+
+    var lineText = '';
+    for (var bi = 0; bi < line.length; bi++) {
+      var byte = line[bi];
+
+      // TASS mnemonic token ($30-$67)
+      if (byte >= 0x30 && byte <= 0x67) {
+        var mnem = TASS_MNEMONICS[byte - 0x30];
+        if (mnem) {
+          lineText += '<span class="basic-keyword">' + mnem + '</span>';
+          continue;
+        }
+      }
+
+      // $28 = operand byte follows
+      if (byte === 0x28 && bi + 1 < line.length) {
+        var operand = line[bi + 1];
+        lineText += '<span class="text-muted">$' + operand.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+        bi++; // skip the operand byte
+        continue;
+      }
+
+      // Directives as ASCII (.TEXT, .BYTE etc.)
+      if (byte === 0x2E && bi + 1 < line.length) {
+        var dir = '.';
+        bi++;
+        while (bi < line.length && line[bi] >= 0x41 && line[bi] <= 0x5A) {
+          dir += String.fromCharCode(line[bi]);
+          bi++;
+        }
+        bi--; // back up one since the loop will advance
+        lineText += '<span class="basic-keyword">' + escHtml(dir) + '</span>';
+        continue;
+      }
+
+      // Printable ASCII
+      if (byte >= 0x20 && byte <= 0x7E) {
+        lineText += escHtml(String.fromCharCode(byte));
+        continue;
+      }
+
+      // Other bytes as hex
+      lineText += '<span class="text-muted">[' + byte.toString(16).toUpperCase().padStart(2, '0') + ']</span>';
+    }
+
+    html += lineText + '</div>';
+  }
+  html += '</div>';
+
+  var titleText = 'Turbo Assembler \u2014 "' + name + '" (' + lines.length + ' lines)';
+  if (result.error) titleText += ' \u2014 ' + result.error;
+  document.getElementById('modal-title').textContent = titleText;
+  document.getElementById('modal-body').innerHTML = html;
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
 // ── BASIC detokenizer ─────────────────────────────────────────────────
 // BASIC V2 tokens ($80-$CB) — C64, VIC-20, C128 (shared base)
 var BASIC_V2_TOKENS = [
@@ -3537,58 +3693,59 @@ function showFileHexViewer(entryOff) {
   var fileData = result.data;
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
   var totalBytes = fileData.length;
-  var viewMode = 'hex';
+
+  var html = '<div class="hex-editor">';
+  var rows = Math.ceil(totalBytes / 8) || 1;
+  for (var row = 0; row < rows; row++) {
+    var rowOff = row * 8;
+    html += '<div class="hex-row"><span class="hex-offset">' + rowOff.toString(16).toUpperCase().padStart(4, '0') + '</span><span class="hex-bytes">';
+    for (var col = 0; col < 8; col++) {
+      var idx = rowOff + col;
+      html += idx < totalBytes ? '<span class="hex-byte">' + fileData[idx].toString(16).toUpperCase().padStart(2, '0') + '</span>' : '<span class="hex-byte" style="opacity:0.2">--</span>';
+    }
+    html += '</span><span class="hex-separator"></span><span class="hex-ascii">';
+    for (var col2 = 0; col2 < 8; col2++) {
+      var idx2 = rowOff + col2;
+      html += idx2 < totalBytes ? '<span class="hex-char">' + escHtml(PETSCII_MAP[fileData[idx2]]) + '</span>' : '<span class="hex-char" style="opacity:0.2">.</span>';
+    }
+    html += '</span></div>';
+  }
+  html += '</div>';
 
   var titleText = 'Hex View \u2014 "' + name + '" (' + totalBytes + ' bytes)';
   if (result.error) titleText += ' \u2014 ' + result.error;
+  document.getElementById('modal-title').textContent = titleText;
+  document.getElementById('modal-body').innerHTML = html;
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+}
 
-  function renderView() {
-    document.getElementById('modal-title').textContent = (viewMode === 'hex' ? 'Hex' : 'Disassembly') + ' \u2014 "' + name + '" (' + totalBytes + ' bytes)';
-    var body = document.getElementById('modal-body');
-    // Mode toggle buttons
-    var toggle = '<div style="margin-bottom:8px;display:flex;gap:4px">' +
-      '<button class="btn-small' + (viewMode === 'hex' ? ' active' : '') + '" id="hex-mode-hex">Hex</button>' +
-      '<button class="btn-small' + (viewMode === 'disasm' ? ' active' : '') + '" id="hex-mode-disasm">Disassembly</button></div>';
+function showFileDisasmViewer(entryOff) {
+  if (!currentBuffer) return;
+  var data = new Uint8Array(currentBuffer);
+  var result = readFileData(currentBuffer, entryOff);
+  var fileData = result.data;
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
 
-    if (viewMode === 'hex') {
-      var html = toggle + '<div class="hex-editor">';
-      var rows = Math.ceil(totalBytes / 8) || 1;
-      for (var row = 0; row < rows; row++) {
-        var rowOff = row * 8;
-        html += '<div class="hex-row"><span class="hex-offset">' + rowOff.toString(16).toUpperCase().padStart(4, '0') + '</span><span class="hex-bytes">';
-        for (var col = 0; col < 8; col++) {
-          var idx = rowOff + col;
-          html += idx < totalBytes ? '<span class="hex-byte">' + fileData[idx].toString(16).toUpperCase().padStart(2, '0') + '</span>' : '<span class="hex-byte" style="opacity:0.2">--</span>';
-        }
-        html += '</span><span class="hex-separator"></span><span class="hex-ascii">';
-        for (var col2 = 0; col2 < 8; col2++) {
-          var idx2 = rowOff + col2;
-          html += idx2 < totalBytes ? '<span class="hex-char">' + escHtml(PETSCII_MAP[fileData[idx2]]) + '</span>' : '<span class="hex-char" style="opacity:0.2">.</span>';
-        }
-        html += '</span></div>';
-      }
-      html += '</div>';
-      body.innerHTML = html;
-    } else {
-      // Disassembly view
-      var loadAddr = fileData.length >= 2 ? (fileData[0] | (fileData[1] << 8)) : 0;
-      var codeData = fileData.subarray(2); // skip load address
-      var lines = disassemble6502(codeData, loadAddr, 2000);
-      var html2 = toggle + '<div class="hex-editor">';
-      for (var di = 0; di < lines.length; di++) {
-        var l = lines[di];
-        html2 += '<div class="hex-row"><span class="hex-offset">' + l.addr + '</span><span class="hex-bytes" style="width:80px">' + escHtml(l.bytes) + '</span><span style="color:var(--selected-text)">' + escHtml(l.text) + '</span></div>';
-      }
-      html2 += '</div>';
-      body.innerHTML = html2;
-    }
+  var loadAddr = fileData.length >= 2 ? (fileData[0] | (fileData[1] << 8)) : 0;
+  var codeData = fileData.subarray(2);
+  var lines = disassemble6502(codeData, loadAddr, 5000);
 
-    document.getElementById('hex-mode-hex').addEventListener('click', function() { viewMode = 'hex'; renderView(); });
-    document.getElementById('hex-mode-disasm').addEventListener('click', function() { viewMode = 'disasm'; renderView(); });
+  var html = '<div class="hex-editor">';
+  for (var di = 0; di < lines.length; di++) {
+    var l = lines[di];
+    html += '<div class="hex-row"><span class="hex-offset">' + l.addr + '</span><span class="hex-bytes" style="width:80px">' + escHtml(l.bytes) + '</span><span style="color:var(--selected-text)">' + escHtml(l.text) + '</span></div>';
   }
+  html += '</div>';
 
-  renderView();
-
+  var titleText = 'Disassembly \u2014 "' + name + '" (load: $' + loadAddr.toString(16).toUpperCase().padStart(4, '0') + ', ' + codeData.length + ' bytes)';
+  if (result.error) titleText += ' \u2014 ' + result.error;
+  document.getElementById('modal-title').textContent = titleText;
+  document.getElementById('modal-body').innerHTML = html;
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
   document.getElementById('modal-close').addEventListener('click', function() {
@@ -4028,6 +4185,13 @@ document.getElementById('opt-view-hex').addEventListener('click', function(e) {
   showFileHexViewer(selectedEntryIndex);
 });
 
+document.getElementById('opt-view-disasm').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  showFileDisasmViewer(selectedEntryIndex);
+});
+
 document.getElementById('opt-view-petscii').addEventListener('click', function(e) {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
@@ -4040,6 +4204,13 @@ document.getElementById('opt-view-basic').addEventListener('click', function(e) 
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
   showFileBasicViewer(selectedEntryIndex);
+});
+
+document.getElementById('opt-view-tass').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  showFileTassViewer(selectedEntryIndex);
 });
 
 document.getElementById('opt-view-gfx').addEventListener('click', function(e) {
@@ -6431,6 +6602,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.0', title: 'Disassembly viewer, TASS viewer', items: [
+      'View As > Disassembly: separate 6502 disassembly viewer with load address',
+      'View As > Turbo Assembler: TASS source file viewer with mnemonic decoding',
+      'TASS detection: identifies source files by .TEXT/.BYTE signatures and $C0 padding',
+      'Hex viewer simplified (disassembly moved to own viewer)',
+    ]},
     { ver: '1.2.0', title: 'Hashing, comparison, interleave, extended BAM', items: [
       'Disk hashing: CRC32 and SHA-256 (Show MD5 Hash menu)',
       'Disk comparison: sector-by-sector diff with another image',
