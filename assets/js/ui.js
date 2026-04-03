@@ -274,13 +274,24 @@ function renderDisk(info) {
   const newDirListing = content.querySelector('.dir-listing');
   if (newDirListing) newDirListing.scrollTop = prevScroll;
 
-  // Restore selection
+  // Restore selection after re-render
   if (prevSelected >= 0) {
-    const el = document.querySelector(`.dir-entry[data-offset="${prevSelected}"]`);
-    if (el) {
-      el.classList.add('selected');
+    var selEl = document.querySelector('.dir-entry[data-offset="' + prevSelected + '"]');
+    if (selEl) {
+      selEl.classList.add('selected');
       selectedEntryIndex = prevSelected;
+      if (selectedEntries.indexOf(prevSelected) < 0) selectedEntries = [prevSelected];
+      // Also restore other multi-selected entries
+      for (var sei = 0; sei < selectedEntries.length; sei++) {
+        if (selectedEntries[sei] === prevSelected) continue;
+        var multiEl = document.querySelector('.dir-entry[data-offset="' + selectedEntries[sei] + '"]');
+        if (multiEl) multiEl.classList.add('selected');
+      }
+    } else {
+      selectedEntries = [];
     }
+  } else {
+    selectedEntries = [];
   }
   updateEntryMenuState();
 
@@ -675,9 +686,10 @@ document.getElementById('content').addEventListener('contextmenu', function(e) {
 
 // Click outside dir entries deselects (registered once)
 document.addEventListener('click', (e) => {
-  if (!e.target.closest('.dir-entry') && !e.target.closest('.menu-item') && !e.target.closest('.petscii-picker') && !e.target.closest('.type-dropdown') && !e.target.closest('#context-menu')) {
+  if (!e.target.closest('.dir-entry') && !e.target.closest('.menu-item') && !e.target.closest('.petscii-picker') && !e.target.closest('.type-dropdown') && !e.target.closest('#context-menu') && !e.target.closest('.modal-overlay') && !e.target.closest('.modal')) {
     document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
     selectedEntryIndex = -1;
+    selectedEntries = [];
     updateEntryMenuState();
   }
 });
@@ -2000,11 +2012,11 @@ document.getElementById('opt-interleave').addEventListener('click', function(e) 
     '<div class="text-md text-muted mb-lg">Sector interleave used when writing new files and directory sectors.</div>' +
     '<div class="form-row">' +
       '<label class="form-label">Directory:</label>' +
-      '<input type="text" id="il-dir" maxlength="2" value="$' + dirInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input wide">' +
+      '<input type="text" id="il-dir" maxlength="2" value="' + dirInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input wide">' +
     '</div>' +
     '<div class="form-row">' +
       '<label class="form-label">File data:</label>' +
-      '<input type="text" id="il-file" maxlength="2" value="$' + fileInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input wide">' +
+      '<input type="text" id="il-file" maxlength="2" value="' + fileInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input wide">' +
     '</div>';
 
   var footer = document.querySelector('#modal-overlay .modal-footer');
@@ -2013,8 +2025,8 @@ document.getElementById('opt-interleave').addEventListener('click', function(e) 
     document.getElementById('modal-overlay').classList.remove('open');
   });
   document.getElementById('il-ok').addEventListener('click', function() {
-    var dStr = document.getElementById('il-dir').value.replace(/[\$]/g, '').trim();
-    var fStr = document.getElementById('il-file').value.replace(/[\$]/g, '').trim();
+    var dStr = document.getElementById('il-dir').value.trim();
+    var fStr = document.getElementById('il-file').value.trim();
     var dVal = parseInt(dStr, 16);
     var fVal = parseInt(fStr, 16);
     if (!isNaN(dVal) && dVal >= 1 && dVal <= 0x14) dirInterleave = dVal;
