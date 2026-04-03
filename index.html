@@ -1010,6 +1010,22 @@
     color: var(--bg);
   }
 
+  .drop-active::after {
+    content: 'Drop files here';
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(53, 40, 121, 0.85);
+    color: #9ad284;
+    font-family: 'C64 Pro Mono', monospace;
+    font-size: 18px;
+    z-index: 9999;
+    pointer-events: none;
+    border: 3px dashed #6c5eb5;
+  }
+
   .gfx-canvas {
     display: block;
     margin: 0 auto;
@@ -1494,6 +1510,8 @@
       <div class="option" id="opt-about">About</div>
       <div class="option" id="opt-credits">Credits &amp; Thanks</div>
       <div class="option" id="opt-shortcuts">Keyboard Shortcuts</div>
+      <div class="separator"></div>
+      <div class="option" id="opt-changelog">Changelog</div>
     </div>
   </div>
   <div class="spacer"></div>

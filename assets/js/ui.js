@@ -5765,6 +5765,133 @@ fileInput.addEventListener('change', () => {
   });
 });
 
+// ── Drag & Drop from OS ──────────────────────────────────────────────
+var dragCounter = 0;
+document.addEventListener('dragenter', function(e) {
+  if (e.dataTransfer.types.indexOf('Files') >= 0) {
+    dragCounter++;
+    document.body.classList.add('drop-active');
+  }
+});
+document.addEventListener('dragleave', function(e) {
+  dragCounter--;
+  if (dragCounter <= 0) { dragCounter = 0; document.body.classList.remove('drop-active'); }
+});
+document.addEventListener('dragover', function(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+});
+
+document.addEventListener('drop', function(e) {
+  e.preventDefault();
+  dragCounter = 0;
+  document.body.classList.remove('drop-active');
+  var files = Array.from(e.dataTransfer.files);
+  if (files.length === 0) return;
+
+  var diskExts = ['.d64', '.d71', '.d81'];
+  var fileExts = ['.prg', '.seq', '.usr', '.rel'];
+  var diskFiles = [];
+  var importFiles = [];
+
+  for (var i = 0; i < files.length; i++) {
+    var name = files[i].name.toLowerCase();
+    var ext = name.substring(name.lastIndexOf('.'));
+    if (diskExts.indexOf(ext) >= 0) diskFiles.push(files[i]);
+    else if (fileExts.indexOf(ext) >= 0) importFiles.push(files[i]);
+  }
+
+  // Open disk images in new tabs
+  if (diskFiles.length > 0) {
+    function openDiskFile(file) {
+      return new Promise(function(resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function() { resolve({ name: file.name, buffer: reader.result }); };
+        reader.onerror = function() { reject(file.name); };
+        reader.readAsArrayBuffer(file);
+      });
+    }
+    Promise.all(diskFiles.map(openDiskFile)).then(function(results) {
+      saveActiveTab();
+      for (var i = 0; i < results.length; i++) {
+        try {
+          currentBuffer = results[i].buffer;
+          currentFileName = results[i].name;
+          currentPartition = null;
+          selectedEntryIndex = -1;
+          parseDisk(currentBuffer);
+          var tab = createTab(results[i].name, currentBuffer, results[i].name);
+          activeTabId = tab.id;
+        } catch (err) {
+          showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
+        }
+      }
+      var info = parseCurrentDir(currentBuffer);
+      renderDisk(info);
+      renderTabs();
+      updateMenuState();
+    });
+  }
+
+  // Import PRG/SEQ/USR/REL files into current disk
+  if (importFiles.length > 0 && currentBuffer) {
+    var imported = 0, failed = 0;
+    function importNext(idx) {
+      if (idx >= importFiles.length) {
+        if (imported > 0) {
+          var info = parseCurrentDir(currentBuffer);
+          renderDisk(info);
+          showModal('Import Complete', [imported + ' file(s) imported.' + (failed > 0 ? ' ' + failed + ' failed.' : '')]);
+        }
+        return;
+      }
+      var file = importFiles[idx];
+      var reader = new FileReader();
+      reader.onload = function() {
+        importFileToDisk(file.name, new Uint8Array(reader.result));
+        imported++;
+        importNext(idx + 1);
+      };
+      reader.onerror = function() { failed++; importNext(idx + 1); };
+      reader.readAsArrayBuffer(file);
+    }
+    importNext(0);
+  } else if (importFiles.length > 0 && !currentBuffer) {
+    showModal('Drop Error', ['No disk open to import files into. Open or create a disk first.']);
+  }
+});
+
+// Make dir entries draggable to OS (export on drag)
+document.addEventListener('dragstart', function(e) {
+  var entry = e.target.closest('.dir-entry:not(.dir-header-row):not(.dir-parent-row)');
+  if (!entry || !currentBuffer || !entry.dataset.offset) return;
+
+  var entryOff = parseInt(entry.dataset.offset, 10);
+  var data = new Uint8Array(currentBuffer);
+  var typeByte = data[entryOff + 2];
+  var typeIdx = typeByte & 0x07;
+  if (typeIdx < 1 || typeIdx > 4 || !(typeByte & 0x80)) return;
+
+  var result = readFileData(currentBuffer, entryOff);
+  if (result.error || result.data.length === 0) return;
+
+  var extMap = { 1: '.seq', 2: '.prg', 3: '.usr', 4: '.rel' };
+  var ext = extMap[typeIdx] || '.prg';
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+  if (!name) name = 'export';
+
+  var blob = new Blob([result.data], { type: 'application/octet-stream' });
+  var url = URL.createObjectURL(blob);
+
+  // Set download data for drag to OS
+  try {
+    e.dataTransfer.setData('DownloadURL', 'application/octet-stream:' + name + ext + ':' + url);
+  } catch (err) {
+    // DownloadURL not supported in all browsers
+  }
+  e.dataTransfer.effectAllowed = 'copyMove';
+});
+
 // ── Help menu ────────────────────────────────────────────────────────
 document.getElementById('opt-about').addEventListener('click', function(e) {
   e.stopPropagation();
@@ -5793,6 +5920,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '&bull; Lost file recovery (orphaned sector chain scanning)<br>' +
       '&bull; Fill free sectors, validate disk, recalculate BAM<br>' +
       '&bull; Multi-tab interface for working with multiple disks<br>' +
+      '&bull; Drag &amp; drop: disk images, PRG/SEQ/USR/REL files, export by dragging<br>' +
       '&bull; Dark and light themes<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
@@ -5858,6 +5986,11 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Disk name / ID', 'Edit disk header'],
       ['Blocks free', 'Edit free block count'],
     ]},
+    { title: 'Drag & Drop', shortcuts: [
+      ['Drop .d64/.d71/.d81', 'Open disk image(s) in new tab(s)'],
+      ['Drop .prg/.seq/.usr/.rel', 'Import file(s) into current disk'],
+      ['Drag file entry to OS', 'Export file (Chrome/Edge)'],
+    ]},
     { title: 'General', shortcuts: [
       ['Right-click', 'Context menu on file entry or empty area'],
       ['Escape', 'Close modal or menu'],
@@ -5875,6 +6008,53 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
         escHtml(sc[1]) + '</td></tr>';
     }
     html += '</table>';
+  }
+  body.innerHTML = html;
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+});
+
+document.getElementById('opt-changelog').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  document.getElementById('modal-title').textContent = 'Changelog';
+  var body = document.getElementById('modal-body');
+  var changes = [
+    { ver: '1.0.1', items: [
+      'Drag & drop: disk images, PRG/SEQ/USR/REL files from OS, drag entries to export',
+      'File info icon: load/end address, SYS line, 370+ packer detection (Restore64/UNP64)',
+      'View As Graphics: 17+ C64 formats, sprites, charsets (MC/hires), Print Shop, color pickers',
+      'View As BASIC: V2 (C64) and V7 (C128) detokenizer with syntax coloring',
+      'View As PETSCII: C64 screen simulation (CHROUT $FFD2) with Pepto VIC-II palette',
+      'View As Hex: full file hex viewer with PETSCII display',
+      'Multi-tab interface: multiple disks open, copy/paste files across tabs',
+      'D81 subdirectories: create, navigate, edit inside partitions',
+      'GEOS support: info viewer, copy/paste with info block, auto-convert prompt',
+      'Scan for lost files: orphaned sector chain recovery with export/restore',
+      'Fill free sectors with custom hex pattern',
+      'Context menu on directory entries',
+      'Export/import PRG, SEQ, USR, REL files',
+      'Validate disk: CBM partition handling, byte-level BAM rebuild',
+      'Fix D71 side 2 BAM layout (free counts at T18/S0 $DD, bitmaps at T53/S0)',
+      'Fix D81 32-bit bitmap operations for sectors 32-39',
+      'Fix readFileData off-by-one (last sector byte count convention)',
+      'Fix D71 80-track initBAM overflow into directory sector',
+      'C64 scene visual identity with Pepto color palette',
+      'Help menu: About, Credits, Keyboard Shortcuts, Changelog',
+    ]},
+  ];
+  var html = '';
+  for (var ci = 0; ci < changes.length; ci++) {
+    html += '<div style="font-weight:bold;font-size:13px;margin-bottom:8px;color:var(--selected-text);font-family:\'C64 Pro Mono\',monospace">v' + escHtml(changes[ci].ver) + '</div>';
+    html += '<ul style="margin:0 0 16px 20px;font-size:12px;line-height:1.7">';
+    for (var ii = 0; ii < changes[ci].items.length; ii++) {
+      html += '<li>' + escHtml(changes[ci].items[ii]) + '</li>';
+    }
+    html += '</ul>';
   }
   body.innerHTML = html;
   var footer = document.querySelector('#modal-overlay .modal-footer');
