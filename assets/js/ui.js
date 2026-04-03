@@ -2006,29 +2006,43 @@ compareInput.addEventListener('change', function() {
   reader.readAsArrayBuffer(file);
 });
 
-// ── Disk menu: Interleave configuration ─────────────────────────────
-document.querySelectorAll('[data-interleave]').forEach(function(el) {
-  el.addEventListener('click', async function(e) {
-    e.stopPropagation();
-    closeMenus();
-    var type = el.dataset.interleave;
-    var current = type === 'dir' ? dirInterleave : fileInterleave;
-    var label = type === 'dir' ? 'Directory Interleave' : 'File Interleave';
-    var val = await showInputModal(label + ' (1-20)', String(current));
-    if (!val) return;
-    var num = parseInt(val, 10);
-    if (isNaN(num) || num < 1 || num > 20) {
-      showModal('Interleave Error', ['Value must be between 1 and 20.']);
-      return;
-    }
-    if (type === 'dir') {
-      dirInterleave = num;
-      document.getElementById('interleave-dir-val').textContent = num;
-    } else {
-      fileInterleave = num;
-      document.getElementById('interleave-file-val').textContent = num;
-    }
+// ── Disk menu: Set Interleave ────────────────────────────────────────
+document.getElementById('opt-interleave').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+
+  document.getElementById('modal-title').textContent = 'Set Interleave';
+  var body = document.getElementById('modal-body');
+  body.innerHTML =
+    '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Sector interleave used when writing new files and directory sectors. This is a global setting.</div>' +
+    '<div style="display:flex;gap:16px;align-items:center;margin-bottom:8px">' +
+      '<label style="font-size:13px;width:80px">Directory:</label>' +
+      '<input type="number" id="il-dir" min="1" max="20" value="' + dirInterleave + '" style="width:60px;padding:4px 6px;font-size:13px;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text);text-align:center">' +
+    '</div>' +
+    '<div style="display:flex;gap:16px;align-items:center">' +
+      '<label style="font-size:13px;width:80px">File data:</label>' +
+      '<input type="number" id="il-file" min="1" max="20" value="' + fileInterleave + '" style="width:60px;padding:4px 6px;font-size:13px;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text);text-align:center">' +
+    '</div>';
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button class="modal-btn-secondary" id="il-cancel">Cancel</button><button id="il-ok">OK</button>';
+  document.getElementById('il-cancel').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
   });
+  document.getElementById('il-ok').addEventListener('click', function() {
+    var dVal = parseInt(document.getElementById('il-dir').value, 10);
+    var fVal = parseInt(document.getElementById('il-file').value, 10);
+    if (!isNaN(dVal) && dVal >= 1 && dVal <= 20) dirInterleave = dVal;
+    if (!isNaN(fVal) && fVal >= 1 && fVal <= 20) fileInterleave = fVal;
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  // Stop propagation on inputs so keydown handlers don't interfere
+  body.querySelectorAll('input').forEach(function(inp) {
+    inp.addEventListener('keydown', function(ev) { ev.stopPropagation(); });
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+  document.getElementById('il-dir').focus();
 });
 
 // ── Disk menu: Add Directory (D81 partition) ─────────────────────────
