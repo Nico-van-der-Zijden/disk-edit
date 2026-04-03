@@ -1190,7 +1190,7 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
   for (var ri = 0; ri < results.length; ri++) {
     (function(r, idx) {
       var card = document.createElement('div');
-      card.style.cssText = 'border:1px solid var(--border);border-radius:4px;padding:10px;margin-bottom:8px;';
+      card.className = 'modal-info-card';
 
       var typeStr = r.suggestedType;
       if (r.suggestedType === 'PRG' && r.loadAddress !== null) {
@@ -1644,16 +1644,16 @@ document.getElementById('opt-fill-free').addEventListener('click', function(e) {
   body.innerHTML = '';
 
   var hint = document.createElement('div');
-  hint.style.cssText = 'font-size:12px;color:var(--text-muted);margin-bottom:10px';
+  hint.className = 'text-md text-muted mb-md';
   hint.textContent = 'Enter hex bytes (00-FF). Up to 8 bytes, pattern repeats across each sector.';
   body.appendChild(hint);
 
   var row = document.createElement('div');
-  row.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px';
+  row.className = 'flex-row-wrap gap-md mb-lg';
   body.appendChild(row);
 
   var preview = document.createElement('div');
-  preview.style.cssText = 'font-size:12px;color:var(--text-muted);font-family:monospace';
+  preview.className = 'text-md text-muted font-mono';
   body.appendChild(preview);
 
   function updatePreview() {
@@ -1666,7 +1666,6 @@ document.getElementById('opt-fill-free').addEventListener('click', function(e) {
     }).join(' ');
   }
 
-  var inputStyle = 'width:32px;padding:4px 6px;font-family:monospace;font-size:14px;text-align:center;text-transform:uppercase;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text)';
 
   function readAllBytes(includePending) {
     var bytes = [];
@@ -1713,7 +1712,7 @@ document.getElementById('opt-fill-free').addEventListener('click', function(e) {
     var inp = document.createElement('input');
     inp.type = 'text';
     inp.maxLength = 2;
-    inp.style.cssText = inputStyle;
+    inp.className = 'fill-byte-input';
     inp.value = value || '';
     row.appendChild(inp);
 
@@ -1904,8 +1903,8 @@ document.getElementById('opt-md5').addEventListener('click', async function(e) {
       '<div style="font-size:13px;line-height:2">' +
         '<b>File:</b> ' + escHtml(currentFileName || 'unnamed') + '<br>' +
         '<b>Size:</b> ' + data.length + ' bytes<br>' +
-        '<b>CRC32:</b> <code style="background:var(--hover);padding:2px 6px;border-radius:3px;user-select:text">' + crc32 + '</code><br>' +
-        '<b>SHA-256:</b> <code style="background:var(--hover);padding:2px 6px;border-radius:3px;font-size:11px;user-select:text;word-break:break-all">' + sha256 + '</code>' +
+        '<b>CRC32:</b> <code class="code-tag;user-select:text">' + crc32 + '</code><br>' +
+        '<b>SHA-256:</b> <code class="code-tag" style="font-size:11px;user-select:text;word-break:break-all">' + sha256 + '</code>' +
       '</div>';
     var footer = document.querySelector('#modal-overlay .modal-footer');
     footer.innerHTML = '<button id="modal-close">OK</button>';
@@ -1960,7 +1959,7 @@ compareInput.addEventListener('change', function() {
 
     document.getElementById('modal-title').textContent = 'Disk Comparison';
     var body = document.getElementById('modal-body');
-    var html = '<div style="font-size:13px;line-height:1.8">' +
+    var html = '<div class="text-base line-tall">' +
       '<b>Current:</b> ' + escHtml(currentFileName || 'unnamed') + ' (' + thisBuf.length + ' bytes)<br>' +
       '<b>Compare:</b> ' + escHtml(file.name) + ' (' + otherBuf.length + ' bytes)<br><br>';
 
@@ -1998,14 +1997,14 @@ document.getElementById('opt-interleave').addEventListener('click', function(e) 
   document.getElementById('modal-title').textContent = 'Set Interleave';
   var body = document.getElementById('modal-body');
   body.innerHTML =
-    '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Sector interleave used when writing new files and directory sectors.</div>' +
-    '<div style="display:flex;gap:16px;align-items:center;margin-bottom:8px">' +
-      '<label style="font-size:13px;width:80px">Directory:</label>' +
-      '<input type="number" id="il-dir" min="1" max="20" value="' + dirInterleave + '" style="width:60px;padding:4px 6px;font-size:13px;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text);text-align:center">' +
+    '<div class="text-md text-muted mb-lg">Sector interleave used when writing new files and directory sectors.</div>' +
+    '<div class="form-row">' +
+      '<label class="form-label">Directory:</label>' +
+      '<input type="text" id="il-dir" maxlength="2" value="$' + dirInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input-sm">' +
     '</div>' +
-    '<div style="display:flex;gap:16px;align-items:center">' +
-      '<label style="font-size:13px;width:80px">File data:</label>' +
-      '<input type="number" id="il-file" min="1" max="20" value="' + fileInterleave + '" style="width:60px;padding:4px 6px;font-size:13px;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text);text-align:center">' +
+    '<div class="form-row">' +
+      '<label class="form-label">File data:</label>' +
+      '<input type="text" id="il-file" maxlength="2" value="$' + fileInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input-sm">' +
     '</div>';
 
   var footer = document.querySelector('#modal-overlay .modal-footer');
@@ -2014,10 +2013,12 @@ document.getElementById('opt-interleave').addEventListener('click', function(e) 
     document.getElementById('modal-overlay').classList.remove('open');
   });
   document.getElementById('il-ok').addEventListener('click', function() {
-    var dVal = parseInt(document.getElementById('il-dir').value, 10);
-    var fVal = parseInt(document.getElementById('il-file').value, 10);
-    if (!isNaN(dVal) && dVal >= 1 && dVal <= 20) dirInterleave = dVal;
-    if (!isNaN(fVal) && fVal >= 1 && fVal <= 20) fileInterleave = fVal;
+    var dStr = document.getElementById('il-dir').value.replace(/[\$]/g, '').trim();
+    var fStr = document.getElementById('il-file').value.replace(/[\$]/g, '').trim();
+    var dVal = parseInt(dStr, 16);
+    var fVal = parseInt(fStr, 16);
+    if (!isNaN(dVal) && dVal >= 1 && dVal <= 0x14) dirInterleave = dVal;
+    if (!isNaN(fVal) && fVal >= 1 && fVal <= 0x14) fileInterleave = fVal;
     document.getElementById('modal-overlay').classList.remove('open');
   });
   // Stop propagation on inputs so keydown handlers don't interfere
@@ -3004,24 +3005,23 @@ function showFileGfxViewer(entryOff) {
   function buildColorPicker(body) {
     if (!needsColorPicker || !colorLabels) return;
     var row = document.createElement('div');
-    row.style.cssText = 'margin-top:8px;display:flex;gap:12px;align-items:center;flex-wrap:wrap';
+    row.className = 'color-picker-row';
 
     for (var li = 0; li < colorLabels.length; li++) {
       (function(lbl) {
         var group = document.createElement('div');
-        group.style.cssText = 'display:flex;gap:2px;align-items:center';
+        group.className = 'color-picker-group';
         var label = document.createElement('span');
         label.textContent = lbl.label + ':';
-        label.style.cssText = 'font-size:11px;color:var(--text-muted);margin-right:2px';
+        label.className = 'color-picker-label';
         group.appendChild(label);
 
         for (var ci = 0; ci < 16; ci++) {
           (function(colorIdx) {
             var swatch = document.createElement('div');
             var isActive = gfxColors[lbl.key] === colorIdx;
-            swatch.style.cssText = 'width:14px;height:14px;cursor:pointer;border:2px solid ' +
-              (isActive ? 'var(--text)' : 'transparent') +
-              ';border-radius:2px;background:' + C64_COLORS[colorIdx];
+            swatch.className = 'color-swatch' + (isActive ? ' active' : '');
+            swatch.style.background = C64_COLORS[colorIdx];
             swatch.title = lbl.label + ': ' + colorIdx;
             swatch.addEventListener('click', function() {
               gfxColors[lbl.key] = colorIdx;
@@ -3044,7 +3044,7 @@ function showFileGfxViewer(entryOff) {
     // Format selector if multiple matches
     if (matches.length > 1) {
       var sel = document.createElement('div');
-      sel.style.cssText = 'margin-bottom:8px;display:flex;gap:4px;flex-wrap:wrap';
+      sel.className = 'flex-row-wrap mb-md';
       for (var mi = 0; mi < matches.length; mi++) {
         (function(m) {
           var btn = document.createElement('button');
@@ -6279,7 +6279,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '<div style="font-size:11px;color:' + C64_COLORS[7] + ';margin-top:12px">CODED BY VAI OF SLASH DESIGN</div>' +
       '<div style="font-size:11px;color:' + C64_COLORS[13] + ';margin-top:4px"><i class="fa-solid fa-cannabis"></i> OOK EEN TREKJE? <i class="fa-solid fa-joint"></i></div>' +
     '</div>' +
-    '<div style="font-size:13px;line-height:1.8">' +
+    '<div class="text-base line-tall">' +
       '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), T64 (tape)<br>' +
       '<b>Features:</b><br>' +
       '&bull; Directory editing: rename, insert, remove, sort, align, lock, scratch<br>' +
@@ -6311,22 +6311,22 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Credits & Thanks';
   var body = document.getElementById('modal-body');
   body.innerHTML =
-    '<div style="font-size:13px;line-height:1.8">' +
+    '<div class="text-base line-tall">' +
       '<b>Packer detection:</b><br>' +
-      '&bull; <a href="https://restore64.dev/" target="_blank" style="color:var(--accent)">Restore64</a> — 370+ packer signatures<br>' +
-      '&bull; <a href="https://csdb.dk/release/?id=235681" target="_blank" style="color:var(--accent)">UNP64</a> by iAN CooG — signature architecture (GPL)<br>' +
+      '&bull; <a href="https://restore64.dev/" target="_blank" class="link">Restore64</a> — 370+ packer signatures<br>' +
+      '&bull; <a href="https://csdb.dk/release/?id=235681" target="_blank" class="link">UNP64</a> by iAN CooG — signature architecture (GPL)<br>' +
       '<br>' +
       '<b>C64 color palette:</b><br>' +
-      '&bull; <a href="https://www.pepto.de/projects/colorvic/2001/" target="_blank" style="color:var(--accent)">Pepto\'s VIC-II palette</a> — accurate VIC-II color reproduction<br>' +
+      '&bull; <a href="https://www.pepto.de/projects/colorvic/2001/" target="_blank" class="link">Pepto\'s VIC-II palette</a> — accurate VIC-II color reproduction<br>' +
       '<br>' +
       '<b>Fonts:</b><br>' +
-      '&bull; <a href="https://style64.org/c64-truetype" target="_blank" style="color:var(--accent)">C64 Pro Mono</a> by Style64 — TrueType PETSCII font<br>' +
+      '&bull; <a href="https://style64.org/c64-truetype" target="_blank" class="link">C64 Pro Mono</a> by Style64 — TrueType PETSCII font<br>' +
       '<br>' +
       '<b>Technical references:</b><br>' +
-      '&bull; <a href="https://vice-emu.sourceforge.io/vice_17.html" target="_blank" style="color:var(--accent)">VICE Manual</a> — disk image format documentation<br>' +
-      '&bull; <a href="https://c64-wiki.com/" target="_blank" style="color:var(--accent)">C64-Wiki</a> — Commodore 64 technical reference<br>' +
-      '&bull; <a href="https://sta.c64.org/" target="_blank" style="color:var(--accent)">STA\'s C64 pages</a> — disk format details<br>' +
-      '&bull; <a href="https://csdb.dk/" target="_blank" style="color:var(--accent)">CSDb</a> — C64 Scene Database<br>' +
+      '&bull; <a href="https://vice-emu.sourceforge.io/vice_17.html" target="_blank" class="link">VICE Manual</a> — disk image format documentation<br>' +
+      '&bull; <a href="https://c64-wiki.com/" target="_blank" class="link">C64-Wiki</a> — Commodore 64 technical reference<br>' +
+      '&bull; <a href="https://sta.c64.org/" target="_blank" class="link">STA\'s C64 pages</a> — disk format details<br>' +
+      '&bull; <a href="https://csdb.dk/" target="_blank" class="link">CSDb</a> — C64 Scene Database<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
@@ -6378,7 +6378,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
     html += '<table style="width:100%;border-collapse:collapse">';
     for (var ki = 0; ki < sections[si].shortcuts.length; ki++) {
       var sc = sections[si].shortcuts[ki];
-      html += '<tr><td style="padding:3px 12px 3px 8px;white-space:nowrap;font-size:12px"><code style="background:var(--hover);padding:2px 6px;border-radius:3px;font-size:11px">' +
+      html += '<tr><td style="padding:3px 12px 3px 8px;white-space:nowrap;font-size:12px"><code class="code-tag" style="font-size:11px">' +
         escHtml(sc[0]) + '</code></td><td style="padding:3px 0;font-size:12px;color:var(--text-muted)">' +
         escHtml(sc[1]) + '</td></tr>';
     }

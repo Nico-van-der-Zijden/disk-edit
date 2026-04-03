@@ -999,6 +999,70 @@
   .basic-rem { color: #6C6C6C; }
   .basic-ctrl { color: #9A6759; font-family: inherit; font-size: 10px; }
 
+  /* --- Utility classes for dynamic content --- */
+  .flex-row { display: flex; gap: 8px; align-items: center; }
+  .flex-row-wrap { display: flex; gap: 4px; flex-wrap: wrap; }
+  .flex-col { display: flex; flex-direction: column; gap: 4px; }
+  .flex-between { display: flex; justify-content: space-between; align-items: center; }
+  .gap-sm { gap: 2px; }
+  .gap-md { gap: 6px; }
+  .gap-lg { gap: 12px; }
+  .mb-sm { margin-bottom: 4px; }
+  .mb-md { margin-bottom: 8px; }
+  .mb-lg { margin-bottom: 12px; }
+  .mt-sm { margin-top: 4px; }
+  .mt-md { margin-top: 8px; }
+  .text-xs { font-size: 10px; }
+  .text-sm { font-size: 11px; }
+  .text-md { font-size: 12px; }
+  .text-base { font-size: 13px; }
+  .text-muted { color: var(--text-muted); }
+  .text-accent { color: var(--accent); }
+  .text-green { color: #588D43; }
+  .text-red { color: #9A6759; }
+  .text-yellow { color: #B8C76F; }
+  .text-center { text-align: center; }
+  .font-bold { font-weight: bold; }
+  .font-mono { font-family: monospace; }
+  .font-c64 { font-family: 'C64 Pro Mono', monospace; }
+  .user-select { user-select: text; -webkit-user-select: text; }
+  .code-tag { background: var(--hover); padding: 2px 6px; border-radius: 3px; }
+  .line-tall { line-height: 1.8; }
+  .link { color: var(--accent); }
+
+  .modal-info-card {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px;
+    margin-bottom: 8px;
+  }
+
+  .color-picker-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .color-picker-group { display: flex; gap: 2px; align-items: center; }
+  .color-picker-label { font-size: 11px; color: var(--text-muted); margin-right: 2px; }
+  .color-swatch {
+    width: 14px; height: 14px; cursor: pointer;
+    border: 2px solid transparent; border-radius: 2px;
+  }
+  .color-swatch.active { border-color: var(--text); }
+
+  .fill-byte-input {
+    width: 32px; padding: 4px 6px; font-family: monospace;
+    font-size: 14px; text-align: center; text-transform: uppercase;
+    border: 1px solid var(--border); border-radius: 3px;
+    background: var(--bg); color: var(--text);
+  }
+
+  .hex-input-sm {
+    width: 60px; padding: 4px 6px; font-family: monospace;
+    font-size: 13px; border: 1px solid var(--border);
+    border-radius: 3px; background: var(--bg); color: var(--text);
+    text-align: center; text-transform: uppercase;
+  }
+
+  .form-row { display: flex; gap: 16px; align-items: center; margin-bottom: 8px; }
+  .form-label { font-size: 13px; width: 80px; }
+
   .btn-small {
     font-size: 12px;
     padding: 3px 12px;
