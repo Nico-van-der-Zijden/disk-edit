@@ -533,8 +533,6 @@ function validatePartition(buffer, startTrack, partSize) {
   return log;
 }
 
-// Backward-compatible alias
-function validateD64(buffer) { return validateDisk(buffer); }
 
 // ── Scan for orphaned sector chains (lost files) ─────────────────────
 // Finds file data remaining on disk after directory entries have been

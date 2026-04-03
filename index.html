@@ -79,13 +79,13 @@
   .menubar {
     display: flex;
     align-items: center;
-    background: var(--selected-bg);
+    background: var(--bg-menu);
     border-bottom: 2px solid var(--border);
     height: 32px;
     padding: 0 4px;
     user-select: none;
     font-size: 13px;
-    color: var(--selected-text);
+    color: var(--text);
   }
 
   .menu-item {
@@ -270,6 +270,7 @@
 
   .tab-close:hover {
     opacity: 1;
+    color: #9A6759;
   }
 
   /* --- Disk Panel --- */
@@ -991,6 +992,23 @@
   .basic-string { color: #588D43; }
   .basic-rem { color: #6C6C6C; }
   .basic-ctrl { color: #9A6759; font-family: inherit; font-size: 10px; }
+
+  .btn-small {
+    font-size: 12px;
+    padding: 3px 12px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--hover);
+    color: var(--text);
+  }
+
+  .btn-small:hover { background: var(--menu-hover); }
+
+  .btn-small.active {
+    background: var(--accent);
+    color: var(--bg);
+  }
 
   .gfx-canvas {
     display: block;

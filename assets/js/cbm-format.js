@@ -551,8 +551,6 @@ const UNICODE_TO_PETSCII = (() => {
   return rev;
 })();
 
-// Convert PUA PETSCII string to readable ASCII (for tooltips, logs, etc.)
-// Get the offset of the header sector (disk name/ID)
 // Read all data bytes from a file's sector chain
 // Returns { data: Uint8Array, error: string|null }
 function readFileData(buffer, entryOff) {
@@ -1021,8 +1019,7 @@ function parsePartition(buffer, startTrack, partSize) {
   return { diskName, diskId, freeBlocks, entries, format: fmt.name, tracks: currentTracks, isPartition: true };
 }
 
-// Backward-compatible alias
-function parseD64(buffer) { return parseDisk(buffer); }
+
 
 // ── Create empty disk image ──────────────────────────────────────────
 function createEmptyDisk(formatKey, numTracks) {
@@ -1054,8 +1051,6 @@ function createEmptyDisk(formatKey, numTracks) {
 
   return data.buffer;
 }
-
-// Backward-compatible alias
 
 // ── Safe PETSCII characters ──────────────────────────────────────────
 var allowUnsafeChars = localStorage.getItem('d64-allowUnsafe') === 'true';

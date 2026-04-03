@@ -1068,7 +1068,7 @@ document.getElementById('opt-validate').addEventListener('click', (e) => {
   if (currentPartition) {
     log = validatePartition(currentBuffer, currentPartition.startTrack, currentPartition.partSize);
   } else {
-    log = validateD64(currentBuffer);
+    log = validateDisk(currentBuffer);
   }
   const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
@@ -1143,7 +1143,7 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
 
       var exportBtn = document.createElement('button');
       exportBtn.textContent = 'Export';
-      exportBtn.style.cssText = 'font-size:12px;padding:3px 12px;cursor:pointer;border:1px solid var(--border);border-radius:3px;background:var(--hover);color:var(--text);';
+      exportBtn.className = 'btn-small';
       exportBtn.addEventListener('click', function() {
         var ext = r.suggestedType === 'PRG' ? '.prg' : r.suggestedType === 'SEQ' ? '.seq' : '.bin';
         var blob = new Blob([r.data], { type: 'application/octet-stream' });
@@ -1157,7 +1157,7 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
 
       var restoreBtn = document.createElement('button');
       restoreBtn.textContent = 'Restore';
-      restoreBtn.style.cssText = 'font-size:12px;padding:3px 12px;cursor:pointer;border:1px solid var(--border);border-radius:3px;background:var(--hover);color:var(--text);';
+      restoreBtn.className = 'btn-small';
       restoreBtn.addEventListener('click', async function() {
         document.getElementById('modal-overlay').classList.remove('open');
         var name = await showInputModal('Filename for Recovered File', 'RECOVERED');
@@ -2795,8 +2795,7 @@ function showFileGfxViewer(entryOff) {
         (function(m) {
           var btn = document.createElement('button');
           btn.textContent = m.name;
-          btn.style.cssText = 'font-size:11px;padding:2px 8px;cursor:pointer;border:1px solid var(--border);border-radius:3px;background:' +
-            (m === activeFmt ? 'var(--accent);color:var(--bg)' : 'var(--hover);color:var(--text)');
+          btn.className = 'btn-small' + (m === activeFmt ? ' active' : '');
           btn.addEventListener('click', function() {
             activeFmt = m;
             updateColorContext();
