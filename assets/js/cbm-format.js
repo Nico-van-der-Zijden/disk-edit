@@ -12,6 +12,7 @@ const DISK_FORMATS = {
     headerSector: 0,
     bamTrack: 18,
     bamSector: 0,
+    bamSectors: [[18,0]],
     dosVersion: 0x41,    // 'A'
     dosType: '2A',
     nameOffset: 0x90,    // offset within header sector for disk name
@@ -109,8 +110,7 @@ const DISK_FORMATS = {
     headerSector: 0,
     bamTrack: 18,
     bamSector: 0,
-    bamTrack2: 53,       // BAM for side 2
-    bamSector2: 0,
+    bamSectors: [[18,0],[53,0]], // side 1 at T18/S0, side 2 at T53/S0
     dosVersion: 0x41,    // 'A'
     dosType: '2A',
     nameOffset: 0x90,
@@ -258,8 +258,8 @@ const DISK_FORMATS = {
     headerTrack: 40,    // disk name/ID are in the header sector (T40/S0)
     headerSector: 0,
     bamTrack: 40,
-    bamSector: 1,       // BAM spans sectors 1 and 2
-    bamSector2: 2,
+    bamSector: 1,
+    bamSectors: [[40,0],[40,1],[40,2]], // header + BAM1 + BAM2
     dosVersion: 0x44,   // 'D'
     dosType: '3D',
     nameOffset: 0x04,   // offset within HEADER sector for disk name
@@ -337,7 +337,7 @@ const DISK_FORMATS = {
 
       // BAM sector 1 (T40/S1) — BAM for tracks 1-40
       data[bamOff + 0x00] = this.dirTrack;
-      data[bamOff + 0x01] = this.bamSector2;
+      data[bamOff + 0x01] = 2; // link to BAM sector 2
       data[bamOff + 0x02] = this.dosVersion;
       data[bamOff + 0x03] = 0xBB;
       // Disk ID copy in BAM sectors

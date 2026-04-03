@@ -5692,19 +5692,9 @@ function buildTrueAllocationMap(buffer) {
     allocated[st + ':1'] = true; // BAM1
     allocated[st + ':2'] = true; // BAM2
   } else {
-    // Root: mark BAM sector(s) as allocated
-    if (fmt.bamSectors) {
-      for (var bsi = 0; bsi < fmt.bamSectors.length; bsi++) {
-        allocated[fmt.bamSectors[bsi][0] + ':' + fmt.bamSectors[bsi][1]] = true;
-      }
-    } else {
-      allocated[fmt.bamTrack + ':' + fmt.bamSector] = true;
-      if (fmt.bamSector2 !== undefined) allocated[fmt.bamTrack + ':' + fmt.bamSector2] = true;
-      if (fmt.bamTrack2) allocated[fmt.bamTrack2 + ':' + (fmt.bamSector2 || 0)] = true;
-    }
-    if (fmt.headerTrack && fmt.headerSector !== undefined &&
-        (fmt.headerTrack !== fmt.bamTrack || fmt.headerSector !== fmt.bamSector)) {
-      allocated[fmt.headerTrack + ':' + fmt.headerSector] = true;
+    // Root: mark all system sectors (BAM + header) as allocated
+    for (var bsi = 0; bsi < fmt.bamSectors.length; bsi++) {
+      allocated[fmt.bamSectors[bsi][0] + ':' + fmt.bamSectors[bsi][1]] = true;
     }
   }
 
