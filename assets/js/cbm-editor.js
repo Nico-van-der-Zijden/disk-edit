@@ -11,7 +11,7 @@ var selectedEntries = []; // multi-select: array of entryOff values
 var showAddresses = localStorage.getItem('d64-showAddresses') === 'true';
 var showTrackSector = localStorage.getItem('d64-showTrackSector') === 'true';
 var currentPartition = null; // null = root, or { entryOff, startTrack, partSize, name }
-var clipboard = null; // { typeIdx, nameBytes: Uint8Array(16), data: Uint8Array }
+var clipboard = []; // array of { typeIdx, nameBytes, geosBytes, geosInfoBlock, data }
 var dirInterleave = 3;   // directory sector interleave
 var fileInterleave = 10; // file data sector interleave
 

@@ -737,7 +737,7 @@ document.addEventListener('keydown', (e) => {
   }
 
   // Ctrl+V: paste file
-  if (e.ctrlKey && e.key === 'v' && clipboard && currentBuffer) {
+  if (e.ctrlKey && e.key === 'v' && clipboard.length > 0 && currentBuffer) {
     e.preventDefault();
     document.getElementById('opt-paste').click();
     return;
@@ -835,7 +835,7 @@ function updateEntryMenuState() {
   }
   document.getElementById('opt-export').classList.toggle('disabled', !exportEnabled);
   document.getElementById('opt-copy').classList.toggle('disabled', !copyEnabled);
-  document.getElementById('opt-paste').classList.toggle('disabled', !clipboard || !currentBuffer || !canInsertFile());
+  document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !currentBuffer || !canInsertFile());
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
   document.getElementById('opt-view-gfx').classList.toggle('disabled', !gfxEnabled);
   document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile());
@@ -5595,60 +5595,56 @@ document.getElementById('opt-copy').addEventListener('click', (e) => {
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
   var data = new Uint8Array(currentBuffer);
-  var typeByte = data[selectedEntryIndex + 2];
-  var typeIdx = typeByte & 0x07;
-  if (typeIdx < 1 || typeIdx > 4) return;
+  var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+  clipboard = [];
 
-  var result = readFileData(currentBuffer, selectedEntryIndex);
-  if (result.error) {
-    showModal('Copy Error', ['Failed to read file: ' + result.error]);
-    return;
-  }
+  for (var ci = 0; ci < entries.length; ci++) {
+    var entOff = entries[ci];
+    var typeByte = data[entOff + 2];
+    var typeIdx = typeByte & 0x07;
+    if (typeIdx < 1 || typeIdx > 4) continue;
 
-  // Copy the 16 PETSCII name bytes and GEOS metadata (bytes 21-29)
-  var nameBytes = new Uint8Array(16);
-  for (var i = 0; i < 16; i++) nameBytes[i] = data[selectedEntryIndex + 5 + i];
-  var geosBytes = new Uint8Array(9); // bytes 21-29 of directory entry
-  for (var g = 0; g < 9; g++) geosBytes[g] = data[selectedEntryIndex + 21 + g];
+    var result = readFileData(currentBuffer, entOff);
+    if (result.error) continue;
 
-  // Copy GEOS info block if present (byte 24 = GEOS file type, >0 means GEOS)
-  var geosInfoBlock = null;
-  var infoTrack = data[selectedEntryIndex + 0x15]; // byte 21
-  var infoSector = data[selectedEntryIndex + 0x16]; // byte 22
-  if (data[selectedEntryIndex + 0x18] > 0 && infoTrack > 0) {
-    var infoOff = sectorOffset(infoTrack, infoSector);
-    if (infoOff >= 0) {
-      geosInfoBlock = new Uint8Array(256);
-      for (var ib = 0; ib < 256; ib++) geosInfoBlock[ib] = data[infoOff + ib];
+    var nameBytes = new Uint8Array(16);
+    for (var i = 0; i < 16; i++) nameBytes[i] = data[entOff + 5 + i];
+    var geosBytes = new Uint8Array(9);
+    for (var g = 0; g < 9; g++) geosBytes[g] = data[entOff + 21 + g];
+
+    var geosInfoBlock = null;
+    var infoTrack = data[entOff + 0x15];
+    var infoSector = data[entOff + 0x16];
+    if (data[entOff + 0x18] > 0 && infoTrack > 0) {
+      var infoOff = sectorOffset(infoTrack, infoSector);
+      if (infoOff >= 0) {
+        geosInfoBlock = new Uint8Array(256);
+        for (var ib = 0; ib < 256; ib++) geosInfoBlock[ib] = data[infoOff + ib];
+      }
     }
-  }
 
-  clipboard = {
-    typeIdx: typeIdx,
-    nameBytes: nameBytes,
-    geosBytes: geosBytes,
-    geosInfoBlock: geosInfoBlock,
-    data: new Uint8Array(result.data)
-  };
+    clipboard.push({
+      typeIdx: typeIdx,
+      nameBytes: nameBytes,
+      geosBytes: geosBytes,
+      geosInfoBlock: geosInfoBlock,
+      data: new Uint8Array(result.data)
+    });
+  }
   updateEntryMenuState();
 });
 
 document.getElementById('opt-paste').addEventListener('click', async (e) => {
   e.stopPropagation();
-  if (!clipboard || !currentBuffer || !canInsertFile()) return;
+  if (clipboard.length === 0 || !currentBuffer || !canInsertFile()) return;
   closeMenus();
 
-  var isGeosFile = clipboard.geosInfoBlock !== null;
-  var geosData = null;
-  if (clipboard.geosBytes || clipboard.geosInfoBlock) {
-    geosData = { geosBytes: clipboard.geosBytes, geosInfoBlock: clipboard.geosInfoBlock };
-  }
-
-  // If pasting a GEOS file to a non-GEOS disk, ask to convert
-  if (isGeosFile && !hasGeosSignature(currentBuffer)) {
+  // Check if any GEOS files in clipboard and disk is not GEOS
+  var hasGeos = clipboard.some(function(c) { return c.geosInfoBlock !== null; });
+  if (hasGeos && !hasGeosSignature(currentBuffer)) {
     var choice = await showChoiceModal(
       'GEOS File',
-      'This is a GEOS file but the disk is not in GEOS format. Convert disk to GEOS format?',
+      'Clipboard contains GEOS file(s) but the disk is not in GEOS format. Convert disk to GEOS format?',
       [
         { label: 'Cancel', value: 'cancel', secondary: true },
         { label: 'Paste Anyway', value: 'paste' },
@@ -5662,11 +5658,25 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     }
   }
 
-  if (writeFileToDisk(clipboard.typeIdx, clipboard.nameBytes, clipboard.data, geosData)) {
+  var pasted = 0, failed = 0;
+  for (var pi = 0; pi < clipboard.length; pi++) {
+    var item = clipboard[pi];
+    var geosData = null;
+    if (item.geosBytes || item.geosInfoBlock) {
+      geosData = { geosBytes: item.geosBytes, geosInfoBlock: item.geosInfoBlock };
+    }
+    if (writeFileToDisk(item.typeIdx, item.nameBytes, item.data, geosData)) {
+      pasted++;
+    } else {
+      failed++;
+      break; // stop on first error (disk full, etc.)
+    }
+  }
+
+  if (pasted > 0) {
     var info = parseCurrentDir(currentBuffer);
     renderDisk(info);
-    var name = petsciiToReadable(readPetsciiString(clipboard.nameBytes, 0, 16)).trim();
-    showModal('Paste Successful', ['"' + name + '" pasted successfully.']);
+    showModal('Paste Complete', [pasted + ' file(s) pasted.' + (failed > 0 ? ' ' + failed + ' failed.' : '')]);
   }
 });
 
