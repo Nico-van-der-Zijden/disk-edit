@@ -697,14 +697,16 @@ document.addEventListener('keydown', (e) => {
   // Delete: remove selected entry
   if (e.key === 'Delete' && selectedEntryIndex >= 0 && currentBuffer) {
     e.preventDefault();
-    const slots = getDirSlotOffsets(currentBuffer);
-    const idx = slots.indexOf(selectedEntryIndex);
-    removeFileEntry(currentBuffer, selectedEntryIndex);
-    const info = parseCurrentDir(currentBuffer);
-    // Select next entry, or previous if at end
-    const visibleEntries = info.entries.filter(en => !en.deleted || showDeleted);
+    pushUndo();
+    var toRemove = selectedEntries.length > 0 ? selectedEntries.slice() : [selectedEntryIndex];
+    var slots = getDirSlotOffsets(currentBuffer);
+    var firstIdx = slots.indexOf(toRemove[0]);
+    // Remove in reverse order to keep offsets stable
+    for (var di = toRemove.length - 1; di >= 0; di--) removeFileEntry(currentBuffer, toRemove[di]);
+    var info = parseCurrentDir(currentBuffer);
+    var visibleEntries = info.entries.filter(function(en) { return !en.deleted || showDeleted; });
     if (visibleEntries.length > 0) {
-      const newIdx = Math.min(idx, visibleEntries.length - 1);
+      var newIdx = Math.min(firstIdx, visibleEntries.length - 1);
       selectedEntryIndex = visibleEntries[newIdx].entryOff;
       selectedEntries = [selectedEntryIndex];
     } else {
@@ -781,14 +783,18 @@ document.addEventListener('keydown', (e) => {
 
 function updateEntryMenuState() {
   const hasSelection = selectedEntryIndex >= 0 && currentBuffer;
+  const multiSelect = selectedEntries.length > 1;
   const inPartition = currentPartition !== null;
-  // Most editing is disabled inside a partition (read-only view)
-  document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection);
-  document.getElementById('opt-insert').classList.toggle('disabled', !currentBuffer || !canInsertFile());
-  document.getElementById('opt-insert-sep').classList.toggle('disabled', !currentBuffer || !canInsertFile());
+  // Single-select only operations
+  document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection || multiSelect);
+  document.getElementById('opt-insert').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile());
+  document.getElementById('opt-insert-sep').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile());
+  document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection || multiSelect);
+  document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection || multiSelect);
+  document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || inPartition || !currentBuffer || currentFormat !== DISK_FORMATS.d81 || !canInsertFile());
+  // Multi-select compatible operations
   document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-align').classList.toggle('disabled', !hasSelection);
-  document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-recalc-size').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection);
   document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection);
@@ -799,7 +805,6 @@ function updateEntryMenuState() {
     var typeEl = document.querySelector('[data-typeidx="' + ti + '"]');
     if (typeEl) typeEl.classList.toggle('disabled', supportedTypes.indexOf(ti) < 0);
   }
-  document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection);
   // Copy: enabled for closed file types 1-4 (same as export)
   // Paste: enabled when clipboard has data and disk has room
   var exportEnabled = false;
@@ -833,9 +838,8 @@ function updateEntryMenuState() {
   document.getElementById('opt-paste').classList.toggle('disabled', !clipboard || !currentBuffer || !canInsertFile());
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
   document.getElementById('opt-view-gfx').classList.toggle('disabled', !gfxEnabled);
-  document.getElementById('opt-import').classList.toggle('disabled', !currentBuffer || !canInsertFile());
-  document.getElementById('opt-add-partition').classList.toggle('disabled', inPartition || !currentBuffer || currentFormat !== DISK_FORMATS.d81 || !canInsertFile());
-  document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection);
+  document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile());
+  document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect);
   document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection);
 
   // GEOS info — enabled when selected entry has GEOS file type
@@ -5524,7 +5528,8 @@ document.querySelectorAll('#opt-align .submenu .option').forEach(el => {
     e.stopPropagation();
     if (!currentBuffer || selectedEntryIndex < 0) return;
     closeMenus();
-    alignFilename(currentBuffer, selectedEntryIndex, el.dataset.align);
+    var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+    for (var ai = 0; ai < entries.length; ai++) alignFilename(currentBuffer, entries[ai], el.dataset.align);
     const info = parseCurrentDir(currentBuffer);
     renderDisk(info);
   });
@@ -5543,8 +5548,11 @@ document.getElementById('opt-recalc-size').addEventListener('click', (e) => {
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
   pushUndo();
-  const actual = countActualBlocks(currentBuffer, selectedEntryIndex);
-  writeBlockSize(currentBuffer, selectedEntryIndex, actual);
+  var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+  for (var ri = 0; ri < entries.length; ri++) {
+    var actual = countActualBlocks(currentBuffer, entries[ri]);
+    writeBlockSize(currentBuffer, entries[ri], actual);
+  }
   const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 });
@@ -5554,30 +5562,31 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+  var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
   var data = new Uint8Array(currentBuffer);
-  var typeByte = data[selectedEntryIndex + 2];
-  var typeIdx = typeByte & 0x07;
-  if (typeIdx < 1 || typeIdx > 4) return;
-
-  var result = readFileData(currentBuffer, selectedEntryIndex);
-  if (result.error) {
-    alert('Export error: ' + result.error);
-    return;
-  }
-
   var extMap = { 1: '.seq', 2: '.prg', 3: '.usr', 4: '.rel' };
-  var ext = extMap[typeIdx];
-  var name = petsciiToReadable(readPetsciiString(data, selectedEntryIndex + 5, 16)).trim();
-  // Sanitize filename: replace characters not safe for filenames
-  name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
-  if (!name) name = 'export';
 
-  var blob = new Blob([result.data], { type: 'application/octet-stream' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name + ext;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  for (var ei = 0; ei < entries.length; ei++) {
+    var entOff = entries[ei];
+    var typeByte = data[entOff + 2];
+    var typeIdx = typeByte & 0x07;
+    if (typeIdx < 1 || typeIdx > 4) continue;
+
+    var result = readFileData(currentBuffer, entOff);
+    if (result.error) continue;
+
+    var ext = extMap[typeIdx];
+    var name = petsciiToReadable(readPetsciiString(data, entOff + 5, 16)).trim();
+    name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+    if (!name) name = 'export';
+
+    var blob = new Blob([result.data], { type: 'application/octet-stream' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name + ext;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
 });
 
 // ── File menu: Copy / Paste ──────────────────────────────────────────
@@ -6078,7 +6087,8 @@ document.getElementById('opt-lock').addEventListener('click', (e) => {
   closeMenus();
   pushUndo();
   const data = new Uint8Array(currentBuffer);
-  data[selectedEntryIndex + 2] ^= 0x40; // toggle lock bit
+  var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+  for (var i = 0; i < entries.length; i++) data[entries[i] + 2] ^= 0x40;
   const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 });
@@ -6089,7 +6099,8 @@ document.getElementById('opt-splat').addEventListener('click', (e) => {
   closeMenus();
   pushUndo();
   const data = new Uint8Array(currentBuffer);
-  data[selectedEntryIndex + 2] ^= 0x80; // toggle closed bit
+  var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+  for (var i = 0; i < entries.length; i++) data[entries[i] + 2] ^= 0x80;
   const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 });
@@ -6099,7 +6110,9 @@ document.querySelectorAll('#opt-change-type .submenu .option').forEach(el => {
     e.stopPropagation();
     if (!currentBuffer || selectedEntryIndex < 0) return;
     closeMenus();
-    changeFileType(selectedEntryIndex, parseInt(el.dataset.typeidx, 10));
+    var typeIdx = parseInt(el.dataset.typeidx, 10);
+    var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+    for (var i = 0; i < entries.length; i++) changeFileType(entries[i], typeIdx);
   });
 });
 
