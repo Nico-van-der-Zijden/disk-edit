@@ -402,17 +402,11 @@ function bindDirSelection() {
         }
         selectedEntryIndex = offset;
       } else {
-        // Normal click: single select
-        var wasSelected = el.classList.contains('selected') && selectedEntries.length <= 1;
+        // Normal click: always select this entry (click same row keeps it selected)
         entries.forEach(function(ent) { ent.classList.remove('selected'); });
-        selectedEntries = [];
-        if (wasSelected) {
-          selectedEntryIndex = -1;
-        } else {
-          el.classList.add('selected');
-          selectedEntryIndex = offset;
-          selectedEntries = [offset];
-        }
+        el.classList.add('selected');
+        selectedEntryIndex = offset;
+        selectedEntries = [offset];
       }
       updateEntryMenuState();
     });
@@ -684,15 +678,7 @@ document.getElementById('content').addEventListener('contextmenu', function(e) {
   showContextMenu(e.clientX, e.clientY);
 });
 
-// Click outside dir entries deselects (registered once)
-document.addEventListener('click', (e) => {
-  if (!e.target.closest('.dir-entry') && !e.target.closest('.menu-item') && !e.target.closest('.petscii-picker') && !e.target.closest('.type-dropdown') && !e.target.closest('#context-menu') && !e.target.closest('.modal-overlay') && !e.target.closest('.modal')) {
-    document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
-    selectedEntryIndex = -1;
-    selectedEntries = [];
-    updateEntryMenuState();
-  }
-});
+// Click outside dir entries — do NOT deselect (selection persists until another file is clicked)
 
 // Keyboard: Arrow Up/Down to select, Ctrl+Arrow to move entry
 // Registered once outside bindDirSelection to avoid stacking listeners
@@ -720,8 +706,10 @@ document.addEventListener('keydown', (e) => {
     if (visibleEntries.length > 0) {
       const newIdx = Math.min(idx, visibleEntries.length - 1);
       selectedEntryIndex = visibleEntries[newIdx].entryOff;
+      selectedEntries = [selectedEntryIndex];
     } else {
       selectedEntryIndex = -1;
+      selectedEntries = [];
     }
     renderDisk(info);
     return;
@@ -5522,8 +5510,10 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
   if (visibleEntries.length > 0) {
     const newIdx = Math.min(idx, visibleEntries.length - 1);
     selectedEntryIndex = visibleEntries[newIdx].entryOff;
+    selectedEntries = [selectedEntryIndex];
   } else {
     selectedEntryIndex = -1;
+    selectedEntries = [];
   }
   renderDisk(info);
   updateMenuState();
