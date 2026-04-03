@@ -288,10 +288,21 @@ function renderDisk(info) {
   var healthEl = document.getElementById('footer-health');
   if (healthEl && currentBuffer && !currentPartition) {
     var integrity = checkBAMIntegrity(currentBuffer);
-    var hasErrors = integrity.bamErrors.length > 0 || integrity.allocMismatch > 0;
-    healthEl.textContent = hasErrors ? '\u25CF' : '\u25CF';
-    healthEl.style.color = hasErrors ? '#9A6759' : '#588D43';
-    healthEl.title = hasErrors ? 'BAM issues detected' : 'Disk OK';
+    var bamIssues = integrity.bamErrors.length > 0 || integrity.allocMismatch > 0;
+    var diskErrors = hasErrorBytes(currentBuffer);
+    if (bamIssues) {
+      healthEl.textContent = '\u25CF';
+      healthEl.style.color = '#9A6759'; // red — BAM problems
+      healthEl.title = 'BAM issues detected';
+    } else if (diskErrors) {
+      healthEl.textContent = '\u25CF';
+      healthEl.style.color = '#B8C76F'; // yellow — has error bytes
+      healthEl.title = 'Disk has error bytes';
+    } else {
+      healthEl.textContent = '\u25CF';
+      healthEl.style.color = '#588D43'; // green — all OK
+      healthEl.title = 'Disk OK';
+    }
   } else if (healthEl) {
     healthEl.textContent = '';
   }
@@ -351,13 +362,45 @@ function bindDirSelection() {
         return;
       }
       cancelActiveEdits();
-      const wasSelected = el.classList.contains('selected');
-      entries.forEach(e => e.classList.remove('selected'));
-      if (wasSelected) {
-        selectedEntryIndex = -1;
+      var offset = parseInt(el.dataset.offset, 10);
+
+      if (e.ctrlKey) {
+        // Ctrl+click: toggle this entry in multi-select
+        if (el.classList.contains('selected')) {
+          el.classList.remove('selected');
+          selectedEntries = selectedEntries.filter(function(o) { return o !== offset; });
+          selectedEntryIndex = selectedEntries.length > 0 ? selectedEntries[selectedEntries.length - 1] : -1;
+        } else {
+          el.classList.add('selected');
+          selectedEntries.push(offset);
+          selectedEntryIndex = offset;
+        }
+      } else if (e.shiftKey && selectedEntryIndex >= 0) {
+        // Shift+click: range select from last selected to this
+        var allOffsets = [];
+        entries.forEach(function(ent) { allOffsets.push(parseInt(ent.dataset.offset, 10)); });
+        var startIdx = allOffsets.indexOf(selectedEntryIndex);
+        var endIdx = allOffsets.indexOf(offset);
+        if (startIdx > endIdx) { var tmp = startIdx; startIdx = endIdx; endIdx = tmp; }
+        entries.forEach(function(ent) { ent.classList.remove('selected'); });
+        selectedEntries = [];
+        for (var si = startIdx; si <= endIdx; si++) {
+          entries[si].classList.add('selected');
+          selectedEntries.push(allOffsets[si]);
+        }
+        selectedEntryIndex = offset;
       } else {
-        el.classList.add('selected');
-        selectedEntryIndex = parseInt(el.dataset.offset, 10);
+        // Normal click: single select
+        var wasSelected = el.classList.contains('selected') && selectedEntries.length <= 1;
+        entries.forEach(function(ent) { ent.classList.remove('selected'); });
+        selectedEntries = [];
+        if (wasSelected) {
+          selectedEntryIndex = -1;
+        } else {
+          el.classList.add('selected');
+          selectedEntryIndex = offset;
+          selectedEntries = [offset];
+        }
       }
       updateEntryMenuState();
     });
@@ -961,7 +1004,10 @@ function updateMenuState() {
   document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || !hasErrorBytes(currentBuffer));
   document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || hasGeosSignature(currentBuffer));
   document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0);
   document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-zero-free').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk);
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -1798,6 +1844,49 @@ document.getElementById('opt-fill-free').addEventListener('click', function(e) {
   footer.appendChild(fillBtn);
 
   document.getElementById('modal-overlay').classList.add('open');
+});
+
+// ── Disk menu: Report 0 Blocks Free ──────────────────────────────────
+document.getElementById('opt-zero-free').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+  pushUndo();
+  var data = new Uint8Array(currentBuffer);
+  var fmt = currentFormat;
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var bamTracks = fmt.bamTracksRange(currentTracks);
+  for (var t = 1; t <= bamTracks; t++) {
+    fmt.writeTrackFree(data, bamOff, t, 0);
+  }
+  var info = parseCurrentDir(currentBuffer);
+  renderDisk(info);
+  updateMenuState();
+  showModal('Report 0 Blocks Free', ['All track free counts set to 0. The BAM bitmaps are unchanged.']);
+});
+
+// ── Disk menu: Export as Text ────────────────────────────────────────
+document.getElementById('opt-export-txt').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+  var info = parseCurrentDir(currentBuffer);
+  var lines = [];
+  lines.push('0 "' + petsciiToReadable(info.diskName).replace(/"/g, '') + '" ' + petsciiToReadable(info.diskId));
+  for (var i = 0; i < info.entries.length; i++) {
+    var en = info.entries[i];
+    if (en.deleted && !showDeleted) continue;
+    var nameR = petsciiToReadable(en.name);
+    lines.push(String(en.blocks).padStart(5) + ' "' + nameR + '"' + ' '.repeat(Math.max(0, 16 - nameR.length)) + ' ' + en.type.trim());
+  }
+  lines.push(info.freeBlocks + ' BLOCKS FREE.');
+  var txt = lines.join('\n') + '\n';
+  var blob = new Blob([txt], { type: 'text/plain' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = (currentFileName || 'disk') + '.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
 });
 
 // ── Disk menu: Add Directory (D81 partition) ─────────────────────────
@@ -5132,6 +5221,17 @@ function showSeparatorEditor() {
   attachEvents();
 }
 
+document.getElementById('opt-undo').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  if (popUndo()) {
+    var info = parseCurrentDir(currentBuffer);
+    renderDisk(info);
+    updateMenuState();
+    updateEntryMenuState();
+  }
+});
+
 document.getElementById('opt-edit-separators').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
@@ -5414,7 +5514,7 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
 // ── File menu: Import File ────────────────────────────────────────────
 var importFileInput = document.createElement('input');
 importFileInput.type = 'file';
-importFileInput.accept = '.prg,.seq,.usr,.rel';
+importFileInput.accept = '.prg,.seq,.usr,.rel,.p00,.s00,.u00,.r00';
 importFileInput.style.display = 'none';
 document.body.appendChild(importFileInput);
 
@@ -5736,7 +5836,7 @@ function asciiToNameBytes(name) {
 function importFileToDisk(fileName, fileData) {
   var dotIdx = fileName.lastIndexOf('.');
   var ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1).toLowerCase() : '';
-  var typeMap = { prg: 2, seq: 1, usr: 3, rel: 4 };
+  var typeMap = { prg: 2, seq: 1, usr: 3, rel: 4, p00: 2, s00: 1, u00: 3, r00: 4 };
   var typeIdx = typeMap[ext];
   if (typeIdx === undefined) {
     showModal('Import Error', ['Unsupported file type: .' + ext]);
@@ -5745,6 +5845,17 @@ function importFileToDisk(fileName, fileData) {
 
   var baseName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
   var nameBytes = asciiToNameBytes(baseName);
+
+  // PC64 format (.P00/.S00/etc.): 26-byte header with original filename
+  if (ext === 'p00' || ext === 's00' || ext === 'u00' || ext === 'r00') {
+    if (fileData.length > 26 && fileData[0] === 0x43 && fileData[1] === 0x36 && fileData[2] === 0x34) {
+      // "C64File" magic — extract original name and strip header
+      var pc64Name = '';
+      for (var pi = 8; pi < 24 && fileData[pi] !== 0x00; pi++) pc64Name += String.fromCharCode(fileData[pi]);
+      if (pc64Name) nameBytes = asciiToNameBytes(pc64Name);
+      fileData = fileData.subarray(26);
+    }
+  }
 
   if (writeFileToDisk(typeIdx, nameBytes, fileData)) {
     var info = parseCurrentDir(currentBuffer);
@@ -6140,6 +6251,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.1.1', title: 'Multi-select, P00, export text, fixes', items: [
+      'Multi-select: Ctrl+click to toggle, Shift+click for range',
+      'PC64 (.P00/.S00/.U00/.R00) import with original filename extraction',
+      'Export as Text: directory listing as .txt file',
+      'Report 0 Blocks Free: set all track free counts to 0',
+      'Undo in Edit menu (not just Ctrl+Z)',
+      'Health indicator: green=OK, yellow=error bytes, red=BAM issues',
+    ]},
     { ver: '1.1.0', title: 'New formats, undo, disassembler', items: [
       'D80 (8050) and D82 (8250) disk format support',
       'D64 42-track support',
