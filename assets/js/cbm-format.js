@@ -385,14 +385,13 @@ const DISK_FORMATS = {
     headerSector: 0,
     bamTrack: 38,
     bamSector: 0,
-    bamSector2: 3,  // second BAM sector at T38/S3
     dosVersion: 0x43, // 'C'
     dosType: '2C',
-    nameOffset: 0x06,
+    nameOffset: 0x06,  // within header sector T39/S0
     nameLength: 16,
     idOffset: 0x18,
     idLength: 5,
-    maxDirSectors: 28, // sectors 1-28 on track 39
+    maxDirSectors: 28,
     entriesPerSector: 8,
     entrySize: 32,
     doubleSidedFlag: 0x00,
@@ -408,83 +407,70 @@ const DISK_FORMATS = {
       return 23;
     },
     bamTracksRange(numTracks) { return Math.min(numTracks, 77); },
-    readTrackFree(data, bamOff, track) {
-      // BAM1 (T38/S0): tracks 1-50, BAM2 (T38/S3): tracks 51-77
-      var base;
-      if (track <= 50) {
-        base = bamOff + 0x06 + (track - 1) * 5;
-      } else {
-        var bam2Off = bamOff + 3 * 256; // T38/S3
-        base = bam2Off + 0x06 + (track - 51) * 5;
-      }
-      return data[base];
+    // BAM: 5 bytes per track (free count + 4 bitmap bytes)
+    // BAM1 at T38/S0 covers tracks 1-50, BAM2 at T38/S3 covers tracks 51-77
+    // Each BAM sector has 6-byte header then entries at offset 0x06
+    _bamEntryBase(bamOff, track) {
+      if (track <= 50) return bamOff + 0x06 + (track - 1) * 5;
+      // BAM2 is at T38/S3 = bamOff + 3*256 (sector offset within same track)
+      return bamOff + 3 * 256 + 0x06 + (track - 51) * 5;
     },
-    writeTrackFree(data, bamOff, track, free) {
-      var base;
-      if (track <= 50) {
-        base = bamOff + 0x06 + (track - 1) * 5;
-      } else {
-        base = bamOff + 3 * 256 + 0x06 + (track - 51) * 5;
-      }
-      data[base] = free;
-    },
+    readTrackFree(data, bamOff, track) { return data[this._bamEntryBase(bamOff, track)]; },
+    writeTrackFree(data, bamOff, track, free) { data[this._bamEntryBase(bamOff, track)] = free; },
     readTrackBitmap(data, bamOff, track) {
-      var base;
-      if (track <= 50) {
-        base = bamOff + 0x06 + (track - 1) * 5 + 1;
-      } else {
-        base = bamOff + 3 * 256 + 0x06 + (track - 51) * 5 + 1;
-      }
-      return data[base] | (data[base+1] << 8) | (data[base+2] << 16) | ((data[base+3] << 24) >>> 0);
+      var b = this._bamEntryBase(bamOff, track) + 1;
+      return data[b] | (data[b+1] << 8) | (data[b+2] << 16) | ((data[b+3] << 24) >>> 0);
     },
     writeTrackBitmap(data, bamOff, track, bm) {
-      var base;
-      if (track <= 50) {
-        base = bamOff + 0x06 + (track - 1) * 5 + 1;
-      } else {
-        base = bamOff + 3 * 256 + 0x06 + (track - 51) * 5 + 1;
-      }
-      data[base] = bm & 0xFF;
-      data[base+1] = (bm >> 8) & 0xFF;
-      data[base+2] = (bm >> 16) & 0xFF;
-      data[base+3] = (bm >> 24) & 0xFF;
+      var b = this._bamEntryBase(bamOff, track) + 1;
+      data[b] = bm & 0xFF; data[b+1] = (bm >> 8) & 0xFF;
+      data[b+2] = (bm >> 16) & 0xFF; data[b+3] = (bm >> 24) & 0xFF;
     },
     initBAM(data, bamOff, numTracks) {
-      // BAM sector 1 (T38/S0)
-      data[bamOff + 0] = 38;
-      data[bamOff + 1] = 3;   // link to BAM2
-      data[bamOff + 2] = this.dosVersion;
-      data[bamOff + 3] = 0x00;
-      // BAM sector 2 (T38/S3)
-      var bam2Off = bamOff + 3 * 256;
-      data[bam2Off + 0] = this.dirTrack;
-      data[bam2Off + 1] = this.dirSector;
-      data[bam2Off + 2] = this.dosVersion;
-      data[bam2Off + 3] = 0x00;
-      // Header at T39/S0
-      var headerOff = bamOff + 256; // T39 is next track from T38
-      // Actually need to compute properly - skip for now, createEmptyDisk handles it
-      // Init BAM entries
+      var headerOff = sectorOffset(this.headerTrack, this.headerSector);
+
+      // Header sector T39/S0: points to first BAM sector
+      data[headerOff + 0] = this.bamTrack; // 38
+      data[headerOff + 1] = 0;             // sector 0
+      data[headerOff + 2] = this.dosVersion;
+      for (var hi = 3; hi < 6; hi++) data[headerOff + hi] = 0x00;
+      // Disk name at offset 0x06
+      for (var ni = 0; ni < 16; ni++) data[headerOff + 0x06 + ni] = 0xA0;
+      data[headerOff + 0x16] = 0xA0; data[headerOff + 0x17] = 0xA0;
+      data[headerOff + 0x18] = 0xA0; data[headerOff + 0x19] = 0xA0;
+      data[headerOff + 0x1A] = 0xA0;
+      data[headerOff + 0x1B] = this.dosType.charCodeAt(0);
+      data[headerOff + 0x1C] = this.dosType.charCodeAt(1);
+
+      // BAM sector 1 (T38/S0): covers tracks 1-50
+      data[bamOff + 0] = 38; data[bamOff + 1] = 3; // chain to BAM2
+      data[bamOff + 2] = this.dosVersion; data[bamOff + 3] = 0x00;
+      data[bamOff + 4] = 1; data[bamOff + 5] = 51; // track range
+
+      // BAM sector 2 (T38/S3): covers tracks 51-77
+      var bam2 = bamOff + 3 * 256;
+      data[bam2 + 0] = this.dirTrack; data[bam2 + 1] = this.dirSector; // chain to dir
+      data[bam2 + 2] = this.dosVersion; data[bam2 + 3] = 0x00;
+      data[bam2 + 4] = 51; data[bam2 + 5] = 78; // track range
+
+      // Init BAM entries for all tracks
       for (var t = 1; t <= numTracks; t++) {
         var spt = this.sectorsPerTrack(t);
-        this.writeTrackFree(data, bamOff, t, t === this.dirTrack || t === this.bamTrack ? spt - 2 : spt);
+        var free = spt;
         var bm = (1 << spt) - 1;
-        if (t === this.bamTrack) { bm &= ~(1 << 0); bm &= ~(1 << 3); }
-        if (t === this.dirTrack) { bm &= ~(1 << 0); bm &= ~(1 << 1); }
+        if (t === this.bamTrack) { free -= 2; bm &= ~(1 << 0); bm &= ~(1 << 3); }
+        if (t === this.dirTrack) { free -= 2; bm &= ~(1 << 0); bm &= ~(1 << 1); }
+        this.writeTrackFree(data, bamOff, t, free);
         this.writeTrackBitmap(data, bamOff, t, bm);
       }
-      // Disk name
-      var hdrOff = bamOff + 256; // approximate T39/S0
-      for (var i = 0; i < 16; i++) data[bam2Off + this.nameOffset + i] = 0xA0;
-      data[bam2Off + 0x18] = 0xA0;
-      data[bam2Off + 0x19] = 0xA0;
-      data[bam2Off + 0x1A] = 0xA0;
-      data[bam2Off + 0x1B] = this.dosType.charCodeAt(0);
-      data[bam2Off + 0x1C] = this.dosType.charCodeAt(1);
+
+      // First dir sector T39/S1
+      var dirOff = sectorOffset(this.dirTrack, this.dirSector);
+      data[dirOff + 0] = 0x00; data[dirOff + 1] = 0xFF;
     },
   },
 
-  // D82 format descriptor (8250 drive, double-sided = 2x D80)
+  // D82 format descriptor (8250 drive, double-sided)
   d82: {
     name: 'D82',
     ext: '.d82',
@@ -494,7 +480,6 @@ const DISK_FORMATS = {
     headerSector: 0,
     bamTrack: 38,
     bamSector: 0,
-    bamSector2: 3,
     dosVersion: 0x43,
     dosType: '2C',
     nameOffset: 0x06,
@@ -517,55 +502,69 @@ const DISK_FORMATS = {
       return 23;
     },
     bamTracksRange(numTracks) { return Math.min(numTracks, 154); },
-    readTrackFree(data, bamOff, track) {
-      // 4 BAM sectors: T38/S0 (1-50), T38/S3 (51-100), T38/S6 (101-150), T38/S9 (151-154)
+    // 4 BAM sectors: T38/S0 (1-50), T38/S3 (51-100), T38/S6 (101-150), T38/S9 (151-154)
+    _bamEntryBase(bamOff, track) {
       var sector, idx;
       if (track <= 50) { sector = 0; idx = track - 1; }
       else if (track <= 100) { sector = 3; idx = track - 51; }
       else if (track <= 150) { sector = 6; idx = track - 101; }
       else { sector = 9; idx = track - 151; }
-      var base = bamOff + sector * 256 + 0x06 + idx * 5;
-      return data[base];
+      return bamOff + sector * 256 + 0x06 + idx * 5;
     },
-    writeTrackFree(data, bamOff, track, free) {
-      var sector, idx;
-      if (track <= 50) { sector = 0; idx = track - 1; }
-      else if (track <= 100) { sector = 3; idx = track - 51; }
-      else if (track <= 150) { sector = 6; idx = track - 101; }
-      else { sector = 9; idx = track - 151; }
-      data[bamOff + sector * 256 + 0x06 + idx * 5] = free;
-    },
+    readTrackFree(data, bamOff, track) { return data[this._bamEntryBase(bamOff, track)]; },
+    writeTrackFree(data, bamOff, track, free) { data[this._bamEntryBase(bamOff, track)] = free; },
     readTrackBitmap(data, bamOff, track) {
-      var sector, idx;
-      if (track <= 50) { sector = 0; idx = track - 1; }
-      else if (track <= 100) { sector = 3; idx = track - 51; }
-      else if (track <= 150) { sector = 6; idx = track - 101; }
-      else { sector = 9; idx = track - 151; }
-      var base = bamOff + sector * 256 + 0x06 + idx * 5 + 1;
-      return data[base] | (data[base+1] << 8) | (data[base+2] << 16) | ((data[base+3] << 24) >>> 0);
+      var b = this._bamEntryBase(bamOff, track) + 1;
+      return data[b] | (data[b+1] << 8) | (data[b+2] << 16) | ((data[b+3] << 24) >>> 0);
     },
     writeTrackBitmap(data, bamOff, track, bm) {
-      var sector, idx;
-      if (track <= 50) { sector = 0; idx = track - 1; }
-      else if (track <= 100) { sector = 3; idx = track - 51; }
-      else if (track <= 150) { sector = 6; idx = track - 101; }
-      else { sector = 9; idx = track - 151; }
-      var base = bamOff + sector * 256 + 0x06 + idx * 5 + 1;
-      data[base] = bm & 0xFF;
-      data[base+1] = (bm >> 8) & 0xFF;
-      data[base+2] = (bm >> 16) & 0xFF;
-      data[base+3] = (bm >> 24) & 0xFF;
+      var b = this._bamEntryBase(bamOff, track) + 1;
+      data[b] = bm & 0xFF; data[b+1] = (bm >> 8) & 0xFF;
+      data[b+2] = (bm >> 16) & 0xFF; data[b+3] = (bm >> 24) & 0xFF;
     },
     initBAM(data, bamOff, numTracks) {
-      // Similar to D80 but with 4 BAM sectors
+      var headerOff = sectorOffset(this.headerTrack, this.headerSector);
+
+      // Header sector T39/S0
+      data[headerOff + 0] = this.bamTrack;
+      data[headerOff + 1] = 0;
+      data[headerOff + 2] = this.dosVersion;
+      for (var hi = 3; hi < 6; hi++) data[headerOff + hi] = 0x00;
+      for (var ni = 0; ni < 16; ni++) data[headerOff + 0x06 + ni] = 0xA0;
+      data[headerOff + 0x16] = 0xA0; data[headerOff + 0x17] = 0xA0;
+      data[headerOff + 0x18] = 0xA0; data[headerOff + 0x19] = 0xA0;
+      data[headerOff + 0x1A] = 0xA0;
+      data[headerOff + 0x1B] = this.dosType.charCodeAt(0);
+      data[headerOff + 0x1C] = this.dosType.charCodeAt(1);
+
+      // BAM sectors with chain and track range headers
+      var bamSectors = [
+        { sec: 0, nextT: 38, nextS: 3, lo: 1, hi: 51 },
+        { sec: 3, nextT: 38, nextS: 6, lo: 51, hi: 101 },
+        { sec: 6, nextT: 38, nextS: 9, lo: 101, hi: 151 },
+        { sec: 9, nextT: this.dirTrack, nextS: this.dirSector, lo: 151, hi: 155 },
+      ];
+      for (var bi = 0; bi < bamSectors.length; bi++) {
+        var bs = bamSectors[bi];
+        var off = bamOff + bs.sec * 256;
+        data[off + 0] = bs.nextT; data[off + 1] = bs.nextS;
+        data[off + 2] = this.dosVersion; data[off + 3] = 0x00;
+        data[off + 4] = bs.lo; data[off + 5] = bs.hi;
+      }
+
+      // Init BAM entries for all tracks
       for (var t = 1; t <= numTracks; t++) {
         var spt = this.sectorsPerTrack(t);
-        this.writeTrackFree(data, bamOff, t, t === this.dirTrack || t === this.bamTrack ? spt - 2 : spt);
+        var free = spt;
         var bm = (1 << spt) - 1;
-        if (t === this.bamTrack) { bm &= ~(1 << 0); bm &= ~(1 << 3); }
-        if (t === this.dirTrack) { bm &= ~(1 << 0); bm &= ~(1 << 1); }
+        if (t === this.bamTrack) { free -= 4; bm &= ~(1 << 0); bm &= ~(1 << 3); bm &= ~(1 << 6); bm &= ~(1 << 9); }
+        if (t === this.dirTrack) { free -= 2; bm &= ~(1 << 0); bm &= ~(1 << 1); }
+        this.writeTrackFree(data, bamOff, t, free);
         this.writeTrackBitmap(data, bamOff, t, bm);
       }
+
+      var dirOff = sectorOffset(this.dirTrack, this.dirSector);
+      data[dirOff + 0] = 0x00; data[dirOff + 1] = 0xFF;
     },
   },
 
@@ -666,6 +665,7 @@ function getBamBitmapBase(track, bamOff) {
   var fmt = currentFormat;
   if (fmt === DISK_FORMATS.d81) return fmt._bamBase(bamOff, track) + 1;
   if (fmt === DISK_FORMATS.d71 && track > 35) return fmt._bam2Off(bamOff) + (track - 36) * 3;
+  if (fmt === DISK_FORMATS.d80 || fmt === DISK_FORMATS.d82) return fmt._bamEntryBase(bamOff, track) + 1;
   return bamOff + 4 * track + 1;
 }
 
