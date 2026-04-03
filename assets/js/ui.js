@@ -2000,11 +2000,11 @@ document.getElementById('opt-interleave').addEventListener('click', function(e) 
     '<div class="text-md text-muted mb-lg">Sector interleave used when writing new files and directory sectors.</div>' +
     '<div class="form-row">' +
       '<label class="form-label">Directory:</label>' +
-      '<input type="text" id="il-dir" maxlength="2" value="$' + dirInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input-sm">' +
+      '<input type="text" id="il-dir" maxlength="2" value="$' + dirInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input wide">' +
     '</div>' +
     '<div class="form-row">' +
       '<label class="form-label">File data:</label>' +
-      '<input type="text" id="il-file" maxlength="2" value="$' + fileInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input-sm">' +
+      '<input type="text" id="il-file" maxlength="2" value="$' + fileInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input wide">' +
     '</div>';
 
   var footer = document.querySelector('#modal-overlay .modal-footer');
