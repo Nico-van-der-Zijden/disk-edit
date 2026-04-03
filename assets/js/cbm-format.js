@@ -28,6 +28,8 @@ const DISK_FORMATS = {
       { tracks: 35, bytes: 175531, label: '35 Tracks + Errors' },
       { tracks: 40, bytes: 196608, label: '40 Tracks' },
       { tracks: 40, bytes: 197376, label: '40 Tracks + Errors' },
+      { tracks: 42, bytes: 205312, label: '42 Tracks' },
+      { tracks: 42, bytes: 206114, label: '42 Tracks + Errors' },
     ],
     sectorsPerTrack(t) {
       if (t <= 17) return 21;
@@ -373,6 +375,230 @@ const DISK_FORMATS = {
       // Directory sector init is handled by createEmptyDisk
     },
   },
+  // D80 format descriptor (8050 drive, single-sided)
+  d80: {
+    name: 'D80',
+    ext: '.d80',
+    dirTrack: 39,
+    dirSector: 1,
+    headerTrack: 39,
+    headerSector: 0,
+    bamTrack: 38,
+    bamSector: 0,
+    bamSector2: 3,  // second BAM sector at T38/S3
+    dosVersion: 0x43, // 'C'
+    dosType: '2C',
+    nameOffset: 0x06,
+    nameLength: 16,
+    idOffset: 0x18,
+    idLength: 5,
+    maxDirSectors: 28, // sectors 1-28 on track 39
+    entriesPerSector: 8,
+    entrySize: 32,
+    doubleSidedFlag: 0x00,
+    fileTypes: [0, 1, 2, 3, 4],
+    sizes: [
+      { tracks: 77, bytes: 533248, label: '77 Tracks' },
+    ],
+    sectorsPerTrack(t) {
+      var st = t <= 77 ? t : t - 77;
+      if (st <= 39) return 29;
+      if (st <= 53) return 27;
+      if (st <= 64) return 25;
+      return 23;
+    },
+    bamTracksRange(numTracks) { return Math.min(numTracks, 77); },
+    readTrackFree(data, bamOff, track) {
+      // BAM1 (T38/S0): tracks 1-50, BAM2 (T38/S3): tracks 51-77
+      var base;
+      if (track <= 50) {
+        base = bamOff + 0x06 + (track - 1) * 5;
+      } else {
+        var bam2Off = bamOff + 3 * 256; // T38/S3
+        base = bam2Off + 0x06 + (track - 51) * 5;
+      }
+      return data[base];
+    },
+    writeTrackFree(data, bamOff, track, free) {
+      var base;
+      if (track <= 50) {
+        base = bamOff + 0x06 + (track - 1) * 5;
+      } else {
+        base = bamOff + 3 * 256 + 0x06 + (track - 51) * 5;
+      }
+      data[base] = free;
+    },
+    readTrackBitmap(data, bamOff, track) {
+      var base;
+      if (track <= 50) {
+        base = bamOff + 0x06 + (track - 1) * 5 + 1;
+      } else {
+        base = bamOff + 3 * 256 + 0x06 + (track - 51) * 5 + 1;
+      }
+      return data[base] | (data[base+1] << 8) | (data[base+2] << 16) | ((data[base+3] << 24) >>> 0);
+    },
+    writeTrackBitmap(data, bamOff, track, bm) {
+      var base;
+      if (track <= 50) {
+        base = bamOff + 0x06 + (track - 1) * 5 + 1;
+      } else {
+        base = bamOff + 3 * 256 + 0x06 + (track - 51) * 5 + 1;
+      }
+      data[base] = bm & 0xFF;
+      data[base+1] = (bm >> 8) & 0xFF;
+      data[base+2] = (bm >> 16) & 0xFF;
+      data[base+3] = (bm >> 24) & 0xFF;
+    },
+    initBAM(data, bamOff, numTracks) {
+      // BAM sector 1 (T38/S0)
+      data[bamOff + 0] = 38;
+      data[bamOff + 1] = 3;   // link to BAM2
+      data[bamOff + 2] = this.dosVersion;
+      data[bamOff + 3] = 0x00;
+      // BAM sector 2 (T38/S3)
+      var bam2Off = bamOff + 3 * 256;
+      data[bam2Off + 0] = this.dirTrack;
+      data[bam2Off + 1] = this.dirSector;
+      data[bam2Off + 2] = this.dosVersion;
+      data[bam2Off + 3] = 0x00;
+      // Header at T39/S0
+      var headerOff = bamOff + 256; // T39 is next track from T38
+      // Actually need to compute properly - skip for now, createEmptyDisk handles it
+      // Init BAM entries
+      for (var t = 1; t <= numTracks; t++) {
+        var spt = this.sectorsPerTrack(t);
+        this.writeTrackFree(data, bamOff, t, t === this.dirTrack || t === this.bamTrack ? spt - 2 : spt);
+        var bm = (1 << spt) - 1;
+        if (t === this.bamTrack) { bm &= ~(1 << 0); bm &= ~(1 << 3); }
+        if (t === this.dirTrack) { bm &= ~(1 << 0); bm &= ~(1 << 1); }
+        this.writeTrackBitmap(data, bamOff, t, bm);
+      }
+      // Disk name
+      var hdrOff = bamOff + 256; // approximate T39/S0
+      for (var i = 0; i < 16; i++) data[bam2Off + this.nameOffset + i] = 0xA0;
+      data[bam2Off + 0x18] = 0xA0;
+      data[bam2Off + 0x19] = 0xA0;
+      data[bam2Off + 0x1A] = 0xA0;
+      data[bam2Off + 0x1B] = this.dosType.charCodeAt(0);
+      data[bam2Off + 0x1C] = this.dosType.charCodeAt(1);
+    },
+  },
+
+  // D82 format descriptor (8250 drive, double-sided = 2x D80)
+  d82: {
+    name: 'D82',
+    ext: '.d82',
+    dirTrack: 39,
+    dirSector: 1,
+    headerTrack: 39,
+    headerSector: 0,
+    bamTrack: 38,
+    bamSector: 0,
+    bamSector2: 3,
+    dosVersion: 0x43,
+    dosType: '2C',
+    nameOffset: 0x06,
+    nameLength: 16,
+    idOffset: 0x18,
+    idLength: 5,
+    maxDirSectors: 28,
+    entriesPerSector: 8,
+    entrySize: 32,
+    doubleSidedFlag: 0x00,
+    fileTypes: [0, 1, 2, 3, 4],
+    sizes: [
+      { tracks: 154, bytes: 1066496, label: '154 Tracks' },
+    ],
+    sectorsPerTrack(t) {
+      var st = t <= 77 ? t : t - 77;
+      if (st <= 39) return 29;
+      if (st <= 53) return 27;
+      if (st <= 64) return 25;
+      return 23;
+    },
+    bamTracksRange(numTracks) { return Math.min(numTracks, 154); },
+    readTrackFree(data, bamOff, track) {
+      // 4 BAM sectors: T38/S0 (1-50), T38/S3 (51-100), T38/S6 (101-150), T38/S9 (151-154)
+      var sector, idx;
+      if (track <= 50) { sector = 0; idx = track - 1; }
+      else if (track <= 100) { sector = 3; idx = track - 51; }
+      else if (track <= 150) { sector = 6; idx = track - 101; }
+      else { sector = 9; idx = track - 151; }
+      var base = bamOff + sector * 256 + 0x06 + idx * 5;
+      return data[base];
+    },
+    writeTrackFree(data, bamOff, track, free) {
+      var sector, idx;
+      if (track <= 50) { sector = 0; idx = track - 1; }
+      else if (track <= 100) { sector = 3; idx = track - 51; }
+      else if (track <= 150) { sector = 6; idx = track - 101; }
+      else { sector = 9; idx = track - 151; }
+      data[bamOff + sector * 256 + 0x06 + idx * 5] = free;
+    },
+    readTrackBitmap(data, bamOff, track) {
+      var sector, idx;
+      if (track <= 50) { sector = 0; idx = track - 1; }
+      else if (track <= 100) { sector = 3; idx = track - 51; }
+      else if (track <= 150) { sector = 6; idx = track - 101; }
+      else { sector = 9; idx = track - 151; }
+      var base = bamOff + sector * 256 + 0x06 + idx * 5 + 1;
+      return data[base] | (data[base+1] << 8) | (data[base+2] << 16) | ((data[base+3] << 24) >>> 0);
+    },
+    writeTrackBitmap(data, bamOff, track, bm) {
+      var sector, idx;
+      if (track <= 50) { sector = 0; idx = track - 1; }
+      else if (track <= 100) { sector = 3; idx = track - 51; }
+      else if (track <= 150) { sector = 6; idx = track - 101; }
+      else { sector = 9; idx = track - 151; }
+      var base = bamOff + sector * 256 + 0x06 + idx * 5 + 1;
+      data[base] = bm & 0xFF;
+      data[base+1] = (bm >> 8) & 0xFF;
+      data[base+2] = (bm >> 16) & 0xFF;
+      data[base+3] = (bm >> 24) & 0xFF;
+    },
+    initBAM(data, bamOff, numTracks) {
+      // Similar to D80 but with 4 BAM sectors
+      for (var t = 1; t <= numTracks; t++) {
+        var spt = this.sectorsPerTrack(t);
+        this.writeTrackFree(data, bamOff, t, t === this.dirTrack || t === this.bamTrack ? spt - 2 : spt);
+        var bm = (1 << spt) - 1;
+        if (t === this.bamTrack) { bm &= ~(1 << 0); bm &= ~(1 << 3); }
+        if (t === this.dirTrack) { bm &= ~(1 << 0); bm &= ~(1 << 1); }
+        this.writeTrackBitmap(data, bamOff, t, bm);
+      }
+    },
+  },
+
+  // T64 tape image (read-only virtual format)
+  t64: {
+    name: 'T64',
+    ext: '.t64',
+    dirTrack: 0,
+    dirSector: 0,
+    headerTrack: 0,
+    headerSector: 0,
+    bamTrack: 0,
+    bamSector: 0,
+    dosVersion: 0x00,
+    dosType: 'T6',
+    nameOffset: 0x28,
+    nameLength: 24,
+    idOffset: 0x28,
+    idLength: 5,
+    maxDirSectors: 0,
+    entriesPerSector: 0,
+    entrySize: 32,
+    doubleSidedFlag: 0x00,
+    fileTypes: [1, 2],
+    sizes: [], // variable size, detected by magic bytes
+    sectorsPerTrack: function() { return 0; },
+    bamTracksRange: function() { return 0; },
+    readTrackFree: function() { return 0; },
+    writeTrackFree: function() {},
+    readTrackBitmap: function() { return 0; },
+    writeTrackBitmap: function() {},
+    initBAM: function() {},
+  },
 };
 
 // ── Active format ────────────────────────────────────────────────────
@@ -384,7 +610,15 @@ function sectorsPerTrack(t) {
   return currentFormat.sectorsPerTrack(t);
 }
 
-function detectFormat(bufferSize) {
+function detectFormat(bufferSize, buffer) {
+  // Check for T64 magic bytes
+  if (buffer) {
+    var data = new Uint8Array(buffer);
+    if (bufferSize >= 64 && data[0] === 0x43 && data[1] === 0x36 && data[2] === 0x34) {
+      // Starts with "C64" — likely T64 tape image
+      return { format: DISK_FORMATS.t64, tracks: 0 };
+    }
+  }
   // Try each format's sizes
   for (const [key, fmt] of Object.entries(DISK_FORMATS)) {
     for (const size of fmt.sizes) {
@@ -861,11 +1095,72 @@ function fileTypeName(typeByte) {
 }
 
 // ── Parse disk image ─────────────────────────────────────────────────
+function parseT64(buffer) {
+  var data = new Uint8Array(buffer);
+  // T64 header: 32 bytes signature, then tape record entries
+  // Offset 0x20: tape version (2 bytes)
+  // Offset 0x22: max directory entries (2 bytes)
+  // Offset 0x24: used directory entries (2 bytes)
+  // Offset 0x28: tape name (24 bytes)
+  // Entries start at offset 0x40, each 32 bytes
+  var maxEntries = data[0x22] | (data[0x23] << 8);
+  var usedEntries = data[0x24] | (data[0x25] << 8);
+  var tapeName = '';
+  for (var i = 0; i < 24; i++) {
+    var ch = data[0x28 + i];
+    if (ch === 0x00) break;
+    tapeName += PETSCII_MAP[ch] || String.fromCharCode(ch);
+  }
+
+  var entries = [];
+  for (var ei = 0; ei < maxEntries && ei < 256; ei++) {
+    var eOff = 0x40 + ei * 32;
+    if (eOff + 32 > data.length) break;
+    var entryType = data[eOff];
+    if (entryType === 0) continue; // empty entry
+    var fileType = data[eOff + 1]; // C64 file type (1=SEQ, $82=PRG, etc.)
+    var startAddr = data[eOff + 2] | (data[eOff + 3] << 8);
+    var endAddr = data[eOff + 4] | (data[eOff + 5] << 8);
+    var dataOffset = data[eOff + 8] | (data[eOff + 9] << 8) | (data[eOff + 10] << 16) | (data[eOff + 11] << 24);
+    var name = '';
+    for (var ni = 0; ni < 16; ni++) {
+      var ch2 = data[eOff + 16 + ni];
+      if (ch2 === 0x00 || ch2 === 0x20) { name += PETSCII_MAP[0xA0]; continue; }
+      name += PETSCII_MAP[ch2] || '?';
+    }
+    var dataSize = endAddr - startAddr;
+    var blocks = Math.ceil(dataSize / 254);
+    var typeStr = (fileType & 0x07) === 1 ? ' SEQ ' : ' PRG ';
+    entries.push({
+      name: name,
+      type: typeStr,
+      blocks: blocks,
+      deleted: false,
+      entryOff: eOff, // offset in file, not a real dir entry
+      t64DataOffset: dataOffset,
+      t64StartAddr: startAddr,
+      t64EndAddr: endAddr
+    });
+  }
+
+  return {
+    diskName: tapeName,
+    diskId: 'T64',
+    freeBlocks: 0,
+    entries: entries,
+    format: 'T64',
+    tracks: 0
+  };
+}
+
 function parseDisk(buffer) {
   const data = new Uint8Array(buffer);
-  const detected = detectFormat(data.length);
+  const detected = detectFormat(data.length, buffer);
   currentFormat = detected.format;
   currentTracks = detected.tracks;
+
+  // T64 tape images use their own parser
+  if (currentFormat === DISK_FORMATS.t64) return parseT64(buffer);
 
   const fmt = currentFormat;
   const bamOffset = sectorOffset(fmt.bamTrack, fmt.bamSector);

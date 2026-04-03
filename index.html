@@ -685,6 +685,12 @@
     flex-shrink: 0;
   }
 
+  .dir-footer-health {
+    font-size: 16px;
+    flex-shrink: 0;
+    margin-left: 4px;
+  }
+
   .dir-entry.deleted {
     opacity: 0.5;
   }
@@ -1393,9 +1399,13 @@
         <div class="submenu">
           <div class="option" data-format="d64" data-tracks="35">D64 - 35 Tracks</div>
           <div class="option" data-format="d64" data-tracks="40">D64 - 40 Tracks</div>
+          <div class="option" data-format="d64" data-tracks="42">D64 - 42 Tracks</div>
           <div class="option" data-format="d71" data-tracks="70">D71 - 70 Tracks</div>
           <div class="option" data-format="d71" data-tracks="80">D71 - 80 Tracks</div>
           <div class="option" data-format="d81" data-tracks="80">D81 - 80 Tracks</div>
+          <div class="separator"></div>
+          <div class="option" data-format="d80" data-tracks="77">D80 - 77 Tracks</div>
+          <div class="option" data-format="d82" data-tracks="154">D82 - 154 Tracks</div>
         </div>
       </div>
       <div class="option" id="opt-open">Open...</div>
@@ -1518,7 +1528,7 @@
   <div class="theme-toggle" id="theme-toggle" title="Toggle theme"></div>
 </div>
 
-<input type="file" id="file-input" accept=".d64,.d71,.d81" multiple>
+<input type="file" id="file-input" accept=".d64,.d71,.d81,.d80,.d82,.t64,.p00,.s00,.u00,.r00" multiple>
 
 <div class="tab-bar" id="tab-bar"></div>
 

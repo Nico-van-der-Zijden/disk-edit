@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 0, build: 1 };
+var APP_VERSION = { major: 1, minor: 1, build: 0 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -11,6 +11,27 @@ var showAddresses = localStorage.getItem('d64-showAddresses') === 'true';
 var showTrackSector = localStorage.getItem('d64-showTrackSector') === 'true';
 var currentPartition = null; // null = root, or { entryOff, startTrack, partSize, name }
 var clipboard = null; // { typeIdx, nameBytes: Uint8Array(16), data: Uint8Array }
+
+// ── Undo system ──────────────────────────────────────────────────────
+var undoStack = [];
+var MAX_UNDO = 20;
+
+function pushUndo() {
+  if (!currentBuffer) return;
+  undoStack.push(currentBuffer.slice(0));
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+}
+
+function popUndo() {
+  if (undoStack.length === 0 || !currentBuffer) return false;
+  currentBuffer = undoStack.pop();
+  // Update active tab
+  var tab = getActiveTab();
+  if (tab) tab.buffer = currentBuffer;
+  return true;
+}
+
+function clearUndo() { undoStack = []; }
 
 // ── Tab management ────────────────────────────────────────────────────
 var tabs = [];        // array of { id, name, buffer, fileName, format, tracks, partition, selectedEntry }

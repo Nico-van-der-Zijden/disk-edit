@@ -252,6 +252,7 @@ function renderDisk(info) {
           <span class="dir-footer-label">blocks free.</span>
           <span class="dir-footer-ts" id="footer-ts"></span>
           <span class="dir-footer-tracks">${currentFormat.name} ${currentTracks} tracks</span>
+          <span class="dir-footer-health" id="footer-health" title="Disk health"></span>
         </div>
       </div>
     </div>`;
@@ -282,6 +283,18 @@ function renderDisk(info) {
     }
   }
   updateEntryMenuState();
+
+  // Filesystem health indicator
+  var healthEl = document.getElementById('footer-health');
+  if (healthEl && currentBuffer && !currentPartition) {
+    var integrity = checkBAMIntegrity(currentBuffer);
+    var hasErrors = integrity.bamErrors.length > 0 || integrity.allocMismatch > 0;
+    healthEl.textContent = hasErrors ? '\u25CF' : '\u25CF';
+    healthEl.style.color = hasErrors ? '#9A6759' : '#588D43';
+    healthEl.title = hasErrors ? 'BAM issues detected' : 'Disk OK';
+  } else if (healthEl) {
+    healthEl.textContent = '';
+  }
 }
 
 let activeEditEl = null;
@@ -654,6 +667,18 @@ document.addEventListener('keydown', (e) => {
       selectedEntryIndex = -1;
     }
     renderDisk(info);
+    return;
+  }
+
+  // Ctrl+Z: undo
+  if (e.ctrlKey && e.key === 'z' && currentBuffer) {
+    e.preventDefault();
+    if (popUndo()) {
+      var info = parseCurrentDir(currentBuffer);
+      renderDisk(info);
+      updateMenuState();
+      updateEntryMenuState();
+    }
     return;
   }
 
@@ -3278,46 +3303,58 @@ function showFileHexViewer(entryOff) {
   var result = readFileData(currentBuffer, entryOff);
   var fileData = result.data;
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
-
-  var html = '<div class="hex-editor">';
   var totalBytes = fileData.length;
-  var rows = Math.ceil(totalBytes / 8) || 1;
-
-  for (var row = 0; row < rows; row++) {
-    var rowOff = row * 8;
-    html += '<div class="hex-row">';
-    html += '<span class="hex-offset">' + rowOff.toString(16).toUpperCase().padStart(4, '0') + '</span>';
-    html += '<span class="hex-bytes">';
-    for (var col = 0; col < 8; col++) {
-      var idx = rowOff + col;
-      if (idx < totalBytes) {
-        html += '<span class="hex-byte">' + fileData[idx].toString(16).toUpperCase().padStart(2, '0') + '</span>';
-      } else {
-        html += '<span class="hex-byte" style="opacity:0.2">--</span>';
-      }
-    }
-    html += '</span>';
-    html += '<span class="hex-separator"></span>';
-    html += '<span class="hex-ascii">';
-    for (var col2 = 0; col2 < 8; col2++) {
-      var idx2 = rowOff + col2;
-      if (idx2 < totalBytes) {
-        html += '<span class="hex-char">' + escHtml(PETSCII_MAP[fileData[idx2]]) + '</span>';
-      } else {
-        html += '<span class="hex-char" style="opacity:0.2">.</span>';
-      }
-    }
-    html += '</span>';
-    html += '</div>';
-  }
-  html += '</div>';
+  var viewMode = 'hex';
 
   var titleText = 'Hex View \u2014 "' + name + '" (' + totalBytes + ' bytes)';
   if (result.error) titleText += ' \u2014 ' + result.error;
 
-  document.getElementById('modal-title').textContent = titleText;
-  var body = document.getElementById('modal-body');
-  body.innerHTML = html;
+  function renderView() {
+    document.getElementById('modal-title').textContent = (viewMode === 'hex' ? 'Hex' : 'Disassembly') + ' \u2014 "' + name + '" (' + totalBytes + ' bytes)';
+    var body = document.getElementById('modal-body');
+    // Mode toggle buttons
+    var toggle = '<div style="margin-bottom:8px;display:flex;gap:4px">' +
+      '<button class="btn-small' + (viewMode === 'hex' ? ' active' : '') + '" id="hex-mode-hex">Hex</button>' +
+      '<button class="btn-small' + (viewMode === 'disasm' ? ' active' : '') + '" id="hex-mode-disasm">Disassembly</button></div>';
+
+    if (viewMode === 'hex') {
+      var html = toggle + '<div class="hex-editor">';
+      var rows = Math.ceil(totalBytes / 8) || 1;
+      for (var row = 0; row < rows; row++) {
+        var rowOff = row * 8;
+        html += '<div class="hex-row"><span class="hex-offset">' + rowOff.toString(16).toUpperCase().padStart(4, '0') + '</span><span class="hex-bytes">';
+        for (var col = 0; col < 8; col++) {
+          var idx = rowOff + col;
+          html += idx < totalBytes ? '<span class="hex-byte">' + fileData[idx].toString(16).toUpperCase().padStart(2, '0') + '</span>' : '<span class="hex-byte" style="opacity:0.2">--</span>';
+        }
+        html += '</span><span class="hex-separator"></span><span class="hex-ascii">';
+        for (var col2 = 0; col2 < 8; col2++) {
+          var idx2 = rowOff + col2;
+          html += idx2 < totalBytes ? '<span class="hex-char">' + escHtml(PETSCII_MAP[fileData[idx2]]) + '</span>' : '<span class="hex-char" style="opacity:0.2">.</span>';
+        }
+        html += '</span></div>';
+      }
+      html += '</div>';
+      body.innerHTML = html;
+    } else {
+      // Disassembly view
+      var loadAddr = fileData.length >= 2 ? (fileData[0] | (fileData[1] << 8)) : 0;
+      var codeData = fileData.subarray(2); // skip load address
+      var lines = disassemble6502(codeData, loadAddr, 2000);
+      var html2 = toggle + '<div class="hex-editor">';
+      for (var di = 0; di < lines.length; di++) {
+        var l = lines[di];
+        html2 += '<div class="hex-row"><span class="hex-offset">' + l.addr + '</span><span class="hex-bytes" style="width:80px">' + escHtml(l.bytes) + '</span><span style="color:var(--selected-text)">' + escHtml(l.text) + '</span></div>';
+      }
+      html2 += '</div>';
+      body.innerHTML = html2;
+    }
+
+    document.getElementById('hex-mode-hex').addEventListener('click', function() { viewMode = 'hex'; renderView(); });
+    document.getElementById('hex-mode-disasm').addEventListener('click', function() { viewMode = 'disasm'; renderView(); });
+  }
+
+  renderView();
 
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
@@ -3328,6 +3365,80 @@ function showFileHexViewer(entryOff) {
 }
 
 // ── Hex sector editor ─────────────────────────────────────────────────
+// ── 6502 Disassembler ─────────────────────────────────────────────────
+var OPS_6502 = [
+  'BRK','ORA','???','???','???','ORA','ASL','???','PHP','ORA','ASL','???','???','ORA','ASL','???',
+  'BPL','ORA','???','???','???','ORA','ASL','???','CLC','ORA','???','???','???','ORA','ASL','???',
+  'JSR','AND','???','???','BIT','AND','ROL','???','PLP','AND','ROL','???','BIT','AND','ROL','???',
+  'BMI','AND','???','???','???','AND','ROL','???','SEC','AND','???','???','???','AND','ROL','???',
+  'RTI','EOR','???','???','???','EOR','LSR','???','PHA','EOR','LSR','???','JMP','EOR','LSR','???',
+  'BVC','EOR','???','???','???','EOR','LSR','???','CLI','EOR','???','???','???','EOR','LSR','???',
+  'RTS','ADC','???','???','???','ADC','ROR','???','PLA','ADC','ROR','???','JMP','ADC','ROR','???',
+  'BVS','ADC','???','???','???','ADC','ROR','???','SEI','ADC','???','???','???','ADC','ROR','???',
+  '???','STA','???','???','STY','STA','STX','???','DEY','???','TXA','???','STY','STA','STX','???',
+  'BCC','STA','???','???','STY','STA','STX','???','TYA','STA','TXS','???','???','STA','???','???',
+  'LDY','LDA','LDX','???','LDY','LDA','LDX','???','TAY','LDA','TAX','???','LDY','LDA','LDX','???',
+  'BCS','LDA','???','???','LDY','LDA','LDX','???','CLV','LDA','TSX','???','LDY','LDA','LDX','???',
+  'CPY','CMP','???','???','CPY','CMP','DEC','???','INY','CMP','DEX','???','CPY','CMP','DEC','???',
+  'BNE','CMP','???','???','???','CMP','DEC','???','CLD','CMP','???','???','???','CMP','DEC','???',
+  'CPX','SBC','???','???','CPX','SBC','INC','???','INX','SBC','NOP','???','CPX','SBC','INC','???',
+  'BEQ','SBC','???','???','???','SBC','INC','???','SED','SBC','???','???','???','SBC','INC','???'
+];
+// Addressing mode sizes: 0=implied(1), 1=imm(2), 2=zp(2), 3=zpx(2), 4=zpy(2), 5=abs(3), 6=absx(3), 7=absy(3), 8=indx(2), 9=indy(2), 10=rel(2), 11=ind(3)
+var MODES_6502 = [
+  0,8,0,0,0,2,2,0,0,1,0,0,0,5,5,0, 10,9,0,0,0,3,3,0,0,7,0,0,0,6,6,0,
+  5,8,0,0,2,2,2,0,0,1,0,0,5,5,5,0, 10,9,0,0,0,3,3,0,0,7,0,0,0,6,6,0,
+  0,8,0,0,0,2,2,0,0,1,0,0,5,5,5,0, 10,9,0,0,0,3,3,0,0,7,0,0,0,6,6,0,
+  0,8,0,0,0,2,2,0,0,1,0,0,11,5,5,0, 10,9,0,0,0,3,3,0,0,7,0,0,0,6,6,0,
+  0,8,0,0,2,2,2,0,0,0,0,0,5,5,5,0, 10,9,0,0,3,3,4,0,0,7,0,0,0,6,0,0,
+  1,8,1,0,2,2,2,0,0,1,0,0,5,5,5,0, 10,9,0,0,3,3,4,0,0,7,0,0,6,6,7,0,
+  1,8,0,0,2,2,2,0,0,1,0,0,5,5,5,0, 10,9,0,0,0,3,3,0,0,7,0,0,0,6,6,0,
+  1,8,0,0,2,2,2,0,0,1,0,0,5,5,5,0, 10,9,0,0,0,3,3,0,0,7,0,0,0,6,6,0
+];
+var MODE_SIZE = [1,2,2,2,2,3,3,3,2,2,2,3];
+
+function disassemble6502(data, startAddr, maxLines) {
+  var lines = [];
+  var pos = 0;
+  for (var li = 0; li < maxLines && pos < data.length; li++) {
+    var opcode = data[pos];
+    var mnemonic = OPS_6502[opcode];
+    var mode = MODES_6502[opcode];
+    var size = MODE_SIZE[mode];
+    var addr = startAddr + pos;
+    var bytes = '';
+    for (var b = 0; b < size && pos + b < data.length; b++) {
+      bytes += data[pos + b].toString(16).toUpperCase().padStart(2, '0') + ' ';
+    }
+    var operand = '';
+    if (size === 2 && pos + 1 < data.length) {
+      var val = data[pos + 1];
+      if (mode === 10) { // relative
+        var target = addr + 2 + (val > 127 ? val - 256 : val);
+        operand = '$' + (target & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
+      } else if (mode === 1) operand = '#$' + val.toString(16).toUpperCase().padStart(2, '0');
+      else if (mode === 8) operand = '($' + val.toString(16).toUpperCase().padStart(2, '0') + ',X)';
+      else if (mode === 9) operand = '($' + val.toString(16).toUpperCase().padStart(2, '0') + '),Y';
+      else if (mode === 3) operand = '$' + val.toString(16).toUpperCase().padStart(2, '0') + ',X';
+      else if (mode === 4) operand = '$' + val.toString(16).toUpperCase().padStart(2, '0') + ',Y';
+      else operand = '$' + val.toString(16).toUpperCase().padStart(2, '0');
+    } else if (size === 3 && pos + 2 < data.length) {
+      var val16 = data[pos + 1] | (data[pos + 2] << 8);
+      if (mode === 11) operand = '($' + val16.toString(16).toUpperCase().padStart(4, '0') + ')';
+      else if (mode === 6) operand = '$' + val16.toString(16).toUpperCase().padStart(4, '0') + ',X';
+      else if (mode === 7) operand = '$' + val16.toString(16).toUpperCase().padStart(4, '0') + ',Y';
+      else operand = '$' + val16.toString(16).toUpperCase().padStart(4, '0');
+    }
+    lines.push({
+      addr: '$' + addr.toString(16).toUpperCase().padStart(4, '0'),
+      bytes: bytes.padEnd(9),
+      text: mnemonic + (operand ? ' ' + operand : '')
+    });
+    pos += size;
+  }
+  return lines;
+}
+
 function showSectorHexEditor(track, sector) {
   if (!currentBuffer) return;
   var off = sectorOffset(track, sector);
@@ -3872,6 +3983,7 @@ function moveEntry(direction) {
 
 // ── Sort directory ────────────────────────────────────────────────────
 function sortDirectory(buffer, sortType) {
+  pushUndo();
   const data = new Uint8Array(buffer);
 
   // Collect all directory entry slots (raw 32-byte blocks) from the chain
@@ -4030,6 +4142,7 @@ function alignFilename(buffer, entryOff, alignment) {
 
 // ── Remove directory entry ────────────────────────────────────────────
 function removeFileEntry(buffer, entryOff) {
+  pushUndo();
   const data = new Uint8Array(buffer);
   const slots = getDirSlotOffsets(buffer);
   const idx = slots.indexOf(entryOff);
@@ -4203,6 +4316,7 @@ function writeFileName(buffer, entryOff, name, overrides) {
 // ── Change file type ──────────────────────────────────────────────────
 function changeFileType(entryOff, newTypeIdx) {
   if (!currentBuffer) return;
+  pushUndo();
   const data = new Uint8Array(currentBuffer);
   // Preserve closed (bit 7) and locked (bit 6), replace type bits (0-2)
   data[entryOff + 2] = (data[entryOff + 2] & 0xC0) | (newTypeIdx & 0x07);
@@ -5485,6 +5599,7 @@ function allocateSectors(allocated, numSectors) {
 // Returns true on success, false on failure (with rollback).
 // geosData is optional: { geosBytes: Uint8Array(9), geosInfoBlock: Uint8Array(256)|null }
 function writeFileToDisk(typeIdx, nameBytes, fileData, geosData) {
+  pushUndo();
   var snapshot = currentBuffer.slice(0);
   var data = new Uint8Array(currentBuffer);
 
@@ -5906,7 +6021,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '<div style="font-size:11px;color:' + C64_COLORS[13] + ';margin-top:4px"><i class="fa-solid fa-cannabis"></i> OOK EEN TREKJE? <i class="fa-solid fa-joint"></i></div>' +
     '</div>' +
     '<div style="font-size:13px;line-height:1.8">' +
-      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581)<br>' +
+      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), T64 (tape)<br>' +
       '<b>Features:</b><br>' +
       '&bull; Directory editing: rename, insert, remove, sort, align, lock, scratch<br>' +
       '&bull; Hex sector editor with track/sector navigation<br>' +
@@ -5974,9 +6089,10 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Enter', 'Rename selected file'],
       ['Delete', 'Remove selected file'],
     ]},
-    { title: 'Clipboard', shortcuts: [
+    { title: 'Clipboard & Undo', shortcuts: [
       ['Ctrl + C', 'Copy selected file'],
       ['Ctrl + V', 'Paste file (works across tabs)'],
+      ['Ctrl + Z', 'Undo last change'],
     ]},
     { title: 'Editing (double-click)', shortcuts: [
       ['Filename', 'Rename file (PETSCII keyboard available)'],
@@ -6024,6 +6140,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.1.0', title: 'New formats, undo, disassembler', items: [
+      'D80 (8050) and D82 (8250) disk format support',
+      'D64 42-track support',
+      'T64 tape image support (read-only)',
+      'Undo system (Ctrl+Z) with 20-level snapshot history',
+      '6502 disassembler in hex viewer (toggle Hex/Disassembly)',
+      'Filesystem health indicator in footer (green/red dot)',
+    ]},
     { ver: '1.0.1', items: [
       'Drag & drop: disk images and PRG/SEQ/USR/REL from OS, drag entries to export',
       'File info icon: load/end address, SYS line, 370+ packer detection (Restore64/UNP64)',
