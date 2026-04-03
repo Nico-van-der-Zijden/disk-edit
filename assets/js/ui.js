@@ -5658,7 +5658,8 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     }
   }
 
-  var pasted = 0, failed = 0;
+  var pasted = 0;
+  var remaining = clipboard.length;
   for (var pi = 0; pi < clipboard.length; pi++) {
     var item = clipboard[pi];
     var geosData = null;
@@ -5668,16 +5669,22 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     if (writeFileToDisk(item.typeIdx, item.nameBytes, item.data, geosData)) {
       pasted++;
     } else {
-      failed++;
-      break; // stop on first error (disk full, etc.)
+      // writeFileToDisk already showed the error — stop here
+      remaining = clipboard.length - pi - 1;
+      break;
     }
   }
 
   if (pasted > 0) {
     var info = parseCurrentDir(currentBuffer);
     renderDisk(info);
-    showModal('Paste Complete', [pasted + ' file(s) pasted.' + (failed > 0 ? ' ' + failed + ' failed.' : '')]);
+    if (pasted === clipboard.length) {
+      showModal('Paste Complete', [pasted + ' file(s) pasted successfully.']);
+    } else {
+      showModal('Paste Incomplete', [pasted + ' of ' + clipboard.length + ' file(s) pasted.', remaining + ' file(s) could not be pasted (disk full or no directory space).']);
+    }
   }
+  // If pasted === 0, writeFileToDisk already showed the error
 });
 
 // ── File menu: Import File ────────────────────────────────────────────
