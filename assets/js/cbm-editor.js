@@ -307,7 +307,19 @@ function validateDisk(buffer) {
     allocated[t] = new Uint8Array(fmt.sectorsPerTrack(Math.max(t, 1)));
   }
 
-  allocated[fmt.bamTrack][fmt.bamSector] = 1;
+  // Mark all system sectors (BAM, header)
+  if (fmt.bamSectors) {
+    for (var bsi = 0; bsi < fmt.bamSectors.length; bsi++) {
+      allocated[fmt.bamSectors[bsi][0]][fmt.bamSectors[bsi][1]] = 1;
+    }
+  } else {
+    allocated[fmt.bamTrack][fmt.bamSector] = 1;
+    if (fmt.bamSector2 !== undefined) allocated[fmt.bamTrack][fmt.bamSector2] = 1;
+    if (fmt.bamTrack2) allocated[fmt.bamTrack2][fmt.bamSector2 || 0] = 1;
+  }
+  if (fmt.headerTrack && fmt.headerTrack !== fmt.bamTrack) {
+    allocated[fmt.headerTrack][fmt.headerSector] = 1;
+  }
 
   function followChain(startTrack, startSector, label) {
     const visited = new Set();

@@ -385,6 +385,7 @@ const DISK_FORMATS = {
     headerSector: 0,
     bamTrack: 38,
     bamSector: 0,
+    bamSectors: [[38,0],[38,3]], // all BAM sector locations
     dosVersion: 0x43, // 'C'
     dosType: '2C',
     nameOffset: 0x06,  // within header sector T39/S0
@@ -480,6 +481,7 @@ const DISK_FORMATS = {
     headerSector: 0,
     bamTrack: 38,
     bamSector: 0,
+    bamSectors: [[38,0],[38,3],[38,6],[38,9]], // all BAM sector locations
     dosVersion: 0x43,
     dosType: '2C',
     nameOffset: 0x06,

@@ -5693,9 +5693,15 @@ function buildTrueAllocationMap(buffer) {
     allocated[st + ':2'] = true; // BAM2
   } else {
     // Root: mark BAM sector(s) as allocated
-    allocated[fmt.bamTrack + ':' + fmt.bamSector] = true;
-    if (fmt.bamSector2 !== undefined) allocated[fmt.bamTrack + ':' + fmt.bamSector2] = true;
-    if (fmt.bamTrack2) allocated[fmt.bamTrack2 + ':' + (fmt.bamSector2 || 0)] = true;
+    if (fmt.bamSectors) {
+      for (var bsi = 0; bsi < fmt.bamSectors.length; bsi++) {
+        allocated[fmt.bamSectors[bsi][0] + ':' + fmt.bamSectors[bsi][1]] = true;
+      }
+    } else {
+      allocated[fmt.bamTrack + ':' + fmt.bamSector] = true;
+      if (fmt.bamSector2 !== undefined) allocated[fmt.bamTrack + ':' + fmt.bamSector2] = true;
+      if (fmt.bamTrack2) allocated[fmt.bamTrack2 + ':' + (fmt.bamSector2 || 0)] = true;
+    }
     if (fmt.headerTrack && fmt.headerSector !== undefined &&
         (fmt.headerTrack !== fmt.bamTrack || fmt.headerSector !== fmt.bamSector)) {
       allocated[fmt.headerTrack + ':' + fmt.headerSector] = true;
@@ -5783,10 +5789,12 @@ function allocateSectors(allocated, numSectors) {
     interleave = 1; // D81 interleave
   } else {
     var dirTrack = fmt.dirTrack;
-    // Only include tracks covered by the BAM (e.g. D64 40-track: BAM only covers 1-35)
+    var skipTracks = {};
+    skipTracks[dirTrack] = true;
+    if (fmt.bamTrack !== dirTrack) skipTracks[fmt.bamTrack] = true;
     var maxBamTrack = fmt.bamTracksRange(currentTracks);
-    for (var t = dirTrack - 1; t >= 1; t--) trackOrder.push(t);
-    for (var t2 = dirTrack + 1; t2 <= maxBamTrack; t2++) trackOrder.push(t2);
+    for (var t = dirTrack - 1; t >= 1; t--) { if (!skipTracks[t]) trackOrder.push(t); }
+    for (var t2 = dirTrack + 1; t2 <= maxBamTrack; t2++) { if (!skipTracks[t2]) trackOrder.push(t2); }
     interleave = (fmt === DISK_FORMATS.d81) ? 1 : fileInterleave;
   }
   var sectorList = [];
