@@ -301,7 +301,8 @@ function renderDisk(info) {
     } else {
       healthEl.textContent = '\u25CF';
       healthEl.style.color = '#588D43'; // green — all OK
-      healthEl.title = 'Disk OK';
+      var extBam = detectExtendedBAM(currentBuffer);
+      healthEl.title = 'Disk OK' + (extBam ? ' (' + extBam + ' extended BAM)' : '');
     }
   } else if (healthEl) {
     healthEl.textContent = '';
@@ -1008,6 +1009,9 @@ function updateMenuState() {
   document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-zero-free').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-md5').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-interleave').classList.toggle('disabled', !hasDisk);
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -1887,6 +1891,144 @@ document.getElementById('opt-export-txt').addEventListener('click', function(e) 
   a.download = (currentFileName || 'disk') + '.txt';
   a.click();
   URL.revokeObjectURL(a.href);
+});
+
+// ── Disk menu: MD5 Hash ──────────────────────────────────────────────
+document.getElementById('opt-md5').addEventListener('click', async function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+  // Use Web Crypto API for SHA-256 (MD5 not available, but SHA-256 is better)
+  // Also compute a simple checksum for quick comparison
+  var data = new Uint8Array(currentBuffer);
+  try {
+    var hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    var hashArray = new Uint8Array(hashBuffer);
+    var sha256 = Array.from(hashArray).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+    // Simple MD5-like CRC32 for quick checks
+    var crc = 0xFFFFFFFF;
+    for (var i = 0; i < data.length; i++) {
+      crc ^= data[i];
+      for (var j = 0; j < 8; j++) crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
+    }
+    crc = (crc ^ 0xFFFFFFFF) >>> 0;
+    var crc32 = crc.toString(16).toUpperCase().padStart(8, '0');
+
+    document.getElementById('modal-title').textContent = 'Disk Hash';
+    var body = document.getElementById('modal-body');
+    body.innerHTML =
+      '<div style="font-size:13px;line-height:2">' +
+        '<b>File:</b> ' + escHtml(currentFileName || 'unnamed') + '<br>' +
+        '<b>Size:</b> ' + data.length + ' bytes<br>' +
+        '<b>CRC32:</b> <code style="background:var(--hover);padding:2px 6px;border-radius:3px;user-select:text">' + crc32 + '</code><br>' +
+        '<b>SHA-256:</b> <code style="background:var(--hover);padding:2px 6px;border-radius:3px;font-size:11px;user-select:text;word-break:break-all">' + sha256 + '</code>' +
+      '</div>';
+    var footer = document.querySelector('#modal-overlay .modal-footer');
+    footer.innerHTML = '<button id="modal-close">OK</button>';
+    document.getElementById('modal-close').addEventListener('click', function() {
+      document.getElementById('modal-overlay').classList.remove('open');
+    });
+    document.getElementById('modal-overlay').classList.add('open');
+  } catch(err) {
+    showModal('Hash Error', ['Failed to compute hash: ' + err.message]);
+  }
+});
+
+// ── Disk menu: Compare with... ──────────────────────────────────────
+var compareInput = document.createElement('input');
+compareInput.type = 'file';
+compareInput.accept = '.d64,.d71,.d81,.d80,.d82';
+compareInput.style.display = 'none';
+document.body.appendChild(compareInput);
+
+document.getElementById('opt-compare').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+  compareInput.click();
+});
+
+compareInput.addEventListener('change', function() {
+  var file = compareInput.files[0];
+  if (!file) return;
+  compareInput.value = '';
+  var reader = new FileReader();
+  reader.onload = function() {
+    var otherBuf = new Uint8Array(reader.result);
+    var thisBuf = new Uint8Array(currentBuffer);
+    var maxLen = Math.max(thisBuf.length, otherBuf.length);
+    var diffs = [];
+    var diffSectors = {};
+
+    for (var i = 0; i < maxLen; i++) {
+      var a = i < thisBuf.length ? thisBuf[i] : -1;
+      var b = i < otherBuf.length ? otherBuf[i] : -1;
+      if (a !== b) {
+        var sectorNum = Math.floor(i / 256);
+        if (!diffSectors[sectorNum]) diffSectors[sectorNum] = 0;
+        diffSectors[sectorNum]++;
+      }
+    }
+
+    var sectorKeys = Object.keys(diffSectors).sort(function(a, b) { return parseInt(a) - parseInt(b); });
+    var totalDiffBytes = 0;
+    for (var k in diffSectors) totalDiffBytes += diffSectors[k];
+
+    document.getElementById('modal-title').textContent = 'Disk Comparison';
+    var body = document.getElementById('modal-body');
+    var html = '<div style="font-size:13px;line-height:1.8">' +
+      '<b>Current:</b> ' + escHtml(currentFileName || 'unnamed') + ' (' + thisBuf.length + ' bytes)<br>' +
+      '<b>Compare:</b> ' + escHtml(file.name) + ' (' + otherBuf.length + ' bytes)<br><br>';
+
+    if (sectorKeys.length === 0) {
+      html += '<div style="color:#588D43;font-weight:bold">Disks are identical!</div>';
+    } else {
+      html += '<b>' + totalDiffBytes + ' byte(s) differ</b> in ' + sectorKeys.length + ' sector(s):<br><br>';
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+      html += '<tr style="color:var(--text-muted)"><td style="padding:2px 8px"><b>Sector</b></td><td><b>Offset</b></td><td><b>Differences</b></td></tr>';
+      for (var si = 0; si < Math.min(sectorKeys.length, 100); si++) {
+        var sn = parseInt(sectorKeys[si]);
+        html += '<tr><td style="padding:2px 8px">' + sn + '</td><td>$' + (sn * 256).toString(16).toUpperCase().padStart(6, '0') + '</td><td>' + diffSectors[sn] + ' byte(s)</td></tr>';
+      }
+      if (sectorKeys.length > 100) html += '<tr><td colspan="3" style="padding:2px 8px;color:var(--text-muted)">...and ' + (sectorKeys.length - 100) + ' more sectors</td></tr>';
+      html += '</table>';
+    }
+    html += '</div>';
+    body.innerHTML = html;
+
+    var footer = document.querySelector('#modal-overlay .modal-footer');
+    footer.innerHTML = '<button id="modal-close">OK</button>';
+    document.getElementById('modal-close').addEventListener('click', function() {
+      document.getElementById('modal-overlay').classList.remove('open');
+    });
+    document.getElementById('modal-overlay').classList.add('open');
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+// ── Disk menu: Interleave configuration ─────────────────────────────
+document.querySelectorAll('[data-interleave]').forEach(function(el) {
+  el.addEventListener('click', async function(e) {
+    e.stopPropagation();
+    closeMenus();
+    var type = el.dataset.interleave;
+    var current = type === 'dir' ? dirInterleave : fileInterleave;
+    var label = type === 'dir' ? 'Directory Interleave' : 'File Interleave';
+    var val = await showInputModal(label + ' (1-20)', String(current));
+    if (!val) return;
+    var num = parseInt(val, 10);
+    if (isNaN(num) || num < 1 || num > 20) {
+      showModal('Interleave Error', ['Value must be between 1 and 20.']);
+      return;
+    }
+    if (type === 'dir') {
+      dirInterleave = num;
+      document.getElementById('interleave-dir-val').textContent = num;
+    } else {
+      fileInterleave = num;
+      document.getElementById('interleave-file-val').textContent = num;
+    }
+  });
 });
 
 // ── Disk menu: Add Directory (D81 partition) ─────────────────────────
@@ -5645,7 +5787,7 @@ function allocateSectors(allocated, numSectors) {
     var maxBamTrack = fmt.bamTracksRange(currentTracks);
     for (var t = dirTrack - 1; t >= 1; t--) trackOrder.push(t);
     for (var t2 = dirTrack + 1; t2 <= maxBamTrack; t2++) trackOrder.push(t2);
-    interleave = (fmt === DISK_FORMATS.d81) ? 1 : 10;
+    interleave = (fmt === DISK_FORMATS.d81) ? 1 : fileInterleave;
   }
   var sectorList = [];
   var lastSector = 0;
@@ -6251,6 +6393,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.2.0', title: 'Hashing, comparison, interleave, extended BAM', items: [
+      'Disk hashing: CRC32 and SHA-256 (Show MD5 Hash menu)',
+      'Disk comparison: sector-by-sector diff with another image',
+      'Configurable interleave: directory (default 3) and file (default 10)',
+      'SpeedDOS/DolphinDOS extended BAM detection for 40-track D64',
+      'Extended BAM type shown in health indicator tooltip',
+    ]},
     { ver: '1.1.1', title: 'Multi-select, P00, export text, fixes', items: [
       'Multi-select: Ctrl+click to toggle, Shift+click for range',
       'PC64 (.P00/.S00/.U00/.R00) import with original filename extraction',

@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 1, build: 1 };
+var APP_VERSION = { major: 1, minor: 2, build: 0 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -12,6 +12,52 @@ var showAddresses = localStorage.getItem('d64-showAddresses') === 'true';
 var showTrackSector = localStorage.getItem('d64-showTrackSector') === 'true';
 var currentPartition = null; // null = root, or { entryOff, startTrack, partSize, name }
 var clipboard = null; // { typeIdx, nameBytes: Uint8Array(16), data: Uint8Array }
+var dirInterleave = 3;   // directory sector interleave
+var fileInterleave = 10; // file data sector interleave
+
+// ── Extended BAM detection (SpeedDOS/DolphinDOS/PrologicDOS) ─────────
+function detectExtendedBAM(buffer) {
+  if (!buffer) return null;
+  var data = new Uint8Array(buffer);
+  var fmt = currentFormat;
+  if (fmt !== DISK_FORMATS.d64 || currentTracks < 40) return null;
+
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  if (bamOff < 0) return null;
+
+  // SpeedDOS: extra BAM at T18/S0 offset $C0-$D3 (4 bytes × 5 tracks = 20 bytes)
+  var speedDosOk = false;
+  var hasBytesAtC0 = false;
+  for (var i = 0xC0; i < 0xD4; i++) {
+    if (data[bamOff + i] !== 0x00) { hasBytesAtC0 = true; break; }
+  }
+  if (hasBytesAtC0) speedDosOk = true;
+
+  // DolphinDOS: extra BAM at T18/S0 offset $AC-$BF (4 bytes × 5 tracks)
+  var dolphinOk = false;
+  var hasBytesAtAC = false;
+  for (var j = 0xAC; j < 0xC0; j++) {
+    if (data[bamOff + j] !== 0xA0 && data[bamOff + j] !== 0x00) { hasBytesAtAC = true; break; }
+  }
+  if (hasBytesAtAC) dolphinOk = true;
+
+  // PrologicDOS: extra BAM at T18/S1 offset $00-$13
+  var dirOff = sectorOffset(fmt.dirTrack, fmt.dirSector);
+  var prologicOk = false;
+  // Check if bytes at the start of T18/S1 look like BAM entries (not directory data)
+  if (dirOff >= 0 && data[dirOff + 2] === 0x00) {
+    // First dir entry type byte is 0 — could be prologic BAM
+    var hasNonZero = false;
+    for (var k = 4; k < 20; k++) {
+      if (data[dirOff + k] !== 0x00) { hasNonZero = true; break; }
+    }
+    // Not reliable enough to auto-detect
+  }
+
+  if (speedDosOk) return 'SpeedDOS';
+  if (dolphinOk) return 'DolphinDOS';
+  return null;
+}
 
 // ── Undo system ──────────────────────────────────────────────────────
 var undoStack = [];
