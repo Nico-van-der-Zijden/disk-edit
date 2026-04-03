@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
-<title>CBM Disk Editor</title>
+<title>CBM Disk Editor - Slash Design</title>
 <link rel="stylesheet" href="assets/fontawesome/all.min.css">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='2' width='56' height='60' rx='4' fill='%231a1a2e' stroke='%23666' stroke-width='2'/%3E%3Crect x='20' y='2' width='24' height='16' rx='2' fill='%23999'/%3E%3Crect x='26' y='4' width='12' height='12' rx='1' fill='%231a1a2e'/%3E%3Ccircle cx='32' cy='35' r='13' fill='none' stroke='%23555' stroke-width='1.5'/%3E%3Ccircle cx='32' cy='35' r='5' fill='%23666'/%3E%3Crect x='8' y='50' width='48' height='10' rx='2' fill='%23e8e8e8'/%3E%3Cline x1='12' y1='53' x2='40' y2='53' stroke='%234a6fa5' stroke-width='1.5'/%3E%3Cline x1='12' y1='56' x2='32' y2='56' stroke='%234a6fa5' stroke-width='1.5'/%3E%3C/svg%3E">
 <style>
@@ -17,36 +17,45 @@
   }
 
   :root {
-    --bg: #1a1a2e;
-    --bg-menu: #252540;
-    --bg-panel: #222238;
-    --text: #e8ecf8;
-    --text-muted: #9399b2;
-    --border: #4a4d6a;
-    --accent: #89b4fa;
-    --hover: #32325a;
-    --menu-hover: #3a3a5e;
-    --placeholder-bg: #2a2a48;
-    --hover-edit: #44447a;
+    --bg: #1b1e3d;
+    --bg-menu: #252850;
+    --bg-panel: #20234a;
+    --text: #b8c4e8;
+    --text-muted: #6c70a0;
+    --border: #3a3d6e;
+    --accent: #6c5eb5;
+    --hover: #2e3168;
+    --menu-hover: #363a78;
+    --placeholder-bg: #262952;
+    --hover-edit: #3e4288;
+    --selected-bg: #352879;
+    --selected-text: #9ad284;
   }
 
   [data-theme="light"] {
-    --bg: #eff1f5;
-    --bg-menu: #dce0e8;
-    --bg-panel: #e6e9ef;
-    --text: #4c4f69;
-    --text-muted: #8c8fa1;
-    --border: #bcc0cc;
-    --accent: #1e66f5;
-    --hover: #ccd0da;
-    --menu-hover: #c5c9d5;
-    --placeholder-bg: #d0d4de;
-    --hover-edit: #b8bcc8;
+    --bg: #d8dce8;
+    --bg-menu: #c4c8d8;
+    --bg-panel: #cdd1e0;
+    --text: #282b4a;
+    --text-muted: #6e7190;
+    --border: #a0a4b8;
+    --accent: #352879;
+    --hover: #b4b8cc;
+    --menu-hover: #a8acc2;
+    --placeholder-bg: #bcc0d0;
+    --hover-edit: #9ca0b8;
+    --selected-bg: #352879;
+    --selected-text: #588d43;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-user-modify: unset; }
 
-  ::selection { background: var(--accent); color: var(--bg); }
+  ::selection { background: var(--accent); color: var(--selected-text); }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--selected-text); }
 
   body {
     font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", "Courier New", monospace;
@@ -70,12 +79,13 @@
   .menubar {
     display: flex;
     align-items: center;
-    background: var(--bg-menu);
-    border-bottom: 1px solid var(--border);
+    background: var(--selected-bg);
+    border-bottom: 2px solid var(--border);
     height: 32px;
     padding: 0 4px;
     user-select: none;
     font-size: 13px;
+    color: var(--selected-text);
   }
 
   .menu-item {
@@ -87,7 +97,7 @@
 
   .menu-item:hover,
   .menu-item.open {
-    background: var(--menu-hover);
+    background: rgba(255,255,255,0.1);
   }
 
   .menubar.menu-active .menu-item:hover > .menu-dropdown {
@@ -99,13 +109,13 @@
     position: absolute;
     top: 100%;
     left: 0;
-    background: var(--bg-menu);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    background: var(--bg-panel);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
     padding: 4px 0;
     min-width: 160px;
     z-index: 100;
-    box-shadow: 0 4px 16px rgba(0,0,0,.25);
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
 
   .menu-item.open .menu-dropdown {
@@ -143,12 +153,12 @@
     position: absolute;
     left: 100%;
     top: -4px;
-    background: var(--bg-menu);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    background: var(--bg-panel);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
     padding: 4px 0;
     min-width: 180px;
-    box-shadow: 0 4px 16px rgba(0,0,0,.25);
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
 
   .has-submenu:not(.disabled):hover > .submenu {
@@ -224,10 +234,10 @@
     padding: 5px 10px;
     font-size: 12px;
     cursor: pointer;
-    background: var(--bg-menu);
+    background: var(--bg-panel);
     border: 1px solid var(--border);
     border-bottom: none;
-    border-radius: 6px 6px 0 0;
+    border-radius: 4px 4px 0 0;
     color: var(--text-muted);
     white-space: nowrap;
     max-width: 180px;
@@ -235,11 +245,14 @@
   }
 
   .tab.active {
-    background: var(--hover);
-    color: var(--text);
+    background: var(--bg);
+    color: var(--selected-text);
+    border-color: var(--accent);
+    border-bottom: 1px solid var(--bg);
   }
 
   .tab:hover:not(.active) {
+    color: var(--text);
     background: var(--hover);
   }
 
@@ -272,10 +285,11 @@
     gap: 8px;
     align-items: center;
     padding: 14px 16px;
-    background: var(--bg-menu);
-    border: 1px solid var(--border);
-    border-radius: 6px 6px 0 0;
+    background: var(--selected-bg);
+    border: 1px solid var(--accent);
+    border-radius: 4px 4px 0 0;
     flex-shrink: 0;
+    color: var(--selected-text);
   }
 
   .disk-header-spacer {
@@ -347,8 +361,8 @@
     flex: 1;
     min-height: 200px;
     padding: 8px 0;
-    border-left: 1px solid var(--border);
-    border-right: 1px solid var(--border);
+    border-left: 1px solid var(--accent);
+    border-right: 1px solid var(--accent);
   }
 
   .dir-entry {
@@ -400,12 +414,12 @@
   }
 
   .dir-entry.selected {
-    background: var(--accent);
-    color: var(--bg);
+    background: var(--selected-bg);
+    color: var(--selected-text);
   }
 
   .dir-entry.selected:hover {
-    filter: brightness(1.2);
+    filter: brightness(1.15);
   }
 
   .dir-entry.selected .dir-blocks,
@@ -413,7 +427,7 @@
   .dir-entry.selected .dir-addr,
   .dir-entry.selected .dir-ts,
   .dir-entry.selected .dir-icons {
-    color: var(--bg);
+    color: var(--selected-text);
   }
 
   .dir-icons {
@@ -438,7 +452,7 @@
 
   .dir-entry.selected .dir-icon-info:hover,
   .dir-entry.selected .dir-icon-geos:hover {
-    color: var(--bg);
+    color: var(--selected-text);
     opacity: 0.8;
   }
 
@@ -580,7 +594,7 @@
   }
 
   .dir-entry.selected .dir-grip {
-    color: var(--bg);
+    color: var(--selected-text);
   }
 
   .dir-header-row .dir-grip {
@@ -636,11 +650,11 @@
     flex-direction: column;
     gap: 4px;
     padding: 10px 16px;
-    background: var(--bg-menu);
-    border: 1px solid var(--border);
+    background: var(--selected-bg);
+    border: 1px solid var(--accent);
     border-top: none;
-    border-radius: 0 0 6px 6px;
-    color: var(--text-muted);
+    border-radius: 0 0 4px 4px;
+    color: var(--selected-text);
     font-size: 13px;
     flex-shrink: 0;
   }
@@ -827,23 +841,25 @@
   }
 
   .modal {
-    background: var(--bg-menu);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    background: var(--bg-panel);
+    border: 2px solid var(--accent);
+    border-radius: 4px;
     width: auto;
     min-width: 460px;
     max-width: 90vw;
     max-height: 90vh;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, .4);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, .5), 0 0 0 1px var(--border);
   }
 
   .modal-title {
-    padding: 14px 16px;
-    font-size: 14px;
+    padding: 10px 16px;
+    font-size: 13px;
     font-weight: bold;
-    border-bottom: 1px solid var(--border);
+    background: var(--selected-bg);
+    color: var(--selected-text);
+    border-bottom: 2px solid var(--accent);
     flex-shrink: 0;
   }
 
@@ -895,29 +911,32 @@
     font-family: inherit;
     font-size: 13px;
     padding: 6px 20px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--hover);
-    color: var(--text);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    background: var(--selected-bg);
+    color: var(--selected-text);
     cursor: pointer;
   }
 
   .modal-footer button:hover:not(:disabled) {
-    background: var(--menu-hover);
+    background: var(--accent);
+    color: var(--bg);
   }
 
   .modal-footer button:disabled {
-    opacity: 0.4;
+    opacity: 0.3;
     cursor: default;
   }
 
   .modal-btn-secondary {
     background: transparent !important;
+    color: var(--text-muted) !important;
     border-color: var(--border) !important;
   }
 
   .modal-btn-secondary:hover {
     background: var(--hover) !important;
+    color: var(--text) !important;
   }
 
   .modal-input {
@@ -1469,6 +1488,8 @@
 
 <div class="content" id="content">
   <div class="empty-state">
+    <div style="font-family:'C64 Pro Mono',monospace;font-size:16px;color:#6c5eb5;margin-bottom:16px">**** CBM DISK EDITOR ****</div>
+    <div style="font-family:'C64 Pro Mono',monospace;font-size:12px;color:#6c5eb5;margin-bottom:24px">READY.</div>
     No disk loaded.<br>
     Use Disk &gt; New to create an empty disk,<br>
     or Disk &gt; Open to load a disk image.
