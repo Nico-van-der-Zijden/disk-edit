@@ -6025,31 +6025,70 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   var body = document.getElementById('modal-body');
   var changes = [
     { ver: '1.0.1', items: [
-      'Drag & drop: disk images, PRG/SEQ/USR/REL files from OS, drag entries to export',
+      'Drag & drop: disk images and PRG/SEQ/USR/REL from OS, drag entries to export',
       'File info icon: load/end address, SYS line, 370+ packer detection (Restore64/UNP64)',
       'View As Graphics: 17+ C64 formats, sprites, charsets (MC/hires), Print Shop, color pickers',
       'View As BASIC: V2 (C64) and V7 (C128) detokenizer with syntax coloring',
-      'View As PETSCII: C64 screen simulation (CHROUT $FFD2) with Pepto VIC-II palette',
+      'View As PETSCII: C64 screen simulation (CHROUT $FFD2) with Pepto palette',
       'View As Hex: full file hex viewer with PETSCII display',
-      'Multi-tab interface: multiple disks open, copy/paste files across tabs',
-      'D81 subdirectories: create, navigate, edit inside partitions',
-      'GEOS support: info viewer, copy/paste with info block, auto-convert prompt',
+      'Multi-tab interface: multiple disks, copy/paste files across tabs',
+      'D81 subdirectories: create, navigate, full editing inside partitions',
+      'GEOS copy/paste with info block, auto-convert prompt for non-GEOS disks',
       'Scan for lost files: orphaned sector chain recovery with export/restore',
-      'Fill free sectors with custom hex pattern',
-      'Context menu on directory entries',
-      'Export/import PRG, SEQ, USR, REL files',
-      'Validate disk: CBM partition handling, byte-level BAM rebuild',
+      'Fill free sectors with custom hex byte pattern',
+      'Context menu on directory entries and empty area',
+      'C64 scene visual identity with Pepto VIC-II color palette',
+      'Help menu: About, Credits & Thanks, Keyboard Shortcuts, Changelog',
+    ]},
+    { ver: '1.0.0', title: 'Bug fixes & accuracy', items: [
+      'Fix readFileData off-by-one (last sector byte count convention)',
       'Fix D71 side 2 BAM layout (free counts at T18/S0 $DD, bitmaps at T53/S0)',
       'Fix D81 32-bit bitmap operations for sectors 32-39',
-      'Fix readFileData off-by-one (last sector byte count convention)',
       'Fix D71 80-track initBAM overflow into directory sector',
-      'C64 scene visual identity with Pepto color palette',
-      'Help menu: About, Credits, Keyboard Shortcuts, Changelog',
+      'Fix D81 max directory sectors (37, not 39)',
+      'Validate: CBM partition handling, byte-level BAM rebuild for all formats',
+      'Refactor: extract BAM helpers, remove dead code, consolidate styles',
+    ]},
+    { ver: '0.9', title: 'Core editing features', items: [
+      'Export/import PRG, SEQ, USR, REL files with sector chain verification',
+      'Real drive sector allocation: interleave 10 (1541/1571), interleave 1 (1581)',
+      'GEOS support: info viewer, GEOS signature detection',
+      'Charset mode toggle (uppercase/lowercase)',
+      'PETSCII keyboard: ALL mode, sticky picker, shift/graphics/CBM modifiers',
+      'Align filenames: left, right, center, justify, expand',
+      'File viewer with text/hex/records tabs',
+    ]},
+    { ver: '0.8', title: 'Hex editor & BAM', items: [
+      'Hex sector editor with track/sector navigation',
+      'BAM viewer with integrity checking and color-coded sector map',
+      'Error byte viewer for disks with error info',
+      'Edit menu: separator editor with custom PETSCII patterns',
+      'Recalculate blocks free from actual BAM',
+    ]},
+    { ver: '0.7', title: 'Multi-format support', items: [
+      'D71 (1571) double-sided disk support',
+      'D81 (1581) 3.5" disk support',
+      'Format auto-detection by file size',
+      'C64 Pro Mono TrueType font for authentic PETSCII display',
+      'PETSCII character mapping rewrite with PUA glyphs',
+    ]},
+    { ver: '0.5', title: 'Foundation', items: [
+      'D64 (1541) disk image loading and display',
+      '35 and 40 track support',
+      'Directory listing with file type, blocks, name',
+      'Inline editing: rename files, edit disk name/ID',
+      'Insert/remove directory entries, sort directory',
+      'Create new empty disk images',
+      'Save/Save As disk images',
+      'Safe/unsafe PETSCII character support',
+      'Dark and light themes',
+      'Drag & drop reordering of directory entries',
     ]},
   ];
   var html = '';
   for (var ci = 0; ci < changes.length; ci++) {
-    html += '<div style="font-weight:bold;font-size:13px;margin-bottom:8px;color:var(--selected-text);font-family:\'C64 Pro Mono\',monospace">v' + escHtml(changes[ci].ver) + '</div>';
+    html += '<div style="font-weight:bold;font-size:13px;margin-bottom:4px;color:var(--selected-text);font-family:\'C64 Pro Mono\',monospace">v' + escHtml(changes[ci].ver) +
+      (changes[ci].title ? ' <span style="font-size:11px;color:var(--text-muted);font-family:inherit">\u2014 ' + escHtml(changes[ci].title) + '</span>' : '') + '</div>';
     html += '<ul style="margin:0 0 16px 20px;font-size:12px;line-height:1.7">';
     for (var ii = 0; ii < changes[ci].items.length; ii++) {
       html += '<li>' + escHtml(changes[ci].items[ii]) + '</li>';
