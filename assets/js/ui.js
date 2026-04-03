@@ -1011,7 +1011,6 @@ function updateMenuState() {
   document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-md5').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-interleave').classList.toggle('disabled', !hasDisk);
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -2009,7 +2008,6 @@ compareInput.addEventListener('change', function() {
 // ── Disk menu: Set Interleave ────────────────────────────────────────
 document.getElementById('opt-interleave').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer) return;
   closeMenus();
 
   document.getElementById('modal-title').textContent = 'Set Interleave';
