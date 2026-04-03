@@ -478,6 +478,7 @@ function bindDirSelection() {
       if (e.clientY >= midY && targetIdx < srcIdx) targetIdx++;
       else if (e.clientY < midY && targetIdx > srcIdx) targetIdx--;
 
+      pushUndo();
       // Move by repeatedly swapping adjacent entries
       const dir = targetIdx > srcIdx ? 1 : -1;
       let cur = srcIdx;
@@ -956,6 +957,7 @@ function startEditing(el) {
     if (reverted) return;
     let value = filterC64Input(input.value, maxLen);
     if (currentBuffer) {
+      pushUndo();
       if (field === 'name') writeDiskName(currentBuffer, value, input._petsciiOverrides);
       else if (field === 'id') writeDiskId(currentBuffer, value, input._petsciiOverrides);
     }
@@ -1007,7 +1009,6 @@ function updateMenuState() {
   document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0);
   document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-zero-free').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-md5').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk);
@@ -1138,6 +1139,7 @@ document.getElementById('opt-validate').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
+  pushUndo();
   var log;
   if (currentPartition) {
     log = validatePartition(currentBuffer, currentPartition.startTrack, currentPartition.partSize);
@@ -1625,6 +1627,7 @@ document.getElementById('opt-convert-geos').addEventListener('click', function(e
   e.stopPropagation();
   if (!currentBuffer || hasGeosSignature(currentBuffer)) return;
   closeMenus();
+  pushUndo();
   writeGeosSignature(currentBuffer);
   updateMenuState();
   showModal('Convert to GEOS', ['Disk has been marked as GEOS format.']);
@@ -1809,6 +1812,7 @@ document.getElementById('opt-fill-free').addEventListener('click', function(e) {
     // Read all valid bytes from inputs (ignore empty ones)
     var fillBytes = readAllBytes();
     if (fillBytes.length === 0) return;
+    pushUndo();
 
     // Build true allocation map (don't trust BAM)
     var allocated = buildTrueAllocationMap(currentBuffer);
@@ -1847,25 +1851,6 @@ document.getElementById('opt-fill-free').addEventListener('click', function(e) {
   footer.appendChild(fillBtn);
 
   document.getElementById('modal-overlay').classList.add('open');
-});
-
-// ── Disk menu: Report 0 Blocks Free ──────────────────────────────────
-document.getElementById('opt-zero-free').addEventListener('click', function(e) {
-  e.stopPropagation();
-  if (!currentBuffer) return;
-  closeMenus();
-  pushUndo();
-  var data = new Uint8Array(currentBuffer);
-  var fmt = currentFormat;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
-  var bamTracks = fmt.bamTracksRange(currentTracks);
-  for (var t = 1; t <= bamTracks; t++) {
-    fmt.writeTrackFree(data, bamOff, t, 0);
-  }
-  var info = parseCurrentDir(currentBuffer);
-  renderDisk(info);
-  updateMenuState();
-  showModal('Report 0 Blocks Free', ['All track free counts set to 0. The BAM bitmaps are unchanged.']);
 });
 
 // ── Disk menu: Export as Text ────────────────────────────────────────
@@ -2013,7 +1998,7 @@ document.getElementById('opt-interleave').addEventListener('click', function(e) 
   document.getElementById('modal-title').textContent = 'Set Interleave';
   var body = document.getElementById('modal-body');
   body.innerHTML =
-    '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Sector interleave used when writing new files and directory sectors. This is a global setting.</div>' +
+    '<div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Sector interleave used when writing new files and directory sectors.</div>' +
     '<div style="display:flex;gap:16px;align-items:center;margin-bottom:8px">' +
       '<label style="font-size:13px;width:80px">Directory:</label>' +
       '<input type="number" id="il-dir" min="1" max="20" value="' + dirInterleave + '" style="width:60px;padding:4px 6px;font-size:13px;border:1px solid var(--border);border-radius:3px;background:var(--bg);color:var(--text);text-align:center">' +
@@ -2102,6 +2087,7 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
     return;
   }
 
+  pushUndo();
   // Take snapshot for rollback
   var snapshot = currentBuffer.slice(0);
   var data = new Uint8Array(currentBuffer);
@@ -3754,6 +3740,7 @@ function showSectorHexEditor(track, sector) {
     var hasChanges = false;
     for (var c = 0; c < 256; c++) { if (working[c] !== original[c]) { hasChanges = true; break; } }
     if (hasChanges) {
+      pushUndo();
       for (var c2 = 0; c2 < 256; c2++) data[off + c2] = working[c2];
     }
     document.removeEventListener('keydown', onKeyDown);
@@ -4072,6 +4059,7 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
+  pushUndo();
 
   // Recalculate by following all file sector chains to find used sectors,
   // then rebuild the BAM free counts from scratch. Don't trust the existing BAM.
@@ -4210,6 +4198,7 @@ function swapDirEntries(buffer, offA, offB) {
 
 function moveEntry(direction) {
   if (!currentBuffer || selectedEntryIndex < 0) return;
+  pushUndo();
   const slots = getDirSlotOffsets(currentBuffer);
   const currentIdx = slots.indexOf(selectedEntryIndex);
   if (currentIdx < 0) return;
@@ -4819,6 +4808,7 @@ function startEditFreeBlocks(blocksSpan) {
 
   function commitEdit() {
     if (reverted) return;
+    pushUndo();
     let value = parseInt(input.value, 10);
     if (isNaN(value) || value < 0) value = 0;
     if (value > getMaxFreeBlocks()) value = getMaxFreeBlocks();
@@ -4957,6 +4947,7 @@ function startEditTrackSector(entryEl) {
       revert();
       return;
     }
+    pushUndo();
     const newTrack = trackInput.getValue();
     const newSector = sectorInput.getValue();
     data[entryOff + 3] = newTrack;
@@ -5040,6 +5031,7 @@ function startEditBlockSize(entryEl) {
 
   function commitEdit() {
     if (reverted) return;
+    pushUndo();
     let value = parseInt(input.value, 10);
     if (isNaN(value) || value < 0) value = 0;
     if (value > MAX_BLOCKS) value = MAX_BLOCKS;
@@ -5104,6 +5096,7 @@ function startRenameEntry(entryEl) {
     if (reverted) return;
     let value = filterC64Input(input.value, 16);
     if (currentBuffer) {
+      pushUndo();
       writeFileName(currentBuffer, entryOff, value, input._petsciiOverrides);
     }
     cleanup();
@@ -5547,6 +5540,7 @@ document.getElementById('opt-recalc-size').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+  pushUndo();
   const actual = countActualBlocks(currentBuffer, selectedEntryIndex);
   writeBlockSize(currentBuffer, selectedEntryIndex, actual);
   const info = parseCurrentDir(currentBuffer);
@@ -6080,6 +6074,7 @@ document.getElementById('opt-lock').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+  pushUndo();
   const data = new Uint8Array(currentBuffer);
   data[selectedEntryIndex + 2] ^= 0x40; // toggle lock bit
   const info = parseCurrentDir(currentBuffer);
@@ -6090,6 +6085,7 @@ document.getElementById('opt-splat').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+  pushUndo();
   const data = new Uint8Array(currentBuffer);
   data[selectedEntryIndex + 2] ^= 0x80; // toggle closed bit
   const info = parseCurrentDir(currentBuffer);

@@ -95,7 +95,8 @@ function createTab(name, buffer, fileName) {
     format: currentFormat,
     tracks: currentTracks,
     partition: null,
-    selectedEntry: -1
+    selectedEntry: -1,
+    undoStack: []
   };
   tabs.push(tab);
   return tab;
@@ -111,6 +112,7 @@ function saveActiveTab() {
   tab.tracks = currentTracks;
   tab.partition = currentPartition;
   tab.selectedEntry = selectedEntryIndex;
+  tab.undoStack = undoStack;
 }
 
 function loadTab(tab) {
@@ -120,6 +122,7 @@ function loadTab(tab) {
   currentTracks = tab.tracks;
   currentPartition = tab.partition;
   selectedEntryIndex = tab.selectedEntry;
+  undoStack = tab.undoStack || [];
   activeTabId = tab.id;
 }
 
