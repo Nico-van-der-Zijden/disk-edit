@@ -88,6 +88,11 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.getElementById('modal-overlay').classList.contains('open')) {
     document.getElementById('modal-overlay').classList.remove('open');
   }
+  // Ctrl+Shift toggles charset (like Commodore+Shift on C64)
+  if (e.ctrlKey && e.key === 'Shift' || e.shiftKey && e.key === 'Control') {
+    e.preventDefault();
+    document.getElementById('opt-charset-mode').click();
+  }
 });
 
 // ── Input Modal ───────────────────────────────────────────────────────
@@ -729,17 +734,113 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
+  // Ctrl+V: paste file
+  if (e.ctrlKey && e.key === 'v' && clipboard.length > 0 && currentBuffer) {
+    e.preventDefault();
+    document.getElementById('opt-paste').click();
+    return;
+  }
+
+  // Ctrl+I: insert file
+  if (e.ctrlKey && e.key === 'i') {
+    e.preventDefault();
+    var insertEl = document.getElementById('opt-insert');
+    if (!insertEl.classList.contains('disabled')) insertEl.click();
+    return;
+  }
+
   // Ctrl+C: copy file
-  if (e.ctrlKey && e.key === 'c' && selectedEntryIndex >= 0 && currentBuffer) {
+  if (e.ctrlKey && !e.shiftKey && e.key === 'c' && selectedEntryIndex >= 0 && currentBuffer) {
     e.preventDefault();
     document.getElementById('opt-copy').click();
     return;
   }
 
-  // Ctrl+V: paste file
-  if (e.ctrlKey && e.key === 'v' && clipboard.length > 0 && currentBuffer) {
+  // Ctrl+Alt+L: align left
+  if (e.ctrlKey && e.altKey && e.code === 'KeyL' && selectedEntryIndex >= 0) {
     e.preventDefault();
-    document.getElementById('opt-paste').click();
+    var alignLeft = document.querySelector('#opt-align .submenu [data-align="left"]');
+    if (alignLeft && !document.getElementById('opt-align').classList.contains('disabled')) alignLeft.click();
+    return;
+  }
+
+  // Ctrl+Alt+R: align right
+  if (e.ctrlKey && e.altKey && e.code === 'KeyR' && selectedEntryIndex >= 0) {
+    e.preventDefault();
+    var alignRight = document.querySelector('#opt-align .submenu [data-align="right"]');
+    if (alignRight && !document.getElementById('opt-align').classList.contains('disabled')) alignRight.click();
+    return;
+  }
+
+  // Ctrl+Alt+C: center
+  if (e.ctrlKey && e.altKey && e.code === 'KeyC' && selectedEntryIndex >= 0) {
+    e.preventDefault();
+    var alignCenter = document.querySelector('#opt-align .submenu [data-align="center"]');
+    if (alignCenter && !document.getElementById('opt-align').classList.contains('disabled')) alignCenter.click();
+    return;
+  }
+
+  // Ctrl+Alt+J: justify
+  if (e.ctrlKey && e.altKey && e.code === 'KeyJ' && selectedEntryIndex >= 0) {
+    e.preventDefault();
+    var alignJustify = document.querySelector('#opt-align .submenu [data-align="justify"]');
+    if (alignJustify && !document.getElementById('opt-align').classList.contains('disabled')) alignJustify.click();
+    return;
+  }
+
+  // Ctrl+<: lock/unlock
+  if (e.ctrlKey && e.key === '<' && selectedEntryIndex >= 0) {
+    e.preventDefault();
+    var lockEl2 = document.getElementById('opt-lock');
+    if (!lockEl2.classList.contains('disabled')) lockEl2.click();
+    return;
+  }
+
+  // Ctrl+*: splat/unsplat
+  if (e.ctrlKey && e.key === '*' && selectedEntryIndex >= 0) {
+    e.preventDefault();
+    var splatEl2 = document.getElementById('opt-splat');
+    if (!splatEl2.classList.contains('disabled')) splatEl2.click();
+    return;
+  }
+
+  // Ctrl+E: export
+  if (e.ctrlKey && e.key === 'e' && selectedEntryIndex >= 0) {
+    e.preventDefault();
+    var exportEl = document.getElementById('opt-export');
+    if (!exportEl.classList.contains('disabled')) exportEl.click();
+    return;
+  }
+
+  // Ctrl+D: add directory (D81 only)
+  if (e.ctrlKey && e.key === 'd') {
+    e.preventDefault();
+    var addDirEl = document.getElementById('opt-add-partition');
+    if (!addDirEl.classList.contains('disabled')) addDirEl.click();
+    return;
+  }
+
+  // Ctrl+B: view BAM
+  if (e.ctrlKey && e.key === 'b') {
+    e.preventDefault();
+    var bamEl = document.getElementById('opt-view-bam');
+    if (!bamEl.classList.contains('disabled')) bamEl.click();
+    return;
+  }
+
+  // Ctrl+H: edit disk name (header)
+  if (e.ctrlKey && !e.altKey && e.key === 'h') {
+    e.preventDefault();
+    var editName = document.getElementById('edit-name');
+    if (editName) startEditing(editName);
+    return;
+  }
+
+  // Ctrl+Alt+I: edit disk ID
+  if (e.ctrlKey && e.altKey && e.code === 'KeyI') {
+    e.preventDefault();
+    var editId = document.getElementById('edit-id');
+    if (editId) startEditing(editId);
     return;
   }
 
@@ -982,8 +1083,8 @@ function startEditing(el) {
     commitEdit();
   });
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); revert(); }
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commitEdit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); revert(); }
   });
 }
 
@@ -1099,6 +1200,31 @@ document.querySelectorAll('.menu-dropdown .option').forEach(opt => {
   });
 });
 
+// Flip submenus that overflow the viewport
+function adjustSubmenu(sub) {
+  sub.classList.remove('flip-left', 'flip-up');
+  requestAnimationFrame(function() {
+    var rect = sub.getBoundingClientRect();
+    if (rect.right > window.innerWidth) sub.classList.add('flip-left');
+    if (rect.bottom > window.innerHeight) sub.classList.add('flip-up');
+  });
+}
+
+// Adjust submenus in menubar and context menu (use delegation for cloned context menu)
+document.querySelectorAll('.has-submenu').forEach(function(item) {
+  item.addEventListener('mouseenter', function() {
+    var sub = item.querySelector('.submenu');
+    if (sub) adjustSubmenu(sub);
+  });
+});
+
+document.getElementById('context-menu').addEventListener('mouseover', function(e) {
+  var item = e.target.closest('.has-submenu');
+  if (!item) return;
+  var sub = item.querySelector('.submenu');
+  if (sub) adjustSubmenu(sub);
+});
+
 document.addEventListener('click', () => {
   closeMenus();
 });
@@ -1143,6 +1269,7 @@ document.addEventListener('keydown', (e) => {
           closeSubmenu();
           sub.style.display = 'block';
           menuSubmenu = sub;
+          adjustSubmenu(sub);
           setMenuFocus(subOpts[0]);
           return;
         }
@@ -1180,6 +1307,7 @@ document.addEventListener('keydown', (e) => {
           closeSubmenu();
           sub2.style.display = 'block';
           menuSubmenu = sub2;
+          adjustSubmenu(sub2);
           setMenuFocus(subOpts2[0]);
         }
       }
@@ -1281,6 +1409,7 @@ function showEmptyState() {
     var submenu = newItem.querySelector('.submenu');
     submenu.style.display = 'block';
     menuSubmenu = submenu;
+    adjustSubmenu(submenu);
     var firstOpt = submenu.querySelector('.option');
     setMenuFocus(firstOpt);
   });
@@ -3919,7 +4048,8 @@ function showFileDisasmViewer(entryOff) {
   var html = '<div class="hex-editor">';
   for (var di = 0; di < lines.length; di++) {
     var l = lines[di];
-    html += '<div class="hex-row"><span class="dasm-offset">' + l.addr + '</span><span class="dasm-bytes">' + escHtml(l.bytes) + '</span><span class="dasm-instr">' + escHtml(l.text) + '</span></div>';
+    var instrClass = l.type === 2 ? 'dasm-unsafe' : l.type === 1 ? 'dasm-illegal' : 'dasm-instr';
+    html += '<div class="hex-row"><span class="dasm-offset">' + l.addr + '</span><span class="dasm-bytes">' + escHtml(l.bytes) + '</span><span class="' + instrClass + '">' + escHtml(l.text) + '</span></div>';
   }
   html += '</div>';
 
@@ -3937,34 +4067,27 @@ function showFileDisasmViewer(entryOff) {
 
 // ── Hex sector editor ─────────────────────────────────────────────────
 // ── 6502 Disassembler ─────────────────────────────────────────────────
+// 6502 opcode table: [mnemonic, addressing mode, type]
+// type: 0=legal, 1=illegal (stable), 2=illegal (unstable)
+// Addressing modes: 0=impl, 1=imm, 2=zp, 3=zpx, 4=zpy, 5=abs, 6=absx, 7=absy, 8=indx, 9=indy, 10=rel, 11=ind
+// Mnemonics follow oxyron.de naming convention
 var OPS_6502 = [
-  'BRK','ORA','???','???','???','ORA','ASL','???','PHP','ORA','ASL','???','???','ORA','ASL','???',
-  'BPL','ORA','???','???','???','ORA','ASL','???','CLC','ORA','???','???','???','ORA','ASL','???',
-  'JSR','AND','???','???','BIT','AND','ROL','???','PLP','AND','ROL','???','BIT','AND','ROL','???',
-  'BMI','AND','???','???','???','AND','ROL','???','SEC','AND','???','???','???','AND','ROL','???',
-  'RTI','EOR','???','???','???','EOR','LSR','???','PHA','EOR','LSR','???','JMP','EOR','LSR','???',
-  'BVC','EOR','???','???','???','EOR','LSR','???','CLI','EOR','???','???','???','EOR','LSR','???',
-  'RTS','ADC','???','???','???','ADC','ROR','???','PLA','ADC','ROR','???','JMP','ADC','ROR','???',
-  'BVS','ADC','???','???','???','ADC','ROR','???','SEI','ADC','???','???','???','ADC','ROR','???',
-  '???','STA','???','???','STY','STA','STX','???','DEY','???','TXA','???','STY','STA','STX','???',
-  'BCC','STA','???','???','STY','STA','STX','???','TYA','STA','TXS','???','???','STA','???','???',
-  'LDY','LDA','LDX','???','LDY','LDA','LDX','???','TAY','LDA','TAX','???','LDY','LDA','LDX','???',
-  'BCS','LDA','???','???','LDY','LDA','LDX','???','CLV','LDA','TSX','???','LDY','LDA','LDX','???',
-  'CPY','CMP','???','???','CPY','CMP','DEC','???','INY','CMP','DEX','???','CPY','CMP','DEC','???',
-  'BNE','CMP','???','???','???','CMP','DEC','???','CLD','CMP','???','???','???','CMP','DEC','???',
-  'CPX','SBC','???','???','CPX','SBC','INC','???','INX','SBC','NOP','???','CPX','SBC','INC','???',
-  'BEQ','SBC','???','???','???','SBC','INC','???','SED','SBC','???','???','???','SBC','INC','???'
-];
-// Addressing mode sizes: 0=implied(1), 1=imm(2), 2=zp(2), 3=zpx(2), 4=zpy(2), 5=abs(3), 6=absx(3), 7=absy(3), 8=indx(2), 9=indy(2), 10=rel(2), 11=ind(3)
-var MODES_6502 = [
-  0,8,0,0,0,2,2,0,0,1,0,0,0,5,5,0, 10,9,0,0,0,3,3,0,0,7,0,0,0,6,6,0,
-  5,8,0,0,2,2,2,0,0,1,0,0,5,5,5,0, 10,9,0,0,0,3,3,0,0,7,0,0,0,6,6,0,
-  0,8,0,0,0,2,2,0,0,1,0,0,5,5,5,0, 10,9,0,0,0,3,3,0,0,7,0,0,0,6,6,0,
-  0,8,0,0,0,2,2,0,0,1,0,0,11,5,5,0, 10,9,0,0,0,3,3,0,0,7,0,0,0,6,6,0,
-  0,8,0,0,2,2,2,0,0,0,0,0,5,5,5,0, 10,9,0,0,3,3,4,0,0,7,0,0,0,6,0,0,
-  1,8,1,0,2,2,2,0,0,1,0,0,5,5,5,0, 10,9,0,0,3,3,4,0,0,7,0,0,6,6,7,0,
-  1,8,0,0,2,2,2,0,0,1,0,0,5,5,5,0, 10,9,0,0,0,3,3,0,0,7,0,0,0,6,6,0,
-  1,8,0,0,2,2,2,0,0,1,0,0,5,5,5,0, 10,9,0,0,0,3,3,0,0,7,0,0,0,6,6,0
+  ['BRK',0,0],['ORA',8,0],['KIL',0,2],['SLO',8,1],['NOP',2,1],['ORA',2,0],['ASL',2,0],['SLO',2,1],['PHP',0,0],['ORA',1,0],['ASL',0,0],['ANC',1,1],['NOP',5,1],['ORA',5,0],['ASL',5,0],['SLO',5,1],
+  ['BPL',10,0],['ORA',9,0],['KIL',0,2],['SLO',9,1],['NOP',3,1],['ORA',3,0],['ASL',3,0],['SLO',3,1],['CLC',0,0],['ORA',7,0],['NOP',0,1],['SLO',7,1],['NOP',6,1],['ORA',6,0],['ASL',6,0],['SLO',6,1],
+  ['JSR',5,0],['AND',8,0],['KIL',0,2],['RLA',8,1],['BIT',2,0],['AND',2,0],['ROL',2,0],['RLA',2,1],['PLP',0,0],['AND',1,0],['ROL',0,0],['ANC',1,1],['BIT',5,0],['AND',5,0],['ROL',5,0],['RLA',5,1],
+  ['BMI',10,0],['AND',9,0],['KIL',0,2],['RLA',9,1],['NOP',3,1],['AND',3,0],['ROL',3,0],['RLA',3,1],['SEC',0,0],['AND',7,0],['NOP',0,1],['RLA',7,1],['NOP',6,1],['AND',6,0],['ROL',6,0],['RLA',6,1],
+  ['RTI',0,0],['EOR',8,0],['KIL',0,2],['SRE',8,1],['NOP',2,1],['EOR',2,0],['LSR',2,0],['SRE',2,1],['PHA',0,0],['EOR',1,0],['LSR',0,0],['ALR',1,1],['JMP',5,0],['EOR',5,0],['LSR',5,0],['SRE',5,1],
+  ['BVC',10,0],['EOR',9,0],['KIL',0,2],['SRE',9,1],['NOP',3,1],['EOR',3,0],['LSR',3,0],['SRE',3,1],['CLI',0,0],['EOR',7,0],['NOP',0,1],['SRE',7,1],['NOP',6,1],['EOR',6,0],['LSR',6,0],['SRE',6,1],
+  ['RTS',0,0],['ADC',8,0],['KIL',0,2],['RRA',8,1],['NOP',2,1],['ADC',2,0],['ROR',2,0],['RRA',2,1],['PLA',0,0],['ADC',1,0],['ROR',0,0],['ARR',1,1],['JMP',11,0],['ADC',5,0],['ROR',5,0],['RRA',5,1],
+  ['BVS',10,0],['ADC',9,0],['KIL',0,2],['RRA',9,1],['NOP',3,1],['ADC',3,0],['ROR',3,0],['RRA',3,1],['SEI',0,0],['ADC',7,0],['NOP',0,1],['RRA',7,1],['NOP',6,1],['ADC',6,0],['ROR',6,0],['RRA',6,1],
+  ['NOP',1,1],['STA',8,0],['NOP',1,1],['SAX',8,1],['STY',2,0],['STA',2,0],['STX',2,0],['SAX',2,1],['DEY',0,0],['NOP',1,1],['TXA',0,0],['XAA',1,2],['STY',5,0],['STA',5,0],['STX',5,0],['SAX',5,1],
+  ['BCC',10,0],['STA',9,0],['KIL',0,2],['AHX',9,2],['STY',3,0],['STA',3,0],['STX',4,0],['SAX',4,1],['TYA',0,0],['STA',7,0],['TXS',0,0],['TAS',7,2],['SHY',6,2],['STA',6,0],['SHX',7,2],['AHX',7,2],
+  ['LDY',1,0],['LDA',8,0],['LDX',1,0],['LAX',8,1],['LDY',2,0],['LDA',2,0],['LDX',2,0],['LAX',2,1],['TAY',0,0],['LDA',1,0],['TAX',0,0],['LAX',1,2],['LDY',5,0],['LDA',5,0],['LDX',5,0],['LAX',5,1],
+  ['BCS',10,0],['LDA',9,0],['KIL',0,2],['LAX',9,1],['LDY',3,0],['LDA',3,0],['LDX',4,0],['LAX',4,1],['CLV',0,0],['LDA',7,0],['TSX',0,0],['LAS',7,2],['LDY',6,0],['LDA',6,0],['LDX',7,0],['LAX',7,1],
+  ['CPY',1,0],['CMP',8,0],['NOP',1,1],['DCP',8,1],['CPY',2,0],['CMP',2,0],['DEC',2,0],['DCP',2,1],['INY',0,0],['CMP',1,0],['DEX',0,0],['AXS',1,1],['CPY',5,0],['CMP',5,0],['DEC',5,0],['DCP',5,1],
+  ['BNE',10,0],['CMP',9,0],['KIL',0,2],['DCP',9,1],['NOP',3,1],['CMP',3,0],['DEC',3,0],['DCP',3,1],['CLD',0,0],['CMP',7,0],['NOP',0,1],['DCP',7,1],['NOP',6,1],['CMP',6,0],['DEC',6,0],['DCP',6,1],
+  ['CPX',1,0],['SBC',8,0],['NOP',1,1],['ISC',8,1],['CPX',2,0],['SBC',2,0],['INC',2,0],['ISC',2,1],['INX',0,0],['SBC',1,0],['NOP',0,0],['SBC',1,1],['CPX',5,0],['SBC',5,0],['INC',5,0],['ISC',5,1],
+  ['BEQ',10,0],['SBC',9,0],['KIL',0,2],['ISC',9,1],['NOP',3,1],['SBC',3,0],['INC',3,0],['ISC',3,1],['SED',0,0],['SBC',7,0],['NOP',0,1],['ISC',7,1],['NOP',6,1],['SBC',6,0],['INC',6,0],['ISC',6,1]
 ];
 var MODE_SIZE = [1,2,2,2,2,3,3,3,2,2,2,3];
 
@@ -3973,8 +4096,10 @@ function disassemble6502(data, startAddr, maxLines) {
   var pos = 0;
   for (var li = 0; li < maxLines && pos < data.length; li++) {
     var opcode = data[pos];
-    var mnemonic = OPS_6502[opcode];
-    var mode = MODES_6502[opcode];
+    var op = OPS_6502[opcode];
+    var mnemonic = op[0];
+    var mode = op[1];
+    var type = op[2]; // 0=legal, 1=illegal stable, 2=illegal unsafe
     var size = MODE_SIZE[mode];
     var addr = startAddr + pos;
     var bytes = '';
@@ -4003,7 +4128,8 @@ function disassemble6502(data, startAddr, maxLines) {
     lines.push({
       addr: '$' + addr.toString(16).toUpperCase().padStart(4, '0'),
       bytes: bytes.padEnd(9),
-      text: mnemonic + (operand ? ' ' + operand : '')
+      text: mnemonic + (operand ? ' ' + operand : ''),
+      type: type
     });
     pos += size;
   }
@@ -4114,8 +4240,8 @@ function showSectorHexEditor(track, sector) {
         }
       }
       input.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') { e.preventDefault(); commit(); }
-        else if (e.key === 'Escape') { e.preventDefault(); span.textContent = getValue().toString(16).toUpperCase().padStart(2, '0'); }
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); span.textContent = getValue().toString(16).toUpperCase().padStart(2, '0'); }
         else if (e.key === 'Tab') { e.preventDefault(); commit(); }
       });
       input.addEventListener('blur', function() {
@@ -4554,18 +4680,57 @@ function swapDirEntries(buffer, offA, offB) {
 
 function moveEntry(direction) {
   if (!currentBuffer || selectedEntryIndex < 0) return;
+  var slots = getDirSlotOffsets(currentBuffer);
+  var entries = selectedEntries.length > 1 ? selectedEntries.slice() : [selectedEntryIndex];
+
+  // Get sorted slot indices for the selected entries
+  var indices = [];
+  for (var i = 0; i < entries.length; i++) {
+    var idx = slots.indexOf(entries[i]);
+    if (idx >= 0) indices.push(idx);
+  }
+  indices.sort(function(a, b) { return a - b; });
+  if (indices.length === 0) return;
+
+  // Find last non-empty slot for lower bound
+  var data = new Uint8Array(currentBuffer);
+  var lastUsed = -1;
+  for (var li = slots.length - 1; li >= 0; li--) {
+    var empty = true;
+    for (var bi = 2; bi < 32; bi++) {
+      if (data[slots[li] + bi] !== 0x00) { empty = false; break; }
+    }
+    if (!empty) { lastUsed = li; break; }
+  }
+
+  // Check bounds
+  if (direction < 0 && indices[0] <= 0) return;
+  if (direction > 0 && indices[indices.length - 1] >= lastUsed) return;
+
   pushUndo();
-  const slots = getDirSlotOffsets(currentBuffer);
-  const currentIdx = slots.indexOf(selectedEntryIndex);
-  if (currentIdx < 0) return;
 
-  const targetIdx = currentIdx + direction;
-  if (targetIdx < 0 || targetIdx >= slots.length) return;
+  if (direction < 0) {
+    // Moving up: swap each entry with the one above, top to bottom
+    for (var u = 0; u < indices.length; u++) {
+      swapDirEntries(currentBuffer, slots[indices[u]], slots[indices[u] - 1]);
+      indices[u]--;
+    }
+  } else {
+    // Moving down: swap each entry with the one below, bottom to top
+    for (var d = indices.length - 1; d >= 0; d--) {
+      swapDirEntries(currentBuffer, slots[indices[d]], slots[indices[d] + 1]);
+      indices[d]++;
+    }
+  }
 
-  swapDirEntries(currentBuffer, slots[currentIdx], slots[targetIdx]);
-  // Update selection to follow the moved entry
-  selectedEntryIndex = slots[targetIdx];
-  const info = parseCurrentDir(currentBuffer);
+  // Update selection to follow moved entries
+  selectedEntries = [];
+  for (var j = 0; j < indices.length; j++) {
+    selectedEntries.push(slots[indices[j]]);
+  }
+  selectedEntryIndex = selectedEntries[0];
+
+  var info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 }
 
@@ -5184,8 +5349,8 @@ function startEditFreeBlocks(blocksSpan) {
     commitEdit();
   });
   input.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') { ev.preventDefault(); commitEdit(); }
-    else if (ev.key === 'Escape') { ev.preventDefault(); revert(); }
+    if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); commitEdit(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); revert(); }
   });
 
   registerActiveEdit(blocksSpan, revert);
@@ -5333,8 +5498,8 @@ function startEditTrackSector(entryEl) {
   }
 
   function onKeyDown(e) {
-    if (e.key === 'Enter') { e.preventDefault(); commitEdit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); revert(); }
+    if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commitEdit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); revert(); }
     else if (e.key === 'Tab') {
       e.preventDefault();
       if (e.target === trackInput) {
@@ -5407,8 +5572,8 @@ function startEditBlockSize(entryEl) {
     commitEdit();
   });
   input.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') { ev.preventDefault(); commitEdit(); }
-    else if (ev.key === 'Escape') { ev.preventDefault(); revert(); }
+    if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); commitEdit(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); revert(); }
   });
 
   registerActiveEdit(blocksSpan, revert);
@@ -5472,8 +5637,8 @@ function startRenameEntry(entryEl) {
     commitRename();
   });
   input.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter') { ev.preventDefault(); commitRename(); }
-    else if (ev.key === 'Escape') { ev.preventDefault(); revert(); }
+    if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); commitRename(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); revert(); }
   });
 
   registerActiveEdit(nameSpan, revert);
@@ -6547,8 +6712,8 @@ document.addEventListener('drop', function(e) {
   var files = Array.from(e.dataTransfer.files);
   if (files.length === 0) return;
 
-  var diskExts = ['.d64', '.d71', '.d81'];
-  var fileExts = ['.prg', '.seq', '.usr', '.rel'];
+  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64'];
+  var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00'];
   var diskFiles = [];
   var importFiles = [];
 
@@ -6708,6 +6873,7 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '<br>' +
       '<b>Technical references:</b><br>' +
       '&bull; <a href="https://vice-emu.sourceforge.io/vice_17.html" target="_blank" class="link">VICE Manual</a> — disk image format documentation<br>' +
+      '&bull; <a href="https://www.oxyron.de/html/opcodes02.html" target="_blank" class="link">Oxyron 6502 Opcode Table</a> — illegal opcode reference<br>' +
       '&bull; <a href="https://c64-wiki.com/" target="_blank" class="link">C64-Wiki</a> — Commodore 64 technical reference<br>' +
       '&bull; <a href="https://sta.c64.org/" target="_blank" class="link">STA\'s C64 pages</a> — disk format details<br>' +
       '&bull; <a href="https://csdb.dk/" target="_blank" class="link">CSDb</a> — C64 Scene Database<br>' +
@@ -6732,10 +6898,24 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Enter', 'Rename selected file'],
       ['Delete', 'Remove selected file'],
     ]},
-    { title: 'Clipboard & Undo', shortcuts: [
-      ['Ctrl + C', 'Copy selected file'],
+    { title: 'File Operations', shortcuts: [
+      ['Ctrl + C', 'Copy selected file(s)'],
       ['Ctrl + V', 'Paste file (works across tabs)'],
+      ['Ctrl + I', 'Insert file'],
+      ['Ctrl + E', 'Export selected file(s)'],
+      ['Ctrl + D', 'Add directory (D81)'],
       ['Ctrl + Z', 'Undo last change'],
+      ['Ctrl + B', 'View BAM'],
+      ['Ctrl + H', 'Edit disk name'],
+      ['Ctrl + Alt + I', 'Edit disk ID'],
+    ]},
+    { title: 'Formatting', shortcuts: [
+      ['Ctrl + Alt + L', 'Align left'],
+      ['Ctrl + Alt + R', 'Align right'],
+      ['Ctrl + Alt + C', 'Center'],
+      ['Ctrl + Alt + J', 'Justify'],
+      ['Ctrl + <', 'Lock / unlock file'],
+      ['Ctrl + *', 'Scratch / unscratch file'],
     ]},
     { title: 'Editing (double-click)', shortcuts: [
       ['Filename', 'Rename file (PETSCII keyboard available)'],
@@ -6751,6 +6931,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Drag file entry to OS', 'Export file (Chrome/Edge)'],
     ]},
     { title: 'General', shortcuts: [
+      ['Ctrl + Shift', 'Toggle uppercase/lowercase charset'],
       ['Right-click', 'Context menu on file entry or empty area'],
       ['Escape', 'Close modal or menu'],
       ['Tab', 'Next input (fill pattern, hex editor)'],
@@ -6783,6 +6964,16 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.4', title: 'Shortcuts, illegal opcodes, menu navigation fixes', items: [
+      'Disassembly: full 256-opcode table with illegal opcodes (oxyron.de naming)',
+      'Disassembly: illegal stable (amber) and unstable (red) opcodes color-coded',
+      'Keyboard shortcuts: Ctrl+I/E/D/B/H, Ctrl+Alt+L/R/C/J/I, Ctrl+</*/Shift',
+      'Menu keyboard navigation fixes: proper dropdown switching, submenu flip',
+      'Submenus flip left/up when overflowing viewport edge',
+      'Move entry: multi-select support, respects last-file boundary',
+      'Edit fields: Enter/Escape no longer triggers rename on selected file',
+      'Drag & drop: added T64, D80, D82, P00/S00/U00/R00 support',
+    ]},
     { ver: '1.3.3', title: 'PETSCII keyboard input, sticky picker fix', items: [
       'PETSCII input: shift+letter produces shifted chars ($C1-$DA), correct per charset mode',
       'Sticky picker: fixed positioning, stays below input field, scrolls into view',

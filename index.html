@@ -161,6 +161,16 @@
     box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
 
+  .submenu.flip-left {
+    left: auto;
+    right: 100%;
+  }
+
+  .submenu.flip-up {
+    top: auto;
+    bottom: -4px;
+  }
+
   .has-submenu:not(.disabled):hover > .submenu,
   .has-submenu.menu-focused > .submenu {
     display: block;
@@ -1179,6 +1189,16 @@
 
   .dasm-instr {
     color: var(--selected-text);
+    font-family: "Cascadia Code", "Consolas", monospace;
+  }
+
+  .dasm-illegal {
+    color: #c0a050;
+    font-family: "Cascadia Code", "Consolas", monospace;
+  }
+
+  .dasm-unsafe {
+    color: #c05050;
     font-family: "Cascadia Code", "Consolas", monospace;
   }
 
