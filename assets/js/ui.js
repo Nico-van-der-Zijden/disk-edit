@@ -6783,6 +6783,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.3', title: 'PETSCII keyboard input, sticky picker fix', items: [
+      'PETSCII input: shift+letter produces shifted chars ($C1-$DA), correct per charset mode',
+      'Sticky picker: fixed positioning, stays below input field, scrolls into view',
+      'Sticky picker: clamps horizontally to prevent overflow off-screen',
+    ]},
     { ver: '1.3.2', title: 'Empty state, dark theme, keyboard menu navigation', items: [
       'Empty state: drop zone with links to create new disk or open a disk image',
       'Dark theme: lighter backgrounds, softer text, lavender accent instead of green',

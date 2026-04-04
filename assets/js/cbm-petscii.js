@@ -178,47 +178,107 @@ function trackCursorPos(input) {
   input.addEventListener('mouseup', update);
   input.addEventListener('input', update);
   update();
+
+  // Intercept letter/symbol keys and map to correct PETSCII with shift support
+  input.addEventListener('keydown', function(e) {
+    // Skip control keys, Enter, Escape, arrows, etc.
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.key.length !== 1) return;
+
+    var ch = e.key;
+    var code = ch.charCodeAt(0);
+    var petscii = -1;
+
+    // Letters: shift produces $C1-$DA, unshifted produces $41-$5A
+    if (code >= 0x41 && code <= 0x5A) {
+      // Uppercase typed (shift held)
+      petscii = code - 0x41 + 0xC1;
+    } else if (code >= 0x61 && code <= 0x7A) {
+      // Lowercase typed (no shift)
+      petscii = code - 0x61 + 0x41;
+    } else {
+      // Non-letter: use standard mapping, let default handle it
+      petscii = UNICODE_TO_PETSCII.get(ch);
+      if (petscii === undefined) return;
+    }
+
+    e.preventDefault();
+    var displayChar = PETSCII_MAP[petscii];
+    insertCharAtCursor(input, displayChar, petscii);
+  });
 }
 
 // ── Show/hide picker ─────────────────────────────────────────────────
+var pickerScrollHandler = null;
+
+function positionPicker() {
+  if (!pickerTarget) return;
+  var el = document.getElementById('petscii-picker');
+  var rect = pickerTarget.getBoundingClientRect();
+
+  if (pickerStick) {
+    // Sticky: use absolute positioning so the picker extends the page
+    el.style.position = 'absolute';
+    var top = rect.bottom + window.scrollY + 4;
+    var left = rect.left + window.scrollX;
+    el.style.top = top + 'px';
+    el.style.left = left + 'px';
+    // Clamp horizontally: if overflowing right, shift left
+    requestAnimationFrame(function() {
+      var elRect = el.getBoundingClientRect();
+      if (elRect.right > window.innerWidth) {
+        var adjusted = window.innerWidth - elRect.width - 8 + window.scrollX;
+        el.style.left = Math.max(0, adjusted) + 'px';
+      }
+      // Scroll the picker into view if it's below the viewport
+      elRect = el.getBoundingClientRect();
+      if (elRect.bottom > window.innerHeight) {
+        el.scrollIntoView({ block: 'end', behavior: 'smooth' });
+      }
+    });
+  } else {
+    // Non-sticky: fixed within viewport
+    el.style.position = 'fixed';
+    var ftop = rect.bottom + 4;
+    var fleft = rect.left;
+    var pickerRect = el.getBoundingClientRect();
+    if (ftop + pickerRect.height > window.innerHeight) {
+      ftop = rect.top - pickerRect.height - 4;
+    }
+    if (fleft + pickerRect.width > window.innerWidth) {
+      fleft = window.innerWidth - pickerRect.width - 8;
+    }
+    el.style.top = Math.max(0, ftop) + 'px';
+    el.style.left = Math.max(0, fleft) + 'px';
+  }
+}
+
 function showPetsciiPicker(targetEl, maxLen) {
   var el = document.getElementById('petscii-picker');
   pickerTarget = targetEl;
   pickerModifier = pickerDefaultAll ? 'all' : 'normal';
   pickerReverse = false;
   renderPicker();
-
-  var rect = targetEl.getBoundingClientRect();
   el.classList.add('open');
+  positionPicker();
 
+  // In sticky mode, follow the input when content scrolls
   if (pickerStick) {
-    // Position directly below the edit field, allow overflow
-    el.style.position = 'absolute';
-    // Find the input's offset parent for absolute positioning
-    var parent = targetEl.offsetParent || document.body;
-    var parentRect = parent.getBoundingClientRect();
-    el.style.top = (rect.bottom - parentRect.top + parent.scrollTop + 4) + 'px';
-    el.style.left = (rect.left - parentRect.left + parent.scrollLeft) + 'px';
-  } else {
-    // Position within viewport
-    el.style.position = 'fixed';
-    var top = rect.bottom + 4;
-    var left = rect.left;
-    var pickerRect = el.getBoundingClientRect();
-    if (top + pickerRect.height > window.innerHeight) {
-      top = rect.top - pickerRect.height - 4;
+    if (pickerScrollHandler) {
+      document.getElementById('content').removeEventListener('scroll', pickerScrollHandler);
     }
-    if (left + pickerRect.width > window.innerWidth) {
-      left = window.innerWidth - pickerRect.width - 8;
-    }
-    el.style.top = Math.max(0, top) + 'px';
-    el.style.left = Math.max(0, left) + 'px';
+    pickerScrollHandler = positionPicker;
+    document.getElementById('content').addEventListener('scroll', pickerScrollHandler);
   }
 }
 
 function hidePetsciiPicker() {
   document.getElementById('petscii-picker').classList.remove('open');
   pickerTarget = null;
+  if (pickerScrollHandler) {
+    document.getElementById('content').removeEventListener('scroll', pickerScrollHandler);
+    pickerScrollHandler = null;
+  }
 }
 
 // Old name compatibility
