@@ -187,7 +187,6 @@ function renderDisk(info) {
         <div class="disk-name"><span class="editable" id="edit-name" data-field="name" data-max="${currentFormat.nameLength}">"${escHtml(info.diskName.padEnd(currentFormat.nameLength))}"</span></div>
         <div class="disk-id"><span class="editable" id="edit-id" data-field="id" data-max="${currentFormat.idLength}">${escHtml(info.diskId)}</span></div>
       </div>
-      ${info.turboWarning ? '<div class="tape-warning"><i class="fa-solid fa-triangle-exclamation"></i> ' + escHtml(info.turboWarning) + '</div>' : ''}
       <div class="dir-listing">
         <div class="dir-entry dir-header-row">
           <span class="dir-grip"></span>
@@ -267,6 +266,7 @@ function renderDisk(info) {
   html += `
       </div>
       <div class="dir-footer">
+        ${info.turboWarning ? '<div class="dir-footer-row tape-warning"><i class="fa-solid fa-triangle-exclamation"></i> ' + escHtml(info.turboWarning) + '</div>' : ''}
         <div class="dir-footer-row">
           <span class="dir-footer-blocks">${info.freeBlocks}</span>
           <span class="dir-footer-label">blocks free.</span>
