@@ -636,6 +636,9 @@ const DISK_FORMATS = {
 // ── Active format ────────────────────────────────────────────────────
 var currentFormat = DISK_FORMATS.d64;
 var currentTracks = 35;
+var parsedT64Entries = null; // entryOff → { t64DataOffset, t64StartAddr, t64EndAddr }
+var parsedTAPEntries = null; // entryOff → { fileData: Uint8Array }
+var parsedTapeDir = null;    // last parsed tape directory entries array
 
 // ── Sector geometry (delegates to current format) ────────────────────
 function sectorsPerTrack(t) {
@@ -822,10 +825,33 @@ const UNICODE_TO_PETSCII = (() => {
   return rev;
 })();
 
-// Read all data bytes from a file's sector chain
+// Read all data bytes from a file's sector chain (or tape container)
 // Returns { data: Uint8Array, error: string|null }
 function readFileData(buffer, entryOff) {
   var disk = new Uint8Array(buffer);
+
+  // T64: read directly from stored data offset, prepend load address
+  if (currentFormat === DISK_FORMATS.t64) {
+    var info = parsedT64Entries && parsedT64Entries[entryOff];
+    if (!info) return { data: new Uint8Array(0), error: 'T64 entry not found' };
+    var size = info.t64EndAddr - info.t64StartAddr;
+    if (size <= 0 || info.t64DataOffset + size > disk.length) {
+      return { data: new Uint8Array(0), error: 'Invalid T64 data range' };
+    }
+    var out = new Uint8Array(size + 2);
+    out[0] = info.t64StartAddr & 0xFF;
+    out[1] = (info.t64StartAddr >> 8) & 0xFF;
+    out.set(disk.subarray(info.t64DataOffset, info.t64DataOffset + size), 2);
+    return { data: out, error: null };
+  }
+
+  // TAP: return pre-decoded data stored during parsing
+  if (currentFormat === DISK_FORMATS.tap) {
+    var tapEntry = parsedTAPEntries && parsedTAPEntries[entryOff];
+    if (!tapEntry || !tapEntry.fileData) return { data: new Uint8Array(0), error: 'TAP data not decoded' };
+    return { data: tapEntry.fileData, error: null };
+  }
+
   var t = disk[entryOff + 3];
   var s = disk[entryOff + 4];
   if (t === 0) return { data: new Uint8Array(0), error: 'No file data (T/S = 0/0)' };
@@ -1194,84 +1220,115 @@ function parseTAP(buffer) {
     return { byte: byte, nextIndex: pi };
   }
 
-  // Scan for pilot tone (repeated $89 bytes in countdown pattern) then read header
-  var entries = [];
-  var fileIndex = 0;
-  var pi = 0;
-  while (pi < pulses.length - 100) {
-    // Look for a sequence of short pulses (pilot tone)
-    var shortCount = 0;
-    while (pi < pulses.length && classifyPulse(pulses[pi]) === 0) {
-      shortCount++;
-      pi++;
-    }
-    if (shortCount < 200) { pi++; continue; } // need substantial pilot
+  // Find pilot tone + sync countdown, return pulse index after sync or -1
+  function findSync(startPi) {
+    var pi2 = startPi;
+    while (pi2 < pulses.length - 100) {
+      // Skip to pilot tone (short pulses)
+      var shortCount = 0;
+      while (pi2 < pulses.length && classifyPulse(pulses[pi2]) === 0) {
+        shortCount++;
+        pi2++;
+      }
+      if (shortCount < 200) { pi2++; continue; }
 
-    // Try to find sync: countdown from $89 to $01
-    var syncFound = false;
-    var syncStart = pi;
-    // Try decoding bytes looking for the countdown pattern
-    var countdown = [];
-    var tryPi = pi;
-    for (var attempt = 0; attempt < 500 && tryPi < pulses.length; attempt++) {
-      var result = decodeByte(tryPi);
-      if (!result) { tryPi++; continue; }
-      countdown.push(result.byte);
-      tryPi = result.nextIndex;
-      // Check for sync: 9 consecutive descending bytes ending at 0x01
-      if (countdown.length >= 9) {
-        var last9 = countdown.slice(-9);
-        if (last9[0] === 0x09 && last9[8] === 0x01) {
-          var valid = true;
-          for (var ci = 1; ci < 9; ci++) {
-            if (last9[ci] !== last9[ci - 1] - 1) { valid = false; break; }
+      // Try to find countdown sync 9→1
+      var countdown = [];
+      var tryPi = pi2;
+      for (var attempt = 0; attempt < 500 && tryPi < pulses.length; attempt++) {
+        var result = decodeByte(tryPi);
+        if (!result) { tryPi++; continue; }
+        countdown.push(result.byte);
+        tryPi = result.nextIndex;
+        if (countdown.length >= 9) {
+          var last9 = countdown.slice(-9);
+          if (last9[0] === 0x09 && last9[8] === 0x01) {
+            var valid = true;
+            for (var ci = 1; ci < 9; ci++) {
+              if (last9[ci] !== last9[ci - 1] - 1) { valid = false; break; }
+            }
+            if (valid) return tryPi;
           }
-          if (valid) { syncFound = true; pi = tryPi; break; }
         }
       }
+      pi2 = tryPi;
     }
-    if (!syncFound) continue;
+    return -1;
+  }
 
-    // Read header block (192 bytes, but we only need the first 21)
-    var header = [];
-    for (var hi = 0; hi < 192 && pi < pulses.length; hi++) {
-      var hResult = decodeByte(pi);
-      if (!hResult) break;
-      header.push(hResult.byte);
-      pi = hResult.nextIndex;
+  // Decode a block of bytes from pulses at given index
+  function decodeBlock(startPi, maxBytes) {
+    var bytes = [];
+    var bp = startPi;
+    for (var i = 0; i < maxBytes && bp < pulses.length; i++) {
+      var r = decodeByte(bp);
+      if (!r) break;
+      bytes.push(r.byte);
+      bp = r.nextIndex;
     }
-    if (header.length < 21) continue;
+    return { bytes: bytes, nextIndex: bp };
+  }
 
-    var fileType = header[0]; // 1=PRG relocatable, 3=PRG non-reloc, 4=SEQ
+  // Scan for file headers and their data blocks
+  var entries = [];
+  parsedTAPEntries = {};
+  parsedT64Entries = null;
+  var pi = 0;
+  var entryId = 0;
+
+  while (pi < pulses.length) {
+    // Find header block
+    pi = findSync(pi);
+    if (pi < 0) break;
+
+    var headerBlock = decodeBlock(pi, 192);
+    pi = headerBlock.nextIndex;
+    if (headerBlock.bytes.length < 21) continue;
+
+    var hdr = headerBlock.bytes;
+    var fileType = hdr[0];
     if (fileType < 1 || fileType > 5) continue;
     if (fileType === 5) continue; // end-of-tape marker
 
-    var startAddr = header[1] | (header[2] << 8);
-    var endAddr = header[3] | (header[4] << 8);
+    var startAddr = hdr[1] | (hdr[2] << 8);
+    var endAddr = hdr[3] | (hdr[4] << 8);
     var name = '';
     for (var ni = 0; ni < 16; ni++) {
-      var ch = header[5 + ni];
+      var ch = hdr[5 + ni];
       if (ch === 0x00 || ch === 0x20) name += PETSCII_MAP[0xA0];
       else name += PETSCII_MAP[ch] || '?';
     }
 
+    // Find and decode the data block (follows after another pilot+sync)
+    var dataPi = findSync(pi);
+    var fileData = null;
     var dataSize2 = endAddr > startAddr ? endAddr - startAddr : 0;
+    if (dataPi >= 0 && dataSize2 > 0) {
+      var dataBlock = decodeBlock(dataPi, dataSize2 + 10); // extra for checksum etc.
+      pi = dataBlock.nextIndex;
+      // Build PRG-style data: 2-byte load address + file bytes
+      var decoded = dataBlock.bytes.slice(0, dataSize2);
+      fileData = new Uint8Array(decoded.length + 2);
+      fileData[0] = startAddr & 0xFF;
+      fileData[1] = (startAddr >> 8) & 0xFF;
+      for (var di = 0; di < decoded.length; di++) fileData[di + 2] = decoded[di];
+    }
+
+    var eOff = entryId++;
     var blocks = Math.ceil(dataSize2 / 254);
     var typeStr = (fileType === 4) ? ' SEQ ' : ' PRG ';
 
+    parsedTAPEntries[eOff] = { fileData: fileData };
     entries.push({
       name: name,
       type: typeStr,
       blocks: blocks,
       deleted: false,
-      entryOff: -1, // no real directory entry
-      tapStartAddr: startAddr,
-      tapEndAddr: endAddr,
-      tapFileType: fileType
+      entryOff: eOff,
     });
-    fileIndex++;
   }
 
+  parsedTapeDir = entries;
   return {
     diskName: tapeName,
     diskId: 'v' + version,
@@ -1285,12 +1342,8 @@ function parseTAP(buffer) {
 // ── Parse disk image ─────────────────────────────────────────────────
 function parseT64(buffer) {
   var data = new Uint8Array(buffer);
-  // T64 header: 32 bytes signature, then tape record entries
-  // Offset 0x20: tape version (2 bytes)
-  // Offset 0x22: max directory entries (2 bytes)
-  // Offset 0x24: used directory entries (2 bytes)
-  // Offset 0x28: tape name (24 bytes)
-  // Entries start at offset 0x40, each 32 bytes
+  parsedT64Entries = {};
+  parsedTAPEntries = null;
   var maxEntries = data[0x22] | (data[0x23] << 8);
   var usedEntries = data[0x24] | (data[0x25] << 8);
   var tapeName = '';
@@ -1319,18 +1372,21 @@ function parseT64(buffer) {
     var dataSize = endAddr - startAddr;
     var blocks = Math.ceil(dataSize / 254);
     var typeStr = (fileType & 0x07) === 1 ? ' SEQ ' : ' PRG ';
+    parsedT64Entries[eOff] = {
+      t64DataOffset: dataOffset,
+      t64StartAddr: startAddr,
+      t64EndAddr: endAddr
+    };
     entries.push({
       name: name,
       type: typeStr,
       blocks: blocks,
       deleted: false,
-      entryOff: eOff, // offset in file, not a real dir entry
-      t64DataOffset: dataOffset,
-      t64StartAddr: startAddr,
-      t64EndAddr: endAddr
+      entryOff: eOff,
     });
   }
 
+  parsedTapeDir = entries;
   return {
     diskName: tapeName,
     diskId: 'T64',
@@ -1339,6 +1395,19 @@ function parseT64(buffer) {
     format: 'T64',
     tracks: 0
   };
+}
+
+// Look up a tape directory entry by entryOff
+function getTapeEntry(entryOff) {
+  if (!parsedTapeDir) return null;
+  for (var i = 0; i < parsedTapeDir.length; i++) {
+    if (parsedTapeDir[i].entryOff === entryOff) return parsedTapeDir[i];
+  }
+  return null;
+}
+
+function isTapeFormat() {
+  return currentFormat === DISK_FORMATS.t64 || currentFormat === DISK_FORMATS.tap;
 }
 
 function parseDisk(buffer) {
@@ -1350,6 +1419,10 @@ function parseDisk(buffer) {
   // Tape images use their own parsers
   if (currentFormat === DISK_FORMATS.tap) return parseTAP(buffer);
   if (currentFormat === DISK_FORMATS.t64) return parseT64(buffer);
+
+  // Clear tape lookup maps for disk formats
+  parsedT64Entries = null;
+  parsedTAPEntries = null;
 
   const fmt = currentFormat;
   const bamOffset = sectorOffset(fmt.bamTrack, fmt.bamSector);

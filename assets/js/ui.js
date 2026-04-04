@@ -6078,15 +6078,24 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
 
   for (var ei = 0; ei < entries.length; ei++) {
     var entOff = entries[ei];
-    var typeByte = data[entOff + 2];
-    var typeIdx = typeByte & 0x07;
-    if (typeIdx < 1 || typeIdx > 4) continue;
+    var ext, name;
+
+    if (isTapeFormat()) {
+      var tapeEntry = getTapeEntry(entOff);
+      if (!tapeEntry) continue;
+      ext = tapeEntry.type.trim() === 'SEQ' ? '.seq' : '.prg';
+      name = petsciiToReadable(tapeEntry.name).trim();
+    } else {
+      var typeByte = data[entOff + 2];
+      var typeIdx = typeByte & 0x07;
+      if (typeIdx < 1 || typeIdx > 4) continue;
+      ext = extMap[typeIdx];
+      name = petsciiToReadable(readPetsciiString(data, entOff + 5, 16)).trim();
+    }
 
     var result = readFileData(currentBuffer, entOff);
-    if (result.error) continue;
+    if (result.error || result.data.length === 0) continue;
 
-    var ext = extMap[typeIdx];
-    var name = petsciiToReadable(readPetsciiString(data, entOff + 5, 16)).trim();
     name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
     if (!name) name = 'export';
 
@@ -6110,28 +6119,42 @@ document.getElementById('opt-copy').addEventListener('click', (e) => {
 
   for (var ci = 0; ci < entries.length; ci++) {
     var entOff = entries[ci];
-    var typeByte = data[entOff + 2];
-    var typeIdx = typeByte & 0x07;
-    if (typeIdx < 1 || typeIdx > 4) continue;
+    var typeIdx, nameBytes, geosBytes, geosInfoBlock;
 
-    var result = readFileData(currentBuffer, entOff);
-    if (result.error) continue;
-
-    var nameBytes = new Uint8Array(16);
-    for (var i = 0; i < 16; i++) nameBytes[i] = data[entOff + 5 + i];
-    var geosBytes = new Uint8Array(9);
-    for (var g = 0; g < 9; g++) geosBytes[g] = data[entOff + 21 + g];
-
-    var geosInfoBlock = null;
-    var infoTrack = data[entOff + 0x15];
-    var infoSector = data[entOff + 0x16];
-    if (data[entOff + 0x18] > 0 && infoTrack > 0) {
-      var infoOff = sectorOffset(infoTrack, infoSector);
-      if (infoOff >= 0) {
-        geosInfoBlock = new Uint8Array(256);
-        for (var ib = 0; ib < 256; ib++) geosInfoBlock[ib] = data[infoOff + ib];
+    if (isTapeFormat()) {
+      var tapeEntry = getTapeEntry(entOff);
+      if (!tapeEntry) continue;
+      typeIdx = tapeEntry.type.trim() === 'SEQ' ? 1 : 2; // SEQ=1, PRG=2
+      // Convert PUA name back to PETSCII bytes
+      nameBytes = new Uint8Array(16);
+      for (var ni = 0; ni < 16 && ni < tapeEntry.name.length; ni++) {
+        nameBytes[ni] = unicodeToPetscii(tapeEntry.name[ni]);
+      }
+      for (var pi = tapeEntry.name.length; pi < 16; pi++) nameBytes[pi] = 0xA0;
+      geosBytes = new Uint8Array(9);
+      geosInfoBlock = null;
+    } else {
+      var typeByte = data[entOff + 2];
+      typeIdx = typeByte & 0x07;
+      if (typeIdx < 1 || typeIdx > 4) continue;
+      nameBytes = new Uint8Array(16);
+      for (var i = 0; i < 16; i++) nameBytes[i] = data[entOff + 5 + i];
+      geosBytes = new Uint8Array(9);
+      for (var g = 0; g < 9; g++) geosBytes[g] = data[entOff + 21 + g];
+      geosInfoBlock = null;
+      var infoTrack = data[entOff + 0x15];
+      var infoSector = data[entOff + 0x16];
+      if (data[entOff + 0x18] > 0 && infoTrack > 0) {
+        var infoOff = sectorOffset(infoTrack, infoSector);
+        if (infoOff >= 0) {
+          geosInfoBlock = new Uint8Array(256);
+          for (var ib = 0; ib < 256; ib++) geosInfoBlock[ib] = data[infoOff + ib];
+        }
       }
     }
+
+    var result = readFileData(currentBuffer, entOff);
+    if (result.error || result.data.length === 0) continue;
 
     clipboard.push({
       typeIdx: typeIdx,
@@ -6958,9 +6981,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.7', title: 'Tape file copy/export, T64 file reading', items: [
+      'T64/TAP: readFileData now works — enables export, copy, and all viewers',
+      'T64/TAP: copy files to clipboard, paste into disk images across tabs',
+      'T64/TAP: export files as .prg/.seq with correct filenames',
+    ]},
     { ver: '1.3.6', title: 'TAP support, refactoring', items: [
       'TAP tape image support (read-only): decodes standard CBM tape encoding',
-      'TAP: detects file headers from raw pulse data, shows name/type/size',
+      'TAP: detects file headers and data blocks from raw pulse data',
       'Refactor: hex8()/hex16() helpers replace verbose hex formatting',
       'Refactor: cached DOM elements for menubar, menu items, alignment',
       'Refactor: consolidated dasm CSS font declarations',
