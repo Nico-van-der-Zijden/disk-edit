@@ -1030,16 +1030,20 @@ function readGeosInfoBlock(buffer, track, sector) {
   // 0x61-0x74: author (20 bytes, 0x00 terminated)  — actually at different offset
   // 0x85-0xFE: file description (free-form text, 0x00 terminated)
 
+  // GEOS class name at $4D-$60 — stored as ASCII/PETSCII
   var className = '';
   for (var i = 0x4D; i < 0x61; i++) {
-    if (data[off + i] === 0x00) break;
-    className += petsciiToReadable(PETSCII_MAP[data[off + i]]);
+    var cb = data[off + i];
+    if (cb === 0x00) break;
+    if (cb >= 0x20 && cb <= 0x7E) className += String.fromCharCode(cb);
+    else if (cb >= 0xC1 && cb <= 0xDA) className += String.fromCharCode(cb - 0xC1 + 0x41); // shifted → uppercase
+    else if (cb >= 0x41 && cb <= 0x5A) className += String.fromCharCode(cb); // uppercase
+    else className += '.';
   }
 
-  // Description starts around 0x61 or later — varies by GEOS version
-  // Safer: read from 0x61 to end, stop at 0x00
+  // Description at $A1-$FF — ASCII text, 0x00 terminated
   var description = '';
-  for (var j = 0x61; j < 0xFF; j++) {
+  for (var j = 0xA1; j < 0xFF; j++) {
     if (data[off + j] === 0x00) break;
     var ch = data[off + j];
     if (ch >= 0x20 && ch <= 0x7E) description += String.fromCharCode(ch);

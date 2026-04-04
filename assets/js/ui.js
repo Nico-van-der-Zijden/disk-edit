@@ -93,6 +93,22 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     document.getElementById('opt-charset-mode').click();
   }
+  // Ctrl+Alt+N: new disk (open Disk > New submenu with first option focused)
+  if (e.ctrlKey && e.altKey && e.code === 'KeyN') {
+    e.preventDefault();
+    var diskMenu = document.querySelector('.menu-item');
+    closeMenus();
+    diskMenu.classList.add('open');
+    document.querySelector('.menubar').classList.add('menu-active');
+    openMenu = diskMenu;
+    var newItem = document.getElementById('opt-new');
+    var submenu = newItem.querySelector('.submenu');
+    submenu.style.display = 'block';
+    menuSubmenu = submenu;
+    adjustSubmenu(submenu);
+    var firstOpt = submenu.querySelector('.option');
+    setMenuFocus(firstOpt);
+  }
 });
 
 // ── Input Modal ───────────────────────────────────────────────────────
@@ -689,6 +705,7 @@ document.getElementById('content').addEventListener('contextmenu', function(e) {
 // Registered once outside bindDirSelection to avoid stacking listeners
 document.addEventListener('keydown', (e) => {
   if (!currentBuffer) return;
+  if (openMenu) return; // menu keyboard navigation handles arrow keys
   if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.isContentEditable)) return;
 
   // Enter: edit selected filename
@@ -2731,8 +2748,8 @@ function showFileInfo(entryOff) {
     ' S:$' + startSector.toString(16).toUpperCase().padStart(2, '0'));
 
   if (addr) {
-    lines.push('Load: $' + addr.start.toString(16).toUpperCase().padStart(4, '0'));
-    lines.push('End:  $' + addr.end.toString(16).toUpperCase().padStart(4, '0'));
+    lines.push('Load: $' + addr.start.toString(16).toUpperCase().padStart(4, '0') +
+      ' - $' + addr.end.toString(16).toUpperCase().padStart(4, '0'));
   }
 
   // PRG-specific: SYS line and packer detection
@@ -6905,6 +6922,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Ctrl + E', 'Export selected file(s)'],
       ['Ctrl + D', 'Add directory (D81)'],
       ['Ctrl + Z', 'Undo last change'],
+      ['Ctrl + Alt + N', 'New disk'],
       ['Ctrl + B', 'View BAM'],
       ['Ctrl + H', 'Edit disk name'],
       ['Ctrl + Alt + I', 'Edit disk ID'],
@@ -6964,6 +6982,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.5', title: 'GEOS class names, file info, menu key fix', items: [
+      'GEOS info: fixed class name display (was showing dots for ASCII chars)',
+      'GEOS info: corrected description offset to $A1',
+      'File info: load address shown as range (Load: $0801 - $08FF)',
+      'Ctrl+Alt+N: new disk shortcut',
+      'Arrow keys no longer change file selection while menu is open',
+    ]},
     { ver: '1.3.4', title: 'Shortcuts, illegal opcodes, menu navigation fixes', items: [
       'Disassembly: full 256-opcode table with illegal opcodes (oxyron.de naming)',
       'Disassembly: illegal stable (amber) and unstable (red) opcodes color-coded',
