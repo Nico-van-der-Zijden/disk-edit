@@ -1297,7 +1297,7 @@ function parseTAP(buffer) {
     var name = '';
     for (var ni = 0; ni < 16; ni++) {
       var ch = hdr[5 + ni];
-      if (ch === 0x00 || ch === 0x20) name += PETSCII_MAP[0xA0];
+      if (ch === 0x00) name += PETSCII_MAP[0xA0];
       else name += PETSCII_MAP[ch] || '?';
     }
 
@@ -1368,7 +1368,7 @@ function parseT64(buffer) {
     var name = '';
     for (var ni = 0; ni < 16; ni++) {
       var ch2 = data[eOff + 16 + ni];
-      if (ch2 === 0x00 || ch2 === 0x20) { name += PETSCII_MAP[0xA0]; continue; }
+      if (ch2 === 0x00) { name += PETSCII_MAP[0xA0]; continue; }
       name += PETSCII_MAP[ch2] || '?';
     }
     var dataSize = endAddr - startAddr;
