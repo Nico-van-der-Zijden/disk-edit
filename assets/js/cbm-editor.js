@@ -121,6 +121,9 @@ function saveActiveTab() {
   tab.selectedEntry = selectedEntryIndex;
   tab.undoStack = undoStack;
   tab.dirty = tabDirty;
+  tab.tapeEntries = parsedT64Entries;
+  tab.tapEntries = parsedTAPEntries;
+  tab.tapeDir = parsedTapeDir;
 }
 
 function loadTab(tab) {
@@ -132,6 +135,9 @@ function loadTab(tab) {
   selectedEntryIndex = tab.selectedEntry;
   undoStack = tab.undoStack || [];
   tabDirty = tab.dirty || false;
+  parsedT64Entries = tab.tapeEntries || null;
+  parsedTAPEntries = tab.tapEntries || null;
+  parsedTapeDir = tab.tapeDir || null;
   activeTabId = tab.id;
 }
 

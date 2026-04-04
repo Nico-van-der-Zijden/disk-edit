@@ -215,8 +215,8 @@ function renderDisk(info) {
   let entries = info.entries.filter(e => !e.deleted || showDeleted);
 
   for (const e of entries) {
-    // Render filename with reversed character support
-    const richName = currentBuffer ? readPetsciiRich(new Uint8Array(currentBuffer), e.entryOff + 5, 16) : null;
+    // Render filename with reversed character support (skip for tape — no raw dir entries)
+    const richName = (currentBuffer && !isTapeFormat()) ? readPetsciiRich(new Uint8Array(currentBuffer), e.entryOff + 5, 16) : null;
     let nameHtml;
     if (richName) {
       const nameStr = richName.map(c =>
@@ -232,12 +232,10 @@ function renderDisk(info) {
 
     // Get file addresses if showing
     let addrHtml = '';
-    if (showAddresses && currentBuffer) {
+    if (showAddresses && currentBuffer && !isTapeFormat()) {
       const addr = getFileAddresses(currentBuffer, e.entryOff);
       if (addr) {
-        const s = '$' + addr.start.toString(16).toUpperCase().padStart(4, '0');
-        const en = '$' + addr.end.toString(16).toUpperCase().padStart(4, '0');
-        addrHtml = s + '-' + en;
+        addrHtml = '$' + hex16(addr.start) + '-$' + hex16(addr.end);
       }
     }
 
@@ -247,11 +245,11 @@ function renderDisk(info) {
           <span class="dir-blocks">${e.blocks}</span>
           <span class="dir-name">${nameHtml}</span>
           <span class="dir-type">${escHtml(e.type)}</span>
-          <span class="dir-ts">${currentBuffer ? ('$' + new Uint8Array(currentBuffer)[e.entryOff + 3].toString(16).toUpperCase().padStart(2, '0') + ' $' + new Uint8Array(currentBuffer)[e.entryOff + 4].toString(16).toUpperCase().padStart(2, '0')) : ''}</span>
+          <span class="dir-ts">${(currentBuffer && !isTapeFormat()) ? ('$' + hex8(new Uint8Array(currentBuffer)[e.entryOff + 3]) + ' $' + hex8(new Uint8Array(currentBuffer)[e.entryOff + 4])) : ''}</span>
           <span class="dir-addr">${addrHtml}</span>
           <span class="dir-icons">${(function() {
             var icons = '';
-            if (!currentBuffer || e.deleted) return icons;
+            if (!currentBuffer || e.deleted || isTapeFormat()) return icons;
             var d = new Uint8Array(currentBuffer);
             var ft = d[e.entryOff + 2] & 0x07;
             // CBM partition/directory icon
@@ -956,7 +954,7 @@ function updateEntryMenuState() {
   document.getElementById('opt-view-geos').classList.toggle('disabled', !geosEnabled);
   const lockEl = document.getElementById('opt-lock');
   const splatEl = document.getElementById('opt-splat');
-  if (hasSelection) {
+  if (hasSelection && !tape) {
     const data = new Uint8Array(currentBuffer);
     const typeByte = data[selectedEntryIndex + 2];
     const closed = (typeByte & 0x80) !== 0;
@@ -1348,11 +1346,12 @@ function renderTabs() {
     var t = tabs[i];
     var cls = 'tab';
     if (t.id === activeTabId) cls += ' active';
-    if (t.format === DISK_FORMATS.t64 || t.format === DISK_FORMATS.tap) cls += ' tab-tape';
+    var isTape = t.format === DISK_FORMATS.t64 || t.format === DISK_FORMATS.tap;
+    if (isTape) cls += ' tab-tape';
     if (t.dirty) cls += ' tab-dirty';
-    var label = (t.dirty ? '\u2022 ' : '') + t.name;
+    var label = (t.dirty ? '* ' : '') + (isTape ? '<span class="tab-tape-badge">TAPE</span> ' : '') + escHtml(t.name);
     html += '<div class="' + cls + '" data-tab-id="' + t.id + '">' +
-      '<span class="tab-name" title="' + escHtml(t.name) + '">' + escHtml(label) + '</span>' +
+      '<span class="tab-name" title="' + escHtml(t.name) + '">' + label + '</span>' +
       '<span class="tab-close" data-tab-close="' + t.id + '"><i class="fa-solid fa-xmark"></i></span>' +
     '</div>';
   }
