@@ -848,7 +848,8 @@ function readFileData(buffer, entryOff) {
   // TAP: return pre-decoded data stored during parsing
   if (currentFormat === DISK_FORMATS.tap) {
     var tapEntry = parsedTAPEntries && parsedTAPEntries[entryOff];
-    if (!tapEntry || !tapEntry.fileData) return { data: new Uint8Array(0), error: 'TAP data not decoded' };
+    if (!tapEntry) return { data: new Uint8Array(0), error: 'TAP entry not found' };
+    if (!tapEntry.fileData) return { data: new Uint8Array(0), error: 'TAP data not decoded (turbo loader?)' };
     return { data: tapEntry.fileData, error: null };
   }
 
@@ -1232,7 +1233,7 @@ function parseTAP(buffer) {
       }
       if (shortCount < 200) { pi2++; continue; }
 
-      // Try to find countdown sync 9→1
+      // Try to find countdown sync $89→$81
       var countdown = [];
       var tryPi = pi2;
       for (var attempt = 0; attempt < 500 && tryPi < pulses.length; attempt++) {
@@ -1242,7 +1243,8 @@ function parseTAP(buffer) {
         tryPi = result.nextIndex;
         if (countdown.length >= 9) {
           var last9 = countdown.slice(-9);
-          if (last9[0] === 0x09 && last9[8] === 0x01) {
+          // Standard CBM sync: $89 $88 $87 $86 $85 $84 $83 $82 $81
+          if (last9[0] === 0x89 && last9[8] === 0x81) {
             var valid = true;
             for (var ci = 1; ci < 9; ci++) {
               if (last9[ci] !== last9[ci - 1] - 1) { valid = false; break; }
