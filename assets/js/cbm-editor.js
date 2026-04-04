@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 8 };
+var APP_VERSION = { major: 1, minor: 3, build: 9 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -62,11 +62,17 @@ function detectExtendedBAM(buffer) {
 // ── Undo system ──────────────────────────────────────────────────────
 var undoStack = [];
 var MAX_UNDO = 20;
+var tabDirty = false;
 
 function pushUndo() {
   if (!currentBuffer) return;
   undoStack.push(currentBuffer.slice(0));
   if (undoStack.length > MAX_UNDO) undoStack.shift();
+  if (!tabDirty) {
+    tabDirty = true;
+    // Update tab bar to show dirty indicator (renderTabs is defined in ui.js)
+    if (typeof renderTabs === 'function') renderTabs();
+  }
 }
 
 function popUndo() {
@@ -96,7 +102,8 @@ function createTab(name, buffer, fileName) {
     tracks: currentTracks,
     partition: null,
     selectedEntry: -1,
-    undoStack: []
+    undoStack: [],
+    dirty: false
   };
   tabs.push(tab);
   return tab;
@@ -113,6 +120,7 @@ function saveActiveTab() {
   tab.partition = currentPartition;
   tab.selectedEntry = selectedEntryIndex;
   tab.undoStack = undoStack;
+  tab.dirty = tabDirty;
 }
 
 function loadTab(tab) {
@@ -123,6 +131,7 @@ function loadTab(tab) {
   currentPartition = tab.partition;
   selectedEntryIndex = tab.selectedEntry;
   undoStack = tab.undoStack || [];
+  tabDirty = tab.dirty || false;
   activeTabId = tab.id;
 }
 

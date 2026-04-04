@@ -1337,12 +1337,22 @@ document.addEventListener('keydown', (e) => {
 
 // ── Tab bar rendering ────────────────────────────────────────────────
 function renderTabs() {
+  // Sync active tab's dirty state before rendering
+  if (activeTabId !== null) {
+    var activeTab = tabs.find(function(t) { return t.id === activeTabId; });
+    if (activeTab) activeTab.dirty = tabDirty;
+  }
   var bar = document.getElementById('tab-bar');
   var html = '';
   for (var i = 0; i < tabs.length; i++) {
     var t = tabs[i];
-    html += '<div class="tab' + (t.id === activeTabId ? ' active' : '') + '" data-tab-id="' + t.id + '">' +
-      '<span class="tab-name" title="' + escHtml(t.name) + '">' + escHtml(t.name) + '</span>' +
+    var cls = 'tab';
+    if (t.id === activeTabId) cls += ' active';
+    if (t.format === DISK_FORMATS.t64 || t.format === DISK_FORMATS.tap) cls += ' tab-tape';
+    if (t.dirty) cls += ' tab-dirty';
+    var label = (t.dirty ? '\u2022 ' : '') + t.name;
+    html += '<div class="' + cls + '" data-tab-id="' + t.id + '">' +
+      '<span class="tab-name" title="' + escHtml(t.name) + '">' + escHtml(label) + '</span>' +
       '<span class="tab-close" data-tab-close="' + t.id + '"><i class="fa-solid fa-xmark"></i></span>' +
     '</div>';
   }
@@ -1440,6 +1450,8 @@ document.getElementById('opt-save').addEventListener('click', (e) => {
   if (!currentBuffer || !currentFileName) return;
   closeMenus();
   downloadD64(currentBuffer, currentFileName);
+  tabDirty = false;
+  renderTabs();
 });
 
 document.getElementById('opt-save-as').addEventListener('click', async (e) => {
@@ -1452,6 +1464,7 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
   if (!fileName) return;
   currentFileName = fileName.endsWith(ext) ? fileName : fileName + ext;
   downloadD64(currentBuffer, currentFileName);
+  tabDirty = false;
   updateTabName();
   updateMenuState();
 });
@@ -6991,6 +7004,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.9', title: 'Tab indicators for tape and unsaved changes', items: [
+      'Tape tabs (T64/TAP): left border accent to distinguish from disk tabs',
+      'Dirty tabs: bullet prefix and italic name when disk has unsaved changes',
+      'Dirty state cleared on Save/Save As, tracked across tab switches',
+    ]},
     { ver: '1.3.8', title: 'Tape read-only enforcement', items: [
       'T64/TAP: all editing disabled (rename, insert, remove, sort, align, lock, etc.)',
       'T64/TAP: paste and import disabled (read-only target)',
