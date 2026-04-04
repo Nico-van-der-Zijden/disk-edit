@@ -838,8 +838,8 @@ function updateEntryMenuState() {
   document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !currentBuffer || !canInsertFile());
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
   document.getElementById('opt-view-gfx').classList.toggle('disabled', !gfxEnabled);
-  // TASS: PRG file, not BASIC load address — enable for any PRG with data
-  document.getElementById('opt-view-tass').classList.toggle('disabled', !gfxEnabled);
+  // TASS: disabled until parser is validated against real files
+  document.getElementById('opt-view-tass').classList.add('disabled');
   document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile());
   document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect);
   document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection);
@@ -3349,8 +3349,8 @@ function detokenizeBasic(fileData) {
   var pos = 2;
 
   while (pos < fileData.length - 1) {
-    var nextPtr = fileData[pos] | (fileData[pos + 1] << 8);
-    if (nextPtr === 0) break;
+    // C64 LIST checks only the high byte of the link pointer for end-of-program
+    if (fileData[pos + 1] === 0x00) break;
 
     var lineNum = fileData[pos + 2] | (fileData[pos + 3] << 8);
     pos += 4;
@@ -3442,7 +3442,7 @@ function detokenizeBasic(fileData) {
       pos++;
     }
 
-    if (pos < fileData.length) pos++;
+    if (pos < fileData.length) pos++; // skip the 0x00 terminator
     lines.push({ lineNum: lineNum, parts: parts });
   }
 
@@ -3738,7 +3738,7 @@ function showFileDisasmViewer(entryOff) {
   var html = '<div class="hex-editor">';
   for (var di = 0; di < lines.length; di++) {
     var l = lines[di];
-    html += '<div class="hex-row"><span class="hex-offset">' + l.addr + '</span><span class="hex-bytes" style="width:80px">' + escHtml(l.bytes) + '</span><span style="color:var(--selected-text)">' + escHtml(l.text) + '</span></div>';
+    html += '<div class="hex-row"><span class="dasm-offset">' + l.addr + '</span><span class="dasm-bytes">' + escHtml(l.bytes) + '</span><span class="dasm-instr">' + escHtml(l.text) + '</span></div>';
   }
   html += '</div>';
 
@@ -6602,6 +6602,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.1', title: 'BASIC viewer fix, disassembly layout', items: [
+      'BASIC viewer: match C64 ROM LIST end-of-program check (high byte of link pointer)',
+      'Disassembly viewer: fix overlapping address/bytes columns with proper CSS classes',
+      'TASS viewer: disabled until parser is validated against real source files',
+    ]},
     { ver: '1.3.0', title: 'Disassembly viewer, TASS viewer', items: [
       'View As > Disassembly: separate 6502 disassembly viewer with load address',
       'View As > Turbo Assembler: TASS source file viewer with mnemonic decoding',
