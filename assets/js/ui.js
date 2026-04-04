@@ -1024,10 +1024,55 @@ function updateMenuState() {
 const fileInput = document.getElementById('file-input');
 let openMenu = null;
 
+var menuFocused = null;   // currently focused .option element
+var menuSubmenu = null;   // currently open submenu forced by keyboard
+var menuKeyNav = false;   // true once keyboard navigation takes over
+
+function clearMenuFocus() {
+  if (menuFocused) menuFocused.classList.remove('menu-focused');
+  menuFocused = null;
+}
+
+function closeSubmenu() {
+  if (menuSubmenu) menuSubmenu.style.display = '';
+  menuSubmenu = null;
+}
+
+function setMenuFocus(opt) {
+  if (menuFocused) menuFocused.classList.remove('menu-focused');
+  if (!opt) { menuFocused = null; return; }
+  menuFocused = opt;
+  opt.classList.add('menu-focused');
+  opt.scrollIntoView({ block: 'nearest' });
+}
+
+function getVisibleOptions(container) {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll(':scope > .option:not(.disabled)'));
+}
+
+function openTopMenu(menu) {
+  clearMenuFocus();
+  closeSubmenu();
+  if (openMenu) openMenu.classList.remove('open');
+  menu.classList.add('open');
+  document.querySelector('.menubar').classList.add('menu-active');
+  openMenu = menu;
+  // When keyboard-driven, disable hover so mouse position doesn't interfere
+  if (menuKeyNav) {
+    document.querySelector('.menubar').classList.add('menu-keynav');
+  }
+}
+
 function closeMenus() {
+  clearMenuFocus();
+  closeSubmenu();
   document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('open'));
-  document.querySelector('.menubar').classList.remove('menu-active');
+  var bar = document.querySelector('.menubar');
+  bar.classList.remove('menu-active');
+  bar.classList.remove('menu-keynav');
   openMenu = null;
+  menuKeyNav = false;
 }
 
 document.querySelectorAll('.menu-item').forEach(menu => {
@@ -1036,23 +1081,125 @@ document.querySelectorAll('.menu-item').forEach(menu => {
     if (openMenu === menu) {
       closeMenus();
     } else {
-      closeMenus();
-      menu.classList.add('open');
-      document.querySelector('.menubar').classList.add('menu-active');
-      openMenu = menu;
+      menuKeyNav = false;
+      openTopMenu(menu);
     }
   });
   menu.addEventListener('mouseenter', () => {
-    if (openMenu && openMenu !== menu) {
-      openMenu.classList.remove('open');
-      menu.classList.add('open');
-      openMenu = menu;
+    if (openMenu && openMenu !== menu && !menuKeyNav) {
+      openTopMenu(menu);
     }
+  });
+});
+
+// Clear keyboard focus when mouse moves over options (only in mouse mode)
+document.querySelectorAll('.menu-dropdown .option').forEach(opt => {
+  opt.addEventListener('mouseenter', () => {
+    if (!menuKeyNav) clearMenuFocus();
   });
 });
 
 document.addEventListener('click', () => {
   closeMenus();
+});
+
+// Mouse movement exits keynav mode so hover works naturally again
+document.querySelector('.menubar').addEventListener('mousemove', () => {
+  if (menuKeyNav) {
+    menuKeyNav = false;
+    document.querySelector('.menubar').classList.remove('menu-keynav');
+  }
+});
+
+// Keyboard navigation for menus
+document.addEventListener('keydown', (e) => {
+  if (!openMenu) return;
+  if (['ArrowDown','ArrowUp','ArrowLeft','ArrowRight','Enter','Escape'].indexOf(e.key) < 0) return;
+
+  e.preventDefault();
+  menuKeyNav = true;
+  document.querySelector('.menubar').classList.add('menu-keynav');
+
+  var inSubmenu = menuSubmenu && menuSubmenu.style.display === 'block';
+  var container = inSubmenu ? menuSubmenu : openMenu.querySelector('.menu-dropdown');
+  var opts = getVisibleOptions(container);
+  var idx = menuFocused ? opts.indexOf(menuFocused) : -1;
+
+  if (e.key === 'ArrowDown') {
+    if (opts.length === 0) return;
+    setMenuFocus(opts[idx + 1 < opts.length ? idx + 1 : 0]);
+
+  } else if (e.key === 'ArrowUp') {
+    if (opts.length === 0) return;
+    setMenuFocus(opts[idx - 1 >= 0 ? idx - 1 : opts.length - 1]);
+
+  } else if (e.key === 'ArrowRight') {
+    // If focused item has a submenu, enter it
+    if (menuFocused && menuFocused.classList.contains('has-submenu') && !menuFocused.classList.contains('disabled')) {
+      var sub = menuFocused.querySelector('.submenu');
+      if (sub) {
+        var subOpts = getVisibleOptions(sub);
+        if (subOpts.length > 0) {
+          closeSubmenu();
+          sub.style.display = 'block';
+          menuSubmenu = sub;
+          setMenuFocus(subOpts[0]);
+          return;
+        }
+      }
+    }
+    // Otherwise switch to next top-level menu
+    var menus = Array.from(document.querySelectorAll('.menu-item'));
+    var mi = menus.indexOf(openMenu);
+    openTopMenu(menus[(mi + 1) % menus.length]);
+
+  } else if (e.key === 'ArrowLeft') {
+    if (inSubmenu) {
+      // Close submenu, re-focus parent item
+      var savedContainer = container;
+      closeSubmenu();
+      var parentOpts = getVisibleOptions(openMenu.querySelector('.menu-dropdown'));
+      var parentItem = parentOpts.find(function(o) {
+        return o.classList.contains('has-submenu') && o.contains(savedContainer);
+      });
+      if (parentItem) setMenuFocus(parentItem);
+    } else {
+      // Switch to previous top-level menu
+      var menus2 = Array.from(document.querySelectorAll('.menu-item'));
+      var mi2 = menus2.indexOf(openMenu);
+      openTopMenu(menus2[(mi2 - 1 + menus2.length) % menus2.length]);
+    }
+
+  } else if (e.key === 'Enter') {
+    if (!menuFocused) return;
+    if (menuFocused.classList.contains('has-submenu') && !menuFocused.classList.contains('disabled')) {
+      var sub2 = menuFocused.querySelector('.submenu');
+      if (sub2) {
+        var subOpts2 = getVisibleOptions(sub2);
+        if (subOpts2.length > 0) {
+          closeSubmenu();
+          sub2.style.display = 'block';
+          menuSubmenu = sub2;
+          setMenuFocus(subOpts2[0]);
+        }
+      }
+    } else {
+      menuFocused.click();
+    }
+
+  } else if (e.key === 'Escape') {
+    if (inSubmenu) {
+      var savedContainer2 = container;
+      closeSubmenu();
+      var parentOpts2 = getVisibleOptions(openMenu.querySelector('.menu-dropdown'));
+      var parentItem2 = parentOpts2.find(function(o) {
+        return o.classList.contains('has-submenu') && o.contains(savedContainer2);
+      });
+      if (parentItem2) setMenuFocus(parentItem2);
+    } else {
+      closeMenus();
+    }
+  }
 });
 
 // ── Tab bar rendering ────────────────────────────────────────────────
@@ -1110,6 +1257,40 @@ document.getElementById('opt-open').addEventListener('click', (e) => {
   closeMenus();
   fileInput.click();
 });
+
+// Empty state: shown when no disk is open
+function showEmptyState() {
+  var content = document.getElementById('content');
+  content.innerHTML =
+    '<div class="empty-state"><div class="empty-drop-zone">' +
+      '<div style="margin-bottom:12px"><i class="fa-solid fa-file-arrow-down" style="font-size:28px;color:var(--border)"></i></div>' +
+      '<div style="margin-bottom:16px">No disk loaded.</div>' +
+      'Create a <a href="#" id="empty-new">new</a> disk or <a href="#" id="empty-open">open</a> a disk image.<br>' +
+      'Drop disk images anywhere on this page.' +
+    '</div></div>';
+  document.getElementById('empty-new').addEventListener('click', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    // Open the Disk menu with New submenu visible and first option focused
+    var diskMenu = document.querySelector('.menu-item');
+    closeMenus();
+    diskMenu.classList.add('open');
+    document.querySelector('.menubar').classList.add('menu-active');
+    openMenu = diskMenu;
+    var newItem = document.getElementById('opt-new');
+    var submenu = newItem.querySelector('.submenu');
+    submenu.style.display = 'block';
+    menuSubmenu = submenu;
+    var firstOpt = submenu.querySelector('.option');
+    setMenuFocus(firstOpt);
+  });
+  document.getElementById('empty-open').addEventListener('click', function(e) {
+    e.preventDefault();
+    fileInput.click();
+  });
+}
+
+showEmptyState();
 
 document.getElementById('opt-close').addEventListener('click', (e) => {
   e.stopPropagation();
@@ -6602,6 +6783,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.2', title: 'Empty state, dark theme, keyboard menu navigation', items: [
+      'Empty state: drop zone with links to create new disk or open a disk image',
+      'Dark theme: lighter backgrounds, softer text, lavender accent instead of green',
+      'Full keyboard menu navigation: arrow keys, Enter, Escape, submenu support',
+      'Keyboard/mouse mode switching: hover disabled during keynav, restored on mouse move',
+    ]},
     { ver: '1.3.1', title: 'BASIC viewer fix, disassembly layout', items: [
       'BASIC viewer: match C64 ROM LIST end-of-program check (high byte of link pointer)',
       'Disassembly viewer: fix overlapping address/bytes columns with proper CSS classes',

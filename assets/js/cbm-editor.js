@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 1 };
+var APP_VERSION = { major: 1, minor: 3, build: 2 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -150,10 +150,7 @@ function closeTab(tabId) {
     currentFileName = null;
     selectedEntryIndex = -1;
     currentPartition = null;
-    document.getElementById('content').innerHTML =
-      '<div class="empty-state">No disk loaded.<br>' +
-      'Use Disk &gt; New to create an empty disk,<br>' +
-      'or Disk &gt; Open to load a disk image.</div>';
+    showEmptyState();
     renderTabs();
     updateMenuState();
     updateEntryMenuState();
