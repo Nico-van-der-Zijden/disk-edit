@@ -444,6 +444,7 @@ function bindDirSelection() {
           return;
         }
       }
+      if (isTapeFormat()) return;
       if (e.target.classList.contains('dir-type')) {
         showTypeDropdown(e.target, entryOff);
       } else if (e.target.classList.contains('dir-blocks')) {
@@ -716,8 +717,8 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Delete: remove selected entry
-  if (e.key === 'Delete' && selectedEntryIndex >= 0 && currentBuffer) {
+  // Delete: remove selected entry (not for tape formats)
+  if (e.key === 'Delete' && selectedEntryIndex >= 0 && currentBuffer && !isTapeFormat()) {
     e.preventDefault();
     pushUndo();
     var toRemove = selectedEntries.length > 0 ? selectedEntries.slice() : [selectedEntryIndex];
@@ -843,7 +844,7 @@ document.addEventListener('keydown', (e) => {
 
   const dir = e.key === 'ArrowUp' ? -1 : 1;
 
-  if (e.ctrlKey && selectedEntryIndex >= 0) {
+  if (e.ctrlKey && selectedEntryIndex >= 0 && !isTapeFormat()) {
     // Ctrl+Arrow: move the selected entry
     moveEntry(dir);
   } else {
@@ -880,71 +881,78 @@ function updateEntryMenuState() {
   const hasSelection = selectedEntryIndex >= 0 && currentBuffer;
   const multiSelect = selectedEntries.length > 1;
   const inPartition = currentPartition !== null;
-  // Single-select only operations
-  document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection || multiSelect);
-  document.getElementById('opt-insert').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile());
-  document.getElementById('opt-insert-sep').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile());
-  document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection || multiSelect);
+  const tape = isTapeFormat();
+  // Single-select only operations (all disabled for tape)
+  document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection || multiSelect || tape);
+  document.getElementById('opt-insert').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
+  document.getElementById('opt-insert-sep').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
+  document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection || multiSelect || tape);
   document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection || multiSelect);
-  document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || inPartition || !currentBuffer || currentFormat !== DISK_FORMATS.d81 || !canInsertFile());
-  // Multi-select compatible operations
-  document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection);
-  document.getElementById('opt-align').classList.toggle('disabled', !hasSelection);
-  document.getElementById('opt-recalc-size').classList.toggle('disabled', !hasSelection);
-  document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection);
-  document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection);
-  document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection);
+  document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || inPartition || !currentBuffer || currentFormat !== DISK_FORMATS.d81 || !canInsertFile() || tape);
+  // Multi-select compatible operations (all disabled for tape except copy/export)
+  document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection || tape);
+  document.getElementById('opt-align').classList.toggle('disabled', !hasSelection || tape);
+  document.getElementById('opt-recalc-size').classList.toggle('disabled', !hasSelection || tape);
+  document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection || tape);
+  document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection || tape);
+  document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection || tape);
   // Disable file types not supported by the current format
   var supportedTypes = currentFormat.fileTypes || [0, 1, 2, 3, 4];
   for (var ti = 0; ti <= 5; ti++) {
     var typeEl = document.querySelector('[data-typeidx="' + ti + '"]');
     if (typeEl) typeEl.classList.toggle('disabled', supportedTypes.indexOf(ti) < 0);
   }
-  // Copy: enabled for closed file types 1-4 (same as export)
-  // Paste: enabled when clipboard has data and disk has room
+  // Copy/export/view: for tape formats, use parsed entry info
   var exportEnabled = false;
   var copyEnabled = false;
   var basicEnabled = false;
   var gfxEnabled = false;
-  if (hasSelection) {
+  var geosEnabled = false;
+  if (hasSelection && tape) {
+    var tapeEntry = getTapeEntry(selectedEntryIndex);
+    if (tapeEntry) {
+      exportEnabled = true;
+      copyEnabled = true;
+      // Check if PRG with BASIC load address
+      if (tapeEntry.type.trim() === 'PRG') {
+        var tResult = readFileData(currentBuffer, selectedEntryIndex);
+        if (tResult.data.length >= 2) {
+          var tAddr = tResult.data[0] | (tResult.data[1] << 8);
+          basicEnabled = BASIC_LOAD_ADDRS[tAddr] !== undefined;
+          gfxEnabled = true;
+        }
+      }
+    }
+  } else if (hasSelection) {
     var edata = new Uint8Array(currentBuffer);
     var eType = edata[selectedEntryIndex + 2];
     var eClosed = (eType & 0x80) !== 0;
     var eIdx = eType & 0x07;
     exportEnabled = eClosed && eIdx >= 1 && eIdx <= 4;
     copyEnabled = exportEnabled;
-    // Graphics: enabled for closed PRG files with data
     gfxEnabled = eClosed && eIdx === 2 && edata[selectedEntryIndex + 3] > 0;
-    // BASIC: PRG file — check first 2 bytes (load address) from first data sector
     if (eClosed && eIdx === 2) {
       var ft = edata[selectedEntryIndex + 3];
       var fs = edata[selectedEntryIndex + 4];
       if (ft > 0) {
         var foff = sectorOffset(ft, fs);
         if (foff >= 0) {
-          var addr = edata[foff + 2] | (edata[foff + 3] << 8); // first 2 data bytes
+          var addr = edata[foff + 2] | (edata[foff + 3] << 8);
           basicEnabled = BASIC_LOAD_ADDRS[addr] !== undefined;
         }
       }
     }
+    geosEnabled = edata[selectedEntryIndex + 0x18] > 0;
   }
   document.getElementById('opt-export').classList.toggle('disabled', !exportEnabled);
   document.getElementById('opt-copy').classList.toggle('disabled', !copyEnabled);
-  document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !currentBuffer || !canInsertFile());
+  document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !currentBuffer || !canInsertFile() || tape);
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
   document.getElementById('opt-view-gfx').classList.toggle('disabled', !gfxEnabled);
-  // TASS: disabled until parser is validated against real files
   document.getElementById('opt-view-tass').classList.add('disabled');
-  document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile());
-  document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect);
-  document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection);
-
-  // GEOS info — enabled when selected entry has GEOS file type
-  var geosEnabled = false;
-  if (hasSelection) {
-    var gdata = new Uint8Array(currentBuffer);
-    geosEnabled = gdata[selectedEntryIndex + 0x18] > 0;
-  }
+  document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
+  document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect || tape);
+  document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection || tape);
   document.getElementById('opt-view-geos').classList.toggle('disabled', !geosEnabled);
   const lockEl = document.getElementById('opt-lock');
   const splatEl = document.getElementById('opt-splat');
@@ -1004,6 +1012,7 @@ function bindEditableFields() {
 }
 
 function startEditing(el) {
+  if (isTapeFormat()) return;
   if (el.classList.contains('editing')) return;
   if (el.querySelector('input')) return;
   cancelActiveEdits();
@@ -1096,23 +1105,24 @@ function downloadD64(buffer, fileName) {
 
 function updateMenuState() {
   const hasDisk = currentBuffer !== null;
+  const tape = isTapeFormat();
   document.getElementById('opt-close').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-save').classList.toggle('disabled', !hasDisk || !currentFileName);
-  document.getElementById('opt-save-as').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-validate').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-show-deleted').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-sort').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-edit-free').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || !hasErrorBytes(currentBuffer));
-  document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || hasGeosSignature(currentBuffer));
-  document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0);
-  document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-save').classList.toggle('disabled', !hasDisk || !currentFileName || tape);
+  document.getElementById('opt-save-as').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-validate').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-show-deleted').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-sort').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-edit-free').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || tape || !hasErrorBytes(currentBuffer));
+  document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || tape || hasGeosSignature(currentBuffer));
+  document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
+  document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-md5').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || tape);
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -5293,7 +5303,7 @@ function countActualFreeBlocks(buffer) {
 }
 
 function startEditFreeBlocks(blocksSpan) {
-  if (!currentBuffer || !blocksSpan) return;
+  if (!currentBuffer || !blocksSpan || isTapeFormat()) return;
   if (blocksSpan.querySelector('input')) return;
 
   cancelActiveEdits();
@@ -5573,7 +5583,7 @@ function startEditBlockSize(entryEl) {
 }
 
 function startRenameEntry(entryEl) {
-  if (!currentBuffer || !entryEl) return;
+  if (!currentBuffer || !entryEl || isTapeFormat()) return;
   const entryOff = parseInt(entryEl.dataset.offset, 10);
   const nameSpan = entryEl.querySelector('.dir-name');
   if (nameSpan.querySelector('input')) return;
@@ -6981,6 +6991,15 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.8', title: 'Tape read-only enforcement', items: [
+      'T64/TAP: all editing disabled (rename, insert, remove, sort, align, lock, etc.)',
+      'T64/TAP: paste and import disabled (read-only target)',
+      'T64/TAP: double-click editing blocked for filenames, types, blocks, T/S',
+      'T64/TAP: header/ID/blocks-free editing blocked',
+      'T64/TAP: Ctrl+Arrow move, Delete key disabled',
+      'T64/TAP: disk operations disabled (save, validate, BAM, fill, scan)',
+      'T64/TAP: copy, export, and all viewers remain functional',
+    ]},
     { ver: '1.3.7', title: 'Tape file copy/export, T64 file reading', items: [
       'T64/TAP: readFileData now works — enables export, copy, and all viewers',
       'T64/TAP: copy files to clipboard, paste into disk images across tabs',
