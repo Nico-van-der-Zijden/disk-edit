@@ -1330,6 +1330,18 @@ function parseTAP(buffer) {
     });
   }
 
+  // Detect turbo loader stubs: all files same small size and load address
+  var turboWarning = '';
+  if (entries.length > 0) {
+    var allSame = entries.every(function(e) {
+      return e.blocks === entries[0].blocks;
+    });
+    var allSmall = entries.every(function(e) { return e.blocks <= 1; });
+    if (allSame && allSmall && entries.length > 1) {
+      turboWarning = 'Turbo loader detected \u2014 only loader stubs extractable';
+    }
+  }
+
   parsedTapeDir = entries;
   return {
     diskName: tapeName,
@@ -1337,7 +1349,8 @@ function parseTAP(buffer) {
     freeBlocks: 0,
     entries: entries,
     format: 'TAP',
-    tracks: 0
+    tracks: 0,
+    turboWarning: turboWarning
   };
 }
 
