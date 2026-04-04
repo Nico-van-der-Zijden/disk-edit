@@ -99,7 +99,7 @@ document.addEventListener('keydown', (e) => {
     var diskMenu = document.querySelector('.menu-item');
     closeMenus();
     diskMenu.classList.add('open');
-    document.querySelector('.menubar').classList.add('menu-active');
+    menubarEl.classList.add('menu-active');
     openMenu = diskMenu;
     var newItem = document.getElementById('opt-new');
     var submenu = newItem.querySelector('.submenu');
@@ -773,35 +773,12 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl+Alt+L: align left
-  if (e.ctrlKey && e.altKey && e.code === 'KeyL' && selectedEntryIndex >= 0) {
+  // Ctrl+Alt+L/R/C/J: alignment shortcuts
+  var alignKeys = { KeyL: 'left', KeyR: 'right', KeyC: 'center', KeyJ: 'justify' };
+  if (e.ctrlKey && e.altKey && alignKeys[e.code] && selectedEntryIndex >= 0) {
     e.preventDefault();
-    var alignLeft = document.querySelector('#opt-align .submenu [data-align="left"]');
-    if (alignLeft && !document.getElementById('opt-align').classList.contains('disabled')) alignLeft.click();
-    return;
-  }
-
-  // Ctrl+Alt+R: align right
-  if (e.ctrlKey && e.altKey && e.code === 'KeyR' && selectedEntryIndex >= 0) {
-    e.preventDefault();
-    var alignRight = document.querySelector('#opt-align .submenu [data-align="right"]');
-    if (alignRight && !document.getElementById('opt-align').classList.contains('disabled')) alignRight.click();
-    return;
-  }
-
-  // Ctrl+Alt+C: center
-  if (e.ctrlKey && e.altKey && e.code === 'KeyC' && selectedEntryIndex >= 0) {
-    e.preventDefault();
-    var alignCenter = document.querySelector('#opt-align .submenu [data-align="center"]');
-    if (alignCenter && !document.getElementById('opt-align').classList.contains('disabled')) alignCenter.click();
-    return;
-  }
-
-  // Ctrl+Alt+J: justify
-  if (e.ctrlKey && e.altKey && e.code === 'KeyJ' && selectedEntryIndex >= 0) {
-    e.preventDefault();
-    var alignJustify = document.querySelector('#opt-align .submenu [data-align="justify"]');
-    if (alignJustify && !document.getElementById('opt-align').classList.contains('disabled')) alignJustify.click();
+    var alignEl = optAlign.querySelector('.submenu [data-align="' + alignKeys[e.code] + '"]');
+    if (alignEl && !optAlign.classList.contains('disabled')) alignEl.click();
     return;
   }
 
@@ -1140,6 +1117,9 @@ function updateMenuState() {
 
 // ── Menu logic ────────────────────────────────────────────────────────
 const fileInput = document.getElementById('file-input');
+const menubarEl = document.querySelector('.menubar');
+const menuItems = Array.from(document.querySelectorAll('.menu-item'));
+const optAlign = document.getElementById('opt-align');
 let openMenu = null;
 
 var menuFocused = null;   // currently focused .option element
@@ -1174,26 +1154,24 @@ function openTopMenu(menu) {
   closeSubmenu();
   if (openMenu) openMenu.classList.remove('open');
   menu.classList.add('open');
-  document.querySelector('.menubar').classList.add('menu-active');
+  menubarEl.classList.add('menu-active');
   openMenu = menu;
   // When keyboard-driven, disable hover so mouse position doesn't interfere
   if (menuKeyNav) {
-    document.querySelector('.menubar').classList.add('menu-keynav');
+    menubarEl.classList.add('menu-keynav');
   }
 }
 
 function closeMenus() {
   clearMenuFocus();
   closeSubmenu();
-  document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('open'));
-  var bar = document.querySelector('.menubar');
-  bar.classList.remove('menu-active');
-  bar.classList.remove('menu-keynav');
+  menuItems.forEach(m => m.classList.remove('open'));
+  menubarEl.classList.remove('menu-active', 'menu-keynav');
   openMenu = null;
   menuKeyNav = false;
 }
 
-document.querySelectorAll('.menu-item').forEach(menu => {
+menuItems.forEach(menu => {
   menu.addEventListener('click', (e) => {
     e.stopPropagation();
     if (openMenu === menu) {
@@ -1247,10 +1225,10 @@ document.addEventListener('click', () => {
 });
 
 // Mouse movement exits keynav mode so hover works naturally again
-document.querySelector('.menubar').addEventListener('mousemove', () => {
+menubarEl.addEventListener('mousemove', () => {
   if (menuKeyNav) {
     menuKeyNav = false;
-    document.querySelector('.menubar').classList.remove('menu-keynav');
+    menubarEl.classList.remove('menu-keynav');
   }
 });
 
@@ -1261,7 +1239,7 @@ document.addEventListener('keydown', (e) => {
 
   e.preventDefault();
   menuKeyNav = true;
-  document.querySelector('.menubar').classList.add('menu-keynav');
+  menubarEl.classList.add('menu-keynav');
 
   var inSubmenu = menuSubmenu && menuSubmenu.style.display === 'block';
   var container = inSubmenu ? menuSubmenu : openMenu.querySelector('.menu-dropdown');
@@ -1293,7 +1271,7 @@ document.addEventListener('keydown', (e) => {
       }
     }
     // Otherwise switch to next top-level menu
-    var menus = Array.from(document.querySelectorAll('.menu-item'));
+    var menus = menuItems;
     var mi = menus.indexOf(openMenu);
     openTopMenu(menus[(mi + 1) % menus.length]);
 
@@ -1309,7 +1287,7 @@ document.addEventListener('keydown', (e) => {
       if (parentItem) setMenuFocus(parentItem);
     } else {
       // Switch to previous top-level menu
-      var menus2 = Array.from(document.querySelectorAll('.menu-item'));
+      var menus2 = menuItems;
       var mi2 = menus2.indexOf(openMenu);
       openTopMenu(menus2[(mi2 - 1 + menus2.length) % menus2.length]);
     }
@@ -1420,7 +1398,7 @@ function showEmptyState() {
     var diskMenu = document.querySelector('.menu-item');
     closeMenus();
     diskMenu.classList.add('open');
-    document.querySelector('.menubar').classList.add('menu-active');
+    menubarEl.classList.add('menu-active');
     openMenu = diskMenu;
     var newItem = document.getElementById('opt-new');
     var submenu = newItem.querySelector('.submenu');
@@ -1927,13 +1905,12 @@ document.getElementById('opt-view-geos').addEventListener('click', function(e) {
     var infoBlock = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
     if (infoBlock) {
       if (infoBlock.className) lines.push('Class: ' + infoBlock.className);
-      lines.push('Load: $' + infoBlock.loadAddr.toString(16).toUpperCase().padStart(4, '0') +
-        ' End: $' + infoBlock.endAddr.toString(16).toUpperCase().padStart(4, '0') +
-        ' Init: $' + infoBlock.initAddr.toString(16).toUpperCase().padStart(4, '0'));
+      lines.push('Load: $' + hex16(infoBlock.loadAddr) +
+        ' End: $' + hex16(infoBlock.endAddr) +
+        ' Init: $' + hex16(infoBlock.initAddr));
       if (infoBlock.description) lines.push('Description: ' + infoBlock.description);
     }
-    lines.push('Info Block: T:$' + geos.infoTrack.toString(16).toUpperCase().padStart(2, '0') +
-      ' S:$' + geos.infoSector.toString(16).toUpperCase().padStart(2, '0'));
+    lines.push('Info Block: T:$' + hex8(geos.infoTrack) + ' S:$' + hex8(geos.infoSector));
   }
 
   // Build HTML
@@ -2744,12 +2721,10 @@ function showFileInfo(entryOff) {
   lines.push('Type: ' + typeName + (closed ? '' : ' (scratched)') + (locked ? ' (locked)' : ''));
   lines.push('Blocks: ' + blocks);
   lines.push('Size: ' + fileData.length + ' bytes');
-  lines.push('Start T:$' + startTrack.toString(16).toUpperCase().padStart(2, '0') +
-    ' S:$' + startSector.toString(16).toUpperCase().padStart(2, '0'));
+  lines.push('Start T:$' + hex8(startTrack) + ' S:$' + hex8(startSector));
 
   if (addr) {
-    lines.push('Load: $' + addr.start.toString(16).toUpperCase().padStart(4, '0') +
-      ' - $' + addr.end.toString(16).toUpperCase().padStart(4, '0'));
+    lines.push('Load: $' + hex16(addr.start) + ' - $' + hex16(addr.end));
   }
 
   // PRG-specific: SYS line and packer detection
@@ -2759,7 +2734,7 @@ function showFileInfo(entryOff) {
       var packerInfo = detectPacker(fileData);
       if (packerInfo) {
         if (packerInfo.sysAddr) {
-          lines.push('SYS: ' + packerInfo.sysAddr + ' ($' + packerInfo.sysAddr.toString(16).toUpperCase().padStart(4, '0') + ')');
+          lines.push('SYS: ' + packerInfo.sysAddr + ' ($' + hex16(packerInfo.sysAddr) + ')');
         }
         if (packerInfo.packer) {
           lines.push('Packer: ' + packerInfo.packer);
@@ -3819,8 +3794,7 @@ function showFileBasicViewer(entryOff) {
   html += '</div>';
 
   var versionLabel = basic.version === 'V7' ? 'BASIC V7 (C128)' : 'BASIC V2';
-  var titleText = versionLabel + ' \u2014 "' + name + '" (load: $' +
-    basic.loadAddr.toString(16).toUpperCase().padStart(4, '0') + ')';
+  var titleText = versionLabel + ' \u2014 "' + name + '" (load: $' + hex16(basic.loadAddr) + ')';
   if (result.error) titleText += ' \u2014 ' + result.error;
 
   document.getElementById('modal-title').textContent = titleText;
@@ -4070,7 +4044,7 @@ function showFileDisasmViewer(entryOff) {
   }
   html += '</div>';
 
-  var titleText = 'Disassembly \u2014 "' + name + '" (load: $' + loadAddr.toString(16).toUpperCase().padStart(4, '0') + ', ' + codeData.length + ' bytes)';
+  var titleText = 'Disassembly \u2014 "' + name + '" (load: $' + hex16(loadAddr) + ', ' + codeData.length + ' bytes)';
   if (result.error) titleText += ' \u2014 ' + result.error;
   document.getElementById('modal-title').textContent = titleText;
   document.getElementById('modal-body').innerHTML = html;
@@ -4121,29 +4095,31 @@ function disassemble6502(data, startAddr, maxLines) {
     var addr = startAddr + pos;
     var bytes = '';
     for (var b = 0; b < size && pos + b < data.length; b++) {
-      bytes += data[pos + b].toString(16).toUpperCase().padStart(2, '0') + ' ';
+      bytes += hex8(data[pos + b]) + ' ';
     }
     var operand = '';
     if (size === 2 && pos + 1 < data.length) {
       var val = data[pos + 1];
+      var h8 = hex8(val);
       if (mode === 10) { // relative
         var target = addr + 2 + (val > 127 ? val - 256 : val);
-        operand = '$' + (target & 0xFFFF).toString(16).toUpperCase().padStart(4, '0');
-      } else if (mode === 1) operand = '#$' + val.toString(16).toUpperCase().padStart(2, '0');
-      else if (mode === 8) operand = '($' + val.toString(16).toUpperCase().padStart(2, '0') + ',X)';
-      else if (mode === 9) operand = '($' + val.toString(16).toUpperCase().padStart(2, '0') + '),Y';
-      else if (mode === 3) operand = '$' + val.toString(16).toUpperCase().padStart(2, '0') + ',X';
-      else if (mode === 4) operand = '$' + val.toString(16).toUpperCase().padStart(2, '0') + ',Y';
-      else operand = '$' + val.toString(16).toUpperCase().padStart(2, '0');
+        operand = '$' + hex16(target & 0xFFFF);
+      } else if (mode === 1) operand = '#$' + h8;
+      else if (mode === 8) operand = '($' + h8 + ',X)';
+      else if (mode === 9) operand = '($' + h8 + '),Y';
+      else if (mode === 3) operand = '$' + h8 + ',X';
+      else if (mode === 4) operand = '$' + h8 + ',Y';
+      else operand = '$' + h8;
     } else if (size === 3 && pos + 2 < data.length) {
       var val16 = data[pos + 1] | (data[pos + 2] << 8);
-      if (mode === 11) operand = '($' + val16.toString(16).toUpperCase().padStart(4, '0') + ')';
-      else if (mode === 6) operand = '$' + val16.toString(16).toUpperCase().padStart(4, '0') + ',X';
-      else if (mode === 7) operand = '$' + val16.toString(16).toUpperCase().padStart(4, '0') + ',Y';
-      else operand = '$' + val16.toString(16).toUpperCase().padStart(4, '0');
+      var h16 = hex16(val16);
+      if (mode === 11) operand = '($' + h16 + ')';
+      else if (mode === 6) operand = '$' + h16 + ',X';
+      else if (mode === 7) operand = '$' + h16 + ',Y';
+      else operand = '$' + h16;
     }
     lines.push({
-      addr: '$' + addr.toString(16).toUpperCase().padStart(4, '0'),
+      addr: '$' + hex16(addr),
       bytes: bytes.padEnd(9),
       text: mnemonic + (operand ? ' ' + operand : ''),
       type: type
@@ -6729,7 +6705,7 @@ document.addEventListener('drop', function(e) {
   var files = Array.from(e.dataTransfer.files);
   if (files.length === 0) return;
 
-  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64'];
+  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap'];
   var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00'];
   var diskFiles = [];
   var importFiles = [];
@@ -6846,7 +6822,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '<div style="font-size:11px;color:' + C64_COLORS[13] + ';margin-top:4px"><i class="fa-solid fa-cannabis"></i> OOK EEN TREKJE? <i class="fa-solid fa-joint"></i></div>' +
     '</div>' +
     '<div class="text-base line-tall">' +
-      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), T64 (tape)<br>' +
+      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), T64 (tape), TAP (raw tape)<br>' +
       '<b>Features:</b><br>' +
       '&bull; Directory editing: rename, insert, remove, sort, align, lock, scratch<br>' +
       '&bull; Hex sector editor with track/sector navigation<br>' +
@@ -6982,6 +6958,15 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.6', title: 'TAP support, refactoring', items: [
+      'TAP tape image support (read-only): decodes standard CBM tape encoding',
+      'TAP: detects file headers from raw pulse data, shows name/type/size',
+      'Refactor: hex8()/hex16() helpers replace verbose hex formatting',
+      'Refactor: cached DOM elements for menubar, menu items, alignment',
+      'Refactor: consolidated dasm CSS font declarations',
+      'Refactor: alignment shortcuts use data-driven lookup',
+      'Refactor: decodeGeosString() shared helper for GEOS text fields',
+    ]},
     { ver: '1.3.5', title: 'GEOS class names, file info, menu key fix', items: [
       'GEOS info: fixed class name display (was showing dots for ASCII chars)',
       'GEOS info: corrected description offset to $A1',

@@ -570,6 +570,37 @@ const DISK_FORMATS = {
     },
   },
 
+  // TAP tape image (read-only, raw pulse data)
+  tap: {
+    name: 'TAP',
+    ext: '.tap',
+    dirTrack: 0,
+    dirSector: 0,
+    headerTrack: 0,
+    headerSector: 0,
+    bamTrack: 0,
+    bamSector: 0,
+    dosVersion: 0x00,
+    dosType: 'TP',
+    nameOffset: 0x0C,
+    nameLength: 0,
+    idOffset: 0x0C,
+    idLength: 1,
+    maxDirSectors: 0,
+    entriesPerSector: 0,
+    entrySize: 32,
+    doubleSidedFlag: 0x00,
+    fileTypes: [1, 2],
+    sizes: [],
+    sectorsPerTrack: function() { return 0; },
+    bamTracksRange: function() { return 0; },
+    readTrackFree: function() { return 0; },
+    writeTrackFree: function() {},
+    readTrackBitmap: function() { return 0; },
+    writeTrackBitmap: function() {},
+    initBAM: function() {},
+  },
+
   // T64 tape image (read-only virtual format)
   t64: {
     name: 'T64',
@@ -612,11 +643,15 @@ function sectorsPerTrack(t) {
 }
 
 function detectFormat(bufferSize, buffer) {
-  // Check for T64 magic bytes
   if (buffer) {
     var data = new Uint8Array(buffer);
+    // Check for TAP magic: "C64-TAPE-RAW"
+    if (bufferSize >= 20 && data[0] === 0x43 && data[1] === 0x36 && data[2] === 0x34 &&
+        data[3] === 0x2D && data[4] === 0x54 && data[5] === 0x41 && data[6] === 0x50 && data[7] === 0x45) {
+      return { format: DISK_FORMATS.tap, tracks: 0 };
+    }
+    // Check for T64 magic: "C64"
     if (bufferSize >= 64 && data[0] === 0x43 && data[1] === 0x36 && data[2] === 0x34) {
-      // Starts with "C64" — likely T64 tape image
       return { format: DISK_FORMATS.t64, tracks: 0 };
     }
   }
@@ -1010,6 +1045,19 @@ function readGeosInfo(buffer, entryOff) {
 }
 
 // Read GEOS info block (256-byte sector with icon, description, class, author)
+function decodeGeosString(data, offset, maxLen) {
+  var s = '';
+  for (var i = 0; i < maxLen; i++) {
+    var b = data[offset + i];
+    if (b === 0x00) break;
+    if (b >= 0x20 && b <= 0x7E) s += String.fromCharCode(b);
+    else if (b >= 0xC1 && b <= 0xDA) s += String.fromCharCode(b - 0x80); // shifted → uppercase
+    else if (b === 0x0D) s += '\n';
+    else s += '.';
+  }
+  return s;
+}
+
 function readGeosInfoBlock(buffer, track, sector) {
   if (track === 0) return null;
   var off = sectorOffset(track, sector);
@@ -1030,26 +1078,8 @@ function readGeosInfoBlock(buffer, track, sector) {
   // 0x61-0x74: author (20 bytes, 0x00 terminated)  — actually at different offset
   // 0x85-0xFE: file description (free-form text, 0x00 terminated)
 
-  // GEOS class name at $4D-$60 — stored as ASCII/PETSCII
-  var className = '';
-  for (var i = 0x4D; i < 0x61; i++) {
-    var cb = data[off + i];
-    if (cb === 0x00) break;
-    if (cb >= 0x20 && cb <= 0x7E) className += String.fromCharCode(cb);
-    else if (cb >= 0xC1 && cb <= 0xDA) className += String.fromCharCode(cb - 0xC1 + 0x41); // shifted → uppercase
-    else if (cb >= 0x41 && cb <= 0x5A) className += String.fromCharCode(cb); // uppercase
-    else className += '.';
-  }
-
-  // Description at $A1-$FF — ASCII text, 0x00 terminated
-  var description = '';
-  for (var j = 0xA1; j < 0xFF; j++) {
-    if (data[off + j] === 0x00) break;
-    var ch = data[off + j];
-    if (ch >= 0x20 && ch <= 0x7E) description += String.fromCharCode(ch);
-    else if (ch === 0x0D) description += '\n';
-    else description += '.';
-  }
+  var className = decodeGeosString(data, off + 0x4D, 20);
+  var description = decodeGeosString(data, off + 0xA1, 94);
 
   return {
     className: className,
@@ -1083,6 +1113,9 @@ function writePetsciiString(buffer, offset, str, maxLen, overrides) {
 }
 
 // ── Utility ──────────────────────────────────────────────────────────
+function hex8(n) { return n.toString(16).toUpperCase().padStart(2, '0'); }
+function hex16(n) { return n.toString(16).toUpperCase().padStart(4, '0'); }
+
 function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -1098,6 +1131,155 @@ function fileTypeName(typeByte) {
   const prefix = closed ? ' ' : '*';
   const suffix = locked ? '<' : ' ';
   return prefix + base + suffix;
+}
+
+// ── TAP tape image parser ────────────────────────────────────────────
+// Decodes standard CBM tape encoding to find file headers
+function parseTAP(buffer) {
+  var data = new Uint8Array(buffer);
+  // TAP header: 0x00-0x0B = "C64-TAPE-RAW", 0x0C = version, 0x10-0x13 = data size
+  var version = data[0x0C];
+  var dataSize = data[0x10] | (data[0x11] << 8) | (data[0x12] << 16) | (data[0x13] << 24);
+  var tapeName = 'TAP v' + version;
+
+  // Read pulse lengths from the data section
+  var pulses = [];
+  var pos = 0x14;
+  var endPos = Math.min(pos + dataSize, data.length);
+  while (pos < endPos) {
+    var b = data[pos++];
+    if (b === 0x00 && version >= 1 && pos + 2 < endPos) {
+      // Version 1: 3-byte overflow pulse
+      pulses.push(data[pos] | (data[pos + 1] << 8) | (data[pos + 2] << 16));
+      pos += 3;
+    } else if (b === 0x00) {
+      pulses.push(256 * 8); // version 0 overflow
+    } else {
+      pulses.push(b * 8);
+    }
+  }
+
+  // Classify pulses: S(hort)=0, M(edium)=1, L(ong)=2
+  // Thresholds based on C64 PAL clock (985248 Hz)
+  // Short: ~363 cycles, Medium: ~531 cycles, Long: ~699 cycles
+  function classifyPulse(cycles) {
+    if (cycles < 432) return 0; // short
+    if (cycles < 616) return 1; // medium
+    return 2; // long
+  }
+
+  // Decode a byte from pulses starting at index pi (CBM standard encoding)
+  // Returns { byte, nextIndex } or null if decoding fails
+  function decodeByte(pi) {
+    // Expect a new-data marker: long-medium pair
+    if (pi + 1 >= pulses.length) return null;
+    var p0 = classifyPulse(pulses[pi]);
+    var p1 = classifyPulse(pulses[pi + 1]);
+    if (p0 !== 2 || p1 !== 1) return null;
+    pi += 2;
+
+    // Read 8 data bits (LSB first) + 1 parity bit = 9 bit pairs
+    var byte = 0;
+    for (var bit = 0; bit < 8; bit++) {
+      if (pi + 1 >= pulses.length) return null;
+      var a = classifyPulse(pulses[pi]);
+      var b2 = classifyPulse(pulses[pi + 1]);
+      pi += 2;
+      if (a === 1 && b2 === 0) byte |= (1 << bit);      // medium+short = 1
+      else if (a === 0 && b2 === 1) { /* short+medium = 0 */ }
+      else return null; // invalid
+    }
+    // Skip parity bit pair
+    pi += 2;
+    return { byte: byte, nextIndex: pi };
+  }
+
+  // Scan for pilot tone (repeated $89 bytes in countdown pattern) then read header
+  var entries = [];
+  var fileIndex = 0;
+  var pi = 0;
+  while (pi < pulses.length - 100) {
+    // Look for a sequence of short pulses (pilot tone)
+    var shortCount = 0;
+    while (pi < pulses.length && classifyPulse(pulses[pi]) === 0) {
+      shortCount++;
+      pi++;
+    }
+    if (shortCount < 200) { pi++; continue; } // need substantial pilot
+
+    // Try to find sync: countdown from $89 to $01
+    var syncFound = false;
+    var syncStart = pi;
+    // Try decoding bytes looking for the countdown pattern
+    var countdown = [];
+    var tryPi = pi;
+    for (var attempt = 0; attempt < 500 && tryPi < pulses.length; attempt++) {
+      var result = decodeByte(tryPi);
+      if (!result) { tryPi++; continue; }
+      countdown.push(result.byte);
+      tryPi = result.nextIndex;
+      // Check for sync: 9 consecutive descending bytes ending at 0x01
+      if (countdown.length >= 9) {
+        var last9 = countdown.slice(-9);
+        if (last9[0] === 0x09 && last9[8] === 0x01) {
+          var valid = true;
+          for (var ci = 1; ci < 9; ci++) {
+            if (last9[ci] !== last9[ci - 1] - 1) { valid = false; break; }
+          }
+          if (valid) { syncFound = true; pi = tryPi; break; }
+        }
+      }
+    }
+    if (!syncFound) continue;
+
+    // Read header block (192 bytes, but we only need the first 21)
+    var header = [];
+    for (var hi = 0; hi < 192 && pi < pulses.length; hi++) {
+      var hResult = decodeByte(pi);
+      if (!hResult) break;
+      header.push(hResult.byte);
+      pi = hResult.nextIndex;
+    }
+    if (header.length < 21) continue;
+
+    var fileType = header[0]; // 1=PRG relocatable, 3=PRG non-reloc, 4=SEQ
+    if (fileType < 1 || fileType > 5) continue;
+    if (fileType === 5) continue; // end-of-tape marker
+
+    var startAddr = header[1] | (header[2] << 8);
+    var endAddr = header[3] | (header[4] << 8);
+    var name = '';
+    for (var ni = 0; ni < 16; ni++) {
+      var ch = header[5 + ni];
+      if (ch === 0x00 || ch === 0x20) name += PETSCII_MAP[0xA0];
+      else name += PETSCII_MAP[ch] || '?';
+    }
+
+    var dataSize2 = endAddr > startAddr ? endAddr - startAddr : 0;
+    var blocks = Math.ceil(dataSize2 / 254);
+    var typeStr = (fileType === 4) ? ' SEQ ' : ' PRG ';
+
+    entries.push({
+      name: name,
+      type: typeStr,
+      blocks: blocks,
+      deleted: false,
+      entryOff: -1, // no real directory entry
+      tapStartAddr: startAddr,
+      tapEndAddr: endAddr,
+      tapFileType: fileType
+    });
+    fileIndex++;
+  }
+
+  return {
+    diskName: tapeName,
+    diskId: 'v' + version,
+    freeBlocks: 0,
+    entries: entries,
+    format: 'TAP',
+    tracks: 0
+  };
 }
 
 // ── Parse disk image ─────────────────────────────────────────────────
@@ -1165,7 +1347,8 @@ function parseDisk(buffer) {
   currentFormat = detected.format;
   currentTracks = detected.tracks;
 
-  // T64 tape images use their own parser
+  // Tape images use their own parsers
+  if (currentFormat === DISK_FORMATS.tap) return parseTAP(buffer);
   if (currentFormat === DISK_FORMATS.t64) return parseT64(buffer);
 
   const fmt = currentFormat;

@@ -1170,13 +1170,16 @@
     font-family: "Cascadia Code", "Consolas", monospace;
   }
 
+  .dasm-offset, .dasm-bytes, .dasm-instr, .dasm-illegal, .dasm-unsafe {
+    font-family: "Cascadia Code", "Consolas", monospace;
+  }
+
   .dasm-offset {
     color: var(--text-muted);
     width: 6ch;
     flex-shrink: 0;
     text-align: right;
     padding-right: 8px;
-    font-family: "Cascadia Code", "Consolas", monospace;
   }
 
   .dasm-bytes {
@@ -1184,23 +1187,11 @@
     width: 10ch;
     flex-shrink: 0;
     padding-right: 12px;
-    font-family: "Cascadia Code", "Consolas", monospace;
   }
 
-  .dasm-instr {
-    color: var(--selected-text);
-    font-family: "Cascadia Code", "Consolas", monospace;
-  }
-
-  .dasm-illegal {
-    color: #c0a050;
-    font-family: "Cascadia Code", "Consolas", monospace;
-  }
-
-  .dasm-unsafe {
-    color: #c05050;
-    font-family: "Cascadia Code", "Consolas", monospace;
-  }
+  .dasm-instr { color: var(--selected-text); }
+  .dasm-illegal { color: #c0a050; }
+  .dasm-unsafe { color: #c05050; }
 
   .hex-byte {
     display: inline-block;
@@ -1669,7 +1660,7 @@
   <div class="theme-toggle" id="theme-toggle" title="Toggle theme"></div>
 </div>
 
-<input type="file" id="file-input" accept=".d64,.d71,.d81,.d80,.d82,.t64,.p00,.s00,.u00,.r00" multiple>
+<input type="file" id="file-input" accept=".d64,.d71,.d81,.d80,.d82,.t64,.tap,.p00,.s00,.u00,.r00" multiple>
 
 <div class="tab-bar" id="tab-bar"></div>
 
