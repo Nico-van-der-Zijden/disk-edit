@@ -1330,15 +1330,17 @@ function parseTAP(buffer) {
     });
   }
 
-  // Detect turbo loader stubs: all files same small size and load address
+  // Detect turbo loader stubs: files with same small size likely use turbo loading
   var turboWarning = '';
   if (entries.length > 0) {
-    var allSame = entries.every(function(e) {
-      return e.blocks === entries[0].blocks;
-    });
-    var allSmall = entries.every(function(e) { return e.blocks <= 1; });
-    if (allSame && allSmall && entries.length > 1) {
-      turboWarning = 'Turbo loader detected \u2014 only loader stubs extractable';
+    var stubCount = 0;
+    for (var ti = 0; ti < entries.length; ti++) {
+      if (entries[ti].blocks <= 1) stubCount++;
+    }
+    if (stubCount > 0) {
+      turboWarning = stubCount === entries.length
+        ? 'Turbo loader detected \u2014 only loader stubs extractable'
+        : stubCount + ' of ' + entries.length + ' files are turbo loader stubs';
     }
   }
 
