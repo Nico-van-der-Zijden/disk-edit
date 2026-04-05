@@ -3825,6 +3825,7 @@ function showFileGfxViewer(entryOff) {
 
   var activeFmt = displayMatches[0] || matches[0];
   var mcEnabled = false;
+  var currentZoom = 0; // 0 = auto-detect on first render
   // Color state for sprites/charset/bitmap
   var gfxColors = { bg: 0, fg: 1, mc1: 2, mc2: 3 };
 
@@ -3981,19 +3982,45 @@ function showFileGfxViewer(entryOff) {
     canvas.className = 'gfx-canvas';
     renderGfxToCanvas(canvas.getContext('2d'), eff, fileData, gfxColors);
 
-    var scale;
-    if (eff.mode === 'geopaint') {
-      scale = 1;
-    } else if (eff.mode === 'printshop') {
-      scale = 4;
-    } else if (eff.mode.indexOf('sprite') >= 0 || eff.mode.indexOf('charset') >= 0) {
-      scale = Math.max(2, Math.min(4, Math.floor(600 / (canvas.width || 1))));
-    } else {
-      scale = 2;
+    // Auto scale based on format
+    if (!currentZoom) {
+      if (eff.mode === 'geopaint') {
+        currentZoom = 1;
+      } else if (eff.mode === 'printshop') {
+        currentZoom = 4;
+      } else if (eff.mode.indexOf('sprite') >= 0 || eff.mode.indexOf('charset') >= 0) {
+        currentZoom = Math.max(2, Math.min(5, Math.floor(600 / (canvas.width || 1))));
+      } else {
+        currentZoom = 2;
+      }
     }
-    canvas.style.width = (canvas.width * scale) + 'px';
-    canvas.style.height = (canvas.height * scale) + 'px';
+    canvas.style.width = (canvas.width * currentZoom) + 'px';
+    canvas.style.height = (canvas.height * currentZoom) + 'px';
     body.appendChild(canvas);
+
+    // Zoom slider
+    var zoomRow = document.createElement('div');
+    zoomRow.className = 'gfx-zoom-row';
+    var zoomLabel = document.createElement('span');
+    zoomLabel.className = 'gfx-zoom-label';
+    zoomLabel.textContent = currentZoom + 'x';
+    var zoomSlider = document.createElement('input');
+    zoomSlider.type = 'range';
+    zoomSlider.className = 'gfx-zoom-slider';
+    zoomSlider.min = '1';
+    zoomSlider.max = '5';
+    zoomSlider.step = '1';
+    zoomSlider.value = currentZoom;
+    zoomSlider.addEventListener('input', function() {
+      currentZoom = parseInt(zoomSlider.value, 10);
+      zoomLabel.textContent = currentZoom + 'x';
+      canvas.style.width = (canvas.width * currentZoom) + 'px';
+      canvas.style.height = (canvas.height * currentZoom) + 'px';
+    });
+    zoomSlider.addEventListener('keydown', function(ev) { ev.stopPropagation(); });
+    zoomRow.appendChild(zoomSlider);
+    zoomRow.appendChild(zoomLabel);
+    body.appendChild(zoomRow);
 
     buildColorPicker(body);
   }

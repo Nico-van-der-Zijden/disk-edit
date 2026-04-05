@@ -1273,13 +1273,31 @@
     border-radius: 2px;
   }
 
+  .gfx-zoom-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .gfx-zoom-slider {
+    width: 120px;
+    cursor: pointer;
+    accent-color: var(--accent);
+  }
+
+  .gfx-zoom-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 20px;
+  }
+
   .gfx-canvas {
     display: block;
     margin: 0 auto;
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     border: 1px solid var(--border);
-    max-width: 100%;
   }
 
   .hex-editor {
