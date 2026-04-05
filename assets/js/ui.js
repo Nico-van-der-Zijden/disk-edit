@@ -3998,28 +3998,49 @@ function showFileGfxViewer(entryOff) {
     canvas.style.height = (canvas.height * currentZoom) + 'px';
     body.appendChild(canvas);
 
-    // Zoom slider
+    // Zoom dropdown
     var zoomRow = document.createElement('div');
     zoomRow.className = 'gfx-zoom-row';
     var zoomLabel = document.createElement('span');
-    zoomLabel.className = 'gfx-zoom-label';
-    zoomLabel.textContent = currentZoom + 'x';
-    var zoomSlider = document.createElement('input');
-    zoomSlider.type = 'range';
-    zoomSlider.className = 'gfx-zoom-slider';
-    zoomSlider.min = '1';
-    zoomSlider.max = '5';
-    zoomSlider.step = '1';
-    zoomSlider.value = currentZoom;
-    zoomSlider.addEventListener('input', function() {
-      currentZoom = parseInt(zoomSlider.value, 10);
-      zoomLabel.textContent = currentZoom + 'x';
-      canvas.style.width = (canvas.width * currentZoom) + 'px';
-      canvas.style.height = (canvas.height * currentZoom) + 'px';
-    });
-    zoomSlider.addEventListener('keydown', function(ev) { ev.stopPropagation(); });
-    zoomRow.appendChild(zoomSlider);
+    zoomLabel.className = 'color-picker-label';
+    zoomLabel.textContent = 'Zoom:';
     zoomRow.appendChild(zoomLabel);
+
+    var zoomGroup = document.createElement('div');
+    zoomGroup.className = 'color-picker-group';
+    var zoomBtn = document.createElement('button');
+    zoomBtn.className = 'color-dropdown-btn';
+    zoomBtn.textContent = currentZoom + 'x';
+    zoomGroup.appendChild(zoomBtn);
+
+    var zoomPopup = document.createElement('div');
+    zoomPopup.className = 'color-dropdown-popup';
+    for (var zi = 1; zi <= 5; zi++) {
+      (function(z) {
+        var opt = document.createElement('div');
+        opt.className = 'color-dropdown-opt' + (z === currentZoom ? ' active' : '');
+        opt.textContent = z + 'x';
+        opt.addEventListener('click', function(ev) {
+          ev.stopPropagation();
+          currentZoom = z;
+          canvas.style.width = (canvas.width * z) + 'px';
+          canvas.style.height = (canvas.height * z) + 'px';
+          zoomBtn.textContent = z + 'x';
+          zoomPopup.classList.remove('open');
+        });
+        zoomPopup.appendChild(opt);
+      })(zi);
+    }
+    zoomGroup.appendChild(zoomPopup);
+
+    zoomBtn.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      var wasOpen = zoomPopup.classList.contains('open');
+      body.querySelectorAll('.color-dropdown-popup.open').forEach(function(p) { p.classList.remove('open'); });
+      if (!wasOpen) zoomPopup.classList.add('open');
+    });
+
+    zoomRow.appendChild(zoomGroup);
     body.appendChild(zoomRow);
 
     buildColorPicker(body);
