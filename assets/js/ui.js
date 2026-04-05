@@ -1119,6 +1119,7 @@ function updateMenuState() {
   document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
   document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-md5').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || tape);
@@ -1704,8 +1705,8 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   var sectorOwner = bamCheck.sectorOwner;
 
   var bamWarnings = '';
-  if (bamCheck.bamErrors.length > 0 || bamCheck.allocMismatch > 0) {
-    bamWarnings += '<ul style="color:#f38ba8;margin:0 0 8px;padding-left:20px;font-size:12px;list-style:none">';
+  if (bamCheck.bamErrors.length > 0 || bamCheck.allocMismatch > 0 || bamCheck.orphanCount > 0) {
+    bamWarnings += '<ul class="bam-warnings">';
     if (bamCheck.bamErrors.length > 0) {
       bamWarnings += '<li><i class="fa-solid fa-triangle-exclamation"></i> ' +
         bamCheck.bamErrors.length + ' track(s) with wrong free count</li>';
@@ -1713,6 +1714,10 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     if (bamCheck.allocMismatch > 0) {
       bamWarnings += '<li><i class="fa-solid fa-triangle-exclamation"></i> ' +
         bamCheck.allocMismatch + ' sector(s) marked free but used by files</li>';
+    }
+    if (bamCheck.orphanCount > 0) {
+      bamWarnings += '<li><i class="fa-solid fa-circle-question"></i> ' +
+        bamCheck.orphanCount + ' sector(s) marked used but not owned by any file</li>';
     }
     bamWarnings += '</ul>';
   }
@@ -1725,11 +1730,15 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   }
 
   // Build the BAM visualization
+  var hasErrors = bamCheck.allocMismatch > 0;
+  var hasOrphans = bamCheck.orphanCount > 0;
   var html = '<div class="bam-legend">' +
     '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent)"></span> Used</span>' +
     '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent);opacity:0.25"></span> Free</span>' +
     '<span class="bam-legend-item"><span class="bam-legend-box bam-sector dir-used"></span> Dir Used</span>' +
     '<span class="bam-legend-item"><span class="bam-legend-box bam-sector dir-free"></span> Dir Free</span>' +
+    (hasErrors ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-error"></span> BAM Error</span>' : '') +
+    (hasOrphans ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-orphan"></span> Orphan</span>' : '') +
     '</div>';
 
   // Sector number header
@@ -1758,9 +1767,17 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
 
     for (var s = 0; s < spt; s++) {
       var isFree = (bm & (1 << s)) !== 0;
+      var sKey = t + ':' + s;
+      var isError = bamCheck.errorSectors[sKey];
+      var isOrphan = bamCheck.orphanSectors[sKey];
+      var owner = sectorOwner[sKey];
       var cls = 'bam-sector';
       if (isDirTrack) {
         cls += isFree ? ' dir-free' : ' dir-used';
+      } else if (isError) {
+        cls += ' error';
+      } else if (isOrphan) {
+        cls += ' orphan';
       } else {
         cls += isFree ? ' free' : ' used';
       }
@@ -1768,20 +1785,20 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
 
       var tooltip = 'T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
         ' S:$' + s.toString(16).toUpperCase().padStart(2, '0');
-      if (isFree) {
+      if (isError) {
+        tooltip += ' \u26a0 BAM says free, used by: ' + petsciiToReadable(owner);
+      } else if (isOrphan) {
+        tooltip += ' (orphan \u2014 used in BAM but no file)';
+      } else if (isFree) {
         tooltip += ' (free)';
       } else if (isDirTrack) {
         tooltip += ' (directory)';
+      } else if (owner) {
+        tooltip += ' (' + petsciiToReadable(owner) + ')';
       } else {
-        var owner = sectorOwner[t + ':' + s];
-        if (owner) {
-          tooltip += ' (' + petsciiToReadable(owner) + ')';
-        } else {
-          tooltip += ' (used)';
-        }
+        tooltip += ' (used)';
       }
 
-      if (bamCheck.errorSectors[t + ':' + s]) cls += ' error';
       html += '<span class="' + cls + '" data-t="' + t + '" data-s="' + s + '" title="' + escHtml(tooltip) + '"></span>';
     }
 
@@ -2181,6 +2198,147 @@ document.getElementById('opt-fill-free').addEventListener('click', function(e) {
     ]);
   });
   footer.appendChild(fillBtn);
+
+  document.getElementById('modal-overlay').classList.add('open');
+});
+
+// ── Disk menu: Optimize Disk ─────────────────────────────────────────
+document.getElementById('opt-optimize').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || isTapeFormat()) return;
+  closeMenus();
+
+  var fmt = currentFormat;
+
+  // Presets per drive type: value, label, description, default flag
+  var presets, defaultPreset;
+  if (fmt === DISK_FORMATS.d81) {
+    presets = [
+      { value: 1, label: '1581 Standard', desc: 'Interleave 1 \u2014 stock 1581 burst mode, maximum speed' },
+      { value: 2, label: '1581 Compatible', desc: 'Interleave 2 \u2014 safer for slower interfaces or emulators' },
+    ];
+    defaultPreset = 0;
+  } else if (fmt === DISK_FORMATS.d71) {
+    presets = [
+      { value: 6, label: '1571 Standard', desc: 'Interleave 6 \u2014 stock 1571 DOS, native double-sided mode' },
+      { value: 5, label: '1571 Optimized', desc: 'Interleave 5 \u2014 slightly faster with burst transfer' },
+      { value: 10, label: '1541 Compatible', desc: 'Interleave 10 \u2014 safe for 1541 mode on a 1571' },
+      { value: 4, label: 'Fast Loader', desc: 'Interleave 4 \u2014 for SpeedDOS, JiffyDOS and similar' },
+    ];
+    defaultPreset = 0;
+  } else if (fmt === DISK_FORMATS.d80 || fmt === DISK_FORMATS.d82) {
+    presets = [
+      { value: 6, label: '8050/8250 Standard', desc: 'Interleave 6 \u2014 stock CBM DOS for IEEE-488 drives' },
+      { value: 5, label: '8050/8250 Optimized', desc: 'Interleave 5 \u2014 tighter timing, faster loading' },
+    ];
+    defaultPreset = 0;
+  } else {
+    // D64
+    presets = [
+      { value: 10, label: '1541 Standard', desc: 'Interleave 10 \u2014 stock CBM DOS, compatible with everything' },
+      { value: 6, label: '1541 Optimized', desc: 'Interleave 6 \u2014 faster on stock hardware, no fast loader needed' },
+      { value: 4, label: 'Fast Loader', desc: 'Interleave 4 \u2014 for SpeedDOS, DolphinDOS, JiffyDOS and similar' },
+    ];
+    defaultPreset = 1;
+  }
+
+  document.getElementById('modal-title').textContent = 'Optimize Disk';
+  var body = document.getElementById('modal-body');
+  var html =
+    '<div class="text-md text-muted mb-lg">Rearrange sectors on disk to reduce loading time on real hardware.</div>' +
+    '<div class="opt-presets">';
+  for (var pi = 0; pi < presets.length; pi++) {
+    html += '<label class="opt-preset' + (pi === defaultPreset ? ' selected' : '') + '">' +
+      '<input type="radio" name="opt-preset" value="' + presets[pi].value + '"' + (pi === defaultPreset ? ' checked' : '') + '>' +
+      '<span class="opt-preset-content">' +
+        '<span class="opt-preset-label">' + presets[pi].label + '</span>' +
+        '<span class="opt-preset-desc">' + presets[pi].desc + '</span>' +
+      '</span>' +
+    '</label>';
+  }
+  html += '<label class="opt-preset">' +
+    '<input type="radio" name="opt-preset" value="custom">' +
+    '<span class="opt-preset-content">' +
+      '<span class="opt-preset-label">Custom</span>' +
+      '<span class="opt-preset-desc">Interleave: <input type="text" id="opt-il-custom" maxlength="2" value="" class="hex-input" placeholder="06"></span>' +
+    '</span>' +
+  '</label>';
+  html += '</div>';
+  html += '<div class="opt-defrag-row">' +
+    '<label class="opt-check-label">' +
+      '<input type="checkbox" id="opt-defrag">' +
+      '<span class="opt-defrag-content">' +
+        '<span class="opt-preset-label">Defragment</span>' +
+        '<span class="opt-preset-desc">Move files closer together, reduces head movement between tracks</span>' +
+      '</span>' +
+    '</label>' +
+  '</div>';
+  body.innerHTML = html;
+
+  // Wire up preset selection highlighting
+  var presetLabels = body.querySelectorAll('.opt-preset');
+  var customInput = document.getElementById('opt-il-custom');
+  presetLabels.forEach(function(label) {
+    var radio = label.querySelector('input[type="radio"]');
+    radio.addEventListener('change', function() {
+      presetLabels.forEach(function(l) { l.classList.remove('selected'); });
+      label.classList.add('selected');
+      if (radio.value === 'custom') customInput.focus();
+    });
+  });
+  // Clicking custom input auto-selects the custom radio
+  customInput.addEventListener('focus', function() {
+    var customRadio = body.querySelector('input[value="custom"]');
+    customRadio.checked = true;
+    customRadio.dispatchEvent(new Event('change'));
+  });
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '';
+
+  var cancelBtn = document.createElement('button');
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.className = 'modal-btn-secondary';
+  cancelBtn.addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  footer.appendChild(cancelBtn);
+
+  var okBtn = document.createElement('button');
+  okBtn.textContent = 'Optimize';
+  okBtn.addEventListener('click', function() {
+    var selected = body.querySelector('input[name="opt-preset"]:checked');
+    var ilVal;
+    if (selected.value === 'custom') {
+      var cStr = customInput.value.trim();
+      ilVal = parseInt(cStr, 16);
+      if (isNaN(ilVal) || ilVal < 1 || ilVal > 20) {
+        customInput.focus();
+        return;
+      }
+    } else {
+      ilVal = parseInt(selected.value, 10);
+    }
+    var defrag = document.getElementById('opt-defrag').checked;
+    document.getElementById('modal-overlay').classList.remove('open');
+
+    pushUndo();
+    var result = optimizeDisk(currentBuffer, ilVal, defrag);
+
+    // Update global interleave so new files use the same setting
+    fileInterleave = ilVal;
+
+    var info = parseCurrentDir(currentBuffer);
+    renderDisk(info);
+    updateMenuState();
+    showModal('Optimize Disk', result.log);
+  });
+  footer.appendChild(okBtn);
+
+  // Stop propagation on inputs
+  body.querySelectorAll('input').forEach(function(inp) {
+    inp.addEventListener('keydown', function(ev) { ev.stopPropagation(); });
+  });
 
   document.getElementById('modal-overlay').classList.add('open');
 });
@@ -2915,19 +3073,17 @@ function detectGfxFormats(fileData) {
     var numChars = dataBytes / 8;
     add('Charset 1\u00D71 (' + numChars + ')', 'charset', 'charset');
     add('Charset MC 1\u00D71 (' + numChars + ')', 'charset-mc', 'charset');
-    if (numChars >= 2 && numChars % 2 === 0) {
+    // Multi-char tile modes use C64 bank stride of 64
+    // WxH needs W*H banks: 1x2/2x1 = 2 banks (128 chars), 2x2 = 4 banks (256 chars)
+    if (numChars >= 128) {
       add('Charset 1\u00D72', 'charset-1x2', 'charset');
       add('Charset MC 1\u00D72', 'charset-mc-1x2', 'charset');
       add('Charset 2\u00D71', 'charset-2x1', 'charset');
       add('Charset MC 2\u00D71', 'charset-mc-2x1', 'charset');
     }
-    if (numChars >= 4 && numChars % 4 === 0) {
+    if (numChars >= 256) {
       add('Charset 2\u00D72', 'charset-2x2', 'charset');
       add('Charset MC 2\u00D72', 'charset-mc-2x2', 'charset');
-    }
-    if (numChars >= 16 && numChars % 16 === 0) {
-      add('Charset 4\u00D74', 'charset-4x4', 'charset');
-      add('Charset MC 4\u00D74', 'charset-mc-4x4', 'charset');
     }
   }
 
@@ -3103,7 +3259,7 @@ function renderC64Sprites(ctx, gfx, multicolor, colors) {
   var count = gfx.count;
   var cols = Math.min(count, 8);
   var rows = Math.ceil(count / cols);
-  var sprW = multicolor ? 12 : 24;
+  var sprW = 24; // always 24px wide — MC uses double-wide pixels
   var w = cols * (sprW + 1) - 1;
   var h = rows * 22 - 1;
   ctx.canvas.width = w;
@@ -3129,11 +3285,13 @@ function renderC64Sprites(ctx, gfx, multicolor, colors) {
           for (var px2 = 0; px2 < 4; px2++) {
             var bits = (byt >> (6 - px2 * 2)) & 3;
             var rgb = bits === 0 ? bgRgb : bits === 1 ? mc1Rgb : bits === 2 ? fgRgb : mc2Rgb;
-            var x = xOff + byteIdx * 4 + px2;
             var y = yOff + line;
-            if (x < w && y < h) {
-              var off = (y * w + x) * 4;
-              px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2];
+            for (var dx = 0; dx < 2; dx++) {
+              var x = xOff + byteIdx * 8 + px2 * 2 + dx;
+              if (x < w && y < h) {
+                var off = (y * w + x) * 4;
+                px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2];
+              }
             }
           }
         } else {
@@ -3157,11 +3315,19 @@ function renderC64Sprites(ctx, gfx, multicolor, colors) {
 function renderC64Charset(ctx, gfx, tileW, tileH, colors, multicolor) {
   tileW = tileW || 1;
   tileH = tileH || 1;
-  var charsPerTile = tileW * tileH;
   var numChars = gfx.count;
-  var numTiles = Math.floor(numChars / charsPerTile);
-  var charPxW = multicolor ? 4 : 8;
-  var tilePxW = tileW * charPxW;
+  // C64 charset tile convention: 256-char set = 4 banks of 64 ($00-$3F, $40-$7F, $80-$BF, $C0-$FF).
+  // Tiles use banks linearly: 1x2 'A' = $01 top, $41 bottom; 2x1 'A' = $01 $41;
+  // 2x2 'A' = $01 $41 top, $81 $C1 bottom.
+  // For larger charsets, tiles repeat across bank sets (e.g. 1x2 with 256 chars = 128 tiles).
+  var banksPerTile = tileW * tileH;
+  var numTiles;
+  if (tileW <= 1 && tileH <= 1) {
+    numTiles = numChars;
+  } else {
+    numTiles = Math.floor(numChars / (banksPerTile * 64)) * 64;
+  }
+  var tilePxW = tileW * 8; // always 8 pixels wide per char — MC uses double-wide pixels
   var tilePxH = tileH * 8;
   var gap = 1;
   var gridCols = Math.min(numTiles, Math.max(1, Math.floor(320 / (tilePxW + gap))));
@@ -3187,7 +3353,10 @@ function renderC64Charset(ctx, gfx, tileW, tileH, colors, multicolor) {
 
     for (var cy = 0; cy < tileH; cy++) {
       for (var cx = 0; cx < tileW; cx++) {
-        var charIdx = ti * charsPerTile + cy * tileW + cx;
+        // C64 convention: 64 tiles per bank set, larger charsets use additional sets
+        var setIdx = Math.floor(ti / 64);
+        var localTi = ti % 64;
+        var charIdx = localTi + setIdx * banksPerTile * 64 + (cy * tileW + cx) * 64;
         if (charIdx >= numChars) continue;
         var base = charIdx * 8;
 
@@ -3197,11 +3366,13 @@ function renderC64Charset(ctx, gfx, tileW, tileH, colors, multicolor) {
             for (var px2 = 0; px2 < 4; px2++) {
               var bits = (byt >> (6 - px2 * 2)) & 3;
               var rgb = bits === 0 ? bgRgb : bits === 1 ? mc1Rgb : bits === 2 ? fgRgb : mc2Rgb;
-              var x = tileXOff + cx * charPxW + px2;
               var y = tileYOff + cy * 8 + line;
-              if (x < w && y < h) {
-                var off = (y * w + x) * 4;
-                px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2];
+              for (var dx = 0; dx < 2; dx++) {
+                var x = tileXOff + cx * 8 + px2 * 2 + dx;
+                if (x < w && y < h) {
+                  var off = (y * w + x) * 4;
+                  px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2];
+                }
               }
             }
           } else {
@@ -3299,27 +3470,58 @@ function showFileGfxViewer(entryOff) {
     return;
   }
 
-  var activeFmt = matches[0];
+  // Separate MC variants from base formats — MC becomes a toggle for sprites/charsets
+  var mcToggleModes = {}; // base mode → mc mode
+  var baseMatches = [];
+  for (var mi2 = 0; mi2 < matches.length; mi2++) {
+    var m = matches[mi2];
+    // Sprite/charset MC variants become toggles, bitmap 'mc' stays as separate format
+    if (m.mode !== 'mc' && (m.mode.indexOf('charset-mc') === 0 || m.mode === 'sprites-mc')) {
+      var baseMode = m.mode.replace('-mc', '');
+      mcToggleModes[baseMode] = m.mode;
+    } else {
+      baseMatches.push(m);
+    }
+  }
+  var displayMatches = baseMatches;
+  var hasMcToggle = false;
+  for (var mi3 = 0; mi3 < displayMatches.length; mi3++) {
+    if (mcToggleModes[displayMatches[mi3].mode]) { hasMcToggle = true; break; }
+  }
+
+  var activeFmt = displayMatches[0] || matches[0];
+  var mcEnabled = false;
   // Color state for sprites/charset/bitmap
   var gfxColors = { bg: 0, fg: 1, mc1: 2, mc2: 3 };
+
+  function getEffectiveFmt() {
+    if (mcEnabled && mcToggleModes[activeFmt.mode]) {
+      // Find the MC match object
+      for (var ei = 0; ei < matches.length; ei++) {
+        if (matches[ei].mode === mcToggleModes[activeFmt.mode] && matches[ei].layout === activeFmt.layout) return matches[ei];
+      }
+    }
+    return activeFmt;
+  }
 
   // For multicolor bitmaps, try to read bg from file
   var needsColorPicker = false;
   var colorLabels = null;
 
   function updateColorContext() {
-    var mode = activeFmt.mode;
-    if (mode === 'mc' || activeFmt.layout === 'drp' || activeFmt.layout === 'drazlace') {
+    var eff = getEffectiveFmt();
+    var mode = eff.mode;
+    if (mode === 'mc' || eff.layout === 'drp' || eff.layout === 'drazlace') {
       needsColorPicker = true;
       colorLabels = [{ key: 'bg', label: 'Background' }];
-      var parser = GFX_PARSERS[activeFmt.layout];
+      var parser = GFX_PARSERS[eff.layout];
       if (parser) {
         var gfx = parser(fileData);
         if (gfx.bg !== undefined) gfxColors.bg = gfx.bg & 0x0F;
       }
     } else if (mode.indexOf('sprite') >= 0 || mode.indexOf('charset') >= 0) {
       needsColorPicker = true;
-      var isMC = mode.indexOf('-mc') >= 0;
+      var isMC = mode.indexOf('-mc') >= 0 || mode === 'sprites-mc';
       colorLabels = [{ key: 'bg', label: 'BG' }, { key: 'fg', label: 'FG' }];
       if (isMC) {
         colorLabels.push({ key: 'mc1', label: 'MC1' });
@@ -3332,6 +3534,12 @@ function showFileGfxViewer(entryOff) {
   }
 
   updateColorContext();
+
+  var C64_COLOR_NAMES = [
+    'Black', 'White', 'Red', 'Cyan', 'Purple', 'Green',
+    'Blue', 'Yellow', 'Orange', 'Brown', 'Light Red', 'Dark Grey',
+    'Grey', 'Light Green', 'Light Blue', 'Light Grey'
+  ];
 
   function buildColorPicker(body) {
     if (!needsColorPicker || !colorLabels) return;
@@ -3347,59 +3555,102 @@ function showFileGfxViewer(entryOff) {
         label.className = 'color-picker-label';
         group.appendChild(label);
 
+        var btn = document.createElement('button');
+        btn.className = 'color-dropdown-btn';
+        var curColor = gfxColors[lbl.key];
+        btn.innerHTML = '<span class="color-dropdown-swatch" style="background:' + C64_COLORS[curColor] + '"></span>' +
+          '<span class="color-dropdown-name">' + C64_COLOR_NAMES[curColor] + '</span>';
+        group.appendChild(btn);
+
+        var popup = document.createElement('div');
+        popup.className = 'color-dropdown-popup';
         for (var ci = 0; ci < 16; ci++) {
           (function(colorIdx) {
-            var swatch = document.createElement('div');
-            var isActive = gfxColors[lbl.key] === colorIdx;
-            swatch.className = 'color-swatch' + (isActive ? ' active' : '');
-            swatch.style.background = C64_COLORS[colorIdx];
-            swatch.title = lbl.label + ': ' + colorIdx;
-            swatch.addEventListener('click', function() {
+            var opt = document.createElement('div');
+            opt.className = 'color-dropdown-opt' + (colorIdx === curColor ? ' active' : '');
+            opt.innerHTML = '<span class="color-dropdown-swatch" style="background:' + C64_COLORS[colorIdx] + '"></span>' +
+              '<span class="color-dropdown-name">' + C64_COLOR_NAMES[colorIdx] + '</span>';
+            opt.addEventListener('click', function(ev) {
+              ev.stopPropagation();
               gfxColors[lbl.key] = colorIdx;
               render();
             });
-            group.appendChild(swatch);
+            popup.appendChild(opt);
           })(ci);
         }
+        group.appendChild(popup);
+
+        btn.addEventListener('click', function(ev) {
+          ev.stopPropagation();
+          var wasOpen = popup.classList.contains('open');
+          // Close all other popups
+          body.querySelectorAll('.color-dropdown-popup.open').forEach(function(p) { p.classList.remove('open'); });
+          if (!wasOpen) popup.classList.add('open');
+        });
+
         row.appendChild(group);
       })(colorLabels[li]);
     }
     body.appendChild(row);
+
+    // Close popups when clicking elsewhere in the modal
+    body.addEventListener('click', function() {
+      body.querySelectorAll('.color-dropdown-popup.open').forEach(function(p) { p.classList.remove('open'); });
+    });
   }
 
   function render() {
-    document.getElementById('modal-title').textContent = activeFmt.name + ' \u2014 "' + name + '" (' + (fileData.length - 2) + ' bytes)';
+    var eff = getEffectiveFmt();
+    document.getElementById('modal-title').textContent = eff.name + ' \u2014 "' + name + '" (' + (fileData.length - 2) + ' bytes)';
     var body = document.getElementById('modal-body');
     body.innerHTML = '';
 
-    // Format selector if multiple matches
-    if (matches.length > 1) {
+    // Format selector + MC toggle
+    var showSelector = displayMatches.length > 1 || hasMcToggle;
+    if (showSelector) {
       var sel = document.createElement('div');
       sel.className = 'flex-row-wrap mb-md';
-      for (var mi = 0; mi < matches.length; mi++) {
-        (function(m) {
-          var btn = document.createElement('button');
-          btn.textContent = m.name;
-          btn.className = 'btn-small' + (m === activeFmt ? ' active' : '');
-          btn.addEventListener('click', function() {
-            activeFmt = m;
-            updateColorContext();
-            render();
-          });
-          sel.appendChild(btn);
-        })(matches[mi]);
+
+      if (displayMatches.length > 1) {
+        for (var mi = 0; mi < displayMatches.length; mi++) {
+          (function(m) {
+            var btn = document.createElement('button');
+            btn.textContent = m.name;
+            btn.className = 'btn-small' + (m === activeFmt ? ' active' : '');
+            btn.addEventListener('click', function() {
+              activeFmt = m;
+              updateColorContext();
+              render();
+            });
+            sel.appendChild(btn);
+          })(displayMatches[mi]);
+        }
       }
+
+      // MC toggle for sprite/charset modes
+      if (hasMcToggle && mcToggleModes[activeFmt.mode]) {
+        var mcBtn = document.createElement('button');
+        mcBtn.textContent = 'Multicolor';
+        mcBtn.className = 'btn-small' + (mcEnabled ? ' active' : '');
+        mcBtn.addEventListener('click', function() {
+          mcEnabled = !mcEnabled;
+          updateColorContext();
+          render();
+        });
+        sel.appendChild(mcBtn);
+      }
+
       body.appendChild(sel);
     }
 
     var canvas = document.createElement('canvas');
     canvas.className = 'gfx-canvas';
-    renderGfxToCanvas(canvas.getContext('2d'), activeFmt, fileData, gfxColors);
+    renderGfxToCanvas(canvas.getContext('2d'), eff, fileData, gfxColors);
 
     var scale;
-    if (activeFmt.mode === 'printshop') {
+    if (eff.mode === 'printshop') {
       scale = 4;
-    } else if (activeFmt.mode.indexOf('sprite') >= 0 || activeFmt.mode.indexOf('charset') >= 0) {
+    } else if (eff.mode.indexOf('sprite') >= 0 || eff.mode.indexOf('charset') >= 0) {
       scale = Math.max(2, Math.min(4, Math.floor(600 / (canvas.width || 1))));
     } else {
       scale = 2;
@@ -4059,15 +4310,26 @@ function showFileDisasmViewer(entryOff) {
   var codeData = fileData.subarray(2);
   var lines = disassemble6502(codeData, loadAddr, 5000);
 
+  // Detect SYS address for auto-scroll
+  var sysTarget = null;
+  var packerInfo = detectPacker(fileData);
+  if (packerInfo && packerInfo.sysAddr > loadAddr) {
+    sysTarget = '$' + hex16(packerInfo.sysAddr);
+  }
+
   var html = '<div class="hex-editor">';
   for (var di = 0; di < lines.length; di++) {
     var l = lines[di];
     var instrClass = l.type === 2 ? 'dasm-unsafe' : l.type === 1 ? 'dasm-illegal' : 'dasm-instr';
-    html += '<div class="hex-row"><span class="dasm-offset">' + l.addr + '</span><span class="dasm-bytes">' + escHtml(l.bytes) + '</span><span class="' + instrClass + '">' + escHtml(l.text) + '</span></div>';
+    var isSysEntry = (sysTarget && l.addr === sysTarget);
+    html += '<div class="hex-row' + (isSysEntry ? ' dasm-sys-entry' : '') + '"' +
+      (isSysEntry ? ' id="dasm-sys-target"' : '') +
+      '><span class="dasm-offset">' + l.addr + '</span><span class="dasm-bytes">' + escHtml(l.bytes) + '</span><span class="' + instrClass + '">' + escHtml(l.text) + '</span></div>';
   }
   html += '</div>';
 
   var titleText = 'Disassembly \u2014 "' + name + '" (load: $' + hex16(loadAddr) + ', ' + codeData.length + ' bytes)';
+  if (sysTarget) titleText += ', SYS ' + sysTarget;
   if (result.error) titleText += ' \u2014 ' + result.error;
   document.getElementById('modal-title').textContent = titleText;
   document.getElementById('modal-body').innerHTML = html;
@@ -4077,6 +4339,10 @@ function showFileDisasmViewer(entryOff) {
     document.getElementById('modal-overlay').classList.remove('open');
   });
   document.getElementById('modal-overlay').classList.add('open');
+
+  // Scroll to SYS entry point
+  var sysEl = document.getElementById('dasm-sys-target');
+  if (sysEl) sysEl.scrollIntoView({ block: 'start' });
 }
 
 // ── Hex sector editor ─────────────────────────────────────────────────
@@ -7004,6 +7270,20 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.10', title: 'Disk optimizer, BAM view, charset/sprite viewer improvements', items: [
+      'Optimize Disk: rewrite file sector chains with chosen interleave for faster loading',
+      'Optimize Disk: preset interleaves per drive type (1541/1571/1581/8050), custom option',
+      'Optimize Disk: defragment option packs files onto consecutive tracks',
+      'Optimize Disk: updates global interleave setting after optimization',
+      'BAM view: error sectors show used color with red outline and owning filename',
+      'BAM view: orphan detection \u2014 sectors marked used but not owned by any file',
+      'Charset viewer: correct C64 bank-stride tile layout (1\u00D72, 2\u00D71, 2\u00D72)',
+      'Charset/sprite viewer: multicolor now draws double-wide pixels like real hardware',
+      'Graphics viewer: MC toggle button replaces duplicate format buttons',
+      'Graphics viewer: color picker dropdowns replace swatch rows for stable modal width',
+      'Disassembly viewer: auto-scrolls to SYS entry point, highlighted with accent border',
+      'Directory header row (Size/Filename/Type) stays visible when scrolling',
+    ]},
     { ver: '1.3.9', title: 'Tab indicators for tape and unsaved changes', items: [
       'Tape tabs (T64/TAP): left border accent to distinguish from disk tabs',
       'Dirty tabs: bullet prefix and italic name when disk has unsaved changes',

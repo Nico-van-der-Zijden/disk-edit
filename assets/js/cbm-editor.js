@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 9 };
+var APP_VERSION = { major: 1, minor: 3, build: 10 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -266,8 +266,11 @@ function checkBAMIntegrity(buffer) {
   }
 
   // Check for sectors used by files but marked free in BAM (byte-level)
+  // Also detect orphaned sectors: marked used but not owned by any file
   var allocMismatch = 0;
-  var errorSectors = {}; // "t:s" → true
+  var orphanCount = 0;
+  var errorSectors = {}; // "t:s" → true (free but used by file)
+  var orphanSectors = {}; // "t:s" → true (used but not owned by any file)
   for (t = 1; t <= bamTracks; t++) {
     if (t === fmt.dirTrack) continue;
     var spt2 = fmt.sectorsPerTrack(t);
@@ -281,11 +284,346 @@ function checkBAMIntegrity(buffer) {
         allocMismatch++;
         errorSectors[t + ':' + s2] = true;
       }
+      if (!isFree && !isUsed) {
+        orphanCount++;
+        orphanSectors[t + ':' + s2] = true;
+      }
     }
   }
 
   return { sectorOwner: sectorOwner, bamErrors: bamErrors, allocMismatch: allocMismatch,
-           errorTracks: errorTracks, errorSectors: errorSectors };
+           orphanCount: orphanCount, errorTracks: errorTracks, errorSectors: errorSectors,
+           orphanSectors: orphanSectors };
+}
+
+// ── Optimize Disk ────────────────────────────────────────────────────
+// Rewrite all file sector chains with a chosen interleave, optionally
+// defragmenting (packing files onto consecutive tracks).
+// Returns { filesOptimized, sectorsRewritten, log[] }
+function optimizeDisk(buffer, interleave, defragment) {
+  var data = new Uint8Array(buffer);
+  var fmt = currentFormat;
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var bamTracks = fmt.bamTracksRange(currentTracks);
+  var log = [];
+
+  // Phase 1: Read all file data into memory
+  var info = parseDisk(buffer);
+  var files = [];
+  for (var fi = 0; fi < info.entries.length; fi++) {
+    var entry = info.entries[fi];
+    if (entry.deleted) continue;
+    var typeByte = data[entry.entryOff + 2];
+    var typeIdx = typeByte & 0x07;
+
+    // Skip CBM partitions — they are contiguous track blocks
+    if (typeIdx === 5 && fmt === DISK_FORMATS.d81) {
+      log.push('Skipped partition: "' + petsciiToReadable(entry.name) + '"');
+      continue;
+    }
+
+    // Skip REL files — side-sector chains have internal T/S pointers
+    // Their sectors will be protected via the protectedSectors map below
+    if (typeIdx === 4) {
+      log.push('Skipped REL file: "' + petsciiToReadable(entry.name) + '"');
+      continue;
+    }
+
+    var ft = data[entry.entryOff + 3];
+    var fs = data[entry.entryOff + 4];
+    if (ft === 0) continue; // empty file
+
+    // Read all raw sector data (preserving bytes 0-255 of each sector)
+    var sectorData = [];
+    var t = ft, s = fs;
+    var visited = {};
+    while (t !== 0) {
+      if (t < 1 || t > currentTracks) break;
+      if (s >= fmt.sectorsPerTrack(t)) break;
+      var key = t + ':' + s;
+      if (visited[key]) break;
+      visited[key] = true;
+      var soff = sectorOffset(t, s);
+      if (soff < 0) break;
+      // Save data payload (bytes 2-255)
+      var payload = new Uint8Array(254);
+      for (var b = 0; b < 254; b++) payload[b] = data[soff + 2 + b];
+      // Save the last-sector byte count for final sector
+      var nextT = data[soff], nextS = data[soff + 1];
+      sectorData.push({ payload: payload, nextT: nextT, nextS: nextS });
+      t = nextT; s = nextS;
+    }
+
+    if (sectorData.length === 0) continue;
+
+    // Check for GEOS info block at entry+0x15/0x16
+    var geosInfoT = data[entry.entryOff + 0x15];
+    var geosInfoS = data[entry.entryOff + 0x16];
+    var geosInfoData = null;
+    if (geosInfoT > 0 && geosInfoT <= currentTracks && data[entry.entryOff + 0x18] > 0) {
+      var giOff = sectorOffset(geosInfoT, geosInfoS);
+      if (giOff >= 0) {
+        geosInfoData = new Uint8Array(256);
+        for (var gi = 0; gi < 256; gi++) geosInfoData[gi] = data[giOff + gi];
+      }
+    }
+
+    files.push({
+      entryOff: entry.entryOff,
+      name: entry.name,
+      sectorData: sectorData,
+      geosInfoData: geosInfoData,
+      lastSectorEnd: sectorData[sectorData.length - 1].nextS // byte count in last sector
+    });
+  }
+
+  if (files.length === 0) {
+    log.push('No files to optimize.');
+    return { filesOptimized: 0, sectorsRewritten: 0, log: log };
+  }
+
+  // Phase 2: Clear all non-system sectors in BAM (mark as free)
+  // Build set of protected sectors (BAM + directory chain)
+  var protectedSectors = {};
+  for (var bsi = 0; bsi < fmt.bamSectors.length; bsi++) {
+    protectedSectors[fmt.bamSectors[bsi][0] + ':' + fmt.bamSectors[bsi][1]] = true;
+  }
+  // Walk directory chain
+  var dirT = fmt.dirTrack, dirS = fmt.dirSector;
+  var dirVisited = {};
+  while (dirT !== 0) {
+    var dkey = dirT + ':' + dirS;
+    if (dirVisited[dkey]) break;
+    dirVisited[dkey] = true;
+    protectedSectors[dkey] = true;
+    var doff = sectorOffset(dirT, dirS);
+    if (doff < 0) break;
+    dirT = data[doff]; dirS = data[doff + 1];
+  }
+
+  // Also protect CBM partition sectors (D81)
+  if (fmt === DISK_FORMATS.d81) {
+    for (fi = 0; fi < info.entries.length; fi++) {
+      var pe = info.entries[fi];
+      if (pe.deleted) continue;
+      var ptb = data[pe.entryOff + 2] & 0x07;
+      if (ptb === 5) {
+        var partStart = data[pe.entryOff + 3];
+        var partSize = data[pe.entryOff + 30] | (data[pe.entryOff + 31] << 8);
+        var partTracks = Math.floor(partSize / 40);
+        for (var pt = partStart; pt < partStart + partTracks && pt <= currentTracks; pt++) {
+          var pspt = fmt.sectorsPerTrack(pt);
+          for (var ps = 0; ps < pspt; ps++) {
+            protectedSectors[pt + ':' + ps] = true;
+          }
+        }
+      }
+    }
+  }
+
+  // Protect REL file sectors (skipped during optimization)
+  for (fi = 0; fi < info.entries.length; fi++) {
+    var re = info.entries[fi];
+    if (re.deleted) continue;
+    var rtb = data[re.entryOff + 2] & 0x07;
+    if (rtb !== 4) continue;
+    // Follow data chain
+    var rt = data[re.entryOff + 3], rs = data[re.entryOff + 4];
+    var rv = {};
+    while (rt !== 0 && rt <= currentTracks) {
+      if (rs >= fmt.sectorsPerTrack(rt)) break;
+      var rk = rt + ':' + rs;
+      if (rv[rk]) break;
+      rv[rk] = true;
+      protectedSectors[rk] = true;
+      var roff = sectorOffset(rt, rs);
+      if (roff < 0) break;
+      rt = data[roff]; rs = data[roff + 1];
+    }
+    // Follow side-sector chain
+    var sst = data[re.entryOff + 0x15], sss = data[re.entryOff + 0x16];
+    var ssv = {};
+    while (sst !== 0 && sst <= currentTracks) {
+      if (sss >= fmt.sectorsPerTrack(sst)) break;
+      var ssk = sst + ':' + sss;
+      if (ssv[ssk]) break;
+      ssv[ssk] = true;
+      protectedSectors[ssk] = true;
+      var ssoff = sectorOffset(sst, sss);
+      if (ssoff < 0) break;
+      sst = data[ssoff]; sss = data[ssoff + 1];
+    }
+  }
+
+  // Mark all non-protected sectors as free
+  var allocated = {}; // our working allocation map
+  for (var tk = 1; tk <= bamTracks; tk++) {
+    var spt = fmt.sectorsPerTrack(tk);
+    for (var sk = 0; sk < spt; sk++) {
+      if (protectedSectors[tk + ':' + sk]) {
+        allocated[tk + ':' + sk] = true;
+      }
+    }
+  }
+
+  // Phase 3: Build track order and reallocate each file
+  var dirTrack = fmt.dirTrack;
+  var trackOrder = [];
+  var skipTracks = {};
+  skipTracks[dirTrack] = true;
+  if (fmt.bamTrack !== dirTrack) skipTracks[fmt.bamTrack] = true;
+
+  if (defragment) {
+    // Sequential from track 1, skipping system tracks
+    for (var td = 1; td <= bamTracks; td++) {
+      if (!skipTracks[td]) trackOrder.push(td);
+    }
+  } else {
+    // CBM drive order: below dir track descending, then above ascending
+    for (var tb = dirTrack - 1; tb >= 1; tb--) {
+      if (!skipTracks[tb]) trackOrder.push(tb);
+    }
+    for (var ta = dirTrack + 1; ta <= bamTracks; ta++) {
+      if (!skipTracks[ta]) trackOrder.push(ta);
+    }
+  }
+
+  var filesOptimized = 0;
+  var sectorsRewritten = 0;
+
+  for (var fIdx = 0; fIdx < files.length; fIdx++) {
+    var file = files[fIdx];
+    var numSectors = file.sectorData.length;
+    var needExtra = file.geosInfoData ? 1 : 0;
+    var totalNeed = numSectors + needExtra;
+
+    // Allocate sectors with chosen interleave
+    var sectorList = [];
+    var lastSector = 0;
+
+    for (var ti = 0; ti < trackOrder.length && sectorList.length < totalNeed; ti++) {
+      var track = trackOrder[ti];
+      var tspt = fmt.sectorsPerTrack(track);
+
+      // Check if any sectors are free on this track
+      var startS = (lastSector + interleave) % tspt;
+      var ss = startS;
+      var foundFirst = false;
+      for (var att = 0; att < tspt; att++) {
+        if (!allocated[track + ':' + ss]) {
+          sectorList.push({ track: track, sector: ss });
+          allocated[track + ':' + ss] = true;
+          lastSector = ss;
+          foundFirst = true;
+          break;
+        }
+        ss = (ss + 1) % tspt;
+      }
+
+      // Continue filling this track
+      if (foundFirst) {
+        while (sectorList.length < totalNeed) {
+          var nextS = (lastSector + interleave) % tspt;
+          var foundMore = false;
+          for (var a2 = 0; a2 < tspt; a2++) {
+            if (!allocated[track + ':' + nextS]) {
+              sectorList.push({ track: track, sector: nextS });
+              allocated[track + ':' + nextS] = true;
+              lastSector = nextS;
+              foundMore = true;
+              break;
+            }
+            nextS = (nextS + 1) % tspt;
+          }
+          if (!foundMore) break;
+        }
+      }
+    }
+
+    if (sectorList.length < totalNeed) {
+      log.push('ERROR: Not enough free sectors for "' + petsciiToReadable(file.name) + '"');
+      continue;
+    }
+
+    // Write GEOS info block if present (first allocated sector)
+    var dataSectorStart = 0;
+    if (file.geosInfoData) {
+      var infoSec = sectorList[0];
+      var infoOff = sectorOffset(infoSec.track, infoSec.sector);
+      for (var ib = 0; ib < 256; ib++) data[infoOff + ib] = file.geosInfoData[ib];
+      data[infoOff] = 0x00;
+      data[infoOff + 1] = 0xFF;
+      data[file.entryOff + 0x15] = infoSec.track;
+      data[file.entryOff + 0x16] = infoSec.sector;
+      dataSectorStart = 1;
+      sectorsRewritten++;
+    }
+
+    // Write file data sectors with new chain links
+    var fileSectors = sectorList.slice(dataSectorStart);
+    for (var si = 0; si < fileSectors.length; si++) {
+      var sec = fileSectors[si];
+      var soff2 = sectorOffset(sec.track, sec.sector);
+
+      if (si < fileSectors.length - 1) {
+        var nextSec = fileSectors[si + 1];
+        data[soff2] = nextSec.track;
+        data[soff2 + 1] = nextSec.sector;
+      } else {
+        // Last sector
+        data[soff2] = 0x00;
+        data[soff2 + 1] = file.lastSectorEnd;
+      }
+      // Write payload
+      var payload = file.sectorData[si].payload;
+      for (var pb = 0; pb < 254; pb++) data[soff2 + 2 + pb] = payload[pb];
+      sectorsRewritten++;
+    }
+
+    // Update directory entry to point to new first sector
+    data[file.entryOff + 3] = fileSectors[0].track;
+    data[file.entryOff + 4] = fileSectors[0].sector;
+
+    filesOptimized++;
+  }
+
+  // Phase 4: Rebuild BAM from final allocation state
+  for (var bt = 1; bt <= bamTracks; bt++) {
+    var bspt = fmt.sectorsPerTrack(bt);
+    var numBytes = Math.ceil(bspt / 8);
+    var bbBase = getBamBitmapBase(bt, bamOff);
+    var free = 0;
+    var newBytes = new Uint8Array(numBytes);
+    for (var bs = 0; bs < bspt; bs++) {
+      if (!allocated[bt + ':' + bs]) {
+        free++;
+        newBytes[Math.floor(bs / 8)] |= (1 << (bs % 8));
+      }
+    }
+    fmt.writeTrackFree(data, bamOff, bt, free);
+    for (var bi = 0; bi < numBytes; bi++) {
+      data[bbBase + bi] = newBytes[bi];
+    }
+  }
+
+  // Phase 5: Verify all files can still be read correctly
+  var verifyErrors = 0;
+  for (fIdx = 0; fIdx < files.length; fIdx++) {
+    var vf = files[fIdx];
+    var verify = readFileData(buffer, vf.entryOff);
+    if (verify.error) {
+      log.push('VERIFY ERROR: "' + petsciiToReadable(vf.name) + '": ' + verify.error);
+      verifyErrors++;
+    }
+  }
+  if (verifyErrors > 0) {
+    log.push('WARNING: ' + verifyErrors + ' file(s) failed verification!');
+  }
+
+  log.push('Optimized ' + filesOptimized + ' file(s), ' + sectorsRewritten + ' sector(s) rewritten.');
+  log.push('Interleave: ' + interleave + (defragment ? ' (defragmented)' : ''));
+
+  return { filesOptimized: filesOptimized, sectorsRewritten: sectorsRewritten, log: log };
 }
 
 // ── Allowed C64 characters ────────────────────────────────────────────

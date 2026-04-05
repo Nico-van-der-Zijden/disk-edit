@@ -441,6 +441,10 @@
     border-bottom: 1px solid var(--border);
     padding-bottom: 4px;
     margin-bottom: 4px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 1;
   }
 
   .dir-parent-row {
@@ -1096,13 +1100,38 @@
   }
 
   .color-picker-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
-  .color-picker-group { display: flex; gap: 2px; align-items: center; }
-  .color-picker-label { font-size: 11px; color: var(--text-muted); margin-right: 2px; }
-  .color-swatch {
-    width: 14px; height: 14px; cursor: pointer;
-    border: 2px solid transparent; border-radius: 2px;
+  .color-picker-group { display: flex; gap: 4px; align-items: center; position: relative; }
+  .color-picker-label { font-size: 11px; color: var(--text-muted); }
+
+  .color-dropdown-btn {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 8px; border-radius: 4px; cursor: pointer;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    font-size: 11px; color: var(--text);
   }
-  .color-swatch.active { border-color: var(--text); }
+  .color-dropdown-btn:hover { border-color: var(--accent); }
+
+  .color-dropdown-swatch {
+    width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0;
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+  .color-dropdown-name { white-space: nowrap; }
+
+  .color-dropdown-popup {
+    display: none; position: absolute; bottom: 100%; left: 0;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    padding: 2px 0; z-index: 100; min-width: 130px;
+    box-shadow: 0 -2px 8px rgba(0,0,0,0.3);
+    max-height: 240px; overflow-y: auto;
+  }
+  .color-dropdown-popup.open { display: block; }
+
+  .color-dropdown-opt {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 8px; cursor: pointer; font-size: 11px;
+  }
+  .color-dropdown-opt:hover { background: var(--hover); }
+  .color-dropdown-opt.active { background: var(--selected-bg); color: var(--selected-text); }
 
   .fill-byte-input {
     width: 32px; padding: 4px 6px; font-family: monospace;
@@ -1115,6 +1144,70 @@
 
   .form-row { display: flex; gap: 16px; align-items: center; margin-bottom: 8px; }
   .form-label { font-size: 13px; width: 80px; }
+  .opt-check-label { font-size: 13px; cursor: pointer; display: flex; align-items: flex-start; gap: 8px; }
+
+  .opt-presets {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 12px;
+  }
+
+  .opt-preset {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid transparent;
+  }
+
+  .opt-preset:hover {
+    background: var(--hover);
+  }
+
+  .opt-preset.selected {
+    border-color: var(--accent);
+    background: var(--hover);
+  }
+
+  .opt-preset input[type="radio"] {
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+
+  .opt-preset-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .opt-preset-label {
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .opt-preset-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .opt-preset-desc .hex-input {
+    width: 28px;
+    margin-left: 2px;
+  }
+
+  .opt-defrag-row {
+    padding: 8px 10px;
+    border-top: 1px solid var(--border);
+  }
+
+  .opt-defrag-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
 
   .btn-small {
     font-size: 12px;
@@ -1211,6 +1304,12 @@
   .dasm-instr { color: var(--selected-text); }
   .dasm-illegal { color: #c0a050; }
   .dasm-unsafe { color: #c05050; }
+
+  .dasm-sys-entry {
+    background: var(--accent);
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    border-left: 2px solid var(--accent);
+  }
 
   .hex-byte {
     display: inline-block;
@@ -1320,11 +1419,44 @@
   }
 
   .bam-sector.error {
+    background: var(--accent);
     outline: 2px solid #f38ba8;
+    opacity: 1;
   }
 
   [data-theme="light"] .bam-sector.error {
+    background: var(--accent);
     outline: 2px solid #d20f39;
+  }
+
+  .bam-sector.orphan {
+    background: #fab387;
+    opacity: 0.6;
+  }
+
+  [data-theme="light"] .bam-sector.orphan {
+    background: #fe640b;
+    opacity: 0.6;
+  }
+
+  .bam-legend-error {
+    background: var(--accent) !important;
+    outline: 2px solid #f38ba8;
+  }
+
+  [data-theme="light"] .bam-legend-error {
+    background: var(--accent) !important;
+    outline: 2px solid #d20f39;
+  }
+
+  .bam-legend-orphan {
+    background: #fab387 !important;
+    opacity: 0.6;
+  }
+
+  [data-theme="light"] .bam-legend-orphan {
+    background: #fe640b !important;
+    opacity: 0.6;
   }
 
   .bam-track-num.error {
@@ -1339,8 +1471,13 @@
     outline: 1px solid var(--text);
   }
 
+  .bam-sector.error:hover {
+    outline: 2px solid var(--text);
+  }
+
   .bam-legend {
     display: flex;
+    flex-wrap: wrap;
     gap: 12px;
     padding: 8px 0 4px;
     font-size: 11px;
@@ -1357,6 +1494,26 @@
     width: 10px;
     height: 10px;
     border-radius: 1px;
+  }
+
+  .bam-warnings {
+    color: #f38ba8;
+    margin: 0 0 8px;
+    padding-left: 20px;
+    font-size: 12px;
+    list-style: none;
+  }
+
+  [data-theme="light"] .bam-warnings {
+    color: #d20f39;
+  }
+
+  .bam-warnings .fa-circle-question {
+    color: #fab387;
+  }
+
+  [data-theme="light"] .bam-warnings .fa-circle-question {
+    color: #fe640b;
   }
 
   /* --- Error Byte Viewer --- */
@@ -1573,6 +1730,7 @@
       <div class="option disabled" id="opt-convert-geos">Convert to GEOS Format</div>
       <div class="separator"></div>
       <div class="option disabled" id="opt-fill-free">Fill Free Sectors</div>
+      <div class="option disabled" id="opt-optimize">Optimize Disk...</div>
       <div class="separator"></div>
       <div class="option disabled" id="opt-export-txt">Export as Text</div>
       <div class="option disabled" id="opt-md5">Show MD5 Hash</div>
