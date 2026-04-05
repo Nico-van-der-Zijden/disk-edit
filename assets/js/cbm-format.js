@@ -1085,6 +1085,117 @@ function decodeGeosString(data, offset, maxLen) {
   return s;
 }
 
+// Read VLIR records from a GEOS VLIR file.
+// The directory entry's T/S points to the VLIR index sector.
+// The index contains up to 127 record pointers (T/S pairs at bytes 2-255).
+// Each record is a standard sector chain. Returns array of Uint8Array (one per record).
+function readVLIRRecords(buffer, entryOff) {
+  var data = new Uint8Array(buffer);
+  var fmt = currentFormat;
+  var indexT = data[entryOff + 3];
+  var indexS = data[entryOff + 4];
+  if (indexT === 0) return [];
+
+  var idxOff = sectorOffset(indexT, indexS);
+  if (idxOff < 0) return [];
+
+  var records = [];
+  // Index sector: bytes 2-255 = up to 127 record T/S pairs
+  for (var ri = 0; ri < 127; ri++) {
+    var recT = data[idxOff + 2 + ri * 2];
+    var recS = data[idxOff + 2 + ri * 2 + 1];
+    if (recT === 0 && recS === 0) {
+      records.push(null); // empty record
+      continue;
+    }
+    if (recT === 0 && recS === 0xFF) {
+      records.push(null); // non-existent record
+      continue;
+    }
+    // Follow this record's sector chain
+    var bytes = [];
+    var visited = {};
+    var t = recT, s = recS;
+    while (t !== 0) {
+      if (t < 1 || t > currentTracks) break;
+      if (s >= fmt.sectorsPerTrack(t)) break;
+      var key = t + ':' + s;
+      if (visited[key]) break;
+      visited[key] = true;
+      var off = sectorOffset(t, s);
+      if (off < 0) break;
+      var nextT = data[off], nextS = data[off + 1];
+      if (nextT === 0) {
+        for (var i = 2; i <= nextS && i < 256; i++) bytes.push(data[off + i]);
+      } else {
+        for (var j = 2; j < 256; j++) bytes.push(data[off + j]);
+      }
+      t = nextT; s = nextS;
+    }
+    records.push(new Uint8Array(bytes));
+  }
+  // Trim trailing null records
+  while (records.length > 0 && records[records.length - 1] === null) records.pop();
+  return records;
+}
+
+// Decompress GEOS bitmap data (geoPaint compression).
+// code < 64: next 'code' bytes are literal data
+// code 64-127: fill (code-64) cards with next 8-byte pattern
+// code > 127: repeat next byte (code-128) times
+function decompressGeosBitmap(compressed) {
+  var out = [];
+  var pos = 0;
+  while (pos < compressed.length) {
+    var code = compressed[pos++];
+    if (code < 64) {
+      for (var i = 0; i < code && pos < compressed.length; i++) out.push(compressed[pos++]);
+    } else if (code < 128) {
+      var count = code - 64;
+      if (pos + 8 > compressed.length) break;
+      var pat = [];
+      for (var p = 0; p < 8; p++) pat.push(compressed[pos++]);
+      for (var r = 0; r < count; r++) for (var p2 = 0; p2 < 8; p2++) out.push(pat[p2]);
+    } else {
+      if (pos >= compressed.length) break;
+      var val = compressed[pos++];
+      var reps = code - 128;
+      for (var r2 = 0; r2 < reps; r2++) out.push(val);
+    }
+  }
+  return new Uint8Array(out);
+}
+
+// Decompress GEOS scrap/album bitmap stream (different from geoPaint!).
+// 0, 128, 220: skip (illegal opcodes)
+// 1-127: RLE — repeat next byte 'code' times
+// 129-219: literal — next (code-128) bytes are data
+// 221-255: pattern — patsize=(code-220), next byte=repeat count, then patsize pattern bytes
+function decompressGeosScrap(compressed) {
+  var out = [];
+  var pos = 0;
+  while (pos < compressed.length) {
+    var code = compressed[pos++];
+    if (code === 0 || code === 128 || code === 220) continue;
+    if (code < 128) {
+      if (pos >= compressed.length) break;
+      var val = compressed[pos++];
+      for (var r = 0; r < code; r++) out.push(val);
+    } else if (code <= 219) {
+      var count = code - 128;
+      for (var i = 0; i < count && pos < compressed.length; i++) out.push(compressed[pos++]);
+    } else {
+      var patsize = code - 220;
+      if (pos + 1 + patsize > compressed.length) break;
+      var repeat = compressed[pos++];
+      var pat = [];
+      for (var p = 0; p < patsize; p++) pat.push(compressed[pos++]);
+      for (var r2 = 0; r2 < repeat; r2++) for (var p2 = 0; p2 < patsize; p2++) out.push(pat[p2]);
+    }
+  }
+  return new Uint8Array(out);
+}
+
 function readGeosInfoBlock(buffer, track, sector) {
   if (track === 0) return null;
   var off = sectorOffset(track, sector);
@@ -1106,7 +1217,14 @@ function readGeosInfoBlock(buffer, track, sector) {
   // 0x85-0xFE: file description (free-form text, 0x00 terminated)
 
   var className = decodeGeosString(data, off + 0x4D, 20);
-  var description = decodeGeosString(data, off + 0xA1, 94);
+  var description = decodeGeosString(data, off + 0xA0, 96);
+
+  // Icon: $02 = width (bytes), $03 = height (pixels), $04 = width (pixels), $05-$43 = bitmap
+  var iconW = data[off + 0x02]; // width in bytes (typically 3 = 24px)
+  var iconH = data[off + 0x03]; // height in pixels (typically 21)
+  var iconBytes = iconW * iconH;
+  var iconData = (iconW > 0 && iconH > 0 && iconBytes <= 63)
+    ? data.subarray(off + 0x05, off + 0x05 + iconBytes) : null;
 
   return {
     className: className,
@@ -1114,6 +1232,9 @@ function readGeosInfoBlock(buffer, track, sector) {
     loadAddr: data[off + 0x47] | (data[off + 0x48] << 8),
     endAddr: data[off + 0x49] | (data[off + 0x4A] << 8),
     initAddr: data[off + 0x4B] | (data[off + 0x4C] << 8),
+    iconW: iconW * 8,
+    iconH: iconH,
+    iconData: iconData,
   };
 }
 

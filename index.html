@@ -439,12 +439,9 @@
     font-size: 11px;
     color: var(--text-muted);
     border-bottom: 1px solid var(--border);
+    border-left: 1px solid var(--accent);
+    border-right: 1px solid var(--accent);
     padding-bottom: 4px;
-    margin-bottom: 4px;
-    position: sticky;
-    top: 0;
-    background: var(--bg);
-    z-index: 1;
   }
 
   .dir-parent-row {
@@ -1242,6 +1239,40 @@
     border: 3px dashed #6c5eb5;
   }
 
+  .geos-info-table {
+    font-size: 13px;
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  .geos-info-label {
+    color: var(--text-muted);
+    padding: 3px 12px 3px 0;
+    white-space: nowrap;
+    vertical-align: top;
+  }
+
+  .geos-info-value {
+    padding: 3px 0;
+    white-space: pre-wrap;
+  }
+
+  .geos-info-name-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .geos-icon {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    width: 48px;
+    height: 42px;
+    flex-shrink: 0;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+  }
+
   .gfx-canvas {
     display: block;
     margin: 0 auto;
@@ -1876,6 +1907,21 @@
 <script src="assets/js/restore64-scanners.js"></script>
 <script src="assets/js/ui.js"></script>
 
+<!-- Matomo -->
+<script>
+  var _paq = window._paq = window._paq || [];
+  /* tracker methods like "setCustomDimension" should be called before "trackPageView" */
+  _paq.push(['trackPageView']);
+  _paq.push(['enableLinkTracking']);
+  (function() {
+    var u="//sannic.nl/matomo/";
+    _paq.push(['setTrackerUrl', u+'matomo.php']);
+    _paq.push(['setSiteId', '6']);
+    var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0];
+    g.async=true; g.src=u+'matomo.js'; s.parentNode.insertBefore(g,s);
+  })();
+</script>
+<!-- End Matomo Code -->
 
 </body>
 </html>

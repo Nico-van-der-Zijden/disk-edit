@@ -84,14 +84,40 @@ document.getElementById('modal-overlay').addEventListener('click', (e) => {
   }
 });
 
+// Ctrl+Shift toggles charset (like Commodore+Shift on C64)
+// Fires on keyup only if no other key was pressed while both modifiers were held,
+// so Ctrl+Shift+< and Ctrl+Shift+* shortcuts work without triggering the toggle.
+var ctrlShiftClean = false;
 document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey && e.key === 'Shift') || (e.shiftKey && e.key === 'Control')) {
+    ctrlShiftClean = true;
+  } else if (e.ctrlKey && e.shiftKey) {
+    ctrlShiftClean = false;
+  }
   if (e.key === 'Escape' && document.getElementById('modal-overlay').classList.contains('open')) {
     document.getElementById('modal-overlay').classList.remove('open');
   }
-  // Ctrl+Shift toggles charset (like Commodore+Shift on C64)
-  if (e.ctrlKey && e.key === 'Shift' || e.shiftKey && e.key === 'Control') {
+  // Ctrl+Alt+G: view as graphics
+  if (e.ctrlKey && e.altKey && e.code === 'KeyG') {
     e.preventDefault();
-    document.getElementById('opt-charset-mode').click();
+    if (currentBuffer && selectedEntryIndex >= 0) {
+      closeMenus();
+      showFileGfxViewer(selectedEntryIndex);
+    }
+  }
+  // Ctrl+Alt+O: open disk
+  if (e.ctrlKey && e.altKey && e.code === 'KeyO') {
+    e.preventDefault();
+    document.getElementById('opt-open').click();
+  }
+  // Ctrl+Alt+S: save disk
+  if (e.ctrlKey && e.altKey && e.code === 'KeyS') {
+    e.preventDefault();
+    if (currentBuffer && currentFileName && !isTapeFormat()) {
+      document.getElementById('opt-save').click();
+    } else if (currentBuffer && !isTapeFormat()) {
+      document.getElementById('opt-save-as').click();
+    }
   }
   // Ctrl+Alt+N: new disk (open Disk > New submenu with first option focused)
   if (e.ctrlKey && e.altKey && e.code === 'KeyN') {
@@ -108,6 +134,13 @@ document.addEventListener('keydown', (e) => {
     adjustSubmenu(submenu);
     var firstOpt = submenu.querySelector('.option');
     setMenuFocus(firstOpt);
+  }
+});
+
+document.addEventListener('keyup', (e) => {
+  if ((e.key === 'Shift' || e.key === 'Control') && ctrlShiftClean) {
+    ctrlShiftClean = false;
+    document.getElementById('opt-charset-mode').click();
   }
 });
 
@@ -187,16 +220,16 @@ function renderDisk(info) {
         <div class="disk-name"><span class="editable" id="edit-name" data-field="name" data-max="${currentFormat.nameLength}">"${escHtml(info.diskName.padEnd(currentFormat.nameLength))}"</span></div>
         <div class="disk-id"><span class="editable" id="edit-id" data-field="id" data-max="${currentFormat.idLength}">${escHtml(info.diskId)}</span></div>
       </div>
-      <div class="dir-listing">
-        <div class="dir-entry dir-header-row">
-          <span class="dir-grip"></span>
-          <span class="dir-blocks">Size</span>
-          <span class="dir-name">Filename</span>
-          <span class="dir-type">Type</span>
-          <span class="dir-ts">T/S</span>
-          <span class="dir-addr">Address</span>
-          <span class="dir-icons"></span>
-        </div>`;
+      <div class="dir-entry dir-header-row">
+        <span class="dir-grip"></span>
+        <span class="dir-blocks">Size</span>
+        <span class="dir-name">Filename</span>
+        <span class="dir-type">Type</span>
+        <span class="dir-ts">T/S</span>
+        <span class="dir-addr">Address</span>
+        <span class="dir-icons"></span>
+      </div>
+      <div class="dir-listing">`;
 
   // Show parent directory link when inside a partition
   if (currentPartition) {
@@ -929,7 +962,11 @@ function updateEntryMenuState() {
     var eIdx = eType & 0x07;
     exportEnabled = eClosed && eIdx >= 1 && eIdx <= 4;
     copyEnabled = exportEnabled;
-    gfxEnabled = eClosed && eIdx === 2 && edata[selectedEntryIndex + 3] > 0;
+    var geosFileType = edata[selectedEntryIndex + 0x18];
+    var geosStruct = edata[selectedEntryIndex + 0x17];
+    var isGeosGfx = (geosFileType === 0x14 || geosFileType === 0x15 || geosFileType === 0x08 || geosFileType === 0x18) ||
+      (geosFileType === 0x07 && geosStruct === 0x01); // application data + VLIR (e.g. geoPaint/album docs)
+    gfxEnabled = eClosed && (eIdx === 2 || isGeosGfx) && edata[selectedEntryIndex + 3] > 0;
     if (eClosed && eIdx === 2) {
       var ft = edata[selectedEntryIndex + 3];
       var fs = edata[selectedEntryIndex + 4];
@@ -1931,8 +1968,7 @@ document.getElementById('opt-view-geos').addEventListener('click', function(e) {
   }
 
   var data = new Uint8Array(currentBuffer);
-  var name = readPetsciiString(data, selectedEntryIndex + 5, 16);
-  var readableName = petsciiToReadable(name);
+  var readableName = decodeGeosString(data, selectedEntryIndex + 5, 16);
 
   var lines = [];
   lines.push('File: ' + readableName);
@@ -1954,22 +1990,68 @@ document.getElementById('opt-view-geos').addEventListener('click', function(e) {
   }
 
   // Build HTML
-  var html = '<table style="font-size:13px;border-collapse:collapse;width:100%">';
+  var html = '';
+
+  // Render GEOS icon if available
+  var iconCanvas = null;
+  if (infoBlock && infoBlock.iconData && infoBlock.iconW > 0 && infoBlock.iconH > 0) {
+    iconCanvas = document.createElement('canvas');
+    iconCanvas.width = infoBlock.iconW;
+    iconCanvas.height = infoBlock.iconH;
+    var ictx = iconCanvas.getContext('2d');
+    var img = ictx.createImageData(infoBlock.iconW, infoBlock.iconH);
+    var px = img.data;
+    var bytesPerRow = infoBlock.iconW / 8;
+    for (var iy = 0; iy < infoBlock.iconH; iy++) {
+      for (var bx = 0; bx < bytesPerRow; bx++) {
+        var byt = infoBlock.iconData[iy * bytesPerRow + bx];
+        for (var bit = 7; bit >= 0; bit--) {
+          var ix = bx * 8 + (7 - bit);
+          var off = (iy * infoBlock.iconW + ix) * 4;
+          var on = byt & (1 << bit);
+          px[off] = on ? 0 : 255;
+          px[off + 1] = on ? 0 : 255;
+          px[off + 2] = on ? 0 : 255;
+          px[off + 3] = 255;
+        }
+      }
+    }
+    ictx.putImageData(img, 0, 0);
+  }
+
+  html += '<table class="geos-info-table">';
   for (var i = 0; i < lines.length; i++) {
     var parts = lines[i].split(': ');
-    if (parts.length >= 2) {
+    if (i === 0 && iconCanvas) {
+      // First row: icon + file name
       var label = parts[0];
       var value = parts.slice(1).join(': ');
-      html += '<tr><td style="color:var(--text-muted);padding:3px 12px 3px 0;white-space:nowrap;vertical-align:top">' +
-        escHtml(label) + '</td><td style="padding:3px 0;white-space:pre-wrap">' + escHtml(value) + '</td></tr>';
+      html += '<tr><td class="geos-info-label">' + escHtml(label) +
+        '</td><td class="geos-info-value"><span class="geos-info-name-row" id="geos-icon-row">' +
+        escHtml(value) + '</span></td></tr>';
+    } else if (parts.length >= 2) {
+      var label2 = parts[0];
+      var value2 = parts.slice(1).join(': ');
+      html += '<tr><td class="geos-info-label">' +
+        escHtml(label2) + '</td><td class="geos-info-value">' + escHtml(value2) + '</td></tr>';
     } else {
-      html += '<tr><td colspan="2" style="padding:3px 0">' + escHtml(lines[i]) + '</td></tr>';
+      html += '<tr><td colspan="2" class="geos-info-value">' + escHtml(lines[i]) + '</td></tr>';
     }
   }
   html += '</table>';
 
   showModal('GEOS File Info', []);
-  document.getElementById('modal-body').innerHTML = html;
+  var body = document.getElementById('modal-body');
+  body.innerHTML = html;
+
+  // Insert icon canvas into the name row
+  if (iconCanvas) {
+    var nameRow = document.getElementById('geos-icon-row');
+    if (nameRow) {
+      iconCanvas.className = 'geos-icon';
+      nameRow.insertBefore(iconCanvas, nameRow.firstChild);
+    }
+  }
 });
 
 // ── Convert to GEOS ──────────────────────────────────────────────────
@@ -3095,6 +3177,250 @@ function detectGfxFormats(fileData) {
   return matches;
 }
 
+// Detect GEOS graphics formats from directory entry metadata and info block
+function detectGeosGfxFormats(entryOff) {
+  if (!currentBuffer || isTapeFormat()) return [];
+  var geos = readGeosInfo(currentBuffer, entryOff);
+  if (!geos.isGeos || geos.structure !== 1) return []; // must be VLIR
+  var matches = [];
+
+  // Check file type and class name for geoPaint documents
+  var isPaint = (geos.fileType === 0x14);
+  if (!isPaint && geos.infoTrack > 0) {
+    var infoBlock = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
+    if (infoBlock && infoBlock.className && infoBlock.className.toLowerCase().indexOf('paint') === 0) {
+      isPaint = true;
+    }
+  }
+  if (isPaint) {
+    matches.push({ name: 'geoPaint', mode: 'geopaint', layout: 'geopaint', geosEntry: entryOff });
+  }
+  if (geos.fileType === 0x15) {
+    matches.push({ name: 'Photo Scrap', mode: 'geoscrap', layout: 'geoscrap', geosEntry: entryOff });
+  }
+  if (geos.fileType === 0x18) {
+    matches.push({ name: 'Photo Album', mode: 'geosalbum', layout: 'geosalbum', geosEntry: entryOff });
+  }
+  // Check class name for photo album (stored as application data $07)
+  if (!isPaint && geos.fileType === 0x07 && geos.infoTrack > 0) {
+    var infoBlock2 = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
+    if (infoBlock2 && infoBlock2.className && infoBlock2.className.toLowerCase().indexOf('photo album') === 0) {
+      matches.push({ name: 'Photo Album', mode: 'geosalbum', layout: 'geosalbum', geosEntry: entryOff });
+    }
+  }
+  if (geos.fileType === 0x08) {
+    matches.push({ name: 'GEOS Font', mode: 'geosfont', layout: 'geosfont', geosEntry: entryOff });
+  }
+  return matches;
+}
+
+// Render a geoPaint image (640×720, VLIR records with GEOS compression).
+// Each record = 2 card rows decompressed to 1448 bytes:
+//   0-639: bitmap row 0 (80 cards × 8 bytes, column-major)
+//   640-1279: bitmap row 1
+//   1280-1287: padding
+//   1288-1367: color row 0 (80 bytes, high nybble=fg, low=bg)
+//   1368-1447: color row 1
+function renderGeoPaint(ctx, entryOff) {
+  var records = readVLIRRecords(currentBuffer, entryOff);
+  if (records.length === 0) return false;
+
+  var w = 640, h = records.length * 16;
+  ctx.canvas.width = w;
+  ctx.canvas.height = h;
+  var img = ctx.createImageData(w, h);
+  var px = img.data;
+  for (var fi = 3; fi < px.length; fi += 4) px[fi] = 255;
+
+  for (var ri = 0; ri < records.length; ri++) {
+    if (!records[ri] || records[ri].length === 0) continue;
+    var dec = decompressGeosBitmap(records[ri]);
+    if (dec.length < 1288) continue;
+
+    for (var cardRow = 0; cardRow < 2; cardRow++) {
+      var bmOff = cardRow * 640;
+      var colOff = 1288 + cardRow * 80;
+
+      for (var card = 0; card < 80; card++) {
+        var colorByte = colOff + card < dec.length ? dec[colOff + card] : 0;
+        var fgRgb = C64_RGB[(colorByte >> 4) & 0x0F];
+        var bgRgb = C64_RGB[colorByte & 0x0F];
+
+        for (var line = 0; line < 8; line++) {
+          var byt = dec[bmOff + card * 8 + line] || 0;
+          var y = ri * 16 + cardRow * 8 + line;
+          for (var bit = 7; bit >= 0; bit--) {
+            var x = card * 8 + (7 - bit);
+            if (x < w && y < h) {
+              var rgb = (byt & (1 << bit)) ? fgRgb : bgRgb;
+              var off = (y * w + x) * 4;
+              px[off] = rgb[0]; px[off + 1] = rgb[1]; px[off + 2] = rgb[2];
+            }
+          }
+        }
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return true;
+}
+
+// Render a single photo scrap from raw data (3-byte header + compressed bitmap).
+// Header: byte 0 = width in cards, bytes 1-2 = height in pixels (LE).
+// Uses scrap compression (different from geoPaint).
+function renderScrapData(ctx, scrapBytes, yOffset) {
+  if (scrapBytes.length < 4) return 0;
+  var wCards = scrapBytes[0];
+  var h = scrapBytes[1] | (scrapBytes[2] << 8);
+  if (wCards === 0 || h === 0 || h > 4096) return 0;
+  var w = wCards * 8;
+  var dec = decompressGeosScrap(scrapBytes.subarray(3));
+  if (dec.length < wCards * h) return 0;
+
+  // Ensure canvas is wide enough
+  if (w > ctx.canvas.width) ctx.canvas.width = w;
+
+  var img = ctx.getImageData(0, yOffset, w, h);
+  var px = img.data;
+  for (var fi = 0; fi < px.length; fi++) px[fi] = 255;
+  for (var fi2 = 3; fi2 < px.length; fi2 += 4) px[fi2] = 255;
+
+  for (var y = 0; y < h; y++) {
+    for (var bx = 0; bx < wCards; bx++) {
+      var byt = dec[y * wCards + bx];
+      for (var bit = 7; bit >= 0; bit--) {
+        var x = bx * 8 + (7 - bit);
+        var off = (y * w + x) * 4;
+        var on = byt & (1 << bit);
+        px[off] = on ? 0 : 255;
+        px[off + 1] = on ? 0 : 255;
+        px[off + 2] = on ? 0 : 255;
+      }
+    }
+  }
+  ctx.putImageData(img, 0, yOffset);
+  return h;
+}
+
+// Render GEOS Photo Scrap (sequential file, single image)
+function renderGeoScrap(ctx, entryOff) {
+  var result = readFileData(currentBuffer, entryOff);
+  if (result.error || result.data.length < 4) return false;
+  var scrapData = result.data;
+  var wCards = scrapData[0];
+  var h = scrapData[1] | (scrapData[2] << 8);
+  if (wCards === 0 || h === 0) return false;
+  ctx.canvas.width = wCards * 8;
+  ctx.canvas.height = h;
+  return renderScrapData(ctx, scrapData, 0) > 0;
+}
+
+// Render GEOS Photo Album (VLIR, each record is a photo scrap)
+function renderGeoAlbum(ctx, entryOff) {
+  var records = readVLIRRecords(currentBuffer, entryOff);
+  if (records.length === 0) return false;
+
+  // First pass: measure total height and max width
+  var totalH = 0, maxW = 0, gap = 4;
+  var scraps = [];
+  for (var ri = 0; ri < records.length; ri++) {
+    if (!records[ri] || records[ri].length < 4) continue;
+    var wCards = records[ri][0];
+    var h = records[ri][1] | (records[ri][2] << 8);
+    if (wCards === 0 || h === 0 || h > 4096) continue;
+    var w = wCards * 8;
+    if (w > maxW) maxW = w;
+    scraps.push({ data: records[ri], h: h });
+    totalH += h + gap;
+  }
+  if (scraps.length === 0) return false;
+  totalH -= gap;
+
+  ctx.canvas.width = maxW;
+  ctx.canvas.height = totalH;
+  // Fill white
+  var bgImg = ctx.createImageData(maxW, totalH);
+  for (var fi = 0; fi < bgImg.data.length; fi++) bgImg.data[fi] = 255;
+  ctx.putImageData(bgImg, 0, 0);
+
+  var yPos = 0;
+  for (var si = 0; si < scraps.length; si++) {
+    renderScrapData(ctx, scraps[si].data, yPos);
+    yPos += scraps[si].h + gap;
+  }
+  return true;
+}
+
+// Render GEOS font: show all glyphs from each available point size.
+// Font VLIR records are NOT compressed. Record N = N-point font.
+// Header (8 bytes): ascent, rowLength(16), height, xTabOffset(16), bmOffset(16)
+// X-table: 97 entries × 2 bytes (character boundaries for $20-$7F + total width)
+// Bitmap: height rows × rowLength bytes (all glyphs concatenated horizontally)
+function renderGeosFont(ctx, entryOff) {
+  var records = readVLIRRecords(currentBuffer, entryOff);
+  if (records.length === 0) return false;
+
+  // Parse valid font sizes
+  var fonts = [];
+  for (var ri = 0; ri < records.length; ri++) {
+    if (!records[ri] || records[ri].length < 8) continue;
+    var rec = records[ri];
+    var ascent = rec[0];
+    var rowLen = rec[1] | (rec[2] << 8);
+    var height = rec[3];
+    var xTabOff = rec[4] | (rec[5] << 8);
+    var bmOff = rec[6] | (rec[7] << 8);
+    // Sanity checks
+    if (height < 1 || height > 63) continue;
+    if (rowLen < 1 || rowLen > 500) continue;
+    if (bmOff + height * rowLen > rec.length) continue;
+    if (xTabOff + 194 > rec.length) continue;
+    fonts.push({ pt: ri, rec: rec, ascent: ascent, rowLen: rowLen, height: height, xTabOff: xTabOff, bmOff: bmOff });
+  }
+
+  if (fonts.length === 0) return false;
+
+  // Render each point size as a labeled strip
+  var gap = 8;
+  var totalH = 0;
+  var maxW = 0;
+  for (var fi2 = 0; fi2 < fonts.length; fi2++) {
+    var bmW = fonts[fi2].rowLen * 8;
+    if (bmW > maxW) maxW = bmW;
+    totalH += fonts[fi2].height + gap;
+  }
+  totalH -= gap;
+  if (maxW > 4096) maxW = 4096;
+
+  ctx.canvas.width = maxW;
+  ctx.canvas.height = totalH;
+  var img = ctx.createImageData(maxW, totalH);
+  var px = img.data;
+  for (var fi3 = 0; fi3 < px.length; fi3++) px[fi3] = 255;
+  for (var fi4 = 3; fi4 < px.length; fi4 += 4) px[fi4] = 255;
+
+  var yPos = 0;
+  for (var fi5 = 0; fi5 < fonts.length; fi5++) {
+    var f = fonts[fi5];
+    for (var row = 0; row < f.height; row++) {
+      for (var bx = 0; bx < f.rowLen; bx++) {
+        var byt = f.rec[f.bmOff + row * f.rowLen + bx];
+        for (var bit = 7; bit >= 0; bit--) {
+          var x = bx * 8 + (7 - bit);
+          var y = yPos + row;
+          if (x < maxW && y < totalH && (byt & (1 << bit))) {
+            var off = (y * maxW + x) * 4;
+            px[off] = 0; px[off + 1] = 0; px[off + 2] = 0;
+          }
+        }
+      }
+    }
+    yPos += f.height + gap;
+  }
+  ctx.putImageData(img, 0, 0);
+  return true;
+}
+
 // Parse C64_COLORS hex to [r,g,b] arrays for canvas
 var C64_RGB = C64_COLORS.map(function(hex) {
   return [parseInt(hex.substr(1,2),16), parseInt(hex.substr(3,2),16), parseInt(hex.substr(5,2),16)];
@@ -3418,6 +3744,12 @@ function renderC64PrintShop(ctx, gfx) {
 }
 
 function renderGfxToCanvas(ctx, fmt, fileData, colors) {
+  // GEOS formats use VLIR, handled separately
+  if (fmt.mode === 'geopaint') { renderGeoPaint(ctx, fmt.geosEntry); return; }
+  if (fmt.mode === 'geoscrap') { renderGeoScrap(ctx, fmt.geosEntry); return; }
+  if (fmt.mode === 'geosalbum') { renderGeoAlbum(ctx, fmt.geosEntry); return; }
+  if (fmt.mode === 'geosfont') { renderGeosFont(ctx, fmt.geosEntry); return; }
+
   var parser = GFX_PARSERS[fmt.layout];
   if (!parser) return;
   var gfx = parser(fileData);
@@ -3464,7 +3796,9 @@ function showFileGfxViewer(entryOff) {
   var fileData = result.data;
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
 
-  var matches = detectGfxFormats(fileData);
+  // Check for GEOS graphics first, then standard formats
+  var geosMatches = detectGeosGfxFormats(entryOff);
+  var matches = geosMatches.concat(detectGfxFormats(fileData));
   if (matches.length === 0) {
     showModal('Graphics View', ['Unrecognized graphics format (' + fileData.length + ' bytes).']);
     return;
@@ -3648,7 +3982,9 @@ function showFileGfxViewer(entryOff) {
     renderGfxToCanvas(canvas.getContext('2d'), eff, fileData, gfxColors);
 
     var scale;
-    if (eff.mode === 'printshop') {
+    if (eff.mode === 'geopaint') {
+      scale = 1;
+    } else if (eff.mode === 'printshop') {
       scale = 4;
     } else if (eff.mode.indexOf('sprite') >= 0 || eff.mode.indexOf('charset') >= 0) {
       scale = Math.max(2, Math.min(4, Math.floor(600 / (canvas.width || 1))));
@@ -7210,8 +7546,11 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Ctrl + E', 'Export selected file(s)'],
       ['Ctrl + D', 'Add directory (D81)'],
       ['Ctrl + Z', 'Undo last change'],
+      ['Ctrl + Alt + O', 'Open disk'],
+      ['Ctrl + Alt + S', 'Save disk'],
       ['Ctrl + Alt + N', 'New disk'],
       ['Ctrl + B', 'View BAM'],
+      ['Ctrl + Alt + G', 'View as graphics'],
       ['Ctrl + H', 'Edit disk name'],
       ['Ctrl + Alt + I', 'Edit disk ID'],
     ]},
