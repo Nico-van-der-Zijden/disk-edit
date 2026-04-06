@@ -614,6 +614,9 @@ function closeContextMenu() {
 }
 
 function showContextMenu(x, y) {
+  // Close top menubar if open
+  closeMenus();
+
   // Clone the File menu options into the context menu
   var source = document.querySelector('#menu-entry > .menu-dropdown');
   contextMenu.innerHTML = source.innerHTML;
@@ -641,6 +644,23 @@ function showContextMenu(x, y) {
         cloneChecks[ci].innerHTML = origChecks[ci].innerHTML;
       }
     }
+  });
+
+  // Bind submenu open/close via mouseenter/mouseleave (more reliable than CSS :hover)
+  contextMenu.querySelectorAll('.has-submenu').forEach(function(item) {
+    item.addEventListener('mouseenter', function() {
+      contextMenu.querySelectorAll('.has-submenu.submenu-open').forEach(function(el) {
+        el.classList.remove('submenu-open');
+      });
+      if (!item.classList.contains('disabled')) {
+        item.classList.add('submenu-open');
+        var sub = item.querySelector('.submenu');
+        if (sub) adjustSubmenu(sub);
+      }
+    });
+    item.addEventListener('mouseleave', function() {
+      item.classList.remove('submenu-open');
+    });
   });
 
   // Position and show
@@ -940,6 +960,7 @@ function updateEntryMenuState() {
   var basicEnabled = false;
   var gfxEnabled = false;
   var geosEnabled = false;
+  var geoWriteEnabled = false;
   if (hasSelection && tape) {
     var tapeEntry = getTapeEntry(selectedEntryIndex);
     if (tapeEntry) {
@@ -965,7 +986,7 @@ function updateEntryMenuState() {
     var geosFileType = edata[selectedEntryIndex + 0x18];
     var geosStruct = edata[selectedEntryIndex + 0x17];
     var isGeosGfx = (geosFileType === 0x14 || geosFileType === 0x15 || geosFileType === 0x08 || geosFileType === 0x18) ||
-      (geosFileType === 0x07 && geosStruct === 0x01); // application data + VLIR (e.g. geoPaint/album docs)
+      ((geosFileType === 0x07 || geosFileType === 0x13) && geosStruct === 0x01); // application data or write image + VLIR
     gfxEnabled = eClosed && (eIdx === 2 || isGeosGfx) && edata[selectedEntryIndex + 3] > 0;
     if (eClosed && eIdx === 2) {
       var ft = edata[selectedEntryIndex + 3];
@@ -979,12 +1000,27 @@ function updateEntryMenuState() {
       }
     }
     geosEnabled = edata[selectedEntryIndex + 0x18] > 0;
+    // geoWrite document detection: type $07 or $13 with VLIR structure
+    if (eClosed && geosStruct === 0x01 && (geosFileType === 0x07 || geosFileType === 0x13)) {
+      var gwInfoT = edata[selectedEntryIndex + 0x15];
+      var gwInfoS = edata[selectedEntryIndex + 0x16];
+      if (gwInfoT > 0) {
+        var gwInfo = readGeosInfoBlock(currentBuffer, gwInfoT, gwInfoS);
+        if (gwInfo && gwInfo.className && gwInfo.className.toLowerCase().indexOf('write image') === 0) {
+          geoWriteEnabled = true;
+        }
+      }
+    }
   }
   document.getElementById('opt-export').classList.toggle('disabled', !exportEnabled);
+  document.getElementById('opt-export-cvt').classList.toggle('disabled', !geosEnabled || !exportEnabled);
+  document.getElementById('opt-export-rtf').classList.toggle('disabled', !geoWriteEnabled);
+  document.getElementById('opt-export-pdf').classList.toggle('disabled', !geoWriteEnabled);
   document.getElementById('opt-copy').classList.toggle('disabled', !copyEnabled);
   document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !currentBuffer || !canInsertFile() || tape);
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
   document.getElementById('opt-view-gfx').classList.toggle('disabled', !gfxEnabled);
+  document.getElementById('opt-view-geowrite').classList.toggle('disabled', !geoWriteEnabled);
   document.getElementById('opt-view-tass').classList.add('disabled');
   document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
   document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect || tape);
@@ -1143,6 +1179,7 @@ function updateMenuState() {
   const hasDisk = currentBuffer !== null;
   const tape = isTapeFormat();
   document.getElementById('opt-close').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-close-all').classList.toggle('disabled', tabs.length === 0);
   document.getElementById('opt-save').classList.toggle('disabled', !hasDisk || !currentFileName || tape);
   document.getElementById('opt-save-as').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-validate').classList.toggle('disabled', !hasDisk || tape);
@@ -1221,6 +1258,7 @@ function closeMenus() {
 menuItems.forEach(menu => {
   menu.addEventListener('click', (e) => {
     e.stopPropagation();
+    closeContextMenu();
     if (openMenu === menu) {
       closeMenus();
     } else {
@@ -1260,12 +1298,6 @@ document.querySelectorAll('.has-submenu').forEach(function(item) {
   });
 });
 
-document.getElementById('context-menu').addEventListener('mouseover', function(e) {
-  var item = e.target.closest('.has-submenu');
-  if (!item) return;
-  var sub = item.querySelector('.submenu');
-  if (sub) adjustSubmenu(sub);
-});
 
 document.addEventListener('click', () => {
   closeMenus();
@@ -1481,6 +1513,24 @@ document.getElementById('opt-close').addEventListener('click', (e) => {
   if (activeTabId !== null) {
     closeTab(activeTabId);
   }
+});
+
+document.getElementById('opt-close-all').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (tabs.length === 0) return;
+  closeMenus();
+  while (tabs.length > 0) {
+    tabs.pop();
+  }
+  activeTabId = null;
+  currentBuffer = null;
+  currentFileName = null;
+  selectedEntryIndex = -1;
+  currentPartition = null;
+  showEmptyState();
+  renderTabs();
+  updateMenuState();
+  updateEntryMenuState();
 });
 
 document.getElementById('opt-save').addEventListener('click', (e) => {
@@ -3211,6 +3261,13 @@ function detectGeosGfxFormats(entryOff) {
   if (geos.fileType === 0x08) {
     matches.push({ name: 'GEOS Font', mode: 'geosfont', layout: 'geosfont', geosEntry: entryOff });
   }
+  // geoWrite documents (type $07 or $13, class "Write Image") — embedded images in records 64-126
+  if (geos.fileType === 0x07 || geos.fileType === 0x13) {
+    var infoBlk = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
+    if (infoBlk && infoBlk.className && infoBlk.className.toLowerCase().indexOf('write image') === 0) {
+      matches.push({ name: 'geoWrite Images', mode: 'geoswrite', layout: 'geoswrite', geosEntry: entryOff });
+    }
+  }
   return matches;
 }
 
@@ -3339,6 +3396,41 @@ function renderGeoAlbum(ctx, entryOff) {
   ctx.canvas.width = maxW;
   ctx.canvas.height = totalH;
   // Fill white
+  var bgImg = ctx.createImageData(maxW, totalH);
+  for (var fi = 0; fi < bgImg.data.length; fi++) bgImg.data[fi] = 255;
+  ctx.putImageData(bgImg, 0, 0);
+
+  var yPos = 0;
+  for (var si = 0; si < scraps.length; si++) {
+    renderScrapData(ctx, scraps[si].data, yPos);
+    yPos += scraps[si].h + gap;
+  }
+  return true;
+}
+
+// Render geoWrite embedded images (VLIR records 64-126, each in Photo Scrap format)
+function renderGeoWrite(ctx, entryOff) {
+  var records = readVLIRRecords(currentBuffer, entryOff);
+  if (records.length <= 64) return false;
+
+  // Collect valid image records (indices 64-126)
+  var totalH = 0, maxW = 0, gap = 4;
+  var scraps = [];
+  for (var ri = 64; ri < records.length && ri <= 126; ri++) {
+    if (!records[ri] || records[ri].length < 4) continue;
+    var wCards = records[ri][0];
+    var h = records[ri][1] | (records[ri][2] << 8);
+    if (wCards === 0 || h === 0 || h > 4096) continue;
+    var w = wCards * 8;
+    if (w > maxW) maxW = w;
+    scraps.push({ data: records[ri], h: h });
+    totalH += h + gap;
+  }
+  if (scraps.length === 0) return false;
+  totalH -= gap;
+
+  ctx.canvas.width = maxW;
+  ctx.canvas.height = totalH;
   var bgImg = ctx.createImageData(maxW, totalH);
   for (var fi = 0; fi < bgImg.data.length; fi++) bgImg.data[fi] = 255;
   ctx.putImageData(bgImg, 0, 0);
@@ -3748,6 +3840,7 @@ function renderGfxToCanvas(ctx, fmt, fileData, colors) {
   if (fmt.mode === 'geopaint') { renderGeoPaint(ctx, fmt.geosEntry); return; }
   if (fmt.mode === 'geoscrap') { renderGeoScrap(ctx, fmt.geosEntry); return; }
   if (fmt.mode === 'geosalbum') { renderGeoAlbum(ctx, fmt.geosEntry); return; }
+  if (fmt.mode === 'geoswrite') { renderGeoWrite(ctx, fmt.geosEntry); return; }
   if (fmt.mode === 'geosfont') { renderGeosFont(ctx, fmt.geosEntry); return; }
 
   var parser = GFX_PARSERS[fmt.layout];
@@ -4049,7 +4142,16 @@ function showFileGfxViewer(entryOff) {
   render();
 
   var footer = document.querySelector('#modal-overlay .modal-footer');
-  footer.innerHTML = '<button id="modal-close">OK</button>';
+  footer.innerHTML = '<button class="modal-btn-secondary" id="gfx-save-png">Save as PNG</button><button id="modal-close">OK</button>';
+  document.getElementById('gfx-save-png').addEventListener('click', function() {
+    var canvas = document.querySelector('#modal-body .gfx-canvas');
+    if (!canvas) return;
+    var a = document.createElement('a');
+    a.href = canvas.toDataURL('image/png');
+    var safeName = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'image';
+    a.download = safeName + '.png';
+    a.click();
+  });
   document.getElementById('modal-close').addEventListener('click', function() {
     document.getElementById('modal-overlay').classList.remove('open');
   });
@@ -4465,6 +4567,260 @@ function showFileBasicViewer(entryOff) {
     document.getElementById('modal-overlay').classList.remove('open');
   });
   document.getElementById('modal-overlay').classList.add('open');
+}
+
+// ── geoWrite Document Viewer ─────────────────────────────────────────
+// Known GEOS font IDs
+// Map GEOS font IDs to CSS font stacks that match their style
+var GEOS_FONT_CSS = {
+  0:  '"Courier New",Courier,monospace',                         // BSW (system mono)
+  1:  'Helvetica,Arial,sans-serif',                              // University (sans)
+  2:  'Helvetica,Arial,sans-serif',                              // California (sans)
+  3:  '"Times New Roman",Times,Georgia,serif',                   // Roma (serif)
+  4:  '"Times New Roman",Times,Georgia,serif',                   // Dwinelle (serif)
+  5:  'Helvetica,Arial,sans-serif',                              // Cory (sans)
+  6:  '"C64 Pro Mono",monospace',                                // Commodore
+  7:  '"Palatino Linotype",Palatino,"Book Antiqua",serif',       // Monterey (serif)
+  8:  '"Times New Roman",Times,Georgia,serif',                   // LW Roma
+  9:  'Helvetica,Arial,sans-serif',                              // LW Cal
+  10: 'Symbol,serif',                                            // LW Greek
+  11: '"Times New Roman",Times,Georgia,serif'                    // LW Barrows
+};
+
+function showGeoWriteViewer(entryOff) {
+  if (!currentBuffer) return;
+  var data = new Uint8Array(currentBuffer);
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+  var records = readVLIRRecords(currentBuffer, entryOff);
+  if (records.length === 0) {
+    showModal('geoWrite', ['No data found in this document.']);
+    return;
+  }
+
+  // Render inline images to data URLs for embedding in HTML
+  var imageCache = {};
+  for (var ri = 64; ri < records.length && ri <= 126; ri++) {
+    if (!records[ri] || records[ri].length < 4) continue;
+    var wCards = records[ri][0];
+    var imgH = records[ri][1] | (records[ri][2] << 8);
+    if (wCards === 0 || imgH === 0 || imgH > 4096) continue;
+    var imgW = wCards * 8;
+    var tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = imgW;
+    tmpCanvas.height = imgH;
+    var tmpCtx = tmpCanvas.getContext('2d');
+    renderScrapData(tmpCtx, records[ri], 0);
+    imageCache[ri] = { url: tmpCanvas.toDataURL(), w: imgW, h: imgH };
+  }
+
+  var html = '<div class="geowrite-doc">';
+  var pageCount = 0;
+
+  // Parse text pages (records 0-60)
+  for (var pi = 0; pi <= 60 && pi < records.length; pi++) {
+    var rec = records[pi];
+    if (!rec || rec.length === 0) continue;
+
+    pageCount++;
+    html += '<div class="geowrite-page">';
+    html += parseGeoWritePage(rec, imageCache);
+    html += '</div>';
+  }
+
+  if (pageCount === 0) {
+    showModal('geoWrite', ['No text pages found in this document.']);
+    return;
+  }
+
+  html += '</div>';
+
+  document.getElementById('modal-title').textContent =
+    'geoWrite \u2014 "' + name + '" (' + pageCount + ' page' + (pageCount > 1 ? 's' : '') + ')';
+  var body = document.getElementById('modal-body');
+  body.innerHTML = html;
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function parseGeoWritePage(rec, imageCache) {
+  var html = '';
+  var pos = 0;
+  var len = rec.length;
+
+  // Current style state
+  var bold = false, italic = false, underline = false, outline = false;
+  var superscript = false, subscript = false;
+  var fontSize = 12;
+  var fontId = 0;
+  var align = 'left';
+  var lineSpacing = 1;
+
+  // Start a paragraph
+  var paraOpen = false;
+
+  function openPara() {
+    if (paraOpen) return;
+    var style = 'text-align:' + align;
+    if (lineSpacing > 1) style += ';line-height:' + lineSpacing;
+    html += '<div class="geowrite-para" style="' + style + '">';
+    paraOpen = true;
+  }
+
+  function closePara() {
+    if (!paraOpen) return;
+    html += '</div>';
+    paraOpen = false;
+  }
+
+  function openSpan() {
+    var styles = [];
+    var fontCSS = GEOS_FONT_CSS[fontId] || '"Times New Roman",Times,Georgia,serif';
+    styles.push('font-family:' + fontCSS);
+
+    // GEOS sizes are in points; convert to px (1pt = 1.333px) and ensure readability
+    var pxSize = Math.round(Math.max(10, fontSize * 1.333));
+    if (superscript || subscript) pxSize = Math.round(pxSize * 0.7);
+    styles.push('font-size:' + pxSize + 'px');
+
+    if (bold) styles.push('font-weight:bold');
+    if (italic) styles.push('font-style:italic');
+    if (underline) styles.push('text-decoration:underline');
+    if (outline) styles.push('-webkit-text-stroke:0.5px;color:transparent');
+    if (superscript) styles.push('vertical-align:super');
+    if (subscript) styles.push('vertical-align:sub');
+
+    return '<span style="' + styles.join(';') + '">';
+  }
+
+  var spanOpen = false;
+  function flushSpan() {
+    if (spanOpen) { html += '</span>'; spanOpen = false; }
+  }
+  function ensureSpan() {
+    if (!spanOpen) {
+      openPara();
+      html += openSpan();
+      spanOpen = true;
+    }
+  }
+
+  while (pos < len) {
+    var b = rec[pos];
+
+    if (b === 0x00) {
+      // End of record
+      break;
+    } else if (b === 0x11) {
+      // ESC_RULER: 1 + 26 bytes
+      if (pos + 27 > len) break;
+      flushSpan();
+      closePara();
+
+      // Parse ruler data (offsets after the $11 byte)
+      var justByte = rec[pos + 23];
+      var alignVal = justByte & 0x03;
+      var spacingVal = (justByte >> 2) & 0x03;
+
+      if (alignVal === 0) align = 'left';
+      else if (alignVal === 1) align = 'center';
+      else if (alignVal === 2) align = 'right';
+      else align = 'justify';
+
+      if (spacingVal === 0) lineSpacing = 1;
+      else if (spacingVal === 1) lineSpacing = 1.5;
+      else lineSpacing = 2;
+
+      pos += 27;
+    } else if (b === 0x17) {
+      // NEWCARDSET: 1 + 3 bytes (font descriptor word + style byte)
+      if (pos + 4 > len) break;
+      flushSpan();
+
+      var fontWord = rec[pos + 1] | (rec[pos + 2] << 8);
+      var styleByte = rec[pos + 3];
+
+      fontId = fontWord >> 5;
+      fontSize = fontWord & 0x1F;
+      if (fontSize === 0) fontSize = 12;
+
+      underline = (styleByte & 0x80) !== 0;
+      bold = (styleByte & 0x40) !== 0;
+      italic = (styleByte & 0x10) !== 0;
+      outline = (styleByte & 0x08) !== 0;
+      superscript = (styleByte & 0x04) !== 0;
+      subscript = (styleByte & 0x02) !== 0;
+
+      pos += 4;
+    } else if (b === 0x10) {
+      // ESC_GRAPHICS: 1 + 4 bytes (inline image reference)
+      if (pos + 5 > len) break;
+      flushSpan();
+      openPara();
+
+      var imgWCards = rec[pos + 1];
+      var imgHeight = rec[pos + 2] | (rec[pos + 3] << 8);
+      var imgRecord = rec[pos + 4];
+
+      if (imageCache[imgRecord]) {
+        var img = imageCache[imgRecord];
+        html += '<img class="geowrite-img" src="' + img.url +
+          '" width="' + img.w + '" height="' + img.h + '">';
+      } else {
+        html += '<span style="color:#6C6C6C">[Image: record ' + imgRecord +
+          ', ' + (imgWCards * 8) + 'x' + imgHeight + ']</span>';
+      }
+
+      pos += 5;
+    } else if (b === 0x0D) {
+      // Carriage return — end line
+      flushSpan();
+      if (!paraOpen) openPara();
+      closePara();
+      pos++;
+    } else if (b === 0x09) {
+      // Tab
+      ensureSpan();
+      html += '<span class="geowrite-tab">\t</span>';
+      pos++;
+    } else if (b === 0x0C) {
+      // Page break
+      flushSpan();
+      closePara();
+      html += '<div class="geowrite-pagebreak">\u2500\u2500\u2500 page break \u2500\u2500\u2500</div>';
+      pos++;
+    } else if (b >= 0x20 && b <= 0x7E) {
+      // Printable ASCII
+      ensureSpan();
+      if (b === 0x26) html += '&amp;';
+      else if (b === 0x3C) html += '&lt;';
+      else if (b === 0x3E) html += '&gt;';
+      else if (b === 0x22) html += '&quot;';
+      else html += String.fromCharCode(b);
+      pos++;
+    } else if (b === 0x08 || b === 0x18) {
+      // V1.x compat: skip 19 extra bytes
+      pos += 20;
+    } else if (b === 0xF5) {
+      // V1.x compat: skip 10 extra bytes
+      pos += 11;
+    } else {
+      // Unknown control code, skip
+      pos++;
+    }
+  }
+
+  flushSpan();
+  closePara();
+
+  // If empty page, show placeholder
+  if (html === '') html = '<div class="geowrite-para" style="color:#6C6C6C">(empty page)</div>';
+
+  return html;
 }
 
 // ── C64 screen renderer (CHROUT $FFD2 simulation) ────────────────────
@@ -5184,6 +5540,13 @@ document.getElementById('opt-view-tass').addEventListener('click', function(e) {
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
   showFileTassViewer(selectedEntryIndex);
+});
+
+document.getElementById('opt-view-geowrite').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  showGeoWriteViewer(selectedEntryIndex);
 });
 
 document.getElementById('opt-view-gfx').addEventListener('click', function(e) {
@@ -6781,6 +7144,675 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
   }
 });
 
+// ── Export as CVT (GEOS ConVerT format) ──────────────────────────────
+function buildCvtFile(entryOff) {
+  var data = new Uint8Array(currentBuffer);
+  var geos = readGeosInfo(currentBuffer, entryOff);
+
+  // Block 1: directory entry bytes 2-31 + signature + zero padding
+  var block1 = new Uint8Array(254);
+  for (var i = 0; i < 30; i++) block1[i] = data[entryOff + 2 + i];
+  var isVlir = geos.structure === 1;
+  var sig = isVlir ? 'PRG formatted GEOS file V1.0' : 'SEQ formatted GEOS file V1.0';
+  for (var si = 0; si < sig.length; si++) block1[30 + si] = sig.charCodeAt(si);
+
+  // Block 2: info block (254 bytes = sector bytes 2-255)
+  var block2 = new Uint8Array(254);
+  if (geos.infoTrack > 0) {
+    var infoOff = sectorOffset(geos.infoTrack, geos.infoSector);
+    if (infoOff >= 0) {
+      for (var j = 0; j < 254; j++) block2[j] = data[infoOff + 2 + j];
+    }
+  }
+
+  if (isVlir) {
+    var records = readVLIRRecords(currentBuffer, entryOff);
+
+    // Read VLIR index sector to distinguish 00/00 vs 00/FF
+    var vlirT = data[entryOff + 3], vlirS = data[entryOff + 4];
+    var vlirOff = sectorOffset(vlirT, vlirS);
+    var vlirRaw = (vlirOff >= 0) ? data.subarray(vlirOff, vlirOff + 256) : null;
+
+    // Block 3: record index
+    var block3 = new Uint8Array(254);
+    var recordChunks = [];
+
+    for (var ri = 0; ri < 127; ri++) {
+      var rec = ri < records.length ? records[ri] : null;
+      if (rec && rec.length > 0) {
+        var numBlocks = Math.ceil(rec.length / 254);
+        var remainder = rec.length % 254;
+        var lastByte = (remainder === 0) ? 0xFF : (remainder + 1);
+        block3[ri * 2] = numBlocks;
+        block3[ri * 2 + 1] = lastByte;
+        // Pad data to full blocks
+        var padded = new Uint8Array(numBlocks * 254);
+        padded.set(rec);
+        recordChunks.push(padded);
+      } else if (vlirRaw && ri < 127) {
+        // Preserve original empty marker (00/FF = empty, 00/00 = end)
+        block3[ri * 2] = vlirRaw[2 + ri * 2];
+        block3[ri * 2 + 1] = vlirRaw[2 + ri * 2 + 1];
+      }
+    }
+
+    var totalLen = 254 + 254 + 254;
+    for (var ci = 0; ci < recordChunks.length; ci++) totalLen += recordChunks[ci].length;
+    var cvt = new Uint8Array(totalLen);
+    cvt.set(block1, 0);
+    cvt.set(block2, 254);
+    cvt.set(block3, 508);
+    var pos = 762;
+    for (var di = 0; di < recordChunks.length; di++) {
+      cvt.set(recordChunks[di], pos);
+      pos += recordChunks[di].length;
+    }
+    return cvt;
+  } else {
+    // Sequential file
+    var result = readFileData(currentBuffer, entryOff);
+    var fileBytes = result.data;
+    var seqBlocks = Math.max(1, Math.ceil(fileBytes.length / 254));
+    var seqPadded = new Uint8Array(seqBlocks * 254);
+    seqPadded.set(fileBytes);
+
+    var cvt = new Uint8Array(254 + 254 + seqPadded.length);
+    cvt.set(block1, 0);
+    cvt.set(block2, 254);
+    cvt.set(seqPadded, 508);
+    return cvt;
+  }
+}
+
+document.getElementById('opt-export-cvt').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+
+  var data = new Uint8Array(currentBuffer);
+  var name = petsciiToReadable(readPetsciiString(data, selectedEntryIndex + 5, 16)).trim();
+  name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+  if (!name) name = 'export';
+
+  var cvtData = buildCvtFile(selectedEntryIndex);
+  var blob = new Blob([cvtData], { type: 'application/octet-stream' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name + '.cvt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// ── geoWrite RTF/PDF Export ───────────────────────────────────────────
+// Map GEOS font IDs to RTF font names
+var GEOS_RTF_FONTS = {
+  0:'Courier New', 1:'Helvetica', 2:'Helvetica', 3:'Times New Roman',
+  4:'Times New Roman', 5:'Helvetica', 6:'Courier New', 7:'Palatino Linotype',
+  8:'Times New Roman', 9:'Helvetica', 10:'Symbol', 11:'Times New Roman'
+};
+
+// Parse geoWrite VLIR records into a structured document
+function parseGeoWriteDoc(entryOff) {
+  var records = readVLIRRecords(currentBuffer, entryOff);
+  if (records.length === 0) return null;
+
+  // Pre-render inline images as PNG data URLs
+  var images = {};
+  for (var ri = 64; ri < records.length && ri <= 126; ri++) {
+    if (!records[ri] || records[ri].length < 4) continue;
+    var wCards = records[ri][0];
+    var imgH = records[ri][1] | (records[ri][2] << 8);
+    if (wCards === 0 || imgH === 0 || imgH > 4096) continue;
+    var tmpC = document.createElement('canvas');
+    tmpC.width = wCards * 8; tmpC.height = imgH;
+    renderScrapData(tmpC.getContext('2d'), records[ri], 0);
+    // Get raw PNG bytes
+    var dataUrl = tmpC.toDataURL('image/png');
+    images[ri] = { w: wCards * 8, h: imgH, dataUrl: dataUrl,
+      base64: dataUrl.substring(dataUrl.indexOf(',') + 1) };
+  }
+
+  // Parse text pages
+  var pages = [];
+  for (var pi = 0; pi <= 60 && pi < records.length; pi++) {
+    var rec = records[pi];
+    if (!rec || rec.length === 0) continue;
+    pages.push(parseGeoWritePageStructured(rec, images));
+  }
+
+  return { pages: pages, images: images };
+}
+
+// Parse a single geoWrite page into structured elements
+function parseGeoWritePageStructured(rec, images) {
+  var elements = []; // array of { type, ... }
+  var pos = 0, len = rec.length;
+
+  var fontId = 0, fontSize = 12;
+  var bold = false, italic = false, underline = false, outline = false;
+  var superscript = false, subscript = false;
+  var align = 0, spacing = 0; // 0=left,1=center,2=right,3=justified; 0=single,1=1.5,2=double
+
+  var currentText = '';
+
+  function flushText() {
+    if (currentText.length > 0) {
+      elements.push({ type: 'text', text: currentText,
+        fontId: fontId, fontSize: fontSize,
+        bold: bold, italic: italic, underline: underline, outline: outline,
+        superscript: superscript, subscript: subscript });
+      currentText = '';
+    }
+  }
+
+  while (pos < len) {
+    var b = rec[pos];
+    if (b === 0x00) break;
+    else if (b === 0x11) { // ruler
+      if (pos + 27 > len) break;
+      flushText();
+      var justByte = rec[pos + 23];
+      align = justByte & 0x03;
+      spacing = (justByte >> 2) & 0x03;
+      elements.push({ type: 'ruler', align: align, spacing: spacing });
+      pos += 27;
+    } else if (b === 0x17) { // font/style change
+      if (pos + 4 > len) break;
+      flushText();
+      var fontWord = rec[pos + 1] | (rec[pos + 2] << 8);
+      var styleByte = rec[pos + 3];
+      fontId = fontWord >> 5;
+      fontSize = fontWord & 0x1F;
+      if (fontSize === 0) fontSize = 12;
+      bold = (styleByte & 0x40) !== 0;
+      italic = (styleByte & 0x10) !== 0;
+      underline = (styleByte & 0x80) !== 0;
+      outline = (styleByte & 0x08) !== 0;
+      superscript = (styleByte & 0x04) !== 0;
+      subscript = (styleByte & 0x02) !== 0;
+      pos += 4;
+    } else if (b === 0x10) { // inline image
+      if (pos + 5 > len) break;
+      flushText();
+      var imgRec = rec[pos + 4];
+      var img = images[imgRec];
+      if (img) elements.push({ type: 'image', record: imgRec, w: img.w, h: img.h });
+      pos += 5;
+    } else if (b === 0x0D) { // CR
+      flushText();
+      elements.push({ type: 'cr' });
+      pos++;
+    } else if (b === 0x09) { // tab
+      flushText();
+      elements.push({ type: 'tab' });
+      pos++;
+    } else if (b === 0x0C) { // page break
+      flushText();
+      elements.push({ type: 'pagebreak' });
+      pos++;
+    } else if (b >= 0x20 && b <= 0x7E) {
+      currentText += String.fromCharCode(b);
+      pos++;
+    } else if (b === 0x08 || b === 0x18) { pos += 20; }
+    else if (b === 0xF5) { pos += 11; }
+    else pos++;
+  }
+  flushText();
+  return elements;
+}
+
+// ── RTF Export ───────────────────────────────────────────────────────
+function geoWriteToRtf(entryOff) {
+  var doc = parseGeoWriteDoc(entryOff);
+  if (!doc || doc.pages.length === 0) return null;
+
+  // Build font table from all used fonts
+  var fontSet = {};
+  for (var pi = 0; pi < doc.pages.length; pi++) {
+    for (var ei = 0; ei < doc.pages[pi].length; ei++) {
+      var el = doc.pages[pi][ei];
+      if (el.type === 'text') fontSet[el.fontId] = true;
+    }
+  }
+  var fontIds = Object.keys(fontSet).map(Number);
+  if (fontIds.length === 0) fontIds = [0];
+  var fontMap = {}; // geosId -> rtfIndex
+  var fontTable = '{\\fonttbl';
+  for (var fi = 0; fi < fontIds.length; fi++) {
+    fontMap[fontIds[fi]] = fi;
+    var fname = GEOS_RTF_FONTS[fontIds[fi]] || 'Times New Roman';
+    var fFamily = (fname === 'Courier New') ? 'fmodern' :
+      (fname === 'Helvetica') ? 'fswiss' : 'froman';
+    fontTable += '{\\f' + fi + '\\' + fFamily + ' ' + fname + ';}';
+  }
+  fontTable += '}';
+
+  var rtf = '{\\rtf1\\ansi\\deff0\n' + fontTable + '\n';
+
+  var curAlign = 0;
+  var curSpacing = 0;
+
+  function alignCmd(a) {
+    if (a === 1) return '\\qc';
+    if (a === 2) return '\\qr';
+    if (a === 3) return '\\qj';
+    return '\\ql';
+  }
+
+  function spacingCmd(s) {
+    if (s === 1) return '\\sl360\\slmult1'; // 1.5
+    if (s === 2) return '\\sl480\\slmult1'; // double
+    return '\\sl240\\slmult1'; // single
+  }
+
+  function escRtf(text) {
+    var out = '';
+    for (var i = 0; i < text.length; i++) {
+      var c = text.charCodeAt(i);
+      if (c === 0x5C) out += '\\\\';
+      else if (c === 0x7B) out += '\\{';
+      else if (c === 0x7D) out += '\\}';
+      else if (c > 127) out += '\\u' + c + '?';
+      else out += text[i];
+    }
+    return out;
+  }
+
+  for (var pi2 = 0; pi2 < doc.pages.length; pi2++) {
+    var page = doc.pages[pi2];
+    if (pi2 > 0) rtf += '\\page\n';
+
+    var paraOpen = false;
+    function openPara() {
+      if (!paraOpen) {
+        rtf += '\\pard ' + alignCmd(curAlign) + ' ' + spacingCmd(curSpacing) + ' ';
+        paraOpen = true;
+      }
+    }
+    function closePara() {
+      if (paraOpen) { rtf += '\\par\n'; paraOpen = false; }
+    }
+
+    for (var ei2 = 0; ei2 < page.length; ei2++) {
+      var el2 = page[ei2];
+
+      if (el2.type === 'ruler') {
+        closePara();
+        curAlign = el2.align;
+        curSpacing = el2.spacing;
+      } else if (el2.type === 'text') {
+        openPara();
+        var fIdx = fontMap[el2.fontId] !== undefined ? fontMap[el2.fontId] : 0;
+        var ptSize = Math.max(10, el2.fontSize) * 2; // RTF uses half-points
+        rtf += '{\\f' + fIdx + '\\fs' + ptSize;
+        if (el2.bold) rtf += '\\b';
+        if (el2.italic) rtf += '\\i';
+        if (el2.underline) rtf += '\\ul';
+        if (el2.superscript) rtf += '\\super';
+        if (el2.subscript) rtf += '\\sub';
+        if (el2.outline) rtf += '\\outl';
+        rtf += ' ' + escRtf(el2.text) + '}';
+      } else if (el2.type === 'cr') {
+        if (!paraOpen) openPara();
+        closePara();
+      } else if (el2.type === 'tab') {
+        openPara();
+        rtf += '\\tab ';
+      } else if (el2.type === 'pagebreak') {
+        closePara();
+        rtf += '\\page\n';
+      } else if (el2.type === 'image') {
+        openPara();
+        var img2 = doc.images[el2.record];
+        if (img2) {
+          // Embed as PNG in RTF using \pngblip
+          var hex = atob(img2.base64).split('').map(function(c) {
+            return ('0' + c.charCodeAt(0).toString(16)).slice(-2);
+          }).join('');
+          rtf += '{\\pict\\pngblip\\picw' + (el2.w * 15) +
+            '\\pich' + (el2.h * 15) +
+            '\\picwgoal' + (el2.w * 15) +
+            '\\pichgoal' + (el2.h * 15) + '\n';
+          // Line-wrap hex at 80 chars
+          for (var hi = 0; hi < hex.length; hi += 80) {
+            rtf += hex.substring(hi, hi + 80) + '\n';
+          }
+          rtf += '}';
+        }
+      }
+    }
+    closePara();
+  }
+
+  rtf += '}';
+  return rtf;
+}
+
+document.getElementById('opt-export-rtf').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+
+  var data = new Uint8Array(currentBuffer);
+  var name = petsciiToReadable(readPetsciiString(data, selectedEntryIndex + 5, 16)).trim();
+  name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'document';
+
+  var rtf = geoWriteToRtf(selectedEntryIndex);
+  if (!rtf) { showModal('Export Error', ['No geoWrite data found.']); return; }
+
+  var blob = new Blob([rtf], { type: 'application/rtf' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name + '.rtf';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// ── PDF Export ───────────────────────────────────────────────────────
+// Minimal PDF generator (no external library)
+function geoWriteToPdf(entryOff) {
+  var doc = parseGeoWriteDoc(entryOff);
+  if (!doc || doc.pages.length === 0) return null;
+
+  var data = new Uint8Array(currentBuffer);
+  var docName = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+
+  // PDF coordinate system: 72 units per inch, origin at bottom-left
+  var pageW = 595, pageH = 842; // A4
+  var marginL = 56, marginR = 56, marginT = 56, marginB = 56;
+  var usableW = pageW - marginL - marginR;
+
+  // Collect embedded images and convert to PDF image XObjects
+  var pdfImages = {};
+  var imgObjIds = {};
+
+  // We'll build the PDF structure manually
+  var objects = [];
+  var objOffsets = [];
+
+  function addObj(content) {
+    objects.push(content);
+    return objects.length; // 1-based ID
+  }
+
+  // PDF font mapping: use the 14 standard PDF fonts
+  function pdfFontName(geosId) {
+    var isSerif = [3, 4, 7, 8, 11].indexOf(geosId) >= 0;
+    var isMono = (geosId === 0 || geosId === 6);
+    if (isMono) return 'Courier';
+    if (isSerif) return 'Times-Roman';
+    return 'Helvetica';
+  }
+
+  function pdfFontNameStyled(geosId, bold, italic) {
+    var base = pdfFontName(geosId);
+    if (base === 'Courier') {
+      if (bold && italic) return 'Courier-BoldOblique';
+      if (bold) return 'Courier-Bold';
+      if (italic) return 'Courier-Oblique';
+      return 'Courier';
+    }
+    if (base === 'Helvetica') {
+      if (bold && italic) return 'Helvetica-BoldOblique';
+      if (bold) return 'Helvetica-Bold';
+      if (italic) return 'Helvetica-Oblique';
+      return 'Helvetica';
+    }
+    // Times
+    if (bold && italic) return 'Times-BoldItalic';
+    if (bold) return 'Times-Bold';
+    if (italic) return 'Times-Italic';
+    return 'Times-Roman';
+  }
+
+  // Collect all font variants used
+  var fontVariants = {};
+  for (var pi = 0; pi < doc.pages.length; pi++) {
+    for (var ei = 0; ei < doc.pages[pi].length; ei++) {
+      var el = doc.pages[pi][ei];
+      if (el.type === 'text') {
+        var fn = pdfFontNameStyled(el.fontId, el.bold, el.italic);
+        fontVariants[fn] = true;
+      }
+    }
+  }
+  if (Object.keys(fontVariants).length === 0) fontVariants['Helvetica'] = true;
+
+  // Assign font resource names
+  var fontResNames = {};
+  var fontResIdx = 0;
+  for (var fv in fontVariants) {
+    fontResNames[fv] = 'F' + fontResIdx;
+    fontResIdx++;
+  }
+
+  // Create font objects
+  var fontObjIds = {};
+  for (var fv2 in fontVariants) {
+    var fObjId = addObj('<< /Type /Font /Subtype /Type1 /BaseFont /' + fv2 + ' /Encoding /WinAnsiEncoding >>');
+    fontObjIds[fv2] = fObjId;
+  }
+
+  // Create image XObjects
+  for (var imgRec in doc.images) {
+    var img = doc.images[imgRec];
+    // Decode PNG to raw pixels for PDF (use canvas)
+    var tmpC = document.createElement('canvas');
+    tmpC.width = img.w; tmpC.height = img.h;
+    var tmpCtx = tmpC.getContext('2d');
+    var tmpImg = new Image();
+    tmpImg.src = img.dataUrl;
+    tmpCtx.drawImage(tmpImg, 0, 0);
+    var imgData = tmpCtx.getImageData(0, 0, img.w, img.h);
+
+    // Convert to grayscale (GEOS images are monochrome)
+    var grayData = new Uint8Array(img.w * img.h);
+    for (var px = 0; px < img.w * img.h; px++) {
+      grayData[px] = imgData.data[px * 4]; // R channel (mono: 0 or 255)
+    }
+
+    var imgStream = '';
+    for (var gi = 0; gi < grayData.length; gi++) {
+      imgStream += ('0' + grayData[gi].toString(16)).slice(-2);
+    }
+
+    var imgObjId = addObj('<< /Type /XObject /Subtype /Image /Width ' + img.w +
+      ' /Height ' + img.h + ' /ColorSpace /DeviceGray /BitsPerComponent 8 ' +
+      '/Length ' + imgStream.length + ' /Filter /ASCIIHexDecode >>\nstream\n' +
+      imgStream + '>\nendstream');
+    imgObjIds[imgRec] = imgObjId;
+  }
+
+  // Build page content streams
+  var pageObjIds = [];
+  var contentObjIds = [];
+  var pagesObjId; // will be set after
+
+  // Helper: escape PDF string
+  function escPdf(text) {
+    return text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  }
+
+  // Approximate character width (fraction of font size) for standard fonts
+  function charWidth(fontName, ch) {
+    if (fontName.indexOf('Courier') === 0) return 0.6;
+    if (fontName.indexOf('Helvetica') === 0) return 0.52;
+    return 0.48; // Times
+  }
+
+  for (var pi2 = 0; pi2 < doc.pages.length; pi2++) {
+    var page = doc.pages[pi2];
+    var stream = '';
+    var curY = pageH - marginT;
+    var curFontName = 'Helvetica';
+    var curFontSize = 12;
+    var lineHeight = 14;
+    var curAlign = 0;
+
+    stream += 'BT\n';
+    stream += '/' + fontResNames[curFontName] + ' ' + curFontSize + ' Tf\n';
+    stream += marginL + ' ' + curY + ' Td\n';
+
+    var lineText = '';
+    var lineWidth = 0;
+
+    function flushLine() {
+      if (lineText.length === 0) return;
+
+      var xOffset = 0;
+      if (curAlign === 1) xOffset = (usableW - lineWidth) / 2; // center
+      else if (curAlign === 2) xOffset = usableW - lineWidth; // right
+
+      if (xOffset > 0) {
+        stream += xOffset.toFixed(1) + ' 0 Td\n';
+      }
+      stream += '(' + escPdf(lineText) + ') Tj\n';
+      if (xOffset > 0) {
+        stream += (-xOffset).toFixed(1) + ' 0 Td\n';
+      }
+      lineText = '';
+      lineWidth = 0;
+    }
+
+    function newLine() {
+      flushLine();
+      curY -= lineHeight;
+      if (curY < marginB) {
+        // Would overflow page — stop (simplified: no auto-pagination within a GEOS page)
+        curY = marginB;
+      }
+      stream += 0 + ' ' + (-lineHeight).toFixed(1) + ' Td\n';
+    }
+
+    for (var ei2 = 0; ei2 < page.length; ei2++) {
+      var el2 = page[ei2];
+
+      if (el2.type === 'ruler') {
+        curAlign = el2.align;
+        if (el2.spacing === 1) lineHeight = curFontSize * 1.5;
+        else if (el2.spacing === 2) lineHeight = curFontSize * 2;
+        else lineHeight = curFontSize * 1.2;
+      } else if (el2.type === 'text') {
+        var fn2 = pdfFontNameStyled(el2.fontId, el2.bold, el2.italic);
+        var sz2 = Math.max(10, el2.fontSize);
+        if (fn2 !== curFontName || sz2 !== curFontSize) {
+          flushLine();
+          curFontName = fn2;
+          curFontSize = sz2;
+          lineHeight = sz2 * 1.2;
+          stream += '/' + fontResNames[curFontName] + ' ' + curFontSize + ' Tf\n';
+        }
+        lineText += el2.text;
+        lineWidth += el2.text.length * charWidth(curFontName) * curFontSize;
+      } else if (el2.type === 'cr') {
+        newLine();
+      } else if (el2.type === 'tab') {
+        lineText += '    ';
+        lineWidth += 4 * charWidth(curFontName) * curFontSize;
+      } else if (el2.type === 'pagebreak') {
+        flushLine();
+        // Simplified: just add extra vertical space
+        curY -= lineHeight * 2;
+        stream += '0 ' + (-(lineHeight * 2)).toFixed(1) + ' Td\n';
+      } else if (el2.type === 'image') {
+        flushLine();
+        stream += 'ET\n'; // end text to draw image
+        var imgObj = imgObjIds[el2.record];
+        if (imgObj) {
+          var imgDisplayW = Math.min(el2.w, usableW);
+          var imgDisplayH = el2.h * (imgDisplayW / el2.w);
+          curY -= imgDisplayH + 4;
+          stream += 'q ' + imgDisplayW.toFixed(1) + ' 0 0 ' + imgDisplayH.toFixed(1) +
+            ' ' + marginL + ' ' + curY.toFixed(1) + ' cm /Im' + el2.record + ' Do Q\n';
+          curY -= 4;
+        }
+        stream += 'BT\n';
+        stream += '/' + fontResNames[curFontName] + ' ' + curFontSize + ' Tf\n';
+        stream += marginL + ' ' + curY.toFixed(1) + ' Td\n';
+      }
+    }
+    flushLine();
+    stream += 'ET\n';
+
+    // Build resource dictionary for this page
+    var fontRes = '';
+    for (var fr in fontResNames) {
+      fontRes += '/' + fontResNames[fr] + ' ' + fontObjIds[fr] + ' 0 R ';
+    }
+    var imgRes = '';
+    for (var ir in imgObjIds) {
+      imgRes += '/Im' + ir + ' ' + imgObjIds[ir] + ' 0 R ';
+    }
+
+    var contentId = addObj('<< /Length ' + stream.length + ' >>\nstream\n' + stream + 'endstream');
+    contentObjIds.push(contentId);
+
+    var resDict = '<< /Font << ' + fontRes + '>> ';
+    if (imgRes) resDict += '/XObject << ' + imgRes + '>> ';
+    resDict += '>>';
+
+    var pageId = addObj('<< /Type /Page /Parent PAGES_REF /MediaBox [0 0 ' +
+      pageW + ' ' + pageH + '] /Contents ' + contentId + ' 0 R /Resources ' + resDict + ' >>');
+    pageObjIds.push(pageId);
+  }
+
+  // Pages object
+  var kidsStr = pageObjIds.map(function(id) { return id + ' 0 R'; }).join(' ');
+  pagesObjId = addObj('<< /Type /Pages /Kids [' + kidsStr + '] /Count ' + pageObjIds.length + ' >>');
+
+  // Catalog
+  var catalogId = addObj('<< /Type /Catalog /Pages ' + pagesObjId + ' 0 R >>');
+
+  // Info
+  var infoId = addObj('<< /Title (' + escPdf(docName) + ') /Producer (CBM Disk Editor) /Creator (geoWrite) >>');
+
+  // Now build the actual PDF bytes
+  var pdf = '%PDF-1.4\n';
+
+  // Write objects and track offsets
+  for (var oi = 0; oi < objects.length; oi++) {
+    objOffsets.push(pdf.length);
+    var objContent = objects[oi];
+    // Replace PAGES_REF placeholder in page objects
+    objContent = objContent.replace('PAGES_REF', pagesObjId + ' 0 R');
+    pdf += (oi + 1) + ' 0 obj\n' + objContent + '\nendobj\n';
+  }
+
+  // Cross-reference table
+  var xrefOff = pdf.length;
+  pdf += 'xref\n0 ' + (objects.length + 1) + '\n';
+  pdf += '0000000000 65535 f \n';
+  for (var xi = 0; xi < objOffsets.length; xi++) {
+    pdf += ('0000000000' + objOffsets[xi]).slice(-10) + ' 00000 n \n';
+  }
+
+  pdf += 'trailer\n<< /Size ' + (objects.length + 1) +
+    ' /Root ' + catalogId + ' 0 R /Info ' + infoId + ' 0 R >>\n';
+  pdf += 'startxref\n' + xrefOff + '\n%%EOF\n';
+
+  return pdf;
+}
+
+document.getElementById('opt-export-pdf').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+
+  var data = new Uint8Array(currentBuffer);
+  var name = petsciiToReadable(readPetsciiString(data, selectedEntryIndex + 5, 16)).trim();
+  name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'document';
+
+  var pdf = geoWriteToPdf(selectedEntryIndex);
+  if (!pdf) { showModal('Export Error', ['No geoWrite data found.']); return; }
+
+  var blob = new Blob([pdf], { type: 'application/pdf' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name + '.pdf';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
 // ── File menu: Copy / Paste ──────────────────────────────────────────
 document.getElementById('opt-copy').addEventListener('click', (e) => {
   e.stopPropagation();
@@ -6896,7 +7928,7 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
 // ── File menu: Import File ────────────────────────────────────────────
 var importFileInput = document.createElement('input');
 importFileInput.type = 'file';
-importFileInput.accept = '.prg,.seq,.usr,.rel,.p00,.s00,.u00,.r00';
+importFileInput.accept = '.prg,.seq,.usr,.rel,.p00,.s00,.u00,.r00,.cvt';
 importFileInput.style.display = 'none';
 document.body.appendChild(importFileInput);
 
@@ -7216,6 +8248,13 @@ function asciiToNameBytes(name) {
 function importFileToDisk(fileName, fileData) {
   var dotIdx = fileName.lastIndexOf('.');
   var ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1).toLowerCase() : '';
+
+  // CVT import: GEOS ConVerT format
+  if (ext === 'cvt') {
+    importCvtFile(fileName, fileData);
+    return;
+  }
+
   var typeMap = { prg: 2, seq: 1, usr: 3, rel: 4, p00: 2, s00: 1, u00: 3, r00: 4 };
   var typeIdx = typeMap[ext];
   if (typeIdx === undefined) {
@@ -7244,6 +8283,272 @@ function importFileToDisk(fileName, fileData) {
     if (fileData.length > 0 && fileData.length % 254 === 0) numSectors++;
     showModal('Import Successful', ['"' + baseName.toUpperCase() + '" imported successfully.', numSectors + ' block(s) written.']);
   }
+}
+
+// ── CVT Import ─────────────────────────────────────────────────────
+function showConfirmModal(title, message) {
+  return new Promise(function(resolve) {
+    document.getElementById('modal-title').textContent = title;
+    var body = document.getElementById('modal-body');
+    body.innerHTML = '<div class="text-base">' + escHtml(message) + '</div>';
+    var footer = document.querySelector('#modal-overlay .modal-footer');
+    footer.innerHTML = '<button class="modal-btn-secondary" id="confirm-cancel">Cancel</button>' +
+      '<button id="confirm-ok">OK</button>';
+    document.getElementById('confirm-ok').addEventListener('click', function() {
+      document.getElementById('modal-overlay').classList.remove('open');
+      resolve(true);
+    });
+    document.getElementById('confirm-cancel').addEventListener('click', function() {
+      document.getElementById('modal-overlay').classList.remove('open');
+      resolve(false);
+    });
+    document.getElementById('modal-overlay').classList.add('open');
+  });
+}
+
+async function importCvtFile(fileName, cvt) {
+  if (cvt.length < 762) {
+    showModal('Import Error', ['CVT file too small.']);
+    return;
+  }
+
+  // Warn if disk will be converted to GEOS format
+  if (!hasGeosSignature(currentBuffer)) {
+    var ok = await showConfirmModal('Import CVT',
+      'This disk does not have a GEOS signature. Importing a CVT file will convert it to a GEOS disk. Continue?');
+    if (!ok) return;
+  }
+
+  // Block 1 ($000-$0FD): directory entry
+  var dirEntry = cvt.subarray(0, 254);
+
+  // Detect variant from signature at offset 30
+  var sigBytes = dirEntry.subarray(30, 60);
+  var sig = '';
+  for (var si = 0; si < 30 && sigBytes[si] !== 0; si++) sig += String.fromCharCode(sigBytes[si]);
+
+  var isV10 = sig.indexOf('V1.0') >= 0;
+  var isBroken = !isV10 && sig.indexOf('formatted GEOS file') >= 0;
+  if (!isV10 && !isBroken) {
+    showModal('Import Error', ['Not a valid CVT file (unknown signature).']);
+    return;
+  }
+
+  // Extract name (bytes 3-18 of dir entry, $A0 padded)
+  var nameBytes = new Uint8Array(16);
+  for (var ni = 0; ni < 16; ni++) nameBytes[ni] = dirEntry[3 + ni];
+
+  var typeByte = dirEntry[0]; // CBM file type (e.g. $84 = USR + closed)
+  var typeIdx = typeByte & 0x07;
+  if (typeIdx < 1) typeIdx = 3; // default to USR
+
+  var geosStructure = dirEntry[0x15]; // CVT offset $15 = dir byte $17 = GEOS structure
+  var geosFileType = dirEntry[0x16];  // CVT offset $16 = dir byte $18 = GEOS file type
+
+  // GEOS metadata bytes = dir entry bytes $15-$1D (info T/S, structure, file type, date)
+  // CVT block 1 stores dir bytes 2-31 at offsets 0-29, so dir byte $15 = CVT offset $13
+  var geosBytes = new Uint8Array(9);
+  for (var gi = 0; gi < 9; gi++) geosBytes[gi] = dirEntry[0x13 + gi];
+
+  // Block 2 ($0FE-$1FB): info block (254 bytes, without T/S link)
+  var infoBlock = new Uint8Array(256);
+  infoBlock[0] = 0x00; infoBlock[1] = 0xFF; // standard info block marker
+  for (var ib = 0; ib < 254; ib++) infoBlock[2 + ib] = cvt[254 + ib];
+
+  var isVlir = geosStructure === 1;
+
+  if (!isVlir) {
+    // Sequential GEOS file: data starts at offset 508
+    var seqData = cvt.subarray(508);
+    // Trim trailing zeros from last block
+    var geosData = { geosBytes: geosBytes, geosInfoBlock: infoBlock };
+    // Set info T/S in geosBytes (will be updated by writeFileToDisk)
+    geosBytes[0] = 0; // info track placeholder
+    geosBytes[1] = 0; // info sector placeholder
+
+    if (writeFileToDisk(typeIdx | 0x80, nameBytes, seqData, geosData)) {
+      var info = parseCurrentDir(currentBuffer);
+      renderDisk(info);
+      var baseName = petsciiToReadable(readPetsciiString(nameBytes, 0, 16)).trim();
+      showModal('CVT Import Successful', ['"' + baseName + '" imported successfully.']);
+    }
+  } else {
+    // VLIR file: block 3 ($1FC-$2F9) = record index, then record data
+    var recordIndex = cvt.subarray(508, 762);
+
+    // Parse record sizes and extract record data
+    var records = [];
+    var dataPos = 762;
+    for (var ri = 0; ri < 127; ri++) {
+      var b0 = recordIndex[ri * 2];
+      var b1 = recordIndex[ri * 2 + 1];
+      if (b0 === 0 && b1 === 0) {
+        records.push(null); // end marker
+        break;
+      }
+      if (b0 === 0 && b1 === 0xFF) {
+        records.push({ data: null }); // empty record
+        continue;
+      }
+      // Populated record
+      var grossSize, dataSize;
+      if (isV10) {
+        grossSize = b0 * 254;
+        dataSize = (b0 - 1) * 254 + b1 - 1;
+      } else {
+        grossSize = b0 * 254 + b1;
+        dataSize = grossSize;
+      }
+      if (dataPos + grossSize > cvt.length) {
+        dataSize = Math.min(dataSize, cvt.length - dataPos);
+        grossSize = Math.min(grossSize, cvt.length - dataPos);
+      }
+      records.push({ data: cvt.subarray(dataPos, dataPos + dataSize) });
+      dataPos += grossSize;
+    }
+
+    // Write VLIR file to disk
+    if (writeVlirFileToDisk(typeIdx | 0x80, nameBytes, records, geosBytes, infoBlock)) {
+      var info2 = parseCurrentDir(currentBuffer);
+      renderDisk(info2);
+      var baseName2 = petsciiToReadable(readPetsciiString(nameBytes, 0, 16)).trim();
+      showModal('CVT Import Successful', ['"' + baseName2 + '" imported successfully.']);
+    }
+  }
+}
+
+function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock) {
+  pushUndo();
+  var snapshot = currentBuffer.slice(0);
+  var data = new Uint8Array(currentBuffer);
+  var allocated = buildTrueAllocationMap(currentBuffer);
+
+  // Count total sectors needed: 1 info block + 1 VLIR index + data sectors
+  var totalSectors = 2; // info + index
+  var recordMeta = []; // { startSectorIdx, numBlocks } for each record
+  for (var ri = 0; ri < records.length; ri++) {
+    var rec = records[ri];
+    if (!rec || !rec.data || rec.data.length === 0) {
+      recordMeta.push(null);
+      continue;
+    }
+    var numBlocks = Math.max(1, Math.ceil(rec.data.length / 254));
+    recordMeta.push({ numBlocks: numBlocks });
+    totalSectors += numBlocks;
+  }
+
+  var sectorList = allocateSectors(allocated, totalSectors);
+  if (sectorList.length < totalSectors) {
+    currentBuffer = snapshot;
+    showModal('Write Error', ['Not enough free sectors. Need ' + totalSectors + ', have ' + sectorList.length + '.']);
+    return false;
+  }
+
+  var entryOff = findFreeDirEntry(currentBuffer);
+  if (entryOff < 0) {
+    currentBuffer = snapshot;
+    showModal('Write Error', ['No free directory entry available.']);
+    return false;
+  }
+
+  var secIdx = 0;
+
+  // Write info block
+  var infoSec = sectorList[secIdx++];
+  var infoOff = sectorOffset(infoSec.track, infoSec.sector);
+  for (var ib2 = 0; ib2 < 256; ib2++) data[infoOff + ib2] = infoBlock[ib2];
+  data[infoOff] = 0x00; data[infoOff + 1] = 0xFF;
+
+  // Write VLIR index sector
+  var vlirSec = sectorList[secIdx++];
+  var vlirOff = sectorOffset(vlirSec.track, vlirSec.sector);
+  for (var vi = 0; vi < 256; vi++) data[vlirOff + vi] = 0x00;
+  data[vlirOff] = 0x00; data[vlirOff + 1] = 0xFF;
+
+  // Write each record's sector chain and update VLIR index
+  for (var ri2 = 0; ri2 < records.length && ri2 < 127; ri2++) {
+    var meta = recordMeta[ri2];
+    if (!meta) {
+      // Empty or null record
+      if (records[ri2] === null) {
+        // End marker
+        data[vlirOff + 2 + ri2 * 2] = 0x00;
+        data[vlirOff + 2 + ri2 * 2 + 1] = 0x00;
+      } else {
+        // Empty record
+        data[vlirOff + 2 + ri2 * 2] = 0x00;
+        data[vlirOff + 2 + ri2 * 2 + 1] = 0xFF;
+      }
+      continue;
+    }
+
+    var recData = records[ri2].data;
+    var recSectors = sectorList.slice(secIdx, secIdx + meta.numBlocks);
+    secIdx += meta.numBlocks;
+
+    // Point VLIR index to first sector of this record
+    data[vlirOff + 2 + ri2 * 2] = recSectors[0].track;
+    data[vlirOff + 2 + ri2 * 2 + 1] = recSectors[0].sector;
+
+    // Write sector chain
+    var recPos = 0;
+    for (var rsi = 0; rsi < recSectors.length; rsi++) {
+      var sec = recSectors[rsi];
+      var soff = sectorOffset(sec.track, sec.sector);
+
+      if (rsi < recSectors.length - 1) {
+        var nextSec = recSectors[rsi + 1];
+        data[soff] = nextSec.track;
+        data[soff + 1] = nextSec.sector;
+        for (var b = 2; b < 256; b++) {
+          data[soff + b] = recPos < recData.length ? recData[recPos++] : 0x00;
+        }
+      } else {
+        data[soff] = 0x00;
+        var bytesInLast = recData.length - recPos;
+        if (bytesInLast <= 0) bytesInLast = 0;
+        data[soff + 1] = bytesInLast + 1;
+        for (var b2 = 2; b2 < 256; b2++) {
+          data[soff + b2] = recPos < recData.length ? recData[recPos++] : 0x00;
+        }
+      }
+    }
+  }
+  // Remaining VLIR index entries: 00/00 (end)
+  for (var ri3 = records.length; ri3 < 127; ri3++) {
+    data[vlirOff + 2 + ri3 * 2] = 0x00;
+    data[vlirOff + 2 + ri3 * 2 + 1] = 0x00;
+  }
+
+  // Fill directory entry
+  data[entryOff + 2] = typeByte;
+  data[entryOff + 3] = vlirSec.track; // points to VLIR index, not info block
+  data[entryOff + 4] = vlirSec.sector;
+  for (var ni2 = 0; ni2 < 16; ni2++) data[entryOff + 5 + ni2] = nameBytes[ni2];
+
+  // GEOS metadata
+  for (var gi2 = 0; gi2 < 9; gi2++) data[entryOff + 21 + gi2] = geosBytes[gi2];
+  data[entryOff + 0x15] = infoSec.track;
+  data[entryOff + 0x16] = infoSec.sector;
+
+  // Block count = all sectors (info + index + data)
+  data[entryOff + 30] = totalSectors & 0xFF;
+  data[entryOff + 31] = (totalSectors >> 8) & 0xFF;
+
+  // Update BAM
+  var ctx = getDirContext();
+  var bamOff = ctx.bamOff;
+  for (var ai = 0; ai < sectorList.length; ai++) {
+    bamMarkSectorUsed(data, sectorList[ai].track, sectorList[ai].sector, bamOff);
+  }
+
+  // Ensure GEOS disk signature is present
+  if (!hasGeosSignature(currentBuffer)) {
+    writeGeosSignature(currentBuffer);
+  }
+
+  selectedEntryIndex = entryOff;
+  return true;
 }
 
 // Find a free directory entry (typeByte === 0x00 with all entry bytes zeroed)
@@ -7402,7 +8707,7 @@ document.addEventListener('drop', function(e) {
   if (files.length === 0) return;
 
   var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap'];
-  var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00'];
+  var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt'];
   var diskFiles = [];
   var importFiles = [];
 
@@ -7445,7 +8750,7 @@ document.addEventListener('drop', function(e) {
     });
   }
 
-  // Import PRG/SEQ/USR/REL files into current disk
+  // Import PRG/SEQ/USR/REL/CVT files into current disk
   if (importFiles.length > 0 && currentBuffer) {
     var imported = 0, failed = 0;
     function importNext(idx) {
@@ -7459,7 +8764,14 @@ document.addEventListener('drop', function(e) {
       }
       var file = importFiles[idx];
       var reader = new FileReader();
-      reader.onload = function() {
+      reader.onload = async function() {
+        var ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+        if (ext === '.cvt') {
+          // CVT import is async (confirmation dialog) and shows its own result
+          await importCvtFile(file.name, new Uint8Array(reader.result));
+          importNext(idx + 1);
+          return;
+        }
         importFileToDisk(file.name, new Uint8Array(reader.result));
         imported++;
         importNext(idx + 1);
@@ -7560,6 +8872,11 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '<b>Fonts:</b><br>' +
       '&bull; <a href="https://style64.org/c64-truetype" target="_blank" class="link">C64 Pro Mono</a> by Style64 — TrueType PETSCII font<br>' +
       '<br>' +
+      '<b>GEOS format references:</b><br>' +
+      '&bull; <a href="https://www.pagetable.com/?p=1471" target="_blank" class="link">Inside geoWrite</a> by Michael Steil — geoWrite file format documentation<br>' +
+      '&bull; <a href="https://github.com/mist64/geowrite2rtf" target="_blank" class="link">geowrite2rtf</a> by Michael Steil — CVT/geoWrite parsing reference<br>' +
+      '&bull; <a href="https://thornton2.com/programming/geos/compaction-strategy.html" target="_blank" class="link">Thornton2</a> — GEOS bitmap compaction strategy<br>' +
+      '<br>' +
       '<b>Technical references:</b><br>' +
       '&bull; <a href="https://vice-emu.sourceforge.io/vice_17.html" target="_blank" class="link">VICE Manual</a> — disk image format documentation<br>' +
       '&bull; <a href="https://www.oxyron.de/html/opcodes02.html" target="_blank" class="link">Oxyron 6502 Opcode Table</a> — illegal opcode reference<br>' +
@@ -7657,6 +8974,19 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.12', title: 'geoWrite viewer, CVT import/export, graphics PNG save', items: [
+      'View As > geoWrite: styled document viewer with fonts, alignment, inline images',
+      'View As > Graphics: geoWrite embedded image viewer for VLIR records 64-126',
+      'Export as RTF: geoWrite documents with full formatting and embedded PNG images',
+      'Export as PDF: geoWrite documents with standard fonts, alignment, images',
+      'Export as CVT: GEOS ConVerT format for any GEOS VLIR/SEQ file',
+      'Import CVT: restore GEOS files from ConVerT format including VLIR structure',
+      'Import CVT: GEOS disk signature conversion warning for non-GEOS disks',
+      'Close All: close all open tabs from Disk menu',
+      'Save as PNG: export graphics from the graphics viewer',
+      'Context menu: fixed submenu hover closing on disabled items',
+      'Top menu and context menu now properly close each other',
+    ]},
     { ver: '1.3.10', title: 'Disk optimizer, BAM view, charset/sprite viewer improvements', items: [
       'Optimize Disk: rewrite file sector chains with chosen interleave for faster loading',
       'Optimize Disk: preset interleaves per drive type (1541/1571/1581/8050), custom option',

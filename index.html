@@ -171,7 +171,7 @@
     bottom: -4px;
   }
 
-  .has-submenu:not(.disabled):hover > .submenu,
+  .menubar .has-submenu:not(.disabled):hover > .submenu,
   .has-submenu.menu-focused > .submenu {
     display: block;
   }
@@ -203,6 +203,11 @@
     left: 0;
     z-index: 200;
     font-size: 13px;
+  }
+
+  /* Context menu submenus: managed via JS mouseenter/mouseleave */
+  .context-menu .has-submenu.submenu-open > .submenu {
+    display: block;
   }
 
   .spacer { flex: 1; }
@@ -1058,6 +1063,26 @@
   .basic-rem { color: #6C6C6C; }
   .basic-ctrl { color: #9A6759; font-family: inherit; font-size: 10px; }
 
+  /* geoWrite document viewer */
+  .geowrite-doc {
+    font-family: serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #d0d0d0;
+    max-width: 640px;
+    margin: 0 auto;
+  }
+  .geowrite-page {
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px dashed var(--border);
+  }
+  .geowrite-page:last-child { border-bottom: none; margin-bottom: 0; }
+  .geowrite-para { margin: 0 0 4px 0; min-height: 1em; }
+  .geowrite-img { margin: 8px 0; image-rendering: pixelated; background: #fff; }
+  .geowrite-tab { display: inline-block; min-width: 40px; }
+  .geowrite-pagebreak { text-align: center; color: #6C6C6C; font-size: 11px; margin: 8px 0; }
+
   /* --- Utility classes for dynamic content --- */
   .flex-row { display: flex; gap: 8px; align-items: center; }
   .flex-row-wrap { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -1721,6 +1746,7 @@
     flex-shrink: 0;
   }
 
+
 </style>
 </head>
 <body>
@@ -1744,6 +1770,7 @@
       </div>
       <div class="option" id="opt-open">Open...</div>
       <div class="option disabled" id="opt-close">Close</div>
+      <div class="option disabled" id="opt-close-all">Close All</div>
       <div class="separator"></div>
       <div class="option disabled" id="opt-save">Save</div>
       <div class="option disabled" id="opt-save-as">Save As...</div>
@@ -1818,11 +1845,15 @@
           <div class="option" id="opt-view-petscii">PETSCII</div>
           <div class="option" id="opt-view-basic">BASIC</div>
           <div class="option disabled" id="opt-view-gfx">Graphics</div>
+          <div class="option disabled" id="opt-view-geowrite">geoWrite</div>
           <div class="option disabled" id="opt-view-tass">Turbo Assembler</div>
         </div>
       </div>
       <div class="separator"></div>
       <div class="option disabled" id="opt-export">Export File</div>
+      <div class="option disabled" id="opt-export-cvt">Export as CVT</div>
+      <div class="option disabled" id="opt-export-rtf">Export as RTF</div>
+      <div class="option disabled" id="opt-export-pdf">Export as PDF</div>
       <div class="option disabled" id="opt-import">Import File</div>
     </div>
   </div>
