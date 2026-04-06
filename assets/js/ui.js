@@ -115,6 +115,11 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (tabs.length > 0) showSearchModal('Find in All Tabs', true);
   }
+  // Ctrl+G: go to track/sector
+  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.code === 'KeyG') {
+    e.preventDefault();
+    if (currentBuffer && !isTapeFormat()) showGoToSector();
+  }
   // Ctrl+Alt+O: open disk
   if (e.ctrlKey && e.altKey && e.code === 'KeyO') {
     e.preventDefault();
@@ -1209,6 +1214,7 @@ function updateMenuState() {
   document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-find').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-find-tabs').classList.toggle('disabled', tabs.length === 0);
+  document.getElementById('opt-goto-sector').classList.toggle('disabled', !hasDisk || tape);
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -5542,21 +5548,47 @@ document.getElementById('opt-edit-file-sector').addEventListener('click', functi
 });
 
 // ── Search ────────────────────────────────────────────────────────────
+// Parse hex string like "$A0 FF", "A0FF", "$A0$FF" into byte array, or null if not hex
+function parseHexSearch(term) {
+  var cleaned = term.replace(/[\s\$,]/g, '');
+  if (cleaned.length === 0 || cleaned.length % 2 !== 0) return null;
+  if (!/^[0-9A-Fa-f]+$/.test(cleaned)) return null;
+  // Only treat as hex if it looks intentional: has $ prefix, spaces between pairs, or all hex with even length
+  var looksHex = term.indexOf('$') >= 0 || /^[0-9A-Fa-f]{2}(\s+[0-9A-Fa-f]{2})+$/.test(term.trim()) ||
+    (cleaned.length >= 2 && cleaned.length <= 512 && /^[0-9A-Fa-f]+$/.test(cleaned) && !/^[A-Za-z]+$/.test(cleaned));
+  if (!looksHex) return null;
+  var bytes = [];
+  for (var i = 0; i < cleaned.length; i += 2) {
+    bytes.push(parseInt(cleaned.substring(i, i + 2), 16));
+  }
+  return bytes;
+}
+
 function searchDisk(buffer, format, numTracks, term, scope) {
   var data = new Uint8Array(buffer);
   var results = [];
   if (!term || term.length === 0) return results;
 
-  // Convert search term to byte array (try PETSCII and ASCII)
-  var termUpper = term.toUpperCase();
-  var termBytes = [];
-  for (var ti = 0; ti < term.length; ti++) termBytes.push(term.charCodeAt(ti));
-  var termPetscii = [];
-  for (var tp = 0; tp < termUpper.length; tp++) {
-    var ch = termUpper.charCodeAt(tp);
-    if (ch >= 0x41 && ch <= 0x5A) termPetscii.push(ch); // A-Z same in PETSCII
-    else if (ch >= 0x20 && ch <= 0x3F) termPetscii.push(ch); // space, digits, punctuation
-    else termPetscii.push(ch);
+  // Try hex pattern first
+  var hexBytes = parseHexSearch(term);
+  var isHex = hexBytes !== null;
+
+  var termBytes, termPetscii;
+  if (isHex) {
+    termBytes = hexBytes;
+    termPetscii = hexBytes; // exact byte match for hex
+  } else {
+    // Convert search term to byte array (try PETSCII and ASCII)
+    var termUpper = term.toUpperCase();
+    termBytes = [];
+    for (var ti = 0; ti < term.length; ti++) termBytes.push(term.charCodeAt(ti));
+    termPetscii = [];
+    for (var tp = 0; tp < termUpper.length; tp++) {
+      var ch = termUpper.charCodeAt(tp);
+      if (ch >= 0x41 && ch <= 0x5A) termPetscii.push(ch);
+      else if (ch >= 0x20 && ch <= 0x3F) termPetscii.push(ch);
+      else termPetscii.push(ch);
+    }
   }
 
   // Determine which sectors to search based on scope
@@ -5676,7 +5708,7 @@ function showSearchModal(title, allTabs) {
 
   var input = document.createElement('input');
   input.type = 'text';
-  input.placeholder = 'Search term...';
+  input.placeholder = 'Text or hex ($A0 FF)...';
   input.id = 'search-input';
   form.appendChild(input);
 
@@ -5710,6 +5742,10 @@ function showSearchModal(title, allTabs) {
 
     if (!term) return;
 
+    // Determine byte length of search term for highlighting
+    var hexParsed = parseHexSearch(term);
+    var searchByteLen = hexParsed ? hexParsed.length : term.length;
+
     if (allTabs) {
       // Search all tabs
       saveActiveTab();
@@ -5737,7 +5773,7 @@ function showSearchModal(title, allTabs) {
           header.textContent = tab.name + ' (' + results.length + ' result' + (results.length > 1 ? 's' : '') + ')';
           resultsDiv.appendChild(header);
 
-          renderResults(resultsDiv, results, tab, term.length);
+          renderResults(resultsDiv, results, tab, searchByteLen);
           totalResults += results.length;
         }
       }
@@ -5754,20 +5790,29 @@ function showSearchModal(title, allTabs) {
         summary.className = 'search-tab-header';
         summary.textContent = results2.length + ' result' + (results2.length > 1 ? 's' : '') + ' found';
         resultsDiv.appendChild(summary);
-        renderResults(resultsDiv, results2, null, term.length);
+        renderResults(resultsDiv, results2, null, searchByteLen);
       }
     }
   }
 
   function renderResults(container, results, targetTab, termLen) {
+    // Count matches per sector for display
+    var sectorCounts = {};
+    for (var ci = 0; ci < results.length; ci++) {
+      var key = results[ci].track + ':' + results[ci].sector;
+      sectorCounts[key] = (sectorCounts[key] || 0) + 1;
+    }
+
     for (var ri = 0; ri < results.length; ri++) {
       (function(r, tab) {
         var row = document.createElement('div');
         row.className = 'search-result';
 
+        var sKey = r.track + ':' + r.sector;
         var ts = document.createElement('span');
         ts.className = 'search-result-ts';
         ts.textContent = 'T:' + r.track + ' S:' + r.sector;
+        if (sectorCounts[sKey] > 1) ts.textContent += ' (' + sectorCounts[sKey] + ')';
         row.appendChild(ts);
 
         var offsetSpan = document.createElement('span');
@@ -5836,6 +5881,38 @@ document.getElementById('opt-find-tabs').addEventListener('click', function(e) {
   e.stopPropagation();
   if (tabs.length === 0) return;
   showSearchModal('Find in All Tabs', true);
+});
+
+// ── Go to Sector (Ctrl+G) ────────────────────────────────────────────
+async function showGoToSector() {
+  closeMenus();
+  var input = await showInputModal('Go to Sector (T:S)', '18:0');
+  if (!input) return;
+
+  // Parse T:S in various formats: "18:0", "18,0", "18 0", "$12:$00"
+  var parts = input.replace(/\$/g, '').split(/[\s:,]+/);
+  if (parts.length < 2) return;
+
+  var t = parseInt(parts[0], parts[0].length <= 2 && /^[0-9a-fA-F]+$/.test(parts[0]) && input.indexOf('$') >= 0 ? 16 : 10);
+  var s = parseInt(parts[1], parts[1].length <= 2 && /^[0-9a-fA-F]+$/.test(parts[1]) && input.indexOf('$') >= 0 ? 16 : 10);
+
+  if (isNaN(t) || isNaN(s) || t < 1 || t > currentTracks) {
+    showModal('Go to Sector', ['Invalid track: ' + t + '. Valid range: 1-' + currentTracks + '.']);
+    return;
+  }
+  var maxS = currentFormat.sectorsPerTrack(t);
+  if (s < 0 || s >= maxS) {
+    showModal('Go to Sector', ['Invalid sector: ' + s + '. Track ' + t + ' has sectors 0-' + (maxS - 1) + '.']);
+    return;
+  }
+
+  showSectorHexEditor(t, s);
+}
+
+document.getElementById('opt-goto-sector').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || isTapeFormat()) return;
+  showGoToSector();
 });
 
 document.getElementById('opt-view-hex').addEventListener('click', function(e) {
@@ -7964,11 +8041,37 @@ function geoWriteToPdf(entryOff) {
     return text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
   }
 
-  // Approximate character width (fraction of font size) for standard fonts
-  function charWidth(fontName, ch) {
-    if (fontName.indexOf('Courier') === 0) return 0.6;
-    if (fontName.indexOf('Helvetica') === 0) return 0.52;
-    return 0.48; // Times
+  // Per-character widths for standard PDF fonts (Adobe widths / 1000)
+  // Covers ASCII 32-126; default for unknown chars
+  var HELVETICA_W = [
+    278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278, // 32-47 (space ! " # $ % & ' ( ) * + , - . /)
+    556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556, // 48-63 (0-9 : ; < = > ?)
+    1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778, // 64-79 (@A-O)
+    667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556, // 80-95 (P-Z [ \ ] ^ _)
+    333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556, // 96-111 (` a-o)
+    556,556,333,500,278,556,500,722,500,500,500,334,260,334,584       // 112-126 (p-z { | } ~)
+  ];
+  var TIMES_W = [
+    250,333,408,500,500,833,778,180,333,333,500,564,250,333,250,278, // 32-47
+    500,500,500,500,500,500,500,500,500,500,278,278,564,564,564,444, // 48-63
+    921,722,667,667,722,611,556,722,722,333,389,722,611,889,722,722, // 64-79
+    556,722,667,556,611,722,722,944,722,722,611,333,278,333,469,500, // 80-95
+    333,444,500,444,500,444,333,500,500,278,278,500,278,778,500,500, // 96-111
+    500,500,333,389,278,500,500,722,500,500,444,480,200,480,541       // 112-126
+  ];
+
+  function textWidth(fontName, text, fontSize) {
+    var isCourier = fontName.indexOf('Courier') === 0;
+    var isHelv = fontName.indexOf('Helvetica') === 0;
+    var widths = isHelv ? HELVETICA_W : TIMES_W;
+    var total = 0;
+    for (var i = 0; i < text.length; i++) {
+      if (isCourier) { total += 600; continue; }
+      var code = text.charCodeAt(i);
+      var w = (code >= 32 && code <= 126) ? widths[code - 32] : 500;
+      total += w;
+    }
+    return total * fontSize / 1000;
   }
 
   for (var pi2 = 0; pi2 < doc.pages.length; pi2++) {
@@ -8034,12 +8137,12 @@ function geoWriteToPdf(entryOff) {
           stream += '/' + fontResNames[curFontName] + ' ' + curFontSize + ' Tf\n';
         }
         lineText += el2.text;
-        lineWidth += el2.text.length * charWidth(curFontName) * curFontSize;
+        lineWidth += textWidth(curFontName, el2.text, curFontSize);
       } else if (el2.type === 'cr') {
         newLine();
       } else if (el2.type === 'tab') {
         lineText += '    ';
-        lineWidth += 4 * charWidth(curFontName) * curFontSize;
+        lineWidth += textWidth(curFontName, '    ', curFontSize);
       } else if (el2.type === 'pagebreak') {
         flushLine();
         // Simplified: just add extra vertical space
@@ -9161,21 +9264,26 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '<div style="font-size:11px;color:' + C64_COLORS[13] + ';margin-top:4px"><i class="fa-solid fa-cannabis"></i> OOK EEN TREKJE? <i class="fa-solid fa-joint"></i></div>' +
     '</div>' +
     '<div class="text-base line-tall">' +
-      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), T64 (tape), TAP (raw tape)<br>' +
+      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), T64 (tape), TAP (raw tape), CVT (GEOS)<br>' +
       '<b>Features:</b><br>' +
       '&bull; Directory editing: rename, insert, remove, sort, align, lock, scratch<br>' +
-      '&bull; Hex sector editor with track/sector navigation<br>' +
-      '&bull; BAM viewer with integrity checking<br>' +
+      '&bull; Hex sector editor with track/sector navigation and search highlighting<br>' +
+      '&bull; BAM viewer with integrity checking and file ownership display<br>' +
+      '&bull; Search: Find/Find in Tabs with text and hex byte pattern matching<br>' +
+      '&bull; Go to Sector (Ctrl+G): jump to any track/sector<br>' +
       '&bull; File import/export/copy/paste across disk images<br>' +
-      '&bull; View As: Hex, PETSCII (C64 screen), BASIC (V2/V7), Graphics<br>' +
-      '&bull; Graphics: 17+ formats (Koala, Art Studio, FLI, sprites, charset, Print Shop)<br>' +
+      '&bull; View As: Hex, PETSCII (C64 screen), BASIC (V2/V7), Graphics, geoWrite<br>' +
+      '&bull; Graphics: 17+ formats (Koala, Art Studio, FLI, sprites, charset, Print Shop) with PNG export<br>' +
+      '&bull; GEOS: geoPaint, Photo Scrap, Photo Album, geoWrite, Font viewers<br>' +
+      '&bull; geoWrite document viewer with styled text and inline images<br>' +
+      '&bull; Export: CVT, RTF, PDF for GEOS/geoWrite files<br>' +
       '&bull; Packer detection: 370+ signatures<br>' +
       '&bull; D81 subdirectories (partitions)<br>' +
-      '&bull; GEOS file support<br>' +
+      '&bull; Disk optimizer with configurable interleave<br>' +
       '&bull; Lost file recovery (orphaned sector chain scanning)<br>' +
       '&bull; Fill free sectors, validate disk, recalculate BAM<br>' +
       '&bull; Multi-tab interface for working with multiple disks<br>' +
-      '&bull; Drag &amp; drop: disk images, PRG/SEQ/USR/REL files, export by dragging<br>' +
+      '&bull; Drag &amp; drop: disk images, PRG/SEQ/USR/REL/CVT files, export by dragging<br>' +
       '&bull; Dark and light themes<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
@@ -9305,6 +9413,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.14', title: 'Search improvements, Go to Sector, PDF font metrics', items: [
+      'Search: hex byte pattern search ($A0 FF, A0FF) in addition to text',
+      'Search: match count per sector shown in results',
+      'Search > Go to Sector (Ctrl+G): jump directly to any T:S in the sector editor',
+      'PDF export: proper per-character width tables for Helvetica, Times, Courier',
+    ]},
     { ver: '1.3.13', title: 'Search, sector editor highlights', items: [
       'Search > Find (Ctrl+F): search current disk by text with scope filter (All/Filename/Header/ID)',
       'Search > Find in All Tabs (Ctrl+Shift+F): search across all open tabs',
