@@ -1820,11 +1820,7 @@
       <div class="option disabled" id="opt-save">Save</div>
       <div class="option disabled" id="opt-save-as">Save As...</div>
       <div class="separator"></div>
-      <div class="option disabled" id="opt-validate">Validate</div>
       <div class="option disabled" id="opt-show-deleted"><span class="check" id="check-deleted"></span>Show Deleted Files</div>
-      <div class="option disabled" id="opt-scan-orphans">Scan for Lost Files</div>
-      <div class="option disabled" id="opt-compact-dir">Compact Directory</div>
-      <div class="option disabled" id="opt-file-chains">File Chains</div>
       <div class="option disabled has-submenu" id="opt-sort">Sort
         <div class="submenu">
           <div class="option" data-sort="name-asc">Name Ascending</div>
@@ -1834,21 +1830,31 @@
           <div class="option" data-sort="blocks-desc">Blocks Descending</div>
         </div>
       </div>
-      <div class="separator"></div>
       <div class="option disabled" id="opt-edit-free">Edit Blocks Free</div>
       <div class="option disabled" id="opt-recalc-free">Recalculate Blocks Free</div>
       <div class="separator"></div>
-      <div class="option disabled" id="opt-convert-geos">Convert to GEOS Format</div>
-      <div class="separator"></div>
-      <div class="option disabled" id="opt-fill-free">Fill Free Sectors</div>
-      <div class="option disabled" id="opt-optimize">Optimize Disk...</div>
-      <div class="separator"></div>
-      <div class="option disabled" id="opt-export-txt">Export as Text</div>
-      <div class="option disabled" id="opt-export-csv">Export as CSV</div>
-      <div class="option disabled" id="opt-export-png-dir">Export Directory as PNG</div>
-      <div class="option disabled" id="opt-md5">Show MD5 Hash</div>
-      <div class="separator"></div>
-      <div class="option disabled" id="opt-compare">Compare with...</div>
+      <div class="option disabled has-submenu" id="opt-disk-tools">Disk Tools
+        <div class="submenu">
+          <div class="option disabled" id="opt-validate">Validate</div>
+          <div class="option disabled" id="opt-scan-orphans">Scan for Lost Files</div>
+          <div class="option disabled" id="opt-compact-dir">Compact Directory</div>
+          <div class="option disabled" id="opt-file-chains">File Chains</div>
+          <div class="separator"></div>
+          <div class="option disabled" id="opt-fill-free">Fill Free Sectors</div>
+          <div class="option disabled" id="opt-optimize">Optimize Disk...</div>
+          <div class="option disabled" id="opt-convert-geos">Convert to GEOS Format</div>
+        </div>
+      </div>
+      <div class="option disabled has-submenu" id="opt-disk-export">Export Disk
+        <div class="submenu">
+          <div class="option disabled" id="opt-export-txt">Export as Text</div>
+          <div class="option disabled" id="opt-export-csv">Export as CSV</div>
+          <div class="option disabled" id="opt-export-png-dir">Export Directory as PNG</div>
+          <div class="separator"></div>
+          <div class="option disabled" id="opt-md5">Show MD5 Hash</div>
+          <div class="option disabled" id="opt-compare">Compare with...</div>
+        </div>
+      </div>
     </div>
   </div>
   <div class="menu-item" id="menu-entry">
@@ -1907,11 +1913,17 @@
         </div>
       </div>
       <div class="separator"></div>
-      <div class="option disabled" id="opt-export">Export File</div>
-      <div class="option disabled" id="opt-export-cvt">Export as CVT</div>
-      <div class="option disabled" id="opt-export-rtf">Export as RTF</div>
-      <div class="option disabled" id="opt-export-pdf">Export as PDF</div>
-      <div class="option disabled" id="opt-export-txt-gw">Export as Text (geoWrite)</div>
+      <div class="option disabled" id="opt-save-sep">Save as Separator</div>
+      <div class="option disabled has-submenu" id="opt-export-menu">Export
+        <div class="submenu">
+          <div class="option disabled" id="opt-export">Export File</div>
+          <div class="option disabled" id="opt-export-cvt">Export as CVT</div>
+          <div class="separator"></div>
+          <div class="option disabled" id="opt-export-rtf">Export as RTF</div>
+          <div class="option disabled" id="opt-export-pdf">Export as PDF</div>
+          <div class="option disabled" id="opt-export-txt-gw">Export as Text (geoWrite)</div>
+        </div>
+      </div>
       <div class="option disabled" id="opt-import">Import File</div>
     </div>
   </div>

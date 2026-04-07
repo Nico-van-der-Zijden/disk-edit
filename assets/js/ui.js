@@ -1109,6 +1109,8 @@ function updateEntryMenuState() {
   document.getElementById('opt-export-rtf').classList.toggle('disabled', !geoWriteEnabled);
   document.getElementById('opt-export-pdf').classList.toggle('disabled', !geoWriteEnabled);
   document.getElementById('opt-export-txt-gw').classList.toggle('disabled', !geoWriteEnabled);
+  document.getElementById('opt-save-sep').classList.toggle('disabled', !hasSelection || tape);
+  document.getElementById('opt-export-menu').classList.toggle('disabled', !exportEnabled && !geoWriteEnabled);
   document.getElementById('opt-copy').classList.toggle('disabled', !copyEnabled);
   document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !currentBuffer || !canInsertFile() || tape);
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
@@ -1296,6 +1298,8 @@ function updateMenuState() {
   document.getElementById('opt-export-png-dir').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-md5').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-disk-tools').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-disk-export').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-find').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-find-tabs').classList.toggle('disabled', tabs.length === 0);
   document.getElementById('opt-goto-sector').classList.toggle('disabled', !hasDisk || tape);
@@ -7431,8 +7435,9 @@ function buildSepSubmenu() {
     if (i === DEFAULT_SEPARATORS.length && customSeparators.length > 0) {
       html += '<div class="separator"></div>';
     }
+    var sepLabel = all[i].name ? ' <span style="font-size:11px;color:var(--text-muted)">' + escHtml(all[i].name) + '</span>' : '';
     html += '<div class="option" data-sep-idx="' + i + '" title="' + escHtml(all[i].name) + '">' +
-      '<span style="font-family:\'C64 Pro Mono\',monospace;font-size:12px">' + sepBytesToPreview(all[i].bytes) + '</span></div>';
+      '<span style="font-family:\'C64 Pro Mono\',monospace;font-size:12px">' + sepBytesToPreview(all[i].bytes) + '</span>' + sepLabel + '</div>';
   }
   submenu.innerHTML = html;
 }
@@ -7454,6 +7459,7 @@ function showSeparatorEditor() {
     for (var j = 0; j < customSeparators.length; j++) {
       html += '<div class="sep-editor-item">';
       html += '<span class="sep-editor-preview">' + sepBytesToPreview(customSeparators[j].bytes) + '</span>';
+      if (customSeparators[j].name) html += '<span style="font-size:11px;color:var(--text-muted)">' + escHtml(customSeparators[j].name) + '</span>';
       html += '<button class="sep-editor-btn" data-action="edit" data-cidx="' + j + '"><i class="fa-solid fa-pen"></i></button>';
       html += '<button class="sep-editor-btn danger" data-action="delete" data-cidx="' + j + '"><i class="fa-solid fa-trash"></i></button>';
       html += '</div>';
@@ -7603,6 +7609,24 @@ document.getElementById('opt-edit-separators').addEventListener('click', functio
   e.stopPropagation();
   closeMenus();
   showSeparatorEditor();
+});
+
+document.getElementById('opt-save-sep').addEventListener('click', async function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+
+  var data = new Uint8Array(currentBuffer);
+  var bytes = [];
+  for (var i = 0; i < 16; i++) bytes.push(data[selectedEntryIndex + 5 + i]);
+
+  var name = await showInputModal('Separator Name (optional)', '');
+  if (name === null) return; // cancelled
+
+  customSeparators.push({ name: name || '', bytes: bytes });
+  saveCustomSeparators();
+  buildSepSubmenu();
+  showModal('Save as Separator', ['Separator saved.' + (name ? ' Name: "' + name + '"' : '')]);
 });
 
 function insertSeparator(pattern) {
@@ -9915,6 +9939,9 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Ctrl + Alt + J', 'Justify'],
       ['Ctrl + <', 'Lock / unlock file'],
       ['Ctrl + *', 'Scratch / unscratch file'],
+      ['Ctrl + L', 'Name to lowercase'],
+      ['Ctrl + U', 'Name to UPPERCASE'],
+      ['Ctrl + T', 'Toggle name case'],
     ]},
     { title: 'Editing (double-click)', shortcuts: [
       ['Filename', 'Rename file (PETSCII keyboard available)'],
@@ -9924,9 +9951,14 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Disk name / ID', 'Edit disk header'],
       ['Blocks free', 'Edit free block count'],
     ]},
+    { title: 'Sector Editor', shortcuts: [
+      ['J', 'Follow sector chain (jump to T/S in bytes 0-1)'],
+      ['Click hex byte', 'Edit byte value'],
+      ['Escape', 'Cancel byte edit'],
+    ]},
     { title: 'Drag & Drop', shortcuts: [
       ['Drop .d64/.d71/.d81', 'Open disk image(s) in new tab(s)'],
-      ['Drop .prg/.seq/.usr/.rel', 'Import file(s) into current disk'],
+      ['Drop .prg/.seq/.usr/.rel/.cvt', 'Import file(s) into current disk'],
       ['Drag file entry to OS', 'Export file (Chrome/Edge)'],
     ]},
     { title: 'General', shortcuts: [
@@ -9963,6 +9995,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.18', title: 'Menu reorganization, save as separator, help updates', items: [
+      'Disk menu: grouped into Disk Tools and Export Disk submenus',
+      'File menu: grouped exports into Export submenu',
+      'File menu: Save as Separator \u2014 save any file pattern as reusable separator',
+      'Separator names shown in editor and insert submenu',
+      'Keyboard shortcuts dialog: added name case, sector editor, updated drag & drop',
+    ]},
     { ver: '1.3.17', title: 'REL viewer, BAM toggle, file chains', items: [
       'View As > REL Records: relative file viewer showing records with hex and ASCII',
       'BAM view: right-click sector to toggle free/used allocation',
