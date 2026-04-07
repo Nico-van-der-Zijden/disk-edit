@@ -3229,6 +3229,12 @@ var GFX_FORMATS = [
   { name: 'Zoomatic', addr: 0x5800, size: 10003, mode: 'mc', layout: 'koala' },
   { name: 'Micro Illustrator', addr: 0x1800, size: 10003, mode: 'mc', layout: 'koala' },
   { name: 'Amica Paint', addr: 0x4000, size: 10018, mode: 'mc', layout: 'koala' },
+  { name: 'Run Paint', addr: 0x6000, size: 10003, mode: 'mc', layout: 'koala' },
+  { name: 'PMC (Pixel Multicolor)', addr: 0x7800, size: 10003, mode: 'mc', layout: 'koala' },
+  { name: 'CDU-Paint', addr: 0x7EEF, size: 10277, mode: 'mc', layout: 'koala' },
+  { name: 'Pixel Perfect', addr: 0x5C00, size: 10006, mode: 'mc', layout: 'koala' },
+  { name: 'Advanced Art Studio', addr: 0x2000, size: 10018, mode: 'mc', layout: 'aas' },
+  { name: 'Saracen Paint', addr: 0x3F8E, size: 10023, mode: 'mc', layout: 'saracen' },
   // Multicolor — other layouts
   { name: 'Drazpaint', addr: 0x5800, size: 10051, mode: 'mc', layout: 'drp' },
   { name: 'Vidcom 64', addr: 0x5800, size: 10050, mode: 'mc', layout: 'vidcom' },
@@ -3254,6 +3260,8 @@ var GFX_PARSERS = {
   koala: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002), col: d.subarray(9002, Math.min(d.length, 10002)), bg: d.length > 10002 ? d[10002] & 0x0F : 0 }; },
   drp: function(d) { return { col: d.subarray(2, 1002), bg: d[1002], bm: d.subarray(1026, 9026), scr: d.subarray(9026, 10026), rowBg: d.subarray(10026, 10051) }; },
   vidcom: function(d) { return { scr: d.subarray(2, 1002), bm: d.subarray(1026, 9026), col: d.subarray(9026, 10026), bg: d[10050] }; },
+  aas: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002), col: d.subarray(9004, 10004), bg: d[9003] & 0x0F }; },
+  saracen: function(d) { return { bm: d.subarray(20, 8020), scr: d.subarray(8020, 9020), col: d.subarray(9020, 10020), bg: d[10020] & 0x0F }; },
   bmscr: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002) }; },
   bmonly: function(d) {
     var scr = new Uint8Array(1000);
@@ -9830,7 +9838,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '&bull; Go to Sector (Ctrl+G): jump to any track/sector<br>' +
       '&bull; File import/export/copy/paste across disk images<br>' +
       '&bull; View As: Hex, Disassembly, PETSCII (C64 screen), BASIC (V2/V7), Graphics, geoWrite<br>' +
-      '&bull; Graphics: 17+ formats (Koala, Art Studio, FLI, sprites, charset, Print Shop) with PNG export<br>' +
+      '&bull; Graphics: 24+ formats (Koala, Art Studio, Advanced Art Studio, FLI, sprites, charset, Print Shop) with PNG export<br>' +
       '&bull; GEOS: geoPaint, Photo Scrap, Photo Album, geoWrite, Font viewers<br>' +
       '&bull; geoWrite document viewer with styled text and inline images<br>' +
       '&bull; Export: CVT, RTF, PDF for GEOS/geoWrite files<br>' +
@@ -9995,6 +10003,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.19', title: 'Additional graphics formats', items: [
+      'Graphics: Advanced Art Studio (multicolor, $2000, 10018 bytes)',
+      'Graphics: Saracen Paint (multicolor, $3F8E, 10023 bytes)',
+      'Graphics: Run Paint, PMC, CDU-Paint, Pixel Perfect (multicolor, various addresses)',
+      'New parsers: AAS layout (bm+scr+border+bg+col), Saracen layout (18-byte header)',
+      'Total supported graphics formats: 24+',
+    ]},
     { ver: '1.3.18', title: 'Menu reorganization, save as separator, help updates', items: [
       'Disk menu: grouped into Disk Tools and Export Disk submenus',
       'File menu: grouped exports into Export submenu',
