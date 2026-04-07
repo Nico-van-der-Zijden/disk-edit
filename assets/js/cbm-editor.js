@@ -5,11 +5,11 @@ var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP
 // ── Current disk state ─────────────────────────────────────────────────
 var currentBuffer = null;
 var currentFileName = null;
-var showDeleted = localStorage.getItem('d64-showDeleted') !== 'false';
+var showDeleted = localStorage.getItem('cbm-showDeleted') !== 'false';
 var selectedEntryIndex = -1;
 var selectedEntries = []; // multi-select: array of entryOff values
-var showAddresses = localStorage.getItem('d64-showAddresses') === 'true';
-var showTrackSector = localStorage.getItem('d64-showTrackSector') === 'true';
+var showAddresses = localStorage.getItem('cbm-showAddresses') !== 'false';
+var showTrackSector = localStorage.getItem('cbm-showTrackSector') !== 'false';
 var currentPartition = null; // null = root, or { entryOff, startTrack, partSize, name }
 var clipboard = []; // array of { typeIdx, nameBytes, geosBytes, geosInfoBlock, data }
 var dirInterleave = 3;   // directory sector interleave

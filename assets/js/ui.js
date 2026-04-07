@@ -1684,7 +1684,7 @@ document.getElementById('opt-show-deleted').addEventListener('click', (e) => {
   if (!currentBuffer) return;
   closeMenus();
   showDeleted = !showDeleted;
-  localStorage.setItem('d64-showDeleted', showDeleted);
+  localStorage.setItem('cbm-showDeleted', showDeleted);
   document.getElementById('check-deleted').innerHTML = showDeleted ? '<i class="fa-solid fa-check"></i>' : '';
   const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
@@ -1862,7 +1862,7 @@ document.getElementById('opt-show-addr').addEventListener('click', (e) => {
   e.stopPropagation();
   closeMenus();
   showAddresses = !showAddresses;
-  localStorage.setItem('d64-showAddresses', showAddresses);
+  localStorage.setItem('cbm-showAddresses', showAddresses);
   document.getElementById('check-addr').innerHTML = showAddresses ? '<i class="fa-solid fa-check"></i>' : '';
   if (currentBuffer) {
     const info = parseCurrentDir(currentBuffer);
@@ -1874,7 +1874,7 @@ document.getElementById('opt-show-ts').addEventListener('click', (e) => {
   e.stopPropagation();
   closeMenus();
   showTrackSector = !showTrackSector;
-  localStorage.setItem('d64-showTrackSector', showTrackSector);
+  localStorage.setItem('cbm-showTrackSector', showTrackSector);
   document.getElementById('check-ts').innerHTML = showTrackSector ? '<i class="fa-solid fa-check"></i>' : '';
   if (currentBuffer) {
     const info = parseCurrentDir(currentBuffer);
@@ -2982,7 +2982,7 @@ document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
   e.stopPropagation();
   closeMenus();
   allowUnsafeChars = !allowUnsafeChars;
-  localStorage.setItem('d64-allowUnsafe', allowUnsafeChars);
+  localStorage.setItem('cbm-allowUnsafe', allowUnsafeChars);
   document.getElementById('check-unsafe').innerHTML = allowUnsafeChars ? '<i class="fa-solid fa-check"></i>' : '';
   if (pickerTarget) renderPicker();
 });
@@ -2991,7 +2991,7 @@ document.getElementById('opt-picker-all').addEventListener('click', (e) => {
   e.stopPropagation();
   closeMenus();
   pickerDefaultAll = !pickerDefaultAll;
-  localStorage.setItem('d64-pickerAll', pickerDefaultAll);
+  localStorage.setItem('cbm-pickerAll', pickerDefaultAll);
   document.getElementById('check-picker-all').innerHTML = pickerDefaultAll ? '<i class="fa-solid fa-check"></i>' : '';
 });
 
@@ -2999,8 +2999,121 @@ document.getElementById('opt-picker-stick').addEventListener('click', (e) => {
   e.stopPropagation();
   closeMenus();
   pickerStick = !pickerStick;
-  localStorage.setItem('d64-pickerStick', pickerStick);
+  localStorage.setItem('cbm-pickerStick', pickerStick);
   document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i class="fa-solid fa-check"></i>' : '';
+});
+
+// ── Export/Import Settings ────────────────────────────────────────────
+document.getElementById('opt-export-settings').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  var settings = {};
+  for (var i = 0; i < localStorage.length; i++) {
+    var key = localStorage.key(i);
+    if (key.indexOf('cbm-') === 0 && key !== 'cbm-customSeparators') {
+      settings[key] = localStorage.getItem(key);
+    }
+  }
+  var json = JSON.stringify(settings, null, 2);
+  var blob = new Blob([json], { type: 'application/json' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'cbm-disk-editor-settings.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// ── Export Separators ─────────────────────────────────────────────────
+document.getElementById('opt-export-separators').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  if (customSeparators.length === 0) {
+    showModal('Export Separators', ['No custom separators to export.']);
+    return;
+  }
+  var json = JSON.stringify(customSeparators, null, 2);
+  var blob = new Blob([json], { type: 'application/json' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'cbm-disk-editor-separators.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// ── Import Settings / Separators (auto-detects format) ───────────────
+document.getElementById('opt-import-settings').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  var input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  input.addEventListener('change', function() {
+    var file = input.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function() {
+      try {
+        var parsed = JSON.parse(reader.result);
+        var results = [];
+
+        if (Array.isArray(parsed)) {
+          // Separator file: array of { name, bytes }
+          var added = 0;
+          for (var i = 0; i < parsed.length; i++) {
+            var sep = parsed[i];
+            if (!sep.bytes || !Array.isArray(sep.bytes) || sep.bytes.length !== 16) continue;
+            if (separatorExists(sep.bytes)) continue;
+            customSeparators.push({ name: sep.name || '', bytes: sep.bytes });
+            added++;
+          }
+          saveCustomSeparators();
+          buildSepSubmenu();
+          if (added > 0) results.push(added + ' separator(s) imported.');
+        } else if (typeof parsed === 'object') {
+          // Settings file: { "cbm-key": "value", ... }
+          var settingsCount = 0;
+          var sepCount = 0;
+          for (var key in parsed) {
+            if (key.indexOf('cbm-') !== 0) continue;
+            if (key === 'cbm-customSeparators') {
+              // Embedded separators in settings file
+              try {
+                var seps = JSON.parse(parsed[key]);
+                if (Array.isArray(seps)) {
+                  for (var si = 0; si < seps.length; si++) {
+                    if (seps[si].bytes && Array.isArray(seps[si].bytes) && seps[si].bytes.length === 16) {
+                      if (!separatorExists(seps[si].bytes)) {
+                        customSeparators.push({ name: seps[si].name || '', bytes: seps[si].bytes });
+                        sepCount++;
+                      }
+                    }
+                  }
+                  saveCustomSeparators();
+                  buildSepSubmenu();
+                }
+              } catch (e2) {}
+            } else {
+              localStorage.setItem(key, parsed[key]);
+              settingsCount++;
+            }
+          }
+          if (settingsCount > 0) results.push(settingsCount + ' setting(s) imported.');
+          if (sepCount > 0) results.push(sepCount + ' separator(s) imported.');
+        }
+
+        if (results.length === 0) {
+          showModal('Import', ['No valid settings or separators found in file.']);
+        } else {
+          results.push('Reload the page to apply settings.');
+          showModal('Import Successful', results);
+        }
+      } catch (err) {
+        showModal('Import Error', ['Invalid file: ' + err.message]);
+      }
+    };
+    reader.readAsText(file);
+  });
+  input.click();
 });
 
 // ── File Info viewer ──────────────────────────────────────────────────
@@ -4280,7 +4393,10 @@ function showFileGfxViewer(entryOff) {
   render();
 
   var footer = document.querySelector('#modal-overlay .modal-footer');
-  footer.innerHTML = '<button class="modal-btn-secondary" id="gfx-save-png">Save as PNG</button><button id="modal-close">OK</button>';
+  footer.className = 'modal-footer modal-footer-split';
+  footer.innerHTML =
+    '<div class="modal-footer-actions"><button class="modal-btn-secondary" id="gfx-save-png">Save as PNG</button></div>' +
+    '<div class="modal-footer-nav"><button id="modal-close">OK</button></div>';
   document.getElementById('gfx-save-png').addEventListener('click', function() {
     var canvas = document.querySelector('#modal-body .gfx-canvas');
     if (!canvas) return;
@@ -4291,6 +4407,7 @@ function showFileGfxViewer(entryOff) {
     a.click();
   });
   document.getElementById('modal-close').addEventListener('click', function() {
+    footer.className = 'modal-footer';
     document.getElementById('modal-overlay').classList.remove('open');
   });
   document.getElementById('modal-overlay').classList.add('open');
@@ -5435,11 +5552,14 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
   body.innerHTML = html;
   var footer = document.querySelector('#modal-overlay .modal-footer');
   var origFooter = footer.innerHTML;
+  var origFooterClass = footer.className;
   var nextT = working[0], nextS = working[1];
   var hasChain = nextT > 0 && nextT <= currentTracks;
-  footer.innerHTML = '<button id="hex-follow" class="modal-btn-secondary"' + (hasChain ? '' : ' disabled') +
-    ' title="Follow sector chain (J)">Follow Chain \u2192</button>' +
-    '<button id="hex-cancel" class="modal-btn-secondary">Cancel</button><button id="hex-save">Save</button>';
+  footer.className = 'modal-footer modal-footer-split';
+  footer.innerHTML =
+    '<div class="modal-footer-actions"><button id="hex-follow" class="modal-btn-secondary"' + (hasChain ? '' : ' disabled') +
+    ' title="Follow sector chain (Ctrl+J)">Follow Chain \u2192</button></div>' +
+    '<div class="modal-footer-nav"><button id="hex-cancel" class="modal-btn-secondary">Cancel</button><button id="hex-save">Save</button></div>';
   document.getElementById('modal-overlay').classList.add('open');
 
   var navTrack = track;
@@ -5455,8 +5575,10 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     }
     document.removeEventListener('keydown', onKeyDown);
     document.getElementById('modal-overlay').classList.remove('open');
+    footer.className = origFooterClass;
     footer.innerHTML = origFooter;
-    document.getElementById('modal-close').addEventListener('click', function() {
+    var closeBtn = document.getElementById('modal-close');
+    if (closeBtn) closeBtn.addEventListener('click', function() {
       document.getElementById('modal-overlay').classList.remove('open');
     });
     showSectorHexEditor(newTrack, newSector);
@@ -5601,7 +5723,7 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
   // Keyboard input for hex editing
   function onKeyDown(e) {
     // J key: follow chain when not editing
-    if (editingByte === null && (e.key === 'j' || e.key === 'J')) {
+    if (editingByte === null && e.ctrlKey && (e.key === 'j' || e.key === 'J')) {
       e.preventDefault();
       followChain();
       return;
@@ -5685,9 +5807,11 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
       renderDisk(info);
     }
     document.getElementById('modal-overlay').classList.remove('open');
+    footer.className = origFooterClass;
     footer.innerHTML = origFooter;
     // Re-attach the OK button handler
-    document.getElementById('modal-close').addEventListener('click', function() {
+    var closeBtn2 = document.getElementById('modal-close');
+    if (closeBtn2) closeBtn2.addEventListener('click', function() {
       document.getElementById('modal-overlay').classList.remove('open');
     });
   }
@@ -7417,10 +7541,21 @@ var DEFAULT_SEPARATORS = [
 ];
 
 // Custom separators stored in localStorage
-var customSeparators = JSON.parse(localStorage.getItem('d64-customSeparators') || '[]');
+var customSeparators = JSON.parse(localStorage.getItem('cbm-customSeparators') || '[]');
 
 function saveCustomSeparators() {
-  localStorage.setItem('d64-customSeparators', JSON.stringify(customSeparators));
+  localStorage.setItem('cbm-customSeparators', JSON.stringify(customSeparators));
+}
+
+function separatorExists(bytes) {
+  for (var i = 0; i < customSeparators.length; i++) {
+    var match = true;
+    for (var j = 0; j < 16; j++) {
+      if (customSeparators[i].bytes[j] !== bytes[j]) { match = false; break; }
+    }
+    if (match) return true;
+  }
+  return false;
 }
 
 function getAllSeparators() {
@@ -7481,30 +7616,6 @@ function showSeparatorEditor() {
     if (editIdx >= 0) html += '<button class="sep-editor-btn" id="sep-edit-cancel">Cancel</button>';
     html += '</div>';
 
-    // Inline PETSCII 16x16 grid
-    html += '<table style="border-collapse:collapse;margin-top:8px" id="sep-char-grid"><tr><td></td>';
-    for (var col = 0; col < 16; col++) {
-      html += '<td style="text-align:center;font-size:9px;color:var(--text-muted);padding:0 1px;font-family:monospace">' + col.toString(16).toUpperCase() + '</td>';
-    }
-    html += '</tr>';
-    for (var row = 0; row < 16; row++) {
-      html += '<tr><td style="text-align:right;font-size:9px;color:var(--text-muted);padding-right:4px;font-family:monospace">' + row.toString(16).toUpperCase() + 'x</td>';
-      for (var col2 = 0; col2 < 16; col2++) {
-        var p = row * 16 + col2;
-        var isSafe = SAFE_PETSCII.has(p);
-        var disabled = !isSafe && !allowUnsafeChars;
-        var isRev = (p <= 0x1F) || (p >= 0x80 && p <= 0x9F);
-        html += '<td data-insert-code="' + p + '" title="$' + p.toString(16).toUpperCase().padStart(2, '0') + '"' +
-          ' style="width:22px;height:20px;text-align:center;cursor:pointer;font-family:\'C64 Pro Mono\',monospace;font-size:12px;' +
-          'border:1px solid var(--border);border-radius:1px;' +
-          (isRev ? 'background:var(--text);color:var(--bg);' : '') +
-          (disabled ? 'opacity:0.5;cursor:not-allowed;' : '') +
-          '">' + escHtml(PETSCII_MAP[p]) + '</td>';
-      }
-      html += '</tr>';
-    }
-    html += '</table>';
-
     return html;
   }
 
@@ -7515,29 +7626,20 @@ function showSeparatorEditor() {
   function attachEvents() {
     var input = document.getElementById('sep-edit-input');
     if (input) {
+      // Track cursor for PETSCII picker insertion
+      var updateCursor = function() { input._lastCursorPos = input.selectionStart; };
+      input.addEventListener('keyup', updateCursor);
+      input.addEventListener('mouseup', updateCursor);
+      input.addEventListener('input', updateCursor);
+
+      input.addEventListener('focus', function() { showPetsciiPicker(input, 16); });
+      input.addEventListener('blur', function() { if (!pickerClicking) hidePetsciiPicker(); });
+
       setTimeout(function() { input.focus(); }, 50);
     }
 
-    // Prevent grid clicks from stealing focus from input
-    var grid = document.getElementById('sep-char-grid');
-    if (grid) {
-      grid.addEventListener('mousedown', function(e) { e.preventDefault(); });
-    }
-
     body.addEventListener('click', function handler(e) {
-      // Don't interfere with input clicks
       if (e.target.tagName === 'INPUT') return;
-      // Inline PETSCII grid click
-      var charKey = e.target.closest('[data-insert-code]');
-      if (charKey) {
-        var code = parseInt(charKey.getAttribute('data-insert-code'), 10);
-        var inp = document.getElementById('sep-edit-input');
-        if (inp && inp.value.length < 16) {
-          inp.value += PETSCII_MAP[code];
-          inp.focus();
-        }
-        return;
-      }
       var btn = e.target.closest('[data-action]');
       if (!btn) {
         // Save/Cancel buttons
@@ -7552,6 +7654,7 @@ function showSeparatorEditor() {
           if (editIdx >= 0) {
             customSeparators[editIdx].bytes = bytes;
           } else {
+            if (separatorExists(bytes)) { render(); return; }
             customSeparators.push({ name: 'Custom', bytes: bytes });
           }
           saveCustomSeparators();
@@ -7591,7 +7694,10 @@ function showSeparatorEditor() {
         var inp2 = document.getElementById('sep-edit-input');
         if (inp2) {
           var val = '';
-          for (var m = 0; m < 16; m++) val += PETSCII_MAP[customSeparators[cidx].bytes[m]];
+          for (var m = 0; m < customSeparators[cidx].bytes.length; m++) {
+            var ch = PETSCII_MAP[customSeparators[cidx].bytes[m]];
+            if (ch) val += ch;
+          }
           inp2.value = val;
         }
         attachEvents();
@@ -7627,6 +7733,11 @@ document.getElementById('opt-save-sep').addEventListener('click', async function
   var data = new Uint8Array(currentBuffer);
   var bytes = [];
   for (var i = 0; i < 16; i++) bytes.push(data[selectedEntryIndex + 5 + i]);
+
+  if (separatorExists(bytes)) {
+    showModal('Save as Separator', ['This separator already exists.']);
+    return;
+  }
 
   var name = await showInputModal('Separator Name (optional)', '');
   if (name === null) return; // cancelled
@@ -9837,12 +9948,14 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '&bull; Search: Find/Find in Tabs with text and hex byte pattern matching<br>' +
       '&bull; Go to Sector (Ctrl+G): jump to any track/sector<br>' +
       '&bull; File import/export/copy/paste across disk images<br>' +
-      '&bull; View As: Hex, Disassembly, PETSCII (C64 screen), BASIC (V2/V7), Graphics, geoWrite<br>' +
+      '&bull; View As: Hex, Disassembly, PETSCII (C64 screen), BASIC (V2/V7), Graphics, geoWrite, REL Records<br>' +
       '&bull; Graphics: 24+ formats (Koala, Art Studio, Advanced Art Studio, FLI, sprites, charset, Print Shop) with PNG export<br>' +
       '&bull; GEOS: geoPaint, Photo Scrap, Photo Album, geoWrite, Font viewers<br>' +
       '&bull; geoWrite document viewer with styled text and inline images<br>' +
-      '&bull; Export: CVT, RTF, PDF for GEOS/geoWrite files<br>' +
+      '&bull; Export: CVT, RTF, PDF, CSV, directory PNG for GEOS/geoWrite files<br>' +
       '&bull; Packer detection: 370+ signatures<br>' +
+      '&bull; File chains viewer, compact directory, name case operations<br>' +
+      '&bull; Save as separator with custom names<br>' +
       '&bull; D81 subdirectories (partitions)<br>' +
       '&bull; Disk optimizer with configurable interleave<br>' +
       '&bull; Lost file recovery (orphaned sector chain scanning)<br>' +
@@ -9960,7 +10073,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Blocks free', 'Edit free block count'],
     ]},
     { title: 'Sector Editor', shortcuts: [
-      ['J', 'Follow sector chain (jump to T/S in bytes 0-1)'],
+      ['Ctrl + J', 'Follow sector chain (jump to T/S in bytes 0-1)'],
       ['Click hex byte', 'Edit byte value'],
       ['Escape', 'Cancel byte edit'],
     ]},
@@ -10255,7 +10368,7 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
 
 // ── Theme toggle ─────────────────────────────────────────────────────
 const themeToggle = document.getElementById('theme-toggle');
-const savedTheme = localStorage.getItem('d64-theme');
+const savedTheme = localStorage.getItem('cbm-theme');
 if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
 
 function updateThemeIcon() {
@@ -10276,6 +10389,6 @@ themeToggle.addEventListener('click', () => {
   const current = document.documentElement.getAttribute('data-theme');
   const next = current === 'dark' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', next);
-  localStorage.setItem('d64-theme', next);
+  localStorage.setItem('cbm-theme', next);
   updateThemeIcon();
 });

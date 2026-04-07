@@ -5,8 +5,8 @@ var pickerTarget = null;
 var pickerClicking = false;
 var pickerModifier = 'normal'; // 'normal', 'shift', 'cbm', 'all'
 var pickerReverse = false;
-var pickerDefaultAll = localStorage.getItem('d64-pickerAll') === 'true';
-var pickerStick = localStorage.getItem('d64-pickerStick') === 'true';
+var pickerDefaultAll = localStorage.getItem('cbm-pickerAll') === 'true';
+var pickerStick = localStorage.getItem('cbm-pickerStick') === 'true';
 
 // C64 keyboard layout: [label, normal, shift, cbm] per key
 const KB_ROWS = [

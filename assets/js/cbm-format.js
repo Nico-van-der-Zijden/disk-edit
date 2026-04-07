@@ -749,7 +749,7 @@ function totalSectors(format, numTracks) {
 // C64 Pro font PUA ranges:
 // E000-E0FF = uppercase/graphics mode (default)
 // E100-E1FF = lowercase/uppercase mode
-var charsetMode = localStorage.getItem('d64-charsetMode') === 'lowercase' ? 'lowercase' : 'uppercase';
+var charsetMode = localStorage.getItem('cbm-charsetMode') === 'lowercase' ? 'lowercase' : 'uppercase';
 
 function buildPetsciiMap(mode) {
   var m = new Array(256).fill('\u00B7');
@@ -774,7 +774,7 @@ var PETSCII_MAP = buildPetsciiMap(charsetMode);
 
 function setCharsetMode(mode) {
   charsetMode = mode;
-  localStorage.setItem('d64-charsetMode', mode);
+  localStorage.setItem('cbm-charsetMode', mode);
   PETSCII_MAP = buildPetsciiMap(mode);
 }
 
@@ -1748,7 +1748,7 @@ function createEmptyDisk(formatKey, numTracks) {
 }
 
 // ── Safe PETSCII characters ──────────────────────────────────────────
-var allowUnsafeChars = localStorage.getItem('d64-allowUnsafe') === 'true';
+var allowUnsafeChars = localStorage.getItem('cbm-allowUnsafe') === 'true';
 
 const SAFE_PETSCII = new Set([
   0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B,0x0C,0x0E,0x0F,
