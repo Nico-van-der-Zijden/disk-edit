@@ -1114,6 +1114,8 @@ function updateEntryMenuState() {
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
   document.getElementById('opt-view-gfx').classList.toggle('disabled', !gfxEnabled);
   document.getElementById('opt-view-geowrite').classList.toggle('disabled', !geoWriteEnabled);
+  var isRel = hasSelection && !tape && edata && (edata[selectedEntryIndex + 2] & 0x07) === 4;
+  document.getElementById('opt-view-rel').classList.toggle('disabled', !isRel);
   document.getElementById('opt-view-tass').classList.add('disabled');
   document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
   document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect || tape);
@@ -1285,6 +1287,7 @@ function updateMenuState() {
   document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || tape || hasGeosSignature(currentBuffer));
   document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-compact-dir').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-file-chains').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
   document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || tape);
@@ -2011,6 +2014,30 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     // Close BAM modal and open sector editor
     document.getElementById('modal-overlay').classList.remove('open');
     showSectorHexEditor(bt, bs);
+  });
+
+  // Right-click on a sector block to toggle free/used
+  bamBody.addEventListener('contextmenu', function(e) {
+    var block = e.target.closest('.bam-sector');
+    if (!block) return;
+    e.preventDefault();
+    var bt = parseInt(block.getAttribute('data-t'), 10);
+    var bs = parseInt(block.getAttribute('data-s'), 10);
+    if (isNaN(bt) || isNaN(bs)) return;
+
+    pushUndo();
+    var d = new Uint8Array(currentBuffer);
+    var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+    var base = getBamBitmapBase(bt, bOff);
+    var byteIdx = Math.floor(bs / 8);
+    var bitMask = 1 << (bs % 8);
+    // Toggle the bit
+    d[base + byteIdx] ^= bitMask;
+    bamRecalcFree(d, bt, bOff);
+
+    // Refresh BAM view
+    document.getElementById('modal-overlay').classList.remove('open');
+    document.getElementById('opt-view-bam').click();
   });
 });
 
@@ -4257,6 +4284,63 @@ function showFileGfxViewer(entryOff) {
   document.getElementById('modal-overlay').classList.add('open');
 }
 
+// ── REL file viewer ──────────────────────────────────────────────────
+function showRelViewer(entryOff) {
+  if (!currentBuffer) return;
+  var data = new Uint8Array(currentBuffer);
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+  var recordLen = data[entryOff + 0x1C]; // record length from dir entry
+  if (recordLen === 0) recordLen = 254;
+
+  // Read file data (follows the data chain)
+  var result = readFileData(currentBuffer, entryOff);
+  var fileData = result.data;
+  if (fileData.length === 0) {
+    showModal('REL View', ['No data found or empty file.']);
+    return;
+  }
+
+  // Split into records
+  var numRecords = Math.ceil(fileData.length / recordLen);
+  var html = '<div style="overflow-y:auto">';
+
+  for (var ri = 0; ri < numRecords; ri++) {
+    var recStart = ri * recordLen;
+    var recEnd = Math.min(recStart + recordLen, fileData.length);
+    if (recStart >= fileData.length) break;
+
+    html += '<div class="rel-record">';
+    html += '<span class="rel-record-num">#' + (ri + 1) + '</span>';
+
+    // Hex bytes
+    var hexStr = '';
+    var asciiStr = '';
+    for (var bi = recStart; bi < recEnd; bi++) {
+      var b = fileData[bi];
+      hexStr += b.toString(16).toUpperCase().padStart(2, '0') + ' ';
+      asciiStr += (b >= 0x20 && b <= 0x7E) ? String.fromCharCode(b) :
+        (b >= 0xC1 && b <= 0xDA) ? String.fromCharCode(b - 0x80) : '\u00B7';
+    }
+
+    html += '<span class="rel-record-hex">' + escHtml(hexStr.trim()) + '</span>';
+    html += '<span class="rel-record-ascii">' + escHtml(asciiStr) + '</span>';
+    html += '</div>';
+  }
+  html += '</div>';
+
+  document.getElementById('modal-title').textContent =
+    'REL Records \u2014 "' + name + '" (record length: ' + recordLen + ', ' + numRecords + ' records)';
+  var body = document.getElementById('modal-body');
+  body.innerHTML = html;
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
 // ── Turbo Assembler viewer ────────────────────────────────────────────
 // 6502 mnemonics in alphabetical order (TASS token $30-$67)
 var TASS_MNEMONICS = [
@@ -6126,6 +6210,13 @@ document.getElementById('opt-view-geowrite').addEventListener('click', function(
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
   showGeoWriteViewer(selectedEntryIndex);
+});
+
+document.getElementById('opt-view-rel').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  showRelViewer(selectedEntryIndex);
 });
 
 document.getElementById('opt-view-gfx').addEventListener('click', function(e) {
@@ -9384,6 +9475,52 @@ document.getElementById('opt-compact-dir').addEventListener('click', function(e)
   showModal('Compact Directory', [allEntries.length + ' file(s) kept, ' + removed + ' empty slot(s) removed.']);
 });
 
+// ── File Chains ──────────────────────────────────────────────────────
+document.getElementById('opt-file-chains').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+
+  var data = new Uint8Array(currentBuffer);
+  var info = parseCurrentDir(currentBuffer);
+  var html = '<div style="font-size:12px">';
+
+  for (var i = 0; i < info.entries.length; i++) {
+    var en = info.entries[i];
+    if (en.deleted || !en.name) continue;
+    var typeByte = data[en.entryOff + 2];
+    if ((typeByte & 0x07) === 0) continue;
+
+    var ft = data[en.entryOff + 3], fs = data[en.entryOff + 4];
+    if (ft === 0) continue;
+
+    var chain = [];
+    var visited = {};
+    var t = ft, s = fs;
+    while (t !== 0) {
+      if (t > currentTracks || s >= currentFormat.sectorsPerTrack(t)) break;
+      var key = t + ':' + s;
+      if (visited[key]) { chain.push(key + ' (loop!)'); break; }
+      visited[key] = true;
+      chain.push('$' + t.toString(16).toUpperCase().padStart(2, '0') + ':$' + s.toString(16).toUpperCase().padStart(2, '0'));
+      var off = sectorOffset(t, s);
+      if (off < 0) break;
+      t = data[off]; s = data[off + 1];
+    }
+
+    var name = petsciiToReadable(en.name).trim();
+    html += '<div style="margin-bottom:6px">';
+    html += '<b style="color:var(--accent)">' + escHtml(name) + '</b>';
+    html += ' <span style="color:var(--text-muted)">(' + chain.length + ' sector' + (chain.length > 1 ? 's' : '') + ')</span><br>';
+    html += '<span style="color:var(--text-muted);word-break:break-all">' + chain.join(' \u2192 ') + '</span>';
+    html += '</div>';
+  }
+
+  html += '</div>';
+  showModal('File Chains', []);
+  document.getElementById('modal-body').innerHTML = html;
+});
+
 // ── CSV Export ───────────────────────────────────────────────────────
 document.getElementById('opt-export-csv').addEventListener('click', function(e) {
   e.stopPropagation();
@@ -9826,6 +9963,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.17', title: 'REL viewer, BAM toggle, file chains', items: [
+      'View As > REL Records: relative file viewer showing records with hex and ASCII',
+      'BAM view: right-click sector to toggle free/used allocation',
+      'File Chains: show sector chains for all files on disk (Disk menu)',
+    ]},
     { ver: '1.3.16', title: 'Name case, compact dir, follow chain, CSV/PNG/text export', items: [
       'Name Case: Ctrl+L lowercase, Ctrl+U uppercase, Ctrl+T toggle (Entry menu)',
       'Compact Directory: remove deleted entries from directory (Disk menu)',

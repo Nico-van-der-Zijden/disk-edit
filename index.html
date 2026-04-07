@@ -1083,6 +1083,15 @@
   .geowrite-tab { display: inline-block; min-width: 40px; }
   .geowrite-pagebreak { text-align: center; color: #6C6C6C; font-size: 11px; margin: 8px 0; }
 
+  /* REL record viewer */
+  .rel-record {
+    font-family: 'C64 Pro Mono', monospace; font-size: 12px;
+    border-bottom: 1px solid var(--border); padding: 2px 8px;
+  }
+  .rel-record-num { color: #6C5EB5; display: inline-block; min-width: 50px; }
+  .rel-record-hex { color: var(--text-muted); }
+  .rel-record-ascii { color: var(--accent); margin-left: 12px; }
+
   /* Search results */
   .search-form { margin-bottom: 12px; flex-shrink: 0; }
   .search-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
@@ -1815,6 +1824,7 @@
       <div class="option disabled" id="opt-show-deleted"><span class="check" id="check-deleted"></span>Show Deleted Files</div>
       <div class="option disabled" id="opt-scan-orphans">Scan for Lost Files</div>
       <div class="option disabled" id="opt-compact-dir">Compact Directory</div>
+      <div class="option disabled" id="opt-file-chains">File Chains</div>
       <div class="option disabled has-submenu" id="opt-sort">Sort
         <div class="submenu">
           <div class="option" data-sort="name-asc">Name Ascending</div>
@@ -1892,6 +1902,7 @@
           <div class="option" id="opt-view-basic">BASIC</div>
           <div class="option disabled" id="opt-view-gfx">Graphics</div>
           <div class="option disabled" id="opt-view-geowrite">geoWrite</div>
+          <div class="option disabled" id="opt-view-rel">REL Records</div>
           <div class="option disabled" id="opt-view-tass">Turbo Assembler</div>
         </div>
       </div>
