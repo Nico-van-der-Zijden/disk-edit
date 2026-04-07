@@ -932,6 +932,24 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
+  // Ctrl+L: name to lowercase
+  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === 'l' && selectedEntryIndex >= 0 && currentBuffer) {
+    e.preventDefault();
+    document.getElementById('opt-case-lower').click();
+    return;
+  }
+  // Ctrl+U: name to uppercase
+  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === 'u' && selectedEntryIndex >= 0 && currentBuffer) {
+    e.preventDefault();
+    document.getElementById('opt-case-upper').click();
+    return;
+  }
+  // Ctrl+T: toggle name case
+  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === 't' && selectedEntryIndex >= 0 && currentBuffer) {
+    e.preventDefault();
+    document.getElementById('opt-case-toggle').click();
+    return;
+  }
   // Ctrl+D: add directory (D81 only, not Ctrl+Alt+D which is View as Disassembly)
   if (e.ctrlKey && !e.altKey && e.key === 'd') {
     e.preventDefault();
@@ -1021,6 +1039,7 @@ function updateEntryMenuState() {
   document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection || tape);
   document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection || tape);
   document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection || tape);
+  document.getElementById('opt-case').classList.toggle('disabled', !hasSelection || tape);
   // Disable file types not supported by the current format
   var supportedTypes = currentFormat.fileTypes || [0, 1, 2, 3, 4];
   for (var ti = 0; ti <= 5; ti++) {
@@ -1089,6 +1108,7 @@ function updateEntryMenuState() {
   document.getElementById('opt-export-cvt').classList.toggle('disabled', !geosEnabled || !exportEnabled);
   document.getElementById('opt-export-rtf').classList.toggle('disabled', !geoWriteEnabled);
   document.getElementById('opt-export-pdf').classList.toggle('disabled', !geoWriteEnabled);
+  document.getElementById('opt-export-txt-gw').classList.toggle('disabled', !geoWriteEnabled);
   document.getElementById('opt-copy').classList.toggle('disabled', !copyEnabled);
   document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !currentBuffer || !canInsertFile() || tape);
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
@@ -1264,10 +1284,13 @@ function updateMenuState() {
   document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || tape || !hasErrorBytes(currentBuffer));
   document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || tape || hasGeosSignature(currentBuffer));
   document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-compact-dir').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
   document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-export-csv').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-export-png-dir').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-md5').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-find').classList.toggle('disabled', !hasDisk);
@@ -5316,7 +5339,11 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
   body.innerHTML = html;
   var footer = document.querySelector('#modal-overlay .modal-footer');
   var origFooter = footer.innerHTML;
-  footer.innerHTML = '<button id="hex-cancel" class="modal-btn-secondary">Cancel</button><button id="hex-save">Save</button>';
+  var nextT = working[0], nextS = working[1];
+  var hasChain = nextT > 0 && nextT <= currentTracks;
+  footer.innerHTML = '<button id="hex-follow" class="modal-btn-secondary"' + (hasChain ? '' : ' disabled') +
+    ' title="Follow sector chain (J)">Follow Chain \u2192</button>' +
+    '<button id="hex-cancel" class="modal-btn-secondary">Cancel</button><button id="hex-save">Save</button>';
   document.getElementById('modal-overlay').classList.add('open');
 
   var navTrack = track;
@@ -5477,6 +5504,12 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
 
   // Keyboard input for hex editing
   function onKeyDown(e) {
+    // J key: follow chain when not editing
+    if (editingByte === null && (e.key === 'j' || e.key === 'J')) {
+      e.preventDefault();
+      followChain();
+      return;
+    }
     if (editingByte === null) return;
     var hexChar = e.key.toUpperCase();
 
@@ -5562,6 +5595,15 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
       document.getElementById('modal-overlay').classList.remove('open');
     });
   }
+
+  // Follow chain: jump to sector pointed to by bytes 0-1
+  function followChain() {
+    var nt = working[0], ns = working[1];
+    if (nt === 0 || nt > currentTracks) return;
+    if (ns >= currentFormat.sectorsPerTrack(nt)) return;
+    saveCurrentAndNavigate(nt, ns);
+  }
+  document.getElementById('hex-follow').addEventListener('click', followChain);
 
   document.getElementById('hex-save').addEventListener('click', function() { closeEditor(true); });
   document.getElementById('hex-cancel').addEventListener('click', function() { closeEditor(false); });
@@ -8376,6 +8418,44 @@ document.getElementById('opt-export-pdf').addEventListener('click', function(e) 
   URL.revokeObjectURL(a.href);
 });
 
+// ── geoWrite Plain Text Export ────────────────────────────────────────
+document.getElementById('opt-export-txt-gw').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+
+  var doc = parseGeoWriteDoc(selectedEntryIndex);
+  if (!doc || doc.pages.length === 0) {
+    showModal('Export Error', ['No geoWrite data found.']);
+    return;
+  }
+
+  var text = '';
+  for (var pi = 0; pi < doc.pages.length; pi++) {
+    var page = doc.pages[pi];
+    for (var ei = 0; ei < page.length; ei++) {
+      var el = page[ei];
+      if (el.type === 'text') text += el.text;
+      else if (el.type === 'cr') text += '\n';
+      else if (el.type === 'tab') text += '\t';
+      else if (el.type === 'pagebreak') text += '\n--- Page Break ---\n';
+      else if (el.type === 'image') text += '[Image]\n';
+    }
+    if (pi < doc.pages.length - 1) text += '\n';
+  }
+
+  var data = new Uint8Array(currentBuffer);
+  var name = petsciiToReadable(readPetsciiString(data, selectedEntryIndex + 5, 16)).trim();
+  name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'document';
+
+  var blob = new Blob([text], { type: 'text/plain' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name + '.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
 // ── File menu: Copy / Paste ──────────────────────────────────────────
 document.getElementById('opt-copy').addEventListener('click', (e) => {
   e.stopPropagation();
@@ -9207,6 +9287,193 @@ document.querySelectorAll('#opt-change-type .submenu .option').forEach(el => {
   });
 });
 
+// ── Name Case Operations ──────────────────────────────────────────────
+function changeNameCase(entryOff, mode) {
+  var data = new Uint8Array(currentBuffer);
+  for (var i = 0; i < 16; i++) {
+    var b = data[entryOff + 5 + i];
+    if (b === 0xA0) break; // end of name
+    if (mode === 'upper') {
+      // PETSCII lowercase ($41-$5A) → uppercase ($C1-$DA)
+      if (b >= 0x41 && b <= 0x5A) data[entryOff + 5 + i] = b + 0x80;
+    } else if (mode === 'lower') {
+      // PETSCII uppercase ($C1-$DA) → lowercase ($41-$5A)
+      if (b >= 0xC1 && b <= 0xDA) data[entryOff + 5 + i] = b - 0x80;
+    } else {
+      // Toggle
+      if (b >= 0x41 && b <= 0x5A) data[entryOff + 5 + i] = b + 0x80;
+      else if (b >= 0xC1 && b <= 0xDA) data[entryOff + 5 + i] = b - 0x80;
+    }
+  }
+}
+
+['upper', 'lower', 'toggle'].forEach(function(mode) {
+  document.getElementById('opt-case-' + mode).addEventListener('click', function(e) {
+    e.stopPropagation();
+    if (!currentBuffer || selectedEntryIndex < 0) return;
+    closeMenus();
+    pushUndo();
+    var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+    for (var i = 0; i < entries.length; i++) changeNameCase(entries[i], mode);
+    var info = parseCurrentDir(currentBuffer);
+    renderDisk(info);
+  });
+});
+
+// ── Compact Directory ────────────────────────────────────────────────
+document.getElementById('opt-compact-dir').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+  pushUndo();
+  var data = new Uint8Array(currentBuffer);
+  var fmt = currentFormat;
+  var ctx = getDirContext();
+  var t = ctx.dirTrack, s = ctx.dirSector;
+  var visited = {};
+  var allEntries = []; // collect all non-deleted entries
+
+  // Read all directory entries
+  while (t !== 0) {
+    var key = t + ':' + s;
+    if (visited[key]) break;
+    visited[key] = true;
+    var off = sectorOffset(t, s);
+    if (off < 0) break;
+    for (var i = 0; i < fmt.entriesPerSector; i++) {
+      var eo = off + i * fmt.entrySize;
+      var typeByte = data[eo + 2];
+      if ((typeByte & 0x07) > 0) {
+        // Non-deleted entry - save the 30 bytes (offset 2-31)
+        var entry = new Uint8Array(30);
+        for (var j = 0; j < 30; j++) entry[j] = data[eo + 2 + j];
+        allEntries.push(entry);
+      }
+    }
+    t = data[off]; s = data[off + 1];
+  }
+
+  // Rewrite directory with compacted entries
+  t = ctx.dirTrack; s = ctx.dirSector;
+  visited = {};
+  var entryIdx = 0;
+  while (t !== 0) {
+    var key2 = t + ':' + s;
+    if (visited[key2]) break;
+    visited[key2] = true;
+    var off2 = sectorOffset(t, s);
+    if (off2 < 0) break;
+    for (var i2 = 0; i2 < fmt.entriesPerSector; i2++) {
+      var eo2 = off2 + i2 * fmt.entrySize;
+      if (entryIdx < allEntries.length) {
+        for (var j2 = 0; j2 < 30; j2++) data[eo2 + 2 + j2] = allEntries[entryIdx][j2];
+        entryIdx++;
+      } else {
+        // Clear remaining entries
+        for (var j3 = 2; j3 < 32; j3++) data[eo2 + j3] = 0x00;
+      }
+    }
+    t = data[off2]; s = data[off2 + 1];
+  }
+
+  var removed = Object.keys(visited).length * fmt.entriesPerSector - allEntries.length;
+  var info = parseCurrentDir(currentBuffer);
+  renderDisk(info);
+  selectedEntryIndex = -1;
+  updateEntryMenuState();
+  showModal('Compact Directory', [allEntries.length + ' file(s) kept, ' + removed + ' empty slot(s) removed.']);
+});
+
+// ── CSV Export ───────────────────────────────────────────────────────
+document.getElementById('opt-export-csv').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+  var info = parseCurrentDir(currentBuffer);
+  var lines = ['Filename,Type,Blocks,Locked,Track,Sector'];
+  for (var i = 0; i < info.entries.length; i++) {
+    var en = info.entries[i];
+    if (!en.name && !en.type) continue;
+    var name = petsciiToReadable(en.name || '').replace(/"/g, '""').trim();
+    var type = (en.type || '').trim();
+    var blocks = en.blocks || 0;
+    var locked = en.locked ? 'Y' : 'N';
+    var ft = en.track || 0;
+    var fs = en.sector || 0;
+    lines.push('"' + name + '",' + type + ',' + blocks + ',' + locked + ',' + ft + ',' + fs);
+  }
+  var csv = lines.join('\n');
+  var diskName = petsciiToReadable(info.diskName || '').trim().replace(/[<>:"/\\|?*]/g, '_') || 'disk';
+  var blob = new Blob([csv], { type: 'text/csv' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = diskName + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// ── Directory Export as PNG ──────────────────────────────────────────
+document.getElementById('opt-export-png-dir').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+  var info = parseCurrentDir(currentBuffer);
+
+  // Render directory to a canvas using C64 colors
+  var charW = 8, charH = 8, scale = 2;
+  var cols = 40, rows = info.entries.length + 3; // header + entries + blocks free
+  var canvasW = cols * charW * scale;
+  var canvasH = rows * charH * scale;
+
+  var canvas = document.createElement('canvas');
+  canvas.width = canvasW;
+  canvas.height = canvasH;
+  var ctx = canvas.getContext('2d');
+
+  // Background
+  ctx.fillStyle = C64_COLORS[6]; // blue
+  ctx.fillRect(0, 0, canvasW, canvasH);
+
+  ctx.font = (charH * scale) + 'px "C64 Pro Mono", monospace';
+  ctx.textBaseline = 'top';
+
+  var y = 0;
+  function drawLine(text, color) {
+    ctx.fillStyle = color || C64_COLORS[14]; // light blue
+    ctx.fillText(text, 0, y);
+    y += charH * scale;
+  }
+
+  // Header
+  var diskName = petsciiToReadable(info.diskName || '').padEnd(currentFormat.nameLength);
+  var diskId = petsciiToReadable(info.diskId || '');
+  drawLine('0 "' + diskName + '" ' + diskId, C64_COLORS[14]);
+  drawLine('', C64_COLORS[14]); // blank line
+
+  // Entries
+  for (var i = 0; i < info.entries.length; i++) {
+    var en = info.entries[i];
+    if (!en.name && !en.type) continue;
+    var blocks = String(en.blocks || 0);
+    var name = '"' + petsciiToReadable(en.name || '').padEnd(16) + '"';
+    var type = (en.type || 'PRG').trim();
+    var line = blocks.padStart(4) + ' ' + name + ' ' + type;
+    drawLine(line, C64_COLORS[14]);
+  }
+
+  // Blocks free
+  drawLine((info.freeBlocks || 0) + ' BLOCKS FREE.', C64_COLORS[14]);
+
+  var diskFileName = petsciiToReadable(info.diskName || '').trim().replace(/[<>:"/\\|?*]/g, '_') || 'directory';
+  var a = document.createElement('a');
+  a.href = canvas.toDataURL('image/png');
+  a.download = diskFileName + '_dir.png';
+  a.click();
+});
+
+// ── geoWrite to Plain Text ──────────────────────────────────────────
+document.getElementById('opt-export-rtf').parentElement.insertAdjacentHTML('beforeend', '');
+
 fileInput.addEventListener('change', () => {
   var files = Array.from(fileInput.files);
   if (files.length === 0) return;
@@ -9559,6 +9826,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.16', title: 'Name case, compact dir, follow chain, CSV/PNG/text export', items: [
+      'Name Case: Ctrl+L lowercase, Ctrl+U uppercase, Ctrl+T toggle (Entry menu)',
+      'Compact Directory: remove deleted entries from directory (Disk menu)',
+      'Follow Chain: J key or button in sector editor to jump to next linked sector',
+      'Export as CSV: directory listing with filename, type, blocks, lock, T/S',
+      'Export Directory as PNG: C64-style directory screenshot',
+      'Export as Text (geoWrite): plain text extraction from geoWrite documents',
+    ]},
     { ver: '1.3.15', title: 'Search UX, keyboard shortcuts, refactoring', items: [
       'Search: PETSCII keyboard attached to search input for special character entry',
       'Search: radio buttons for scope selection, spinner during search',
