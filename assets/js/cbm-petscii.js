@@ -155,7 +155,7 @@ function insertCharAtCursor(input, ch, petsciiCode) {
   if (!input || input.tagName !== 'INPUT') return;
   var pos = (input._lastCursorPos != null) ? input._lastCursorPos : (input.selectionStart || 0);
   var val = input.value;
-  var maxLen = input.maxLength || 9999;
+  var maxLen = (input.maxLength > 0) ? input.maxLength : 9999;
   var newVal = val.slice(0, pos) + ch + val.slice(pos);
   if (newVal.length > maxLen) return;
   input.value = newVal;

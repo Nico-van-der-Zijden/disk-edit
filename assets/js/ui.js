@@ -80,6 +80,7 @@ function showChoiceModal(title, message, buttons, items) {
 
 document.getElementById('modal-overlay').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) {
+    hidePetsciiPicker();
     document.getElementById('modal-overlay').classList.remove('open');
   }
 });
@@ -95,6 +96,7 @@ document.addEventListener('keydown', (e) => {
     ctrlShiftClean = false;
   }
   if (e.key === 'Escape' && document.getElementById('modal-overlay').classList.contains('open')) {
+    hidePetsciiPicker();
     document.getElementById('modal-overlay').classList.remove('open');
   }
   // Ctrl+Alt+G: view as graphics
@@ -119,6 +121,62 @@ document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && !e.altKey && !e.shiftKey && e.code === 'KeyG') {
     e.preventDefault();
     if (currentBuffer && !isTapeFormat()) showGoToSector();
+  }
+  // Ctrl+W: close current tab
+  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.code === 'KeyW') {
+    e.preventDefault();
+    var closeEl = document.getElementById('opt-close');
+    if (!closeEl.classList.contains('disabled')) closeEl.click();
+  }
+  // Ctrl+Shift+W: close all tabs
+  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyW') {
+    e.preventDefault();
+    var closeAllEl = document.getElementById('opt-close-all');
+    if (!closeAllEl.classList.contains('disabled')) closeAllEl.click();
+  }
+  // Ctrl+Alt+H: view as hex
+  if (e.ctrlKey && e.altKey && e.code === 'KeyH') {
+    e.preventDefault();
+    if (currentBuffer && selectedEntryIndex >= 0) {
+      closeMenus();
+      showFileHexViewer(selectedEntryIndex);
+    }
+  }
+  // Ctrl+Alt+B: view as BASIC
+  if (e.ctrlKey && e.altKey && e.code === 'KeyB') {
+    e.preventDefault();
+    if (currentBuffer && selectedEntryIndex >= 0) {
+      closeMenus();
+      showFileBasicViewer(selectedEntryIndex);
+    }
+  }
+  // Ctrl+Alt+P: view as PETSCII
+  if (e.ctrlKey && e.altKey && e.code === 'KeyP') {
+    e.preventDefault();
+    if (currentBuffer && selectedEntryIndex >= 0) {
+      closeMenus();
+      showFilePetsciiViewer(selectedEntryIndex);
+    }
+  }
+  // Ctrl+Alt+D: view as disassembly
+  if (e.ctrlKey && e.altKey && e.code === 'KeyD') {
+    e.preventDefault();
+    if (currentBuffer && selectedEntryIndex >= 0) {
+      closeMenus();
+      showFileDisasmViewer(selectedEntryIndex);
+    }
+  }
+  // Ctrl+Alt+V: validate disk
+  if (e.ctrlKey && e.altKey && e.code === 'KeyV') {
+    e.preventDefault();
+    var valEl = document.getElementById('opt-validate');
+    if (!valEl.classList.contains('disabled')) valEl.click();
+  }
+  // Ctrl+Shift+S: save as
+  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyS') {
+    e.preventDefault();
+    var saveAsEl = document.getElementById('opt-save-as');
+    if (!saveAsEl.classList.contains('disabled')) saveAsEl.click();
   }
   // Ctrl+Alt+O: open disk
   if (e.ctrlKey && e.altKey && e.code === 'KeyO') {
@@ -874,16 +932,16 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl+D: add directory (D81 only)
-  if (e.ctrlKey && e.key === 'd') {
+  // Ctrl+D: add directory (D81 only, not Ctrl+Alt+D which is View as Disassembly)
+  if (e.ctrlKey && !e.altKey && e.key === 'd') {
     e.preventDefault();
     var addDirEl = document.getElementById('opt-add-partition');
     if (!addDirEl.classList.contains('disabled')) addDirEl.click();
     return;
   }
 
-  // Ctrl+B: view BAM
-  if (e.ctrlKey && e.key === 'b') {
+  // Ctrl+B: view BAM (not Ctrl+Alt+B which is View as BASIC)
+  if (e.ctrlKey && !e.altKey && e.key === 'b') {
     e.preventDefault();
     var bamEl = document.getElementById('opt-view-bam');
     if (!bamEl.classList.contains('disabled')) bamEl.click();
@@ -5228,8 +5286,7 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     html += '<span class="hex-ascii">';
     for (var col2 = 0; col2 < 8; col2++) {
       var idx2 = rowOff + col2;
-      var hl2 = hlSet[idx2] ? ' hex-highlight' : '';
-      html += '<span class="hex-char' + hl2 + '" data-idx="' + idx2 + '">' + escHtml(PETSCII_MAP[working[idx2]]) + '</span>';
+      html += '<span class="hex-char" data-idx="' + idx2 + '">' + escHtml(PETSCII_MAP[working[idx2]]) + '</span>';
     }
     html += '</span>';
     html += '</div>';
@@ -5601,31 +5658,31 @@ function searchDisk(buffer, format, numTracks, term, scope) {
       if (off < 0 || off + 256 > data.length) continue;
 
       if (scope === 'filename') {
-        // Only search filename bytes in directory sectors (dir track)
         if (t !== dirTrack) continue;
         for (var ei = 0; ei < format.entriesPerSector; ei++) {
           var eo = off + ei * format.entrySize;
           var nameOff = eo + 5;
-          if (matchBytes(data, nameOff, 16, termBytes, termPetscii)) {
-            var ctx = readableContext(data, nameOff, 16, termBytes, termPetscii);
-            results.push({ track: t, sector: s, offset: nameOff - off, context: ctx });
+          var mPos = matchBytesAt(data, nameOff, 16, termBytes, termPetscii);
+          if (mPos >= 0) {
+            var cp = buildContextParts(data, nameOff, 16, nameOff + mPos, termBytes.length);
+            results.push({ track: t, sector: s, offset: nameOff - off + mPos, petParts: cp.petParts });
           }
         }
       } else if (scope === 'header') {
-        // Search disk name in header sector
         if (t !== format.bamTrack) continue;
         var hOff = off + format.nameOffset;
-        if (matchBytes(data, hOff, format.nameLength, termBytes, termPetscii)) {
-          var ctx2 = readableContext(data, hOff, format.nameLength, termBytes, termPetscii);
-          results.push({ track: t, sector: s, offset: format.nameOffset, context: ctx2 });
+        var mPos2 = matchBytesAt(data, hOff, format.nameLength, termBytes, termPetscii);
+        if (mPos2 >= 0) {
+          var cp2 = buildContextParts(data, hOff, format.nameLength, hOff + mPos2, termBytes.length);
+          results.push({ track: t, sector: s, offset: format.nameOffset + mPos2, petParts: cp2.petParts });
         }
       } else if (scope === 'id') {
-        // Search disk ID
         if (t !== format.bamTrack) continue;
         var idOff = off + format.idOffset;
-        if (matchBytes(data, idOff, format.idLength, termBytes, termPetscii)) {
-          var ctx3 = readableContext(data, idOff, format.idLength, termBytes, termPetscii);
-          results.push({ track: t, sector: s, offset: format.idOffset, context: ctx3 });
+        var mPos3 = matchBytesAt(data, idOff, format.idLength, termBytes, termPetscii);
+        if (mPos3 >= 0) {
+          var cp3 = buildContextParts(data, idOff, format.idLength, idOff + mPos3, termBytes.length);
+          results.push({ track: t, sector: s, offset: format.idOffset + mPos3, petParts: cp3.petParts });
         }
       } else {
         // Search all bytes in sector
@@ -5639,9 +5696,9 @@ function searchDisk(buffer, format, numTracks, term, scope) {
   return results;
 }
 
-function matchBytes(data, offset, len, termAscii, termPetscii) {
-  if (offset + termAscii.length > data.length) return false;
-  if (termAscii.length > len) return false;
+function matchBytesAt(data, offset, len, termAscii, termPetscii) {
+  if (offset + termAscii.length > data.length) return -1;
+  if (termAscii.length > len) return -1;
   for (var pos = 0; pos <= len - termAscii.length; pos++) {
     var matchA = true, matchP = true;
     for (var i = 0; i < termAscii.length; i++) {
@@ -5650,10 +5707,11 @@ function matchBytes(data, offset, len, termAscii, termPetscii) {
       if (b !== termPetscii[i]) matchP = false;
       if (!matchA && !matchP) break;
     }
-    if (matchA || matchP) return true;
+    if (matchA || matchP) return pos;
   }
-  return false;
+  return -1;
 }
+
 
 function findAllInSector(data, sectorOff, len, termAscii, termPetscii) {
   var results = [];
@@ -5668,32 +5726,37 @@ function findAllInSector(data, sectorOff, len, termAscii, termPetscii) {
     if (matchA || matchP) {
       var ctxStart = Math.max(0, pos - 4);
       var ctxEnd = Math.min(len, pos + termAscii.length + 4);
-      var ctx = '';
+      var petParts = [];
       for (var ci = ctxStart; ci < ctxEnd; ci++) {
         var cb = data[sectorOff + ci];
-        if (ci >= pos && ci < pos + termAscii.length) {
-          ctx += '\x01'; // marker for highlight start
-          ctx += (cb >= 0x20 && cb <= 0x7E) ? String.fromCharCode(cb) : '.';
-          ctx += '\x02'; // marker for highlight end
-        } else {
-          ctx += (cb >= 0x20 && cb <= 0x7E) ? String.fromCharCode(cb) : '.';
-        }
+        var isMatch = (ci >= pos && ci < pos + termAscii.length);
+        petParts.push({ ch: byteToDisplayChar(cb), match: isMatch });
       }
-      results.push({ offset: pos, context: ctx });
+      results.push({ offset: pos, petParts: petParts });
       pos += termAscii.length - 1; // skip past match
     }
   }
   return results;
 }
 
-function readableContext(data, offset, len, termAscii, termPetscii) {
-  var ctx = '';
+// Convert byte to a displayable character (ASCII-safe, no PUA/C64 glyphs)
+function byteToDisplayChar(b) {
+  if (b >= 0x20 && b <= 0x7E) return String.fromCharCode(b); // printable ASCII
+  if (b >= 0x41 && b <= 0x5A) return String.fromCharCode(b); // A-Z
+  if (b >= 0xC1 && b <= 0xDA) return String.fromCharCode(b - 0x80); // PETSCII uppercase → A-Z
+  if (b >= 0x61 && b <= 0x7A) return String.fromCharCode(b - 0x20); // PETSCII shifted lowercase → A-Z
+  return '\u00B7'; // middle dot for non-printable
+}
+
+function buildContextParts(data, startOff, len, matchOff, matchLen) {
+  var petParts = [];
   for (var i = 0; i < len; i++) {
-    var b = data[offset + i];
+    var b = data[startOff + i];
     if (b === 0xA0) continue; // skip PETSCII padding
-    ctx += (b >= 0x20 && b <= 0x7E) ? String.fromCharCode(b) : '.';
+    var isMatch = (startOff + i >= matchOff && startOff + i < matchOff + matchLen);
+    petParts.push({ ch: byteToDisplayChar(b), match: isMatch });
   }
-  return ctx;
+  return { petParts: petParts };
 }
 
 function showSearchModal(title, allTabs) {
@@ -5706,93 +5769,114 @@ function showSearchModal(title, allTabs) {
   var form = document.createElement('div');
   form.className = 'search-form';
 
+  var row = document.createElement('div');
+  row.className = 'search-row';
+
   var input = document.createElement('input');
   input.type = 'text';
   input.placeholder = 'Text or hex ($A0 FF)...';
   input.id = 'search-input';
-  form.appendChild(input);
-
-  var scopeSelect = document.createElement('select');
-  scopeSelect.id = 'search-scope';
-  var scopes = [['all', 'All Sectors'], ['filename', 'Filenames'], ['header', 'Disk Name'], ['id', 'Disk ID']];
-  for (var si = 0; si < scopes.length; si++) {
-    var opt = document.createElement('option');
-    opt.value = scopes[si][0];
-    opt.textContent = scopes[si][1];
-    scopeSelect.appendChild(opt);
-  }
-  form.appendChild(scopeSelect);
+  row.appendChild(input);
 
   var searchBtn = document.createElement('button');
   searchBtn.textContent = 'Search';
   searchBtn.id = 'search-go';
-  form.appendChild(searchBtn);
+  row.appendChild(searchBtn);
 
-  body.appendChild(form);
+  form.appendChild(row);
+
+  var scopeRow = document.createElement('div');
+  scopeRow.className = 'search-scopes';
+  var scopes = [['all', 'All sectors'], ['filename', 'Filenames'], ['header', 'Disk name'], ['id', 'Disk ID']];
+  for (var si = 0; si < scopes.length; si++) {
+    var label = document.createElement('label');
+    var radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'search-scope';
+    radio.value = scopes[si][0];
+    if (si === 0) radio.checked = true;
+    label.appendChild(radio);
+    label.appendChild(document.createTextNode(scopes[si][1]));
+    scopeRow.appendChild(label);
+  }
+  form.appendChild(scopeRow);
+
+  var layout = document.createElement('div');
+  layout.className = 'search-layout';
+  layout.appendChild(form);
 
   var resultsDiv = document.createElement('div');
   resultsDiv.className = 'search-results';
   resultsDiv.id = 'search-results';
-  body.appendChild(resultsDiv);
+  layout.appendChild(resultsDiv);
+
+  body.appendChild(layout);
 
   function doSearch() {
     var term = input.value;
-    var scope = scopeSelect.value;
+    var scopeRadio = form.querySelector('input[name="search-scope"]:checked');
+    var scope = scopeRadio ? scopeRadio.value : 'all';
     resultsDiv.innerHTML = '';
 
     if (!term) return;
+
+    // Show spinner while searching
+    resultsDiv.innerHTML = '<div class="search-spinner"><i class="fa-solid fa-spinner fa-spin"></i> Searching...</div>';
+    searchBtn.disabled = true;
 
     // Determine byte length of search term for highlighting
     var hexParsed = parseHexSearch(term);
     var searchByteLen = hexParsed ? hexParsed.length : term.length;
 
-    if (allTabs) {
-      // Search all tabs
-      saveActiveTab();
-      var totalResults = 0;
-      for (var ti = 0; ti < tabs.length; ti++) {
-        var tab = tabs[ti];
-        // Temporarily load tab's format context
-        var prevBuffer = currentBuffer;
-        var prevFormat = currentFormat;
-        var prevTracks = currentTracks;
-        currentBuffer = tab.buffer;
-        currentFormat = tab.format;
-        currentTracks = tab.tracks;
+    // Defer to let spinner render
+    setTimeout(function() {
+      resultsDiv.innerHTML = '';
 
-        var results = searchDisk(tab.buffer, tab.format, tab.tracks, term, scope);
+      if (allTabs) {
+        saveActiveTab();
+        var totalResults = 0;
+        for (var ti = 0; ti < tabs.length; ti++) {
+          var tab = tabs[ti];
+          var prevBuffer = currentBuffer;
+          var prevFormat = currentFormat;
+          var prevTracks = currentTracks;
+          currentBuffer = tab.buffer;
+          currentFormat = tab.format;
+          currentTracks = tab.tracks;
 
-        // Restore
-        currentBuffer = prevBuffer;
-        currentFormat = prevFormat;
-        currentTracks = prevTracks;
+          var results = searchDisk(tab.buffer, tab.format, tab.tracks, term, scope);
 
-        if (results.length > 0) {
-          var header = document.createElement('div');
-          header.className = 'search-tab-header';
-          header.textContent = tab.name + ' (' + results.length + ' result' + (results.length > 1 ? 's' : '') + ')';
-          resultsDiv.appendChild(header);
+          currentBuffer = prevBuffer;
+          currentFormat = prevFormat;
+          currentTracks = prevTracks;
 
-          renderResults(resultsDiv, results, tab, searchByteLen);
-          totalResults += results.length;
+          if (results.length > 0) {
+            var header = document.createElement('div');
+            header.className = 'search-tab-header';
+            header.textContent = tab.name + ' (' + results.length + ' result' + (results.length > 1 ? 's' : '') + ')';
+            resultsDiv.appendChild(header);
+
+            renderResults(resultsDiv, results, tab, searchByteLen);
+            totalResults += results.length;
+          }
+        }
+        if (totalResults === 0) {
+          resultsDiv.innerHTML = '<div class="search-no-results">No results found.</div>';
+        }
+      } else {
+        var results2 = searchDisk(currentBuffer, currentFormat, currentTracks, term, scope);
+        if (results2.length === 0) {
+          resultsDiv.innerHTML = '<div class="search-no-results">No results found.</div>';
+        } else {
+          var summary = document.createElement('div');
+          summary.className = 'search-tab-header';
+          summary.textContent = results2.length + ' result' + (results2.length > 1 ? 's' : '') + ' found';
+          resultsDiv.appendChild(summary);
+          renderResults(resultsDiv, results2, null, searchByteLen);
         }
       }
-      if (totalResults === 0) {
-        resultsDiv.innerHTML = '<div class="search-no-results">No results found.</div>';
-      }
-    } else {
-      // Search current tab only
-      var results2 = searchDisk(currentBuffer, currentFormat, currentTracks, term, scope);
-      if (results2.length === 0) {
-        resultsDiv.innerHTML = '<div class="search-no-results">No results found.</div>';
-      } else {
-        var summary = document.createElement('div');
-        summary.className = 'search-tab-header';
-        summary.textContent = results2.length + ' result' + (results2.length > 1 ? 's' : '') + ' found';
-        resultsDiv.appendChild(summary);
-        renderResults(resultsDiv, results2, null, searchByteLen);
-      }
-    }
+      searchBtn.disabled = false;
+    }, 20);
   }
 
   function renderResults(container, results, targetTab, termLen) {
@@ -5809,36 +5893,24 @@ function showSearchModal(title, allTabs) {
         row.className = 'search-result';
 
         var sKey = r.track + ':' + r.sector;
-        var ts = document.createElement('span');
-        ts.className = 'search-result-ts';
-        ts.textContent = 'T:' + r.track + ' S:' + r.sector;
-        if (sectorCounts[sKey] > 1) ts.textContent += ' (' + sectorCounts[sKey] + ')';
-        row.appendChild(ts);
+        var tHex = r.track.toString(16).toUpperCase().padStart(2, '0');
+        var sHex = r.sector.toString(16).toUpperCase().padStart(2, '0');
 
-        var offsetSpan = document.createElement('span');
-        offsetSpan.className = 'search-result-ts';
-        offsetSpan.textContent = ' +$' + ('00' + r.offset.toString(16).toUpperCase()).slice(-2);
-        row.appendChild(offsetSpan);
-
-        var ctx = document.createElement('span');
-        ctx.className = 'search-result-ctx';
-        // Parse context with highlight markers
-        var ctxText = r.context;
-        var html = ' ';
-        for (var ci = 0; ci < ctxText.length; ci++) {
-          if (ctxText[ci] === '\x01') {
-            html += '<span class="search-result-match">';
-          } else if (ctxText[ci] === '\x02') {
-            html += '</span>';
-          } else {
-            html += escHtml(ctxText[ci]);
+        var html = '<span class="search-result-ts">T:$' + tHex + ' S:$' + sHex + '</span> ';
+        if (r.petParts) {
+          html += '<span class="search-result-pet">';
+          for (var pi = 0; pi < r.petParts.length; pi++) {
+            html += escHtml(r.petParts[pi].ch);
           }
+          html += '</span>';
         }
-        ctx.innerHTML = html;
-        row.appendChild(ctx);
+        var cnt = sectorCounts[sKey];
+        html += ' <span class="search-result-pet">(' + cnt + ' occurrence' + (cnt > 1 ? 's' : '') + ')</span>';
+        row.innerHTML = html;
 
-        row.title = 'Click to open sector editor at T:' + r.track + ' S:' + r.sector;
+        row.title = 'Open sector editor at T:$' + tHex + ' S:$' + sHex;
         row.addEventListener('click', function() {
+          hidePetsciiPicker();
           document.getElementById('modal-overlay').classList.remove('open');
           if (tab) {
             // Switch to the target tab first
@@ -5857,14 +5929,29 @@ function showSearchModal(title, allTabs) {
     }
   }
 
-  searchBtn.addEventListener('click', doSearch);
+  searchBtn.addEventListener('click', function() { hidePetsciiPicker(); doSearch(); });
   input.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') { e.preventDefault(); doSearch(); }
+    if (e.key === 'Enter') { e.preventDefault(); hidePetsciiPicker(); doSearch(); }
+  });
+
+  // Track cursor for PETSCII picker insertion (without intercepting keyboard)
+  var updateCursor = function() { input._lastCursorPos = input.selectionStart; };
+  input.addEventListener('keyup', updateCursor);
+  input.addEventListener('mouseup', updateCursor);
+  input.addEventListener('input', updateCursor);
+
+  // Show picker only when search input has focus
+  input.addEventListener('focus', function() {
+    showPetsciiPicker(input, 255);
+  });
+  input.addEventListener('blur', function() {
+    if (!pickerClicking) hidePetsciiPicker();
   });
 
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
   document.getElementById('modal-close').addEventListener('click', function() {
+    hidePetsciiPicker();
     document.getElementById('modal-overlay').classList.remove('open');
   });
   document.getElementById('modal-overlay').classList.add('open');
@@ -5884,29 +5971,71 @@ document.getElementById('opt-find-tabs').addEventListener('click', function(e) {
 });
 
 // ── Go to Sector (Ctrl+G) ────────────────────────────────────────────
-async function showGoToSector() {
+function showGoToSector() {
   closeMenus();
-  var input = await showInputModal('Go to Sector (T:S)', '18:0');
-  if (!input) return;
+  document.getElementById('modal-title').textContent = 'Go to Sector';
+  var body = document.getElementById('modal-body');
+  body.innerHTML = '';
 
-  // Parse T:S in various formats: "18:0", "18,0", "18 0", "$12:$00"
-  var parts = input.replace(/\$/g, '').split(/[\s:,]+/);
-  if (parts.length < 2) return;
+  var row = document.createElement('div');
+  row.className = 'flex-row';
 
-  var t = parseInt(parts[0], parts[0].length <= 2 && /^[0-9a-fA-F]+$/.test(parts[0]) && input.indexOf('$') >= 0 ? 16 : 10);
-  var s = parseInt(parts[1], parts[1].length <= 2 && /^[0-9a-fA-F]+$/.test(parts[1]) && input.indexOf('$') >= 0 ? 16 : 10);
+  var tLabel = document.createElement('span');
+  tLabel.textContent = 'Track: $';
+  row.appendChild(tLabel);
 
-  if (isNaN(t) || isNaN(s) || t < 1 || t > currentTracks) {
-    showModal('Go to Sector', ['Invalid track: ' + t + '. Valid range: 1-' + currentTracks + '.']);
-    return;
+  var trackInput = createHexInput({
+    value: currentFormat.bamTrack || 18,
+    maxBytes: 1,
+    validate: function(v) { return v >= 1 && v <= currentTracks; }
+  });
+  row.appendChild(trackInput);
+
+  var sLabel = document.createElement('span');
+  sLabel.textContent = 'Sector: $';
+  row.appendChild(sLabel);
+
+  var sectorInput = createHexInput({
+    value: 0,
+    maxBytes: 1,
+    validate: function(v) {
+      var t = trackInput.getValue();
+      if (t < 1 || t > currentTracks) return false;
+      return v >= 0 && v < currentFormat.sectorsPerTrack(t);
+    }
+  });
+  row.appendChild(sectorInput);
+
+  body.appendChild(row);
+
+  // Revalidate sector when track changes
+  trackInput.addEventListener('input', function() { sectorInput.isValid(); });
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML =
+    '<button class="modal-btn-secondary" id="goto-cancel">Cancel</button>' +
+    '<button id="goto-ok">Go</button>';
+
+  function doGo() {
+    if (!trackInput.isValid() || !sectorInput.isValid()) return;
+    var t = trackInput.getValue();
+    var s = sectorInput.getValue();
+    document.getElementById('modal-overlay').classList.remove('open');
+    showSectorHexEditor(t, s);
   }
-  var maxS = currentFormat.sectorsPerTrack(t);
-  if (s < 0 || s >= maxS) {
-    showModal('Go to Sector', ['Invalid sector: ' + s + '. Track ' + t + ' has sectors 0-' + (maxS - 1) + '.']);
-    return;
-  }
 
-  showSectorHexEditor(t, s);
+  document.getElementById('goto-ok').addEventListener('click', doGo);
+  document.getElementById('goto-cancel').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+
+  // Enter to confirm
+  trackInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') doGo(); });
+  sectorInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') doGo(); });
+
+  document.getElementById('modal-overlay').classList.add('open');
+  trackInput.focus();
+  trackInput.select();
 }
 
 document.getElementById('opt-goto-sector').addEventListener('click', function(e) {
@@ -7931,7 +8060,6 @@ function geoWriteToPdf(entryOff) {
   var usableW = pageW - marginL - marginR;
 
   // Collect embedded images and convert to PDF image XObjects
-  var pdfImages = {};
   var imgObjIds = {};
 
   // We'll build the PDF structure manually
@@ -8019,10 +8147,11 @@ function geoWriteToPdf(entryOff) {
       grayData[px] = imgData.data[px * 4]; // R channel (mono: 0 or 255)
     }
 
-    var imgStream = '';
+    var imgHexArr = new Array(grayData.length);
     for (var gi = 0; gi < grayData.length; gi++) {
-      imgStream += ('0' + grayData[gi].toString(16)).slice(-2);
+      imgHexArr[gi] = ('0' + grayData[gi].toString(16)).slice(-2);
     }
+    var imgStream = imgHexArr.join('');
 
     var imgObjId = addObj('<< /Type /XObject /Subtype /Image /Width ' + img.w +
       ' /Height ' + img.h + ' /ColorSpace /DeviceGray /BitsPerComponent 8 ' +
@@ -9272,7 +9401,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '&bull; Search: Find/Find in Tabs with text and hex byte pattern matching<br>' +
       '&bull; Go to Sector (Ctrl+G): jump to any track/sector<br>' +
       '&bull; File import/export/copy/paste across disk images<br>' +
-      '&bull; View As: Hex, PETSCII (C64 screen), BASIC (V2/V7), Graphics, geoWrite<br>' +
+      '&bull; View As: Hex, Disassembly, PETSCII (C64 screen), BASIC (V2/V7), Graphics, geoWrite<br>' +
       '&bull; Graphics: 17+ formats (Koala, Art Studio, FLI, sprites, charset, Print Shop) with PNG export<br>' +
       '&bull; GEOS: geoPaint, Photo Scrap, Photo Album, geoWrite, Font viewers<br>' +
       '&bull; geoWrite document viewer with styled text and inline images<br>' +
@@ -9284,6 +9413,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '&bull; Fill free sectors, validate disk, recalculate BAM<br>' +
       '&bull; Multi-tab interface for working with multiple disks<br>' +
       '&bull; Drag &amp; drop: disk images, PRG/SEQ/USR/REL/CVT files, export by dragging<br>' +
+      '&bull; 40+ keyboard shortcuts for all major operations<br>' +
       '&bull; Dark and light themes<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
@@ -9322,6 +9452,7 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '&bull; <a href="https://c64-wiki.com/" target="_blank" class="link">C64-Wiki</a> — Commodore 64 technical reference<br>' +
       '&bull; <a href="https://sta.c64.org/" target="_blank" class="link">STA\'s C64 pages</a> — disk format details<br>' +
       '&bull; <a href="https://csdb.dk/" target="_blank" class="link">CSDb</a> — C64 Scene Database<br>' +
+      '&bull; <a href="https://www.zimmers.net/anonftp/pub/cbm/" target="_blank" class="link">Zimmers.net</a> — CBM file archive and GEOS format documentation<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
@@ -9352,11 +9483,26 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Ctrl + Z', 'Undo last change'],
       ['Ctrl + Alt + O', 'Open disk'],
       ['Ctrl + Alt + S', 'Save disk'],
+      ['Ctrl + Shift + S', 'Save as'],
       ['Ctrl + Alt + N', 'New disk'],
+      ['Ctrl + W', 'Close current tab'],
+      ['Ctrl + Shift + W', 'Close all tabs'],
       ['Ctrl + B', 'View BAM'],
-      ['Ctrl + Alt + G', 'View as graphics'],
+      ['Ctrl + Alt + V', 'Validate disk'],
       ['Ctrl + H', 'Edit disk name'],
       ['Ctrl + Alt + I', 'Edit disk ID'],
+    ]},
+    { title: 'Viewers', shortcuts: [
+      ['Ctrl + Alt + H', 'View as hex'],
+      ['Ctrl + Alt + B', 'View as BASIC'],
+      ['Ctrl + Alt + P', 'View as PETSCII'],
+      ['Ctrl + Alt + D', 'View as disassembly'],
+      ['Ctrl + Alt + G', 'View as graphics'],
+    ]},
+    { title: 'Search', shortcuts: [
+      ['Ctrl + F', 'Find in current disk'],
+      ['Ctrl + Shift + F', 'Find in all tabs'],
+      ['Ctrl + G', 'Go to sector'],
     ]},
     { title: 'Formatting', shortcuts: [
       ['Ctrl + Alt + L', 'Align left'],
@@ -9413,6 +9559,20 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.15', title: 'Search UX, keyboard shortcuts, refactoring', items: [
+      'Search: PETSCII keyboard attached to search input for special character entry',
+      'Search: radio buttons for scope selection, spinner during search',
+      'Search: hex byte display and PETSCII chars in results, scrollable results',
+      'Go to Sector: proper hex input fields for track and sector with validation',
+      'Keyboard shortcuts: Ctrl+W close tab, Ctrl+Shift+W close all, Ctrl+Shift+S save as',
+      'Keyboard shortcuts: Ctrl+Alt+H/B/P/D for hex/BASIC/PETSCII/disassembly viewers',
+      'Keyboard shortcuts: Ctrl+Alt+V validate disk',
+      'Keyboard shortcuts dialog: new Viewers and Search sections',
+      'Sector editor: search match highlighting on hex bytes only (removed from PETSCII column)',
+      'Refactor: removed dead matchBytes() function, unused pdfImages variable',
+      'Refactor: optimized PDF image hex encoding with Array.join()',
+      'Fix: PETSCII picker maxLength check for inputs without explicit maxLength',
+    ]},
     { ver: '1.3.14', title: 'Search improvements, Go to Sector, PDF font metrics', items: [
       'Search: hex byte pattern search ($A0 FF, A0FF) in addition to text',
       'Search: match count per sector shown in results',
