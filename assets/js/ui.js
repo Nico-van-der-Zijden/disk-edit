@@ -10116,6 +10116,17 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.20', title: 'Build script, settings export, UI polish', items: [
+      'Build script (build.ps1): single self-contained dist/index.html with all JS/CSS/fonts inlined',
+      'Options: Export/Import Settings and Separators with auto-detect on import',
+      'Separator duplicate prevention on import and save',
+      'Separator editor: replaced built-in grid with standard PETSCII picker',
+      'Modal footer split: actions (left) vs navigation (right) for cleaner UX',
+      'Follow chain shortcut changed to Ctrl+J (was bare J key)',
+      'Show Addresses and Track/Sector columns default to on for new users',
+      'localStorage keys renamed from d64- to cbm- prefix',
+      'Fixed follow chain null error when restoring footer',
+    ]},
     { ver: '1.3.19', title: 'Additional graphics formats', items: [
       'Graphics: Advanced Art Studio (multicolor, $2000, 10018 bytes)',
       'Graphics: Saracen Paint (multicolor, $3F8E, 10023 bytes)',
