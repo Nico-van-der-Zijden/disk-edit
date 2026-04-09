@@ -1334,6 +1334,7 @@ function updateMenuState() {
   document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-compact-dir').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-file-chains').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-unzip').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
   document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || tape);
@@ -9927,6 +9928,174 @@ document.getElementById('opt-compact-dir').addEventListener('click', function(e)
   showModal('Compact Directory', [allEntries.length + ' file(s) kept, ' + removed + ' empty slot(s) removed.']);
 });
 
+// ── Decompress ZipCode ───────────────────────────────────────────────
+document.getElementById('opt-unzip').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+
+  var data = new Uint8Array(currentBuffer);
+  var info = parseCurrentDir(currentBuffer);
+
+  // Find ZipCode sets: look for files starting with "1!" and matching 2!/3!/4!
+  var sets = {};
+  for (var i = 0; i < info.entries.length; i++) {
+    var en = info.entries[i];
+    if (en.deleted) continue;
+    var name = petsciiToReadable(en.name || '').trim();
+    if (name.length < 3) continue;
+    var prefix = name.substring(0, 2);
+    if (prefix === '1!' || prefix === '2!' || prefix === '3!' || prefix === '4!') {
+      var baseName = name.substring(2);
+      if (!sets[baseName]) sets[baseName] = {};
+      sets[baseName][prefix[0]] = en.entryOff;
+    }
+  }
+
+  // Find complete sets (all 4 files present)
+  var completeSets = [];
+  for (var sn in sets) {
+    if (sets[sn]['1'] && sets[sn]['2'] && sets[sn]['3'] && sets[sn]['4']) {
+      completeSets.push({ name: sn, offsets: sets[sn] });
+    }
+  }
+
+  if (completeSets.length === 0) {
+    // Show what we found
+    var partial = Object.keys(sets);
+    if (partial.length > 0) {
+      var msgs = ['Incomplete ZipCode set(s) found:'];
+      for (var pk = 0; pk < partial.length; pk++) {
+        var found = Object.keys(sets[partial[pk]]).sort().map(function(n) { return n + '!'; }).join(', ');
+        msgs.push('"' + partial[pk] + '": found ' + found + ' (need 1!, 2!, 3!, 4!)');
+      }
+      showModal('Decompress ZipCode', msgs);
+    } else {
+      showModal('Decompress ZipCode', ['No ZipCode files found on this disk.', 'ZipCode files are named 1!NAME, 2!NAME, 3!NAME, 4!NAME.']);
+    }
+    return;
+  }
+
+  // If multiple sets, use the first one (could add a chooser later)
+  var set = completeSets[0];
+  if (completeSets.length > 1) {
+    // TODO: let user pick which set
+  }
+
+  // Read all 4 files
+  var files = [];
+  for (var fi = 1; fi <= 4; fi++) {
+    var result = readFileData(currentBuffer, set.offsets[String(fi)]);
+    if (result.error || result.data.length < 3) {
+      showModal('Decompress Error', ['Failed to read file ' + fi + '!' + set.name + ': ' + (result.error || 'too small')]);
+      return;
+    }
+    files.push(result.data);
+  }
+
+  // Decompress into a D64
+  var d64 = decompressZipCode(files);
+  if (!d64) {
+    showModal('Decompress Error', ['ZipCode decompression failed — data may be corrupt.']);
+    return;
+  }
+
+  // Open as new tab
+  saveActiveTab();
+  currentBuffer = d64;
+  currentFileName = set.name + '.d64';
+  currentPartition = null;
+  selectedEntryIndex = -1;
+  parseDisk(currentBuffer);
+  var tab = createTab(set.name + '.d64', currentBuffer, set.name + '.d64');
+  activeTabId = tab.id;
+  var newInfo = parseCurrentDir(currentBuffer);
+  renderDisk(newInfo);
+  renderTabs();
+  updateMenuState();
+  showModal('Decompress ZipCode', ['"' + set.name + '" decompressed successfully.', 'Opened as new tab.']);
+});
+
+function decompressZipCode(files) {
+  // Standard D64: 35 tracks, 174848 bytes
+  var spt = function(t) {
+    if (t <= 17) return 21;
+    if (t <= 24) return 19;
+    if (t <= 30) return 18;
+    return 17;
+  };
+
+  var d64 = new Uint8Array(174848);
+  var tracksPerFile = [8, 8, 9, 10];
+  var track = 1;
+
+  for (var fi = 0; fi < 4; fi++) {
+    var fileData = files[fi];
+    var pos = 2; // skip PRG load address
+
+    for (var ti = 0; ti < tracksPerFile[fi]; ti++) {
+      var sectors = spt(track);
+
+      for (var si = 0; si < sectors; si++) {
+        if (pos >= fileData.length) return null;
+
+        var packByte = fileData[pos++];
+        var method = (packByte >> 6) & 0x03;
+        var sectorNum = packByte & 0x3F;
+
+        // Calculate D64 offset for this sector
+        var d64Off = 0;
+        for (var ct = 1; ct < track; ct++) d64Off += spt(ct) * 256;
+        d64Off += sectorNum * 256;
+
+        if (d64Off + 256 > d64.length) return null;
+
+        if (method === 0) {
+          // Store: raw 256 bytes
+          if (pos + 256 > fileData.length) return null;
+          for (var bi = 0; bi < 256; bi++) d64[d64Off + bi] = fileData[pos++];
+
+        } else if (method === 1) {
+          // Fill: single byte repeated 256 times
+          if (pos >= fileData.length) return null;
+          var fillVal = fileData[pos++];
+          for (var bi2 = 0; bi2 < 256; bi2++) d64[d64Off + bi2] = fillVal;
+
+        } else if (method === 2) {
+          // RLE compressed
+          if (pos >= fileData.length) return null;
+          var rleEscape = fileData[pos++];
+          var decoded = 0;
+
+          while (decoded < 256) {
+            if (pos >= fileData.length) return null;
+            var b = fileData[pos++];
+
+            if (b === rleEscape) {
+              if (pos + 1 >= fileData.length) return null;
+              var count = fileData[pos++];
+              var fill = fileData[pos++];
+              if (count === 0) count = 256;
+              for (var ri = 0; ri < count && decoded < 256; ri++) {
+                d64[d64Off + decoded++] = fill;
+              }
+            } else {
+              d64[d64Off + decoded++] = b;
+            }
+          }
+
+        } else {
+          // Method 3: invalid
+          return null;
+        }
+      }
+      track++;
+    }
+  }
+
+  return d64.buffer;
+}
+
 // ── File Chains ──────────────────────────────────────────────────────
 document.getElementById('opt-file-chains').addEventListener('click', function(e) {
   e.stopPropagation();
@@ -10556,6 +10725,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.24', title: 'ZipCode decompression', items: [
+      'Decompress ZipCode: detect 1!-4! file sets on disk and extract to new D64 tab',
+      'Three compression methods: store (raw), fill (single byte), RLE',
+      'Validates complete set (all 4 files present) with clear error for partial sets',
+    ]},
     { ver: '1.3.23', title: 'G64, DNP, D1M/D2M/D4M format support', items: [
       'G64 (GCR disk image): auto-decode to D64 on open, full GCR-to-sector extraction',
       'DNP (CMD Native Partition): read/write support with 256 sectors/track BAM',
