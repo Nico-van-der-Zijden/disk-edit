@@ -355,7 +355,19 @@ function renderDisk(info) {
           <span class="dir-addr">${addrHtml}</span>
           <span class="dir-icons">${(function() {
             var icons = '';
-            if (!currentBuffer || e.deleted || isTapeFormat()) return icons;
+            if (!currentBuffer || isTapeFormat()) return icons;
+            if (e.deleted) {
+              var dd = new Uint8Array(currentBuffer);
+              var dt = dd[e.entryOff + 3];
+              // Skip separators: T/S points to directory track or is 0
+              if (dt !== 0 && dt !== currentFormat.dirTrack) {
+                var recov = checkScratchedRecoverable(currentBuffer, e.entryOff);
+                if (recov === 'yes') icons += '<span class="dir-icon-recover" title="Recoverable \u2014 sector chain intact"><i class="fa-solid fa-heart-pulse"></i></span>';
+                else if (recov === 'partial') icons += '<span class="dir-icon-recover-partial" title="Partially recoverable \u2014 some sectors reused"><i class="fa-solid fa-heart-crack"></i></span>';
+                else icons += '<span class="dir-icon-recover-no" title="Not recoverable \u2014 sectors reused"><i class="fa-solid fa-skull"></i></span>';
+              }
+              return icons;
+            }
             var d = new Uint8Array(currentBuffer);
             var ft = d[e.entryOff + 2] & 0x07;
             // CBM partition/directory icon
@@ -430,19 +442,23 @@ function renderDisk(info) {
     if (bamIssues) {
       healthEl.textContent = '\u25CF';
       healthEl.style.color = '#9A6759'; // red — BAM problems
-      healthEl.title = 'BAM issues detected';
+      healthEl.title = 'BAM issues detected — click to view BAM';
+      healthEl.onclick = function() { document.getElementById('opt-view-bam').click(); };
     } else if (diskErrors) {
       healthEl.textContent = '\u25CF';
       healthEl.style.color = '#B8C76F'; // yellow — has error bytes
-      healthEl.title = 'Disk has error bytes';
+      healthEl.title = 'Disk has error bytes — click to view';
+      healthEl.onclick = function() { document.getElementById('opt-view-errors').click(); };
     } else {
       healthEl.textContent = '\u25CF';
       healthEl.style.color = '#588D43'; // green — all OK
       var extBam = detectExtendedBAM(currentBuffer);
-      healthEl.title = 'Disk OK' + (extBam ? ' (' + extBam + ' extended BAM)' : '');
+      healthEl.title = 'Disk OK' + (extBam ? ' (' + extBam + ' extended BAM)' : '') + ' — click to view BAM';
+      healthEl.onclick = function() { document.getElementById('opt-view-bam').click(); };
     }
   } else if (healthEl) {
     healthEl.textContent = '';
+    healthEl.onclick = null;
   }
 }
 
@@ -1132,13 +1148,13 @@ function updateEntryMenuState() {
     const locked = (typeByte & 0x40) !== 0;
     const currentTypeIdx = typeByte & 0x07;
     lockEl.textContent = locked ? 'Unlock File' : 'Lock File';
-    splatEl.textContent = closed ? 'Scratch File' : 'Unscratch File';
+    splatEl.textContent = closed ? 'Splat File' : 'Unsplat File';
     for (let i = 0; i < 6; i++) {
       document.getElementById('check-type-' + i).innerHTML = i === currentTypeIdx ? '<i class="fa-solid fa-check"></i>' : '';
     }
   } else {
     lockEl.textContent = 'Lock File';
-    splatEl.textContent = 'Scratch File';
+    splatEl.textContent = 'Splat File';
     for (let i = 0; i < 6; i++) {
       document.getElementById('check-type-' + i).textContent = '';
     }
@@ -3434,13 +3450,17 @@ function detectGfxFormats(fileData) {
 
   // 2. Generic bitmap formats by data size (any load address)
   if (dataBytes >= 8000 && dataBytes <= 8192) add('Hires (bitmap only)', 'hires', 'bmonly');
-  if (dataBytes >= 9000 && dataBytes <= 9216) {
+  if (dataBytes >= 9000 && dataBytes <= 9218) {
     add('Hires (bitmap+screen)', 'hires', 'bmscr');
     add('Hires (screen+bitmap)', 'hires', 'scrbm');
   }
-  if (dataBytes >= 10000 && dataBytes <= 10050) add('Multicolor (Koala-style)', 'mc', 'koala');
-  if (dataBytes >= 17200 && dataBytes <= 17472) add('Multicolor FLI', 'fli', 'fli');
-  if (dataBytes >= 16384 && dataBytes <= 16384) add('Hires FLI (AFLI)', 'afli', 'afli');
+  if (dataBytes >= 10001 && dataBytes <= 10018) {
+    add('Multicolor (Koala-style)', 'mc', 'koala');
+    add('Multicolor (AAS-style)', 'mc', 'aas');
+  }
+  if (dataBytes > 10018 && dataBytes <= 10280) add('Multicolor (Koala-style)', 'mc', 'koala');
+  if (dataBytes >= 17200 && dataBytes <= 17474) add('Multicolor FLI', 'fli', 'fli');
+  if (dataBytes >= 16384 && dataBytes <= 16386) add('Hires FLI (AFLI)', 'afli', 'afli');
   if (dataBytes >= 18200 && dataBytes <= 18250) add('Multicolor Interlace', 'mc', 'drazlace');
   if (dataBytes >= 32760 && dataBytes <= 32780) add('Multicolor IFLI', 'fli', 'eci');
 
@@ -6967,6 +6987,43 @@ function showTypeDropdown(typeSpan, entryOff) {
 // Max value for block size field: 16-bit unsigned (2 bytes in directory entry)
 const MAX_BLOCKS = 65535;
 
+// Check if a scratched file's sectors are still free (recoverable)
+// Returns 'yes' (all free), 'partial' (some free), 'no' (none/invalid chain)
+function checkScratchedRecoverable(buffer, entryOff) {
+  var data = new Uint8Array(buffer);
+  var ft = data[entryOff + 3], fs = data[entryOff + 4];
+  if (ft === 0) return 'no';
+
+  var fmt = currentFormat;
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var visited = {};
+  var totalSectors = 0, freeSectors = 0;
+  var t = ft, s = fs;
+
+  while (t !== 0) {
+    if (t < 1 || t > currentTracks) break;
+    if (s >= fmt.sectorsPerTrack(t)) break;
+    var key = t + ':' + s;
+    if (visited[key]) break;
+    visited[key] = true;
+    totalSectors++;
+
+    // Check if this sector is free in BAM
+    var base = getBamBitmapBase(t, bamOff);
+    var isFree = (data[base + Math.floor(s / 8)] & (1 << (s % 8))) !== 0;
+    if (isFree) freeSectors++;
+
+    var off = sectorOffset(t, s);
+    if (off < 0) break;
+    t = data[off]; s = data[off + 1];
+  }
+
+  if (totalSectors === 0) return 'no';
+  if (freeSectors === totalSectors) return 'yes';
+  if (freeSectors > 0) return 'partial';
+  return 'no';
+}
+
 function getFileAddresses(buffer, entryOff) {
   const data = new Uint8Array(buffer);
   const typeByte = data[entryOff + 2];
@@ -9940,7 +9997,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
     '<div class="text-base line-tall">' +
       '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), T64 (tape), TAP (raw tape), CVT (GEOS)<br>' +
       '<b>Features:</b><br>' +
-      '&bull; Directory editing: rename, insert, remove, sort, align, lock, scratch<br>' +
+      '&bull; Directory editing: rename, insert, remove, sort, align, lock, splat<br>' +
       '&bull; Hex sector editor with track/sector navigation and search highlighting<br>' +
       '&bull; BAM viewer with integrity checking and file ownership display<br>' +
       '&bull; Search: Find/Find in Tabs with text and hex byte pattern matching<br>' +
@@ -10057,7 +10114,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Ctrl + Alt + C', 'Center'],
       ['Ctrl + Alt + J', 'Justify'],
       ['Ctrl + <', 'Lock / unlock file'],
-      ['Ctrl + *', 'Scratch / unscratch file'],
+      ['Ctrl + *', 'Splat / unsplat file'],
       ['Ctrl + L', 'Name to lowercase'],
       ['Ctrl + U', 'Name to UPPERCASE'],
       ['Ctrl + T', 'Toggle name case'],
