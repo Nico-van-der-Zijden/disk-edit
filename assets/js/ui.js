@@ -7634,8 +7634,6 @@ function showSeparatorEditor() {
 
       input.addEventListener('focus', function() { showPetsciiPicker(input, 16); });
       input.addEventListener('blur', function() { if (!pickerClicking) hidePetsciiPicker(); });
-
-      setTimeout(function() { input.focus(); }, 50);
     }
 
     body.addEventListener('click', function handler(e) {

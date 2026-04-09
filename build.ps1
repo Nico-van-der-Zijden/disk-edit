@@ -55,13 +55,18 @@ $html = [regex]::Replace($html, "url\('assets/webfonts/([^']+)'\)", {
 })
 Write-Host "  Inlined C64 Pro Mono fonts" -ForegroundColor DarkGray
 
-# 3. Inline all JS files
-$html = [regex]::Replace($html, '<script src="([^"]+)"></script>', {
+# 3. Inline JS files (skip matomo.js for dist builds)
+$html = [regex]::Replace($html, '(?:<!-- Matomo[^>]*-->\s*)?<script src="([^"]+)"></script>', {
     param($match)
-    $jsPath = Join-Path $srcDir $match.Groups[1].Value
+    $jsFile = $match.Groups[1].Value
+    if ($jsFile -match 'matomo') {
+        Write-Host "  Skipped $jsFile (analytics)" -ForegroundColor DarkYellow
+        return "<!-- Matomo excluded from dist build -->"
+    }
+    $jsPath = Join-Path $srcDir $jsFile
     if (Test-Path $jsPath) {
         $js = Get-Content $jsPath -Raw -Encoding UTF8
-        Write-Host "  Inlined $($match.Groups[1].Value)" -ForegroundColor DarkGray
+        Write-Host "  Inlined $jsFile" -ForegroundColor DarkGray
         return "<script>`n$js`n</script>"
     } else {
         Write-Warning "File not found: $jsPath"
