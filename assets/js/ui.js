@@ -2005,7 +2005,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     html += '<span class="bam-sectors">';
 
     for (var s = 0; s < spt; s++) {
-      var isFree = (bm & (1 << s)) !== 0;
+      var isFree = checkSectorFree(data, bamOff, t, s);
       var sKey = t + ':' + s;
       var isError = bamCheck.errorSectors[sKey];
       var isOrphan = bamCheck.orphanSectors[sKey];
@@ -2078,12 +2078,11 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     pushUndo();
     var d = new Uint8Array(currentBuffer);
     var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
-    var base = getBamBitmapBase(bt, bOff);
+    var base = (fmt._bamBase) ? fmt._bamBase(bt) : getBamBitmapBase(bt, bOff);
     var byteIdx = Math.floor(bs / 8);
     var bitMask = 1 << (bs % 8);
-    // Toggle the bit
     d[base + byteIdx] ^= bitMask;
-    bamRecalcFree(d, bt, bOff);
+    if (typeof fmt.writeTrackFree === 'function' && !fmt._bamBase) bamRecalcFree(d, bt, bOff);
 
     // Refresh BAM view
     document.getElementById('modal-overlay').classList.remove('open');
@@ -7181,9 +7180,7 @@ function checkScratchedRecoverable(buffer, entryOff) {
     totalSectors++;
 
     // Check if this sector is free in BAM
-    var base = getBamBitmapBase(t, bamOff);
-    var isFree = (data[base + Math.floor(s / 8)] & (1 << (s % 8))) !== 0;
-    if (isFree) freeSectors++;
+    if (checkSectorFree(data, bamOff, t, s)) freeSectors++;
 
     var off = sectorOffset(t, s);
     if (off < 0) break;
@@ -7210,10 +7207,9 @@ function showRecoveryDialog(entryOff) {
     var key = t + ':' + s;
     if (visited[key]) break;
     visited[key] = true;
-    var base = getBamBitmapBase(t, bamOff);
-    var isFree = (data[base + Math.floor(s / 8)] & (1 << (s % 8))) !== 0;
-    if (isFree) totalFree++;
-    chain.push({ t: t, s: s, free: isFree });
+    var sfree = checkSectorFree(data, bamOff, t, s);
+    if (sfree) totalFree++;
+    chain.push({ t: t, s: s, free: sfree });
     var off = sectorOffset(t, s);
     if (off < 0) break;
     t = data[off]; s = data[off + 1];
@@ -9471,7 +9467,6 @@ function importFileToDisk(fileName, fileData) {
     var info = parseCurrentDir(currentBuffer);
     renderDisk(info);
     var numSectors = fileData.length === 0 ? 1 : Math.ceil(fileData.length / 254);
-    if (fileData.length > 0 && fileData.length % 254 === 0) numSectors++;
     showModal('Import Successful', ['"' + baseName.toUpperCase() + '" imported successfully.', numSectors + ' block(s) written.']);
   }
 }
@@ -10261,7 +10256,7 @@ document.addEventListener('drop', function(e) {
   var files = Array.from(e.dataTransfer.files);
   if (files.length === 0) return;
 
-  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64'];
+  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp'];
   var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
   var diskFiles = [];
   var importFiles = [];
@@ -10385,7 +10380,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '<div style="font-size:11px;color:' + C64_COLORS[13] + ';margin-top:4px"><i class="fa-solid fa-cannabis"></i> OOK EEN TREKJE? <i class="fa-solid fa-joint"></i></div>' +
     '</div>' +
     '<div class="text-base line-tall">' +
-      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), X64, T64 (tape), TAP (raw tape), CVT (GEOS)<br>' +
+      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), G64 (GCR), DNP (CMD), D1M/D2M/D4M (CMD FD), X64, T64 (tape), TAP (raw tape), CVT (GEOS)<br>' +
       '<b>Features:</b><br>' +
       '&bull; Directory editing: rename, insert, remove, sort, align, lock, splat<br>' +
       '&bull; Hex sector editor with track/sector navigation and search highlighting<br>' +
@@ -10561,6 +10556,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.23', title: 'G64, DNP, D1M/D2M/D4M format support', items: [
+      'G64 (GCR disk image): auto-decode to D64 on open, full GCR-to-sector extraction',
+      'DNP (CMD Native Partition): read/write support with 256 sectors/track BAM',
+      'D1M/D2M/D4M (CMD FD2000/FD4000): detected by file size, treated as DNP',
+      'GCR decoder: sync detection, header/data block parsing, track wrap handling',
+    ]},
     { ver: '1.3.22', title: 'BASIC dialect selector, modal stacking, sector clipboard fix', items: [
       'BASIC viewer: dialect selector (V2/Simons\'/FC3) for C64 programs',
       'BASIC viewer: re-renders instantly when switching dialect',
