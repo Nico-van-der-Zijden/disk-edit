@@ -1549,7 +1549,16 @@ function isTapeFormat() {
 }
 
 function parseDisk(buffer) {
-  const data = new Uint8Array(buffer);
+  var data = new Uint8Array(buffer);
+
+  // X64 format: 64-byte header starting with "C1541" — strip header
+  if (data.length > 64 && data[0] === 0x43 && data[1] === 0x31 && data[2] === 0x35 &&
+      data[3] === 0x34 && data[4] === 0x31) {
+    buffer = buffer.slice(64);
+    data = new Uint8Array(buffer);
+    currentBuffer = buffer;
+  }
+
   const detected = detectFormat(data.length, buffer);
   currentFormat = detected.format;
   currentTracks = detected.tracks;

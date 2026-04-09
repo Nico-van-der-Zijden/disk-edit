@@ -1,3 +1,24 @@
+// ── Modal z-index stacking ────────────────────────────────────────────
+var modalZCounter = 200;
+
+// Auto-manage z-index stacking when modals open/close
+document.addEventListener('DOMContentLoaded', function() {
+  var overlays = document.querySelectorAll('.modal-overlay');
+  var observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      if (m.type !== 'attributes' || m.attributeName !== 'class') return;
+      var el = m.target;
+      if (el.classList.contains('open')) {
+        modalZCounter += 10;
+        el.style.zIndex = modalZCounter;
+      }
+    });
+  });
+  overlays.forEach(function(el) {
+    observer.observe(el, { attributes: true, attributeFilter: ['class'] });
+  });
+});
+
 // ── Modal ─────────────────────────────────────────────────────────────
 function showModal(title, lines) {
   document.getElementById('modal-title').textContent = title;
@@ -362,8 +383,8 @@ function renderDisk(info) {
               // Skip separators: T/S points to directory track or is 0
               if (dt !== 0 && dt !== currentFormat.dirTrack) {
                 var recov = checkScratchedRecoverable(currentBuffer, e.entryOff);
-                if (recov === 'yes') icons += '<span class="dir-icon-recover" title="Recoverable \u2014 sector chain intact"><i class="fa-solid fa-heart-pulse"></i></span>';
-                else if (recov === 'partial') icons += '<span class="dir-icon-recover-partial" title="Partially recoverable \u2014 some sectors reused"><i class="fa-solid fa-heart-crack"></i></span>';
+                if (recov === 'yes') icons += '<span class="dir-icon-recover" data-recover="' + e.entryOff + '" title="Recoverable \u2014 click to restore"><i class="fa-solid fa-heart-pulse"></i></span>';
+                else if (recov === 'partial') icons += '<span class="dir-icon-recover-partial" data-recover="' + e.entryOff + '" title="Partially recoverable \u2014 click for details"><i class="fa-solid fa-heart-crack"></i></span>';
                 else icons += '<span class="dir-icon-recover-no" title="Not recoverable \u2014 sectors reused"><i class="fa-solid fa-skull"></i></span>';
               }
               return icons;
@@ -513,6 +534,13 @@ function bindDirSelection() {
         el.classList.add('selected');
         updateEntryMenuState();
         document.getElementById('opt-view-geos').click();
+        return;
+      }
+      // Recovery icon click — show chain details and offer restore
+      var recoverIcon = e.target.closest('[data-recover]');
+      if (recoverIcon) {
+        var recOff = parseInt(recoverIcon.getAttribute('data-recover'), 10);
+        showRecoveryDialog(recOff);
         return;
       }
       cancelActiveEdits();
@@ -1309,8 +1337,10 @@ function updateMenuState() {
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
   document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-export-all').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-export-csv').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-export-html-dir').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-export-png-dir').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-md5').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || tape);
@@ -4694,11 +4724,43 @@ var BASIC_V7_FE_TOKENS = {
   0x24: 'OFF', 0x25: 'FAST', 0x26: 'SLOW'
 };
 
+// Simons' BASIC extended tokens ($CC-$FE)
+var SIMONS_TOKENS = [
+  'HIRES','PLOT','LINE','BLOCK','FCHR','FCOL','FILL','REC',      // $CC-$D3
+  'ROT','DRAW','CHAR','HI COL','INV','FREV','BASE','DENSITY',    // $D4-$DB
+  'DVPLPT','COLOURS','PENX','PENY','SOUND','VOL','WAVE','MUSIC', // $DC-$E3
+  'PLAY','RPT','ENVELOPE','CENTRE','DESIGN','RCOMP','DISPLAY',   // $E4-$EA
+  'MOV','TRACE','IF#','ELSE','PAGE','EXEC','FIND','OPTION',      // $EB-$F2
+  'AUTO','OLD','JOY','MOD','DIV','!','DEC','HEX$',               // $F3-$FA
+  'DEEK','ERROR','CGOTO'                                           // $FB-$FD
+];
+
+// Final Cartridge III extended tokens ($CC-$FE)
+var FC3_TOKENS = [
+  'OFF','AUTO','DEL','RENUM','?','DUMP','ARRAY','MEM',            // $CC-$D3
+  'TRACE','REPLACE','ORDER','PACK','UNPACK','MREAD','MWRITE',     // $D4-$DA
+  null, null, null, null, null, null, null, null,                  // $DB-$E2
+  null, null, null, null, null, null, null, null,                  // $E3-$EA
+  null, null, null, null, null, null, null, null,                  // $EB-$F2
+  null, null, null, null, null, null                                // $F3-$F8
+];
+
+// BASIC V3.5 (C16/Plus4) extended tokens ($CC-$FE)
+var BASIC_V35_TOKENS = [
+  'RGR','RCLR','RLUM','JOY','RDOT','DEC','HEX$','ERR$',         // $CC-$D3
+  'INSTR','ELSE','RESUME','TRAP','TRON','TROFF','SOUND',          // $D4-$DA
+  'VOL','AUTO','PUDEF','GRAPHIC','PAINT','CHAR','BOX',            // $DB-$E1
+  'CIRCLE','PASTE','CUT','LINE','LOCATE','COLOR','SCNCLR',       // $E2-$E8
+  'SCALE','HELP','DO','LOOP','EXIT','DIRECTORY','DSAVE',          // $E9-$EF
+  'DLOAD','HEADER','SCRATCH','COLLECT','COPY','RENAME','BACKUP',  // $F0-$F6
+  'DELETE','RENUMBER','KEY','MONITOR','USING','UNTIL','WHILE'     // $F7-$FD
+];
+
 // Known BASIC load addresses → version
 var BASIC_LOAD_ADDRS = {
   0x0401: 'V2',   // VIC-20 unexpanded
   0x0801: 'V2',   // C64
-  0x1001: 'V2',   // VIC-20 +8K, C16/Plus4
+  0x1001: 'V35',  // C16/Plus4 (or VIC-20 +8K)
   0x1201: 'V2',   // VIC-20 +16K
   0x1C01: 'V7'    // C128
 };
@@ -4733,11 +4795,11 @@ function emitLiteral(parts, b, type) {
   }
 }
 
-function detokenizeBasic(fileData) {
+function detokenizeBasic(fileData, dialect) {
   if (fileData.length < 4) return null;
 
   var loadAddr = fileData[0] | (fileData[1] << 8);
-  var version = BASIC_LOAD_ADDRS[loadAddr] || 'V2';
+  var version = dialect || BASIC_LOAD_ADDRS[loadAddr] || 'V2';
   var isV7 = version === 'V7';
   var lines = [];
   var pos = 2;
@@ -4827,6 +4889,20 @@ function detokenizeBasic(fileData) {
         continue;
       }
 
+      // Extended tokens ($CC-$FD) for non-V7 dialects
+      if (!isV7 && b >= 0xCC && b <= 0xFD) {
+        var extKw = null;
+        if (version === 'V35') extKw = BASIC_V35_TOKENS[b - 0xCC];
+        else if (version === 'FC3') extKw = FC3_TOKENS[b - 0xCC];
+        else if (version === 'SIMONS') extKw = SIMONS_TOKENS[b - 0xCC];
+        else extKw = SIMONS_TOKENS[b - 0xCC]; // default for V2
+        if (extKw) {
+          parts.push({ type: 'keyword', text: extKw });
+          pos++;
+          continue;
+        }
+      }
+
       // Literal character
       if (b >= 0x20 && b <= 0x7E) {
         parts.push({ type: 'text', text: String.fromCharCode(b) });
@@ -4845,17 +4921,79 @@ function detokenizeBasic(fileData) {
 
 function showFileBasicViewer(entryOff) {
   if (!currentBuffer) return;
-  var data = new Uint8Array(currentBuffer);
+  showFileBasicRendered(entryOff, null);
+}
+
+function showFileBasicRendered(entryOff, dialect) {
   var result = readFileData(currentBuffer, entryOff);
   var fileData = result.data;
+  var data = new Uint8Array(currentBuffer);
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
 
-  var basic = detokenizeBasic(fileData);
+  var basic = detokenizeBasic(fileData, dialect);
   if (!basic || basic.lines.length === 0) {
     showModal('BASIC View', ['Not a valid BASIC program or empty file.']);
     return;
   }
 
+  var rendered = renderBasicHtml(basic, name, result);
+
+  var versionLabels = {
+    V2: 'BASIC V2', V7: 'BASIC V7 (C128)', V35: 'BASIC V3.5 (C16/Plus4)',
+    SIMONS: "Simons' BASIC", FC3: 'Final Cartridge III'
+  };
+  var versionLabel = versionLabels[rendered.basic.version] || 'BASIC V2';
+  var titleText = versionLabel + ' \u2014 "' + name + '" (load: $' + hex16(rendered.basic.loadAddr) + ')';
+  if (result.error) titleText += ' \u2014 ' + result.error;
+
+  document.getElementById('modal-title').textContent = titleText;
+  var body = document.getElementById('modal-body');
+
+  // Dialect selector for C64 programs (V2 load address, not V7/V35)
+  var detectedVersion = BASIC_LOAD_ADDRS[rendered.basic.loadAddr] || 'V2';
+  var showDialect = (detectedVersion === 'V2');
+  var currentDialect = dialect || detectedVersion;
+
+  if (showDialect) {
+    var selDiv = document.createElement('div');
+    selDiv.style.cssText = 'margin-bottom:8px;display:flex;gap:8px;align-items:center;font-size:12px';
+    var selLabel = document.createElement('span');
+    selLabel.textContent = 'Dialect:';
+    selLabel.style.color = 'var(--text-muted)';
+    selDiv.appendChild(selLabel);
+
+    var dialects = [
+      ['V2', 'BASIC V2 (standard)'],
+      ['SIMONS', "Simons' BASIC"],
+      ['FC3', 'Final Cartridge III']
+    ];
+    for (var di = 0; di < dialects.length; di++) {
+      (function(val, label) {
+        var btn = document.createElement('button');
+        btn.textContent = label;
+        btn.className = 'btn-small' + (currentDialect === val ? ' active' : '');
+        btn.addEventListener('click', function() {
+          showFileBasicRendered(entryOff, val);
+        });
+        selDiv.appendChild(btn);
+      })(dialects[di][0], dialects[di][1]);
+    }
+    body.innerHTML = '';
+    body.appendChild(selDiv);
+    body.insertAdjacentHTML('beforeend', rendered.html);
+  } else {
+    body.innerHTML = rendered.html;
+  }
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function renderBasicHtml(basic, name, result) {
   var html = '<div class="basic-listing">';
   for (var li = 0; li < basic.lines.length; li++) {
     var line = basic.lines[li];
@@ -4884,21 +5022,7 @@ function showFileBasicViewer(entryOff) {
     html += '</div>';
   }
   html += '</div>';
-
-  var versionLabel = basic.version === 'V7' ? 'BASIC V7 (C128)' : 'BASIC V2';
-  var titleText = versionLabel + ' \u2014 "' + name + '" (load: $' + hex16(basic.loadAddr) + ')';
-  if (result.error) titleText += ' \u2014 ' + result.error;
-
-  document.getElementById('modal-title').textContent = titleText;
-  var body = document.getElementById('modal-body');
-  body.innerHTML = html;
-
-  var footer = document.querySelector('#modal-overlay .modal-footer');
-  footer.innerHTML = '<button id="modal-close">OK</button>';
-  document.getElementById('modal-close').addEventListener('click', function() {
-    document.getElementById('modal-overlay').classList.remove('open');
-  });
-  document.getElementById('modal-overlay').classList.add('open');
+  return { html: html, basic: basic };
 }
 
 // ── geoWrite Document Viewer ─────────────────────────────────────────
@@ -5490,6 +5614,8 @@ function disassemble6502(data, startAddr, maxLines) {
   return lines;
 }
 
+var sectorClipboard = null;
+
 function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
   if (!currentBuffer) return;
   var off = sectorOffset(track, sector);
@@ -5577,8 +5703,14 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
   var hasChain = nextT > 0 && nextT <= currentTracks;
   footer.className = 'modal-footer modal-footer-split';
   footer.innerHTML =
-    '<div class="modal-footer-actions"><button id="hex-follow" class="modal-btn-secondary"' + (hasChain ? '' : ' disabled') +
-    ' title="Follow sector chain (Ctrl+J)">Follow Chain \u2192</button></div>' +
+    '<div class="modal-footer-actions">' +
+    '<button id="hex-back" class="modal-btn-secondary" title="Find sector pointing here">\u2190 Back</button>' +
+    '<button id="hex-follow" class="modal-btn-secondary"' + (hasChain ? '' : ' disabled') +
+    ' title="Follow sector chain (Ctrl+J)">Follow \u2192</button>' +
+    '<button id="hex-fill-sec" class="modal-btn-secondary" title="Fill sector with byte">Fill</button>' +
+    '<button id="hex-copy-sec" class="modal-btn-secondary" title="Copy sector to clipboard">Copy</button>' +
+    '<button id="hex-paste-sec" class="modal-btn-secondary" title="Paste from clipboard"' + (sectorClipboard ? '' : ' disabled') + '>Paste</button>' +
+    '</div>' +
     '<div class="modal-footer-nav"><button id="hex-cancel" class="modal-btn-secondary">Cancel</button><button id="hex-save">Save</button></div>';
   document.getElementById('modal-overlay').classList.add('open');
 
@@ -5843,7 +5975,47 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     if (ns >= currentFormat.sectorsPerTrack(nt)) return;
     saveCurrentAndNavigate(nt, ns);
   }
+  // Back-navigate: find sector whose bytes 0-1 point to current T:S
+  document.getElementById('hex-back').addEventListener('click', function() {
+    var d2 = new Uint8Array(currentBuffer);
+    for (var bt = 1; bt <= currentTracks; bt++) {
+      var spt = currentFormat.sectorsPerTrack(bt);
+      for (var bs = 0; bs < spt; bs++) {
+        var boff = sectorOffset(bt, bs);
+        if (boff < 0) continue;
+        if (d2[boff] === track && d2[boff + 1] === sector) {
+          saveCurrentAndNavigate(bt, bs);
+          return;
+        }
+      }
+    }
+    showModal('Back Navigate', ['No sector found pointing to T:$' +
+      track.toString(16).toUpperCase().padStart(2, '0') + ' S:$' +
+      sector.toString(16).toUpperCase().padStart(2, '0')]);
+  });
+
   document.getElementById('hex-follow').addEventListener('click', followChain);
+
+  // Fill sector with a byte value
+  document.getElementById('hex-fill-sec').addEventListener('click', async function() {
+    var val = await showInputModal('Fill sector with hex byte (00-FF)', '00');
+    if (val === null) return;
+    var byte = parseInt(val.replace(/[\s\$]/g, ''), 16);
+    if (isNaN(byte) || byte < 0 || byte > 255) return;
+    for (var fi = 0; fi < 256; fi++) { updateByte(fi, byte); }
+  });
+
+  // Copy sector bytes to internal clipboard
+  document.getElementById('hex-copy-sec').addEventListener('click', function() {
+    sectorClipboard = new Uint8Array(working);
+    document.getElementById('hex-paste-sec').disabled = false;
+  });
+
+  // Paste sector from clipboard
+  document.getElementById('hex-paste-sec').addEventListener('click', function() {
+    if (!sectorClipboard) return;
+    for (var pi = 0; pi < 256; pi++) { updateByte(pi, sectorClipboard[pi]); }
+  });
 
   document.getElementById('hex-save').addEventListener('click', function() { closeEditor(true); });
   document.getElementById('hex-cancel').addEventListener('click', function() { closeEditor(false); });
@@ -7022,6 +7194,74 @@ function checkScratchedRecoverable(buffer, entryOff) {
   if (freeSectors === totalSectors) return 'yes';
   if (freeSectors > 0) return 'partial';
   return 'no';
+}
+
+function showRecoveryDialog(entryOff) {
+  var data = new Uint8Array(currentBuffer);
+  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+  var ft = data[entryOff + 3], fs = data[entryOff + 4];
+  var fmt = currentFormat;
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+
+  // Follow chain and check each sector
+  var chain = [], totalFree = 0, t = ft, s = fs, visited = {};
+  while (t !== 0) {
+    if (t < 1 || t > currentTracks || s >= fmt.sectorsPerTrack(t)) break;
+    var key = t + ':' + s;
+    if (visited[key]) break;
+    visited[key] = true;
+    var base = getBamBitmapBase(t, bamOff);
+    var isFree = (data[base + Math.floor(s / 8)] & (1 << (s % 8))) !== 0;
+    if (isFree) totalFree++;
+    chain.push({ t: t, s: s, free: isFree });
+    var off = sectorOffset(t, s);
+    if (off < 0) break;
+    t = data[off]; s = data[off + 1];
+  }
+
+  var html = '<div style="margin-bottom:12px">' +
+    '<b>File:</b> ' + escHtml(name) + '<br>' +
+    '<b>Chain:</b> ' + chain.length + ' sector' + (chain.length > 1 ? 's' : '') +
+    ' (' + totalFree + ' free, ' + (chain.length - totalFree) + ' reused)<br>' +
+    '<b>Sectors:</b> ' + chain.map(function(c) {
+      var col = c.free ? '#55a049' : '#883932';
+      return '<span style="color:' + col + '">$' + c.t.toString(16).toUpperCase().padStart(2, '0') +
+        ':$' + c.s.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+    }).join(' \u2192 ') +
+    '</div>';
+
+  document.getElementById('modal-title').textContent = 'Recover \u2014 "' + name + '"';
+  var body = document.getElementById('modal-body');
+  body.innerHTML = html;
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  if (totalFree === chain.length) {
+    footer.className = 'modal-footer modal-footer-split';
+    footer.innerHTML =
+      '<div class="modal-footer-actions"><button id="recover-restore" class="modal-btn-secondary">Restore File</button></div>' +
+      '<div class="modal-footer-nav"><button id="modal-close">OK</button></div>';
+    document.getElementById('recover-restore').addEventListener('click', function() {
+      pushUndo();
+      // Set the closed bit to restore the file
+      data[entryOff + 2] |= 0x80;
+      // Mark sectors as used in BAM
+      for (var ri = 0; ri < chain.length; ri++) {
+        bamMarkSectorUsed(data, chain[ri].t, chain[ri].s, bamOff);
+      }
+      document.getElementById('modal-overlay').classList.remove('open');
+      footer.className = 'modal-footer';
+      var info = parseCurrentDir(currentBuffer);
+      renderDisk(info);
+      updateMenuState();
+    });
+  } else {
+    footer.innerHTML = '<button id="modal-close">OK</button>';
+  }
+  document.getElementById('modal-close').addEventListener('click', function() {
+    footer.className = 'modal-footer';
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
 }
 
 function getFileAddresses(buffer, entryOff) {
@@ -8860,7 +9100,7 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
 // ── File menu: Import File ────────────────────────────────────────────
 var importFileInput = document.createElement('input');
 importFileInput.type = 'file';
-importFileInput.accept = '.prg,.seq,.usr,.rel,.p00,.s00,.u00,.r00,.cvt';
+importFileInput.accept = '.prg,.seq,.usr,.rel,.p00,.s00,.u00,.r00,.cvt,.txt';
 importFileInput.style.display = 'none';
 document.body.appendChild(importFileInput);
 
@@ -9185,6 +9425,25 @@ function importFileToDisk(fileName, fileData) {
   if (ext === 'cvt') {
     importCvtFile(fileName, fileData);
     return;
+  }
+
+  // TXT import: convert ASCII to PETSCII and import as SEQ
+  if (ext === 'txt') {
+    var text = new TextDecoder().decode(fileData);
+    var petBytes = [];
+    for (var ti = 0; ti < text.length; ti++) {
+      var ch = text.charCodeAt(ti);
+      if (ch === 0x0A) { petBytes.push(0x0D); continue; } // LF → CR
+      if (ch === 0x0D) continue; // skip CR (handled with LF)
+      if (ch >= 0x41 && ch <= 0x5A) petBytes.push(ch); // A-Z → PETSCII uppercase
+      else if (ch >= 0x61 && ch <= 0x7A) petBytes.push(ch - 0x20); // a-z → A-Z in PETSCII
+      else if (ch >= 0x20 && ch <= 0x3F) petBytes.push(ch); // space, digits, punctuation
+      else if (ch === 0x5B) petBytes.push(0x5B); // [
+      else if (ch === 0x5D) petBytes.push(0x5D); // ]
+      else petBytes.push(0x2E); // unknown → dot
+    }
+    fileData = new Uint8Array(petBytes);
+    ext = 'seq';
   }
 
   var typeMap = { prg: 2, seq: 1, usr: 3, rel: 4, p00: 2, s00: 1, u00: 3, r00: 4 };
@@ -9719,6 +9978,98 @@ document.getElementById('opt-file-chains').addEventListener('click', function(e)
   document.getElementById('modal-body').innerHTML = html;
 });
 
+// ── Export All Files ─────────────────────────────────────────────────
+// Minimal ZIP builder (store-only, no compression)
+function buildZip(files) {
+  var localHeaders = [], centralHeaders = [], offset = 0;
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    var nameBytes = new TextEncoder().encode(f.name);
+    // Local file header (30 + name + data)
+    var lh = new Uint8Array(30 + nameBytes.length + f.data.length);
+    var v = new DataView(lh.buffer);
+    v.setUint32(0, 0x04034b50, true); // signature
+    v.setUint16(4, 20, true); // version needed
+    v.setUint16(8, 0, true); // method: store
+    v.setUint32(18, f.data.length, true); // compressed size
+    v.setUint32(22, f.data.length, true); // uncompressed size
+    v.setUint16(26, nameBytes.length, true); // name length
+    lh.set(nameBytes, 30);
+    lh.set(f.data, 30 + nameBytes.length);
+    localHeaders.push(lh);
+    // Central directory header (46 + name)
+    var ch = new Uint8Array(46 + nameBytes.length);
+    var cv = new DataView(ch.buffer);
+    cv.setUint32(0, 0x02014b50, true); // signature
+    cv.setUint16(4, 20, true); // version made by
+    cv.setUint16(6, 20, true); // version needed
+    cv.setUint16(10, 0, true); // method: store
+    cv.setUint32(20, f.data.length, true); // compressed
+    cv.setUint32(24, f.data.length, true); // uncompressed
+    cv.setUint16(28, nameBytes.length, true); // name length
+    cv.setUint32(42, offset, true); // local header offset
+    ch.set(nameBytes, 46);
+    centralHeaders.push(ch);
+    offset += lh.length;
+  }
+  var centralStart = offset;
+  var centralSize = 0;
+  for (var ci = 0; ci < centralHeaders.length; ci++) centralSize += centralHeaders[ci].length;
+  // End of central directory (22 bytes)
+  var eocd = new Uint8Array(22);
+  var ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, files.length, true); // entries on disk
+  ev.setUint16(10, files.length, true); // total entries
+  ev.setUint32(12, centralSize, true);
+  ev.setUint32(16, centralStart, true);
+  // Combine
+  var total = offset + centralSize + 22;
+  var zip = new Uint8Array(total);
+  var pos = 0;
+  for (var li = 0; li < localHeaders.length; li++) { zip.set(localHeaders[li], pos); pos += localHeaders[li].length; }
+  for (var di = 0; di < centralHeaders.length; di++) { zip.set(centralHeaders[di], pos); pos += centralHeaders[di].length; }
+  zip.set(eocd, pos);
+  return zip;
+}
+
+document.getElementById('opt-export-all').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+  var data = new Uint8Array(currentBuffer);
+  var info = parseCurrentDir(currentBuffer);
+  var extMap = { 1: '.seq', 2: '.prg', 3: '.usr', 4: '.rel' };
+  var files = [];
+
+  for (var i = 0; i < info.entries.length; i++) {
+    var en = info.entries[i];
+    if (en.deleted) continue;
+    var typeByte = data[en.entryOff + 2];
+    var typeIdx = typeByte & 0x07;
+    if (typeIdx < 1 || typeIdx > 4) continue;
+    var result = readFileData(currentBuffer, en.entryOff);
+    if (result.error || result.data.length === 0) continue;
+    var name = petsciiToReadable(en.name || '').trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+    if (!name) name = 'file' + i;
+    files.push({ name: name + (extMap[typeIdx] || '.prg'), data: result.data });
+  }
+
+  if (files.length === 0) {
+    showModal('Export All', ['No exportable files found.']);
+    return;
+  }
+
+  var zip = buildZip(files);
+  var diskName = petsciiToReadable(info.diskName || '').trim().replace(/[<>:"/\\|?*]/g, '_') || 'disk';
+  var blob = new Blob([zip], { type: 'application/zip' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = diskName + '.zip';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
 // ── CSV Export ───────────────────────────────────────────────────────
 document.getElementById('opt-export-csv').addEventListener('click', function(e) {
   e.stopPropagation();
@@ -9743,6 +10094,45 @@ document.getElementById('opt-export-csv').addEventListener('click', function(e) 
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = diskName + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// ── Directory Export as HTML ─────────────────────────────────────────
+document.getElementById('opt-export-html-dir').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+  var info = parseCurrentDir(currentBuffer);
+  var diskName = petsciiToReadable(info.diskName || '').padEnd(currentFormat.nameLength);
+  var diskId = petsciiToReadable(info.diskId || '');
+
+  var html = '<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n' +
+    '<title>' + escHtml(diskName.trim()) + '</title>\n' +
+    '<style>\n' +
+    'body { background: #40318d; color: #6C5EB5; font-family: "C64 Pro Mono", "Courier New", monospace; font-size: 16px; padding: 20px; }\n' +
+    'pre { margin: 0; line-height: 1.4; }\n' +
+    '.dir { color: #6C5EB5; }\n' +
+    '</style>\n</head>\n<body>\n<pre class="dir">\n';
+
+  html += '0 \u0022' + escHtml(diskName) + '\u0022 ' + escHtml(diskId) + '\n';
+  for (var i = 0; i < info.entries.length; i++) {
+    var en = info.entries[i];
+    if (en.deleted && !showDeleted) continue;
+    if (!en.name && !en.type) continue;
+    var blocks = String(en.blocks || 0);
+    var name = '\u0022' + petsciiToReadable(en.name || '').padEnd(16) + '\u0022';
+    var type = (en.type || 'PRG').trim();
+    html += blocks.padStart(4) + ' ' + name + ' ' + escHtml(type) + '\n';
+  }
+  html += (info.freeBlocks || 0) + ' BLOCKS FREE.\n';
+  html += '</pre>\n</body>\n</html>';
+
+  var safeName = diskName.trim().replace(/[<>:"/\\|?*]/g, '_') || 'directory';
+  var blob = new Blob([html], { type: 'text/html' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = safeName + '.html';
   a.click();
   URL.revokeObjectURL(a.href);
 });
@@ -9871,8 +10261,8 @@ document.addEventListener('drop', function(e) {
   var files = Array.from(e.dataTransfer.files);
   if (files.length === 0) return;
 
-  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap'];
-  var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt'];
+  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64'];
+  var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
   var diskFiles = [];
   var importFiles = [];
 
@@ -9995,7 +10385,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '<div style="font-size:11px;color:' + C64_COLORS[13] + ';margin-top:4px"><i class="fa-solid fa-cannabis"></i> OOK EEN TREKJE? <i class="fa-solid fa-joint"></i></div>' +
     '</div>' +
     '<div class="text-base line-tall">' +
-      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), T64 (tape), TAP (raw tape), CVT (GEOS)<br>' +
+      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), X64, T64 (tape), TAP (raw tape), CVT (GEOS)<br>' +
       '<b>Features:</b><br>' +
       '&bull; Directory editing: rename, insert, remove, sort, align, lock, splat<br>' +
       '&bull; Hex sector editor with track/sector navigation and search highlighting<br>' +
@@ -10003,11 +10393,11 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '&bull; Search: Find/Find in Tabs with text and hex byte pattern matching<br>' +
       '&bull; Go to Sector (Ctrl+G): jump to any track/sector<br>' +
       '&bull; File import/export/copy/paste across disk images<br>' +
-      '&bull; View As: Hex, Disassembly, PETSCII (C64 screen), BASIC (V2/V7), Graphics, geoWrite, REL Records<br>' +
+      '&bull; View As: Hex, Disassembly, PETSCII (C64 screen), BASIC (V2/V3.5/V7/Simons\'/FC3), Graphics, geoWrite, REL Records<br>' +
       '&bull; Graphics: 24+ formats (Koala, Art Studio, Advanced Art Studio, FLI, sprites, charset, Print Shop) with PNG export<br>' +
       '&bull; GEOS: geoPaint, Photo Scrap, Photo Album, geoWrite, Font viewers<br>' +
       '&bull; geoWrite document viewer with styled text and inline images<br>' +
-      '&bull; Export: CVT, RTF, PDF, CSV, directory PNG for GEOS/geoWrite files<br>' +
+      '&bull; Export: ZIP (all files), CVT, RTF, PDF, CSV, HTML, directory PNG<br>' +
       '&bull; Packer detection: 370+ signatures<br>' +
       '&bull; File chains viewer, compact directory, name case operations<br>' +
       '&bull; Save as separator with custom names<br>' +
@@ -10171,6 +10561,16 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.21', title: 'Export All ZIP, BASIC dialects, sector tools, X64, recovery', items: [
+      'Export All Files: one-click ZIP download of all files on disk',
+      'BASIC: Simons\' BASIC, Final Cartridge III, BASIC V3.5 (C16/Plus4) token support',
+      'Sector editor: Fill sector with byte, Copy/Paste sector, Back-navigate chain',
+      'Export as HTML: styled directory listing with C64 colors',
+      'X64 format: auto-detect and strip 64-byte header',
+      'ASCII to PETSCII: .txt files auto-convert on import as SEQ',
+      'Scratched file recovery: click heartbeat icon to view chain and restore',
+      'Generic graphics detection: widened size ranges for relocated bitmaps',
+    ]},
     { ver: '1.3.20', title: 'Build script, settings export, UI polish', items: [
       'Build script (build.ps1): single self-contained dist/index.html with all JS/CSS/fonts inlined',
       'Options: Export/Import Settings and Separators with auto-detect on import',
