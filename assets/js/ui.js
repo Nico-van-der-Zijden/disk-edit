@@ -10561,6 +10561,16 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.22', title: 'BASIC dialect selector, modal stacking, sector clipboard fix', items: [
+      'BASIC viewer: dialect selector (V2/Simons\'/FC3) for C64 programs',
+      'BASIC viewer: re-renders instantly when switching dialect',
+      'Modal stacking: MutationObserver auto-bumps z-index for any modal opened on top of another',
+      'Sector clipboard: persists across sector editor sessions and tabs',
+      'Sector fill: uses styled input modal instead of browser prompt',
+      'Scratched file recovery icon: clickable for chain details and restore',
+      'Health dot: opens error bytes viewer for yellow, BAM for red/green',
+      'Splat File renamed from Scratch File',
+    ]},
     { ver: '1.3.21', title: 'Export All ZIP, BASIC dialects, sector tools, X64, recovery', items: [
       'Export All Files: one-click ZIP download of all files on disk',
       'BASIC: Simons\' BASIC, Final Cartridge III, BASIC V3.5 (C16/Plus4) token support',
