@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 25 };
+var APP_VERSION = { major: 1, minor: 3, build: 26 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -103,7 +103,9 @@ function createTab(name, buffer, fileName) {
     partition: null,
     selectedEntry: -1,
     undoStack: [],
-    dirty: false
+    dirty: false,
+    cmdFdBuffer: null,
+    cmdFdFileName: null
   };
   tabs.push(tab);
   return tab;

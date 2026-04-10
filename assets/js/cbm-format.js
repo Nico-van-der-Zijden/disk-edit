@@ -1015,6 +1015,7 @@ function getBamBitmapBase(track, bamOff) {
     return bamOff + 256 + 0x10 + (relTrack - 41) * 6 + 1;
   }
   var fmt = currentFormat;
+  if (fmt === DISK_FORMATS.dnp) return fmt._bamBase(track);
   if (fmt === DISK_FORMATS.d81) return fmt._bamBase(bamOff, track) + 1;
   if (fmt === DISK_FORMATS.d71 && track > 35) return fmt._bam2Off(bamOff) + (track - 36) * 3;
   if (fmt === DISK_FORMATS.d80 || fmt === DISK_FORMATS.d82) return fmt._bamEntryBase(bamOff, track) + 1;
@@ -2056,6 +2057,16 @@ function parsePartition(buffer, startTrack, partSize) {
 
 // ── Create empty disk image ──────────────────────────────────────────
 function createEmptyDisk(formatKey, numTracks) {
+  // CMD FD images: create with partition table + default 1581 partition
+  if (formatKey === 'd1m' || formatKey === 'd2m' || formatKey === 'd4m' || formatKey === 'dhd') {
+    return createCmdFdImage(formatKey, numTracks);
+  }
+
+  // DNP: create a native CMD partition
+  if (formatKey === 'dnp') {
+    return createDnpImage(numTracks || 10);
+  }
+
   const fmt = DISK_FORMATS[formatKey || 'd64'];
   if (!fmt) throw new Error('Unknown format: ' + formatKey);
 
@@ -2081,6 +2092,115 @@ function createEmptyDisk(formatKey, numTracks) {
   })();
   data[dirOff + 0] = 0x00;
   data[dirOff + 1] = 0xFF;
+
+  return data.buffer;
+}
+
+function createDnpImage(numTracks) {
+  // DNP: 256 sectors per track, 256 bytes per sector
+  var size = numTracks * 256 * 256;
+  var data = new Uint8Array(size);
+
+  // Track 1, Sector 0: partition header
+  data[0x00] = 0x01; data[0x01] = 0x22; // T/S to directory (T1/S34)
+  data[0x02] = 0x48; // format type 'H'
+  // Disk name at offset 0x04: pad with $A0
+  for (var i = 0; i < 16; i++) data[0x04 + i] = 0xA0;
+  data[0x16] = 0xA0; data[0x17] = 0xA0; // disk ID
+  data[0x18] = 0xA0;
+  data[0x19] = 0x31; // DOS version '1'
+  data[0x1A] = 0x48; // format type 'H'
+
+  // Track 1, Sector 1: BAM header
+  var bamOff = 256;
+  data[bamOff + 0x02] = 0x48; // format type
+  data[bamOff + 0x03] = 0xB7; // complement
+  data[bamOff + 0x04] = 0xA0; data[bamOff + 0x05] = 0xA0; // disk ID
+  data[bamOff + 0x08] = numTracks; // last available track
+
+  // Track 1, Sectors 2-33: BAM bitmap (all free = $FF)
+  for (var s = 2; s <= 33; s++) {
+    for (var b = 0; b < 256; b++) data[s * 256 + b] = 0xFF;
+  }
+  // Mark track 1 sectors 0-34 as used (system/BAM/directory)
+  var t1base = 2 * 256; // BAM for track 1 starts at sector 2
+  for (var us = 0; us <= 34; us++) {
+    data[t1base + Math.floor(us / 8)] &= ~(1 << (us % 8));
+  }
+
+  // Track 1, Sector 34: first directory sector
+  var dirOff = 34 * 256;
+  data[dirOff + 0] = 0x00; data[dirOff + 1] = 0xFF;
+
+  return data.buffer;
+}
+
+function createCmdFdImage(formatKey, requestedParts) {
+  var spt, totalSize;
+  if (formatKey === 'd1m') { spt = 40; totalSize = 829440; }
+  else if (formatKey === 'd2m') { spt = 80; totalSize = 1658880; }
+  else if (formatKey === 'd4m') { spt = 160; totalSize = 3317760; }
+  else {
+    // DHD: size based on requested partitions
+    var dhdParts = requestedParts || 4;
+    spt = 256;
+    totalSize = spt * 256 + dhdParts * 819200; // system track + N partitions
+  }
+
+  var data = new Uint8Array(totalSize);
+  var d81 = DISK_FORMATS.d81;
+  var partSize1581 = 819200; // bytes per 1581 partition
+
+  // Calculate how many 1581 partitions fit
+  var systemTrackSize = spt * 256;
+  var availableBytes = totalSize - systemTrackSize;
+  var numPartitions = Math.floor(availableBytes / partSize1581);
+  if (numPartitions < 1) numPartitions = 1;
+  if (numPartitions > 31) numPartitions = 31;
+
+  for (var pn = 0; pn < numPartitions; pn++) {
+    var partStartByte = systemTrackSize + pn * partSize1581;
+    var partSizeBytes = Math.min(partSize1581, totalSize - partStartByte);
+    if (partSizeBytes < partSize1581) break; // don't create partial partitions
+
+    var partStartBlock = partStartByte / 512;
+    var partSizeBlocks = partSizeBytes / 512;
+
+    // Write partition table entry (32 bytes each, 8 per sector starting at sector 1)
+    var entrySecIdx = 1 + Math.floor(pn / 8);
+    var entryInSec = pn % 8;
+    var ptOff = entrySecIdx * 256 + entryInSec * 32;
+
+    data[ptOff + 0] = 0x04; // type: 1581 emulation
+    data[ptOff + 1] = (partStartBlock >> 16) & 0xFF;
+    data[ptOff + 2] = (partStartBlock >> 8) & 0xFF;
+    data[ptOff + 3] = partStartBlock & 0xFF;
+    data[ptOff + 5] = (partSizeBlocks >> 16) & 0xFF;
+    data[ptOff + 6] = (partSizeBlocks >> 8) & 0xFF;
+    data[ptOff + 7] = partSizeBlocks & 0xFF;
+
+    // Partition name
+    var nameStr = 'PARTITION ' + (pn + 1);
+    while (nameStr.length < 16) nameStr += ' ';
+    for (var ni = 0; ni < 16; ni++) data[ptOff + 8 + ni] = nameStr.charCodeAt(ni);
+
+    // Format the 1581 partition
+    var savedFmt = currentFormat;
+    var savedTracks = currentTracks;
+    currentFormat = d81;
+    currentTracks = 80;
+
+    var partData = data.subarray(partStartByte, partStartByte + partSizeBytes);
+    var offsets81 = getTrackOffsets(d81, 80);
+    var bamOff81 = offsets81[d81.bamTrack] + d81.bamSector * 256;
+    d81.initBAM(partData, bamOff81, 80);
+    var dirOff81 = offsets81[d81.dirTrack] + d81.dirSector * 256;
+    partData[dirOff81 + 0] = 0x00;
+    partData[dirOff81 + 1] = 0xFF;
+
+    currentFormat = savedFmt;
+    currentTracks = savedTracks;
+  }
 
   return data.buffer;
 }

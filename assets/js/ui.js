@@ -138,22 +138,16 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (tabs.length > 0) showSearchModal('Find in All Tabs', true);
   }
-  // Ctrl+G: go to track/sector
-  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.code === 'KeyG') {
+  // Ctrl+Shift+G: go to track/sector (Ctrl+G conflicts with browser Find Next)
+  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyG') {
     e.preventDefault();
     if (currentBuffer && !isTapeFormat()) showGoToSector();
   }
-  // Ctrl+W: close current tab
-  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.code === 'KeyW') {
+  // Ctrl+Alt+W: close current tab (Ctrl+W conflicts with browser close tab)
+  if (e.ctrlKey && e.altKey && e.code === 'KeyW') {
     e.preventDefault();
     var closeEl = document.getElementById('opt-close');
     if (!closeEl.classList.contains('disabled')) closeEl.click();
-  }
-  // Ctrl+Shift+W: close all tabs
-  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyW') {
-    e.preventDefault();
-    var closeAllEl = document.getElementById('opt-close-all');
-    if (!closeAllEl.classList.contains('disabled')) closeAllEl.click();
   }
   // Ctrl+Alt+H: view as hex
   if (e.ctrlKey && e.altKey && e.code === 'KeyH') {
@@ -921,8 +915,8 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl+I: insert file
-  if (e.ctrlKey && e.key === 'i') {
+  // Ctrl+Shift+I: insert file (Ctrl+I conflicts with browser DevTools)
+  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyI') {
     e.preventDefault();
     var insertEl = document.getElementById('opt-insert');
     if (!insertEl.classList.contains('disabled')) insertEl.click();
@@ -961,50 +955,50 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl+E: export
-  if (e.ctrlKey && e.key === 'e' && selectedEntryIndex >= 0) {
+  // Ctrl+Alt+E: export (Ctrl+E conflicts with browser search bar)
+  if (e.ctrlKey && e.altKey && e.code === 'KeyE' && selectedEntryIndex >= 0) {
     e.preventDefault();
     var exportEl = document.getElementById('opt-export');
     if (!exportEl.classList.contains('disabled')) exportEl.click();
     return;
   }
 
-  // Ctrl+L: name to lowercase
-  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === 'l' && selectedEntryIndex >= 0 && currentBuffer) {
+  // Ctrl+Shift+L: name to lowercase (Ctrl+L conflicts with browser address bar)
+  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyL' && selectedEntryIndex >= 0 && currentBuffer) {
     e.preventDefault();
     document.getElementById('opt-case-lower').click();
     return;
   }
-  // Ctrl+U: name to uppercase
-  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === 'u' && selectedEntryIndex >= 0 && currentBuffer) {
+  // Ctrl+Shift+U: name to uppercase (Ctrl+U conflicts with browser view source)
+  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyU' && selectedEntryIndex >= 0 && currentBuffer) {
     e.preventDefault();
     document.getElementById('opt-case-upper').click();
     return;
   }
-  // Ctrl+T: toggle name case
-  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === 't' && selectedEntryIndex >= 0 && currentBuffer) {
+  // Ctrl+Shift+T: toggle name case (Ctrl+T conflicts with browser new tab)
+  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyT' && selectedEntryIndex >= 0 && currentBuffer) {
     e.preventDefault();
     document.getElementById('opt-case-toggle').click();
     return;
   }
-  // Ctrl+D: add directory (D81 only, not Ctrl+Alt+D which is View as Disassembly)
-  if (e.ctrlKey && !e.altKey && e.key === 'd') {
+  // Ctrl+Shift+D: add directory (Ctrl+D conflicts with browser bookmark)
+  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyD') {
     e.preventDefault();
     var addDirEl = document.getElementById('opt-add-partition');
     if (!addDirEl.classList.contains('disabled')) addDirEl.click();
     return;
   }
 
-  // Ctrl+B: view BAM (not Ctrl+Alt+B which is View as BASIC)
-  if (e.ctrlKey && !e.altKey && e.key === 'b') {
+  // Ctrl+Shift+B: view BAM (Ctrl+B conflicts with browser bookmarks bar)
+  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyB') {
     e.preventDefault();
     var bamEl = document.getElementById('opt-view-bam');
     if (!bamEl.classList.contains('disabled')) bamEl.click();
     return;
   }
 
-  // Ctrl+H: edit disk name (header)
-  if (e.ctrlKey && !e.altKey && e.key === 'h') {
+  // Ctrl+Shift+H: edit disk name/header (Ctrl+H conflicts with browser history)
+  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyH') {
     e.preventDefault();
     var editName = document.getElementById('edit-name');
     if (editName) startEditing(editName);
@@ -1342,6 +1336,8 @@ function updateMenuState() {
   const tape = isTapeFormat();
   document.getElementById('opt-close').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-close-all').classList.toggle('disabled', tabs.length === 0);
+  var activeTab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
+  document.getElementById('opt-change-partition').classList.toggle('disabled', !activeTab || !activeTab.cmdFdBuffer);
   document.getElementById('opt-save').classList.toggle('disabled', !hasDisk || !currentFileName || tape);
   document.getElementById('opt-save-as').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-validate').classList.toggle('disabled', !hasDisk || tape);
@@ -1382,6 +1378,7 @@ let openMenu = null;
 
 var menuFocused = null;   // currently focused .option element
 var menuSubmenu = null;   // currently open submenu forced by keyboard
+var menuSubmenuStack = []; // stack for nested submenus
 var menuKeyNav = false;   // true once keyboard navigation takes over
 
 function clearMenuFocus() {
@@ -1390,8 +1387,10 @@ function clearMenuFocus() {
 }
 
 function closeSubmenu() {
+  for (var si = 0; si < menuSubmenuStack.length; si++) menuSubmenuStack[si].style.display = '';
   if (menuSubmenu) menuSubmenu.style.display = '';
   menuSubmenu = null;
+  menuSubmenuStack = [];
 }
 
 function setMenuFocus(opt) {
@@ -1514,7 +1513,8 @@ document.addEventListener('keydown', (e) => {
       if (sub) {
         var subOpts = getVisibleOptions(sub);
         if (subOpts.length > 0) {
-          closeSubmenu();
+          // Push current submenu onto stack (if any) and open nested one
+          if (menuSubmenu) menuSubmenuStack.push(menuSubmenu);
           sub.style.display = 'block';
           menuSubmenu = sub;
           adjustSubmenu(sub);
@@ -1530,10 +1530,13 @@ document.addEventListener('keydown', (e) => {
 
   } else if (e.key === 'ArrowLeft') {
     if (inSubmenu) {
-      // Close submenu, re-focus parent item
+      // Close current submenu, go back to parent
       var savedContainer = container;
-      closeSubmenu();
-      var parentOpts = getVisibleOptions(openMenu.querySelector('.menu-dropdown'));
+      menuSubmenu.style.display = '';
+      menuSubmenu = menuSubmenuStack.length > 0 ? menuSubmenuStack.pop() : null;
+      // Find parent container and re-focus the has-submenu item
+      var parentContainer = menuSubmenu || openMenu.querySelector('.menu-dropdown');
+      var parentOpts = getVisibleOptions(parentContainer);
       var parentItem = parentOpts.find(function(o) {
         return o.classList.contains('has-submenu') && o.contains(savedContainer);
       });
@@ -1552,7 +1555,7 @@ document.addEventListener('keydown', (e) => {
       if (sub2) {
         var subOpts2 = getVisibleOptions(sub2);
         if (subOpts2.length > 0) {
-          closeSubmenu();
+          if (menuSubmenu) menuSubmenuStack.push(menuSubmenu);
           sub2.style.display = 'block';
           menuSubmenu = sub2;
           adjustSubmenu(sub2);
@@ -1617,20 +1620,50 @@ function renderTabs() {
   });
 }
 
-document.querySelectorAll('#opt-new .submenu .option').forEach(el => {
-  el.addEventListener('click', (e) => {
+document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
+  el.addEventListener('click', async (e) => {
     e.stopPropagation();
     closeMenus();
     saveActiveTab();
-    const tracks = parseInt(el.dataset.tracks, 10);
-    const formatKey = el.dataset.format || 'd64';
-    const buf = createEmptyDisk(formatKey, tracks);
+    var tracks = parseInt(el.dataset.tracks, 10);
+    const formatKey = el.dataset.format;
+
+    // DHD: prompt for number of partitions
+    if (formatKey === 'dhd') {
+      var numStr = await showInputModal('Number of 1581 partitions (1-31)', '4');
+      if (numStr === null) return;
+      var numParts = parseInt(numStr, 10);
+      if (isNaN(numParts) || numParts < 1 || numParts > 31) {
+        showModal('New DHD', ['Invalid number. Enter 1 to 31.']);
+        return;
+      }
+      tracks = numParts; // pass partition count as tracks param
+    }
+
+    var buf = createEmptyDisk(formatKey, tracks);
+    if (!buf) return;
+    var fname = null;
+
+    // CMD FD/HD: run through partition picker to extract the formatted partition
+    var origCmdBufNew = null, origCmdNameNew = null;
+    if (formatKey === 'd1m' || formatKey === 'd2m' || formatKey === 'd4m' || formatKey === 'dhd') {
+      origCmdBufNew = buf;
+      origCmdNameNew = 'New ' + formatKey.toUpperCase();
+      var fmtName = formatKey.toUpperCase();
+      var picked = await showCmdFdPartitionPicker(buf, 'New ' + fmtName, fmtName);
+      if (!picked) return;
+      buf = picked.buffer;
+      fname = picked.name;
+    }
+
     currentBuffer = buf;
-    currentFileName = null;
+    currentFileName = fname;
     currentPartition = null;
     selectedEntryIndex = -1;
     newDiskCount++;
-    var tab = createTab('New Disk ' + newDiskCount, buf, null);
+    var tabName = fname || 'New Disk ' + newDiskCount;
+    var tab = createTab(tabName, buf, fname);
+    if (origCmdBufNew) { tab.cmdFdBuffer = origCmdBufNew; tab.cmdFdFileName = origCmdNameNew; }
     activeTabId = tab.id;
     const info = parseDisk(buf);
     renderDisk(info);
@@ -1705,6 +1738,37 @@ document.getElementById('opt-close-all').addEventListener('click', (e) => {
   renderTabs();
   updateMenuState();
   updateEntryMenuState();
+});
+
+document.getElementById('opt-change-partition').addEventListener('click', async (e) => {
+  e.stopPropagation();
+  closeMenus();
+  var tab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
+  if (!tab || !tab.cmdFdBuffer) return;
+
+  var fmtName = /\.dhd$/i.test(tab.cmdFdFileName || '') ? 'DHD' : undefined;
+  var picked = await showCmdFdPartitionPicker(tab.cmdFdBuffer, tab.cmdFdFileName, fmtName, true);
+  if (!picked) return;
+
+  // Replace current tab's buffer with the new partition
+  currentBuffer = picked.buffer;
+  currentFileName = picked.name;
+  currentPartition = null;
+  selectedEntryIndex = -1;
+  parseDisk(currentBuffer);
+
+  tab.buffer = currentBuffer;
+  tab.fileName = currentFileName;
+  tab.name = picked.name;
+  tab.format = currentFormat;
+  tab.tracks = currentTracks;
+  tab.partition = null;
+  tab.dirty = false;
+
+  var info = parseCurrentDir(currentBuffer);
+  renderDisk(info);
+  renderTabs();
+  updateMenuState();
 });
 
 document.getElementById('opt-save').addEventListener('click', (e) => {
@@ -10426,8 +10490,11 @@ fileInput.addEventListener('change', () => {
         var fname = results[i].name;
 
         // CMD FD/HD images: show partition picker
+        var origCmdBuf = null, origCmdName = null;
         var isCmdFd = isCmdImage(buf) || /\.dhd$/i.test(fname);
         if (isCmdFd) {
+          origCmdBuf = buf;
+          origCmdName = fname;
           var fmtName = /\.dhd$/i.test(fname) ? 'DHD' : undefined;
           var picked = await showCmdFdPartitionPicker(buf, fname, fmtName);
           if (!picked) continue; // user cancelled
@@ -10441,6 +10508,7 @@ fileInput.addEventListener('change', () => {
         selectedEntryIndex = -1;
         parseDisk(currentBuffer);
         var tab = createTab(fname, currentBuffer, fname);
+        if (origCmdBuf) { tab.cmdFdBuffer = origCmdBuf; tab.cmdFdFileName = origCmdName; }
         activeTabId = tab.id;
       } catch (err) {
         showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
@@ -10508,8 +10576,11 @@ document.addEventListener('drop', function(e) {
           var buf = results[i].buffer;
           var fname = results[i].name;
 
+          var origCmdBuf2 = null, origCmdName2 = null;
           var isCmdFd2 = isCmdImage(buf) || /\.dhd$/i.test(fname);
           if (isCmdFd2) {
+            origCmdBuf2 = buf;
+            origCmdName2 = fname;
             var fmtName2 = /\.dhd$/i.test(fname) ? 'DHD' : undefined;
             var picked = await showCmdFdPartitionPicker(buf, fname, fmtName2);
             if (!picked) continue;
@@ -10523,6 +10594,7 @@ document.addEventListener('drop', function(e) {
           selectedEntryIndex = -1;
           parseDisk(currentBuffer);
           var tab = createTab(fname, currentBuffer, fname);
+          if (origCmdBuf2) { tab.cmdFdBuffer = origCmdBuf2; tab.cmdFdFileName = origCmdName2; }
           activeTabId = tab.id;
         } catch (err) {
           showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
@@ -10701,19 +10773,18 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
     { title: 'File Operations', shortcuts: [
       ['Ctrl + C', 'Copy selected file(s)'],
       ['Ctrl + V', 'Paste file (works across tabs)'],
-      ['Ctrl + I', 'Insert file'],
-      ['Ctrl + E', 'Export selected file(s)'],
-      ['Ctrl + D', 'Add directory (D81)'],
+      ['Ctrl + Shift + I', 'Insert file'],
+      ['Ctrl + Alt + E', 'Export selected file(s)'],
+      ['Ctrl + Shift + D', 'Add directory (D81/DNP)'],
       ['Ctrl + Z', 'Undo last change'],
       ['Ctrl + Alt + O', 'Open disk'],
       ['Ctrl + Alt + S', 'Save disk'],
       ['Ctrl + Shift + S', 'Save as'],
       ['Ctrl + Alt + N', 'New disk'],
-      ['Ctrl + W', 'Close current tab'],
-      ['Ctrl + Shift + W', 'Close all tabs'],
-      ['Ctrl + B', 'View BAM'],
+      ['Ctrl + Alt + W', 'Close current tab'],
+      ['Ctrl + Shift + B', 'View BAM'],
       ['Ctrl + Alt + V', 'Validate disk'],
-      ['Ctrl + H', 'Edit disk name'],
+      ['Ctrl + Shift + H', 'Edit disk name'],
       ['Ctrl + Alt + I', 'Edit disk ID'],
     ]},
     { title: 'Viewers', shortcuts: [
@@ -10726,7 +10797,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
     { title: 'Search', shortcuts: [
       ['Ctrl + F', 'Find in current disk'],
       ['Ctrl + Shift + F', 'Find in all tabs'],
-      ['Ctrl + G', 'Go to sector'],
+      ['Ctrl + Shift + G', 'Go to sector'],
     ]},
     { title: 'Formatting', shortcuts: [
       ['Ctrl + Alt + L', 'Align left'],
@@ -10735,9 +10806,9 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Ctrl + Alt + J', 'Justify'],
       ['Ctrl + <', 'Lock / unlock file'],
       ['Ctrl + *', 'Splat / unsplat file'],
-      ['Ctrl + L', 'Name to lowercase'],
-      ['Ctrl + U', 'Name to UPPERCASE'],
-      ['Ctrl + T', 'Toggle name case'],
+      ['Ctrl + Shift + L', 'Name to lowercase'],
+      ['Ctrl + Shift + U', 'Name to UPPERCASE'],
+      ['Ctrl + Shift + T', 'Toggle name case'],
     ]},
     { title: 'Editing (double-click)', shortcuts: [
       ['Filename', 'Rename file (PETSCII keyboard available)'],
@@ -10791,6 +10862,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.26', title: 'New disk menu with CMD formats, DHD support', items: [
+      'New menu: reorganized by drive type (1541/1571/1581/8050/8250/CMD)',
+      'New: CMD Native (DNP) with formatted BAM and directory',
+      'New: CMD FD (D1M/D2M/D4M) with partition table and default 1581 partition',
+      'New: CMD HD (DHD) with partition table and default 1581 partition',
+      'DHD format: CMD Hard Drive image support via file extension detection',
+    ]},
     { ver: '1.3.25', title: 'CMD FD partitions, scratch/unscratch, fixes', items: [
       'D1M/D2M/D4M: proper partition table reading with partition picker dialog',
       'CMD FD: partitions extracted as virtual disks (1541/1571/1581/native)',
@@ -11132,24 +11210,24 @@ document.getElementById('opt-download').addEventListener('click', function(e) {
 });
 
 // ── CMD FD Partition Picker ───────────────────────────────────────────
-function showCmdFdPartitionPicker(buffer, fileName, formatName) {
+function showCmdFdPartitionPicker(buffer, fileName, formatName, forceDialog) {
   return new Promise(function(resolve) {
     var fdInfo = readCmdFdPartitions(buffer, formatName);
     if (!fdInfo || fdInfo.partitions.length === 0) {
-      showModal('CMD FD Image', ['No partitions found in ' + fileName]);
+      showModal('CMD Image', ['No partitions found in ' + fileName]);
       resolve(null);
       return;
     }
 
-    // If only one non-system partition, auto-select it
+    // If only one non-system partition and not forced, auto-select it
     var userParts = fdInfo.partitions.filter(function(p) { return p.type !== 5; });
-    if (userParts.length === 1) {
+    if (userParts.length === 1 && !forceDialog) {
       var part = userParts[0];
       var extracted = extractCmdPartition(buffer, part);
       if (extracted) {
         resolve({ buffer: extracted, name: fileName + ' [' + part.name + ']' });
       } else {
-        showModal('CMD FD Image', ['Failed to extract partition "' + part.name + '"']);
+        showModal('CMD Image', ['Failed to extract partition "' + part.name + '"']);
         resolve(null);
       }
       return;
