@@ -877,6 +877,73 @@ function extractGCRSector(trackData, trackSize, track, sector) {
   return null; // sector not found
 }
 
+// ── CMD FD partition table reader ─────────────────────────────────────
+var CMD_FD_SIZES = {
+  829440: { name: 'D1M', spt: 40 },
+  832680: { name: 'D1M', spt: 40 },
+  1658880: { name: 'D2M', spt: 80 },
+  1665360: { name: 'D2M', spt: 80 },
+  3317760: { name: 'D4M', spt: 160 },
+  3330720: { name: 'D4M', spt: 160 },
+};
+
+var CMD_PART_TYPES = { 0: 'Empty', 1: 'Native', 2: '1541', 3: '1571', 4: '1581', 5: 'System' };
+
+function isCmdImage(buffer) {
+  return CMD_FD_SIZES[buffer.byteLength] !== undefined;
+}
+
+function readCmdFdPartitions(buffer, formatName) {
+  var data = new Uint8Array(buffer);
+  var fdInfo = CMD_FD_SIZES[buffer.byteLength];
+  var name = fdInfo ? fdInfo.name : (formatName || 'CMD');
+
+  var partitions = [];
+  // Partition table at track 1, sector 1 (offset 256), 32 bytes per entry, 8 per sector
+  for (var i = 0; i < 31; i++) {
+    var secIdx = 1 + Math.floor(i / 8);
+    var entryIdx = i % 8;
+    var off = secIdx * 256 + entryIdx * 32;
+    if (off + 32 > data.length) break;
+
+    var type = data[off];
+    if (type === 0) continue; // empty entry
+
+    var startBlock = (data[off + 1] << 16) | (data[off + 2] << 8) | data[off + 3];
+    var sizeBlocks = (data[off + 5] << 16) | (data[off + 6] << 8) | data[off + 7];
+    var startByte = startBlock * 512;
+    var sizeBytes = sizeBlocks * 512;
+
+    var name = '';
+    for (var ni = 0; ni < 16; ni++) {
+      var ch = data[off + 8 + ni];
+      if (ch === 0xA0) break;
+      name += String.fromCharCode(ch >= 0xC1 && ch <= 0xDA ? ch - 0x80 : ch);
+    }
+
+    partitions.push({
+      index: i + 1,
+      type: type,
+      typeName: CMD_PART_TYPES[type] || 'Unknown',
+      name: name || 'Partition ' + (i + 1),
+      startByte: startByte,
+      sizeBytes: sizeBytes,
+      sizeBlocks: sizeBlocks
+    });
+  }
+  return { format: name, spt: fdInfo ? fdInfo.spt : 256, partitions: partitions };
+}
+
+function extractCmdPartition(buffer, partition) {
+  if (partition.startByte + partition.sizeBytes > buffer.byteLength) {
+    // Clamp to available data
+    var available = buffer.byteLength - partition.startByte;
+    if (available <= 0) return null;
+    return buffer.slice(partition.startByte, partition.startByte + available);
+  }
+  return buffer.slice(partition.startByte, partition.startByte + partition.sizeBytes);
+}
+
 function detectFormat(bufferSize, buffer) {
   if (buffer) {
     var data = new Uint8Array(buffer);
@@ -896,13 +963,8 @@ function detectFormat(bufferSize, buffer) {
       if (bufferSize === size.bytes) return { format: fmt, tracks: size.tracks };
     }
   }
-  // D1M/D2M/D4M detection by exact size
-  if (bufferSize === 829440 || bufferSize === 832680)
-    return { format: DISK_FORMATS.dnp, tracks: Math.floor(bufferSize / 65536) };
-  if (bufferSize === 1658880 || bufferSize === 1665360)
-    return { format: DISK_FORMATS.dnp, tracks: Math.floor(bufferSize / 65536) };
-  if (bufferSize === 3317760 || bufferSize === 3330720)
-    return { format: DISK_FORMATS.dnp, tracks: Math.floor(bufferSize / 65536) };
+  // D1M/D2M/D4M: don't auto-detect here; handled in openCmdFdImage() in ui.js
+  // Falls through to DNP detection below if opened directly
   // DNP: multiple of 65536, at least 2 tracks, not matching other formats
   if (bufferSize >= 131072 && bufferSize % 65536 === 0 && bufferSize <= 16711680) {
     var dnpTracks = bufferSize / 65536;

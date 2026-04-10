@@ -10418,16 +10418,29 @@ fileInput.addEventListener('change', () => {
     });
   }
 
-  Promise.all(files.map(openFile)).then(function(results) {
+  Promise.all(files.map(openFile)).then(async function(results) {
     saveActiveTab();
     for (var i = 0; i < results.length; i++) {
       try {
-        currentBuffer = results[i].buffer;
-        currentFileName = results[i].name;
+        var buf = results[i].buffer;
+        var fname = results[i].name;
+
+        // CMD FD/HD images: show partition picker
+        var isCmdFd = isCmdImage(buf) || /\.dhd$/i.test(fname);
+        if (isCmdFd) {
+          var fmtName = /\.dhd$/i.test(fname) ? 'DHD' : undefined;
+          var picked = await showCmdFdPartitionPicker(buf, fname, fmtName);
+          if (!picked) continue; // user cancelled
+          buf = picked.buffer;
+          fname = picked.name;
+        }
+
+        currentBuffer = buf;
+        currentFileName = fname;
         currentPartition = null;
         selectedEntryIndex = -1;
         parseDisk(currentBuffer);
-        var tab = createTab(results[i].name, currentBuffer, results[i].name);
+        var tab = createTab(fname, currentBuffer, fname);
         activeTabId = tab.id;
       } catch (err) {
         showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
@@ -10466,7 +10479,7 @@ document.addEventListener('drop', function(e) {
   var files = Array.from(e.dataTransfer.files);
   if (files.length === 0) return;
 
-  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp'];
+  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dhd', '.dnp'];
   var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
   var diskFiles = [];
   var importFiles = [];
@@ -10488,16 +10501,28 @@ document.addEventListener('drop', function(e) {
         reader.readAsArrayBuffer(file);
       });
     }
-    Promise.all(diskFiles.map(openDiskFile)).then(function(results) {
+    Promise.all(diskFiles.map(openDiskFile)).then(async function(results) {
       saveActiveTab();
       for (var i = 0; i < results.length; i++) {
         try {
-          currentBuffer = results[i].buffer;
-          currentFileName = results[i].name;
+          var buf = results[i].buffer;
+          var fname = results[i].name;
+
+          var isCmdFd2 = isCmdImage(buf) || /\.dhd$/i.test(fname);
+          if (isCmdFd2) {
+            var fmtName2 = /\.dhd$/i.test(fname) ? 'DHD' : undefined;
+            var picked = await showCmdFdPartitionPicker(buf, fname, fmtName2);
+            if (!picked) continue;
+            buf = picked.buffer;
+            fname = picked.name;
+          }
+
+          currentBuffer = buf;
+          currentFileName = fname;
           currentPartition = null;
           selectedEntryIndex = -1;
           parseDisk(currentBuffer);
-          var tab = createTab(results[i].name, currentBuffer, results[i].name);
+          var tab = createTab(fname, currentBuffer, fname);
           activeTabId = tab.id;
         } catch (err) {
           showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
@@ -10590,7 +10615,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '<div style="font-size:11px;color:' + C64_COLORS[13] + ';margin-top:4px"><i class="fa-solid fa-cannabis"></i> OOK EEN TREKJE? <i class="fa-solid fa-joint"></i></div>' +
     '</div>' +
     '<div class="text-base line-tall">' +
-      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), G64 (GCR), DNP (CMD), D1M/D2M/D4M (CMD FD), X64, T64 (tape), TAP (raw tape), CVT (GEOS)<br>' +
+      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), G64 (GCR), DNP (CMD), D1M/D2M/D4M (CMD FD), DHD (CMD HD), X64, T64 (tape), TAP (raw tape), CVT (GEOS)<br>' +
       '<b>Features:</b><br>' +
       '&bull; Directory editing: rename, insert, remove, sort, align, lock, splat<br>' +
       '&bull; Hex sector editor with track/sector navigation and search highlighting<br>' +
@@ -10766,6 +10791,21 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.25', title: 'CMD FD partitions, scratch/unscratch, fixes', items: [
+      'D1M/D2M/D4M: proper partition table reading with partition picker dialog',
+      'CMD FD: partitions extracted as virtual disks (1541/1571/1581/native)',
+      'CMD FD: auto-opens single-partition images, picker for multi-partition',
+      'Scratch File: C64-style scratch (clear closed bit + free sectors in BAM)',
+      'Unscratch File: restore scratched files (set closed bit + mark sectors used)',
+      'Scratch/Unscratch: show/hide based on file state, locked files can\'t be scratched',
+      'CBM partition protection: scratch/splat/change type disabled on directory entries',
+      'DNP: Add Directory enabled for CMD native partitions',
+      'PETSCII: fixed $61-$7A and $C1-$DA in petsciiToReadable for GEOS filenames',
+      'PETSCII picker: z-index always above current modal',
+      'Search input: focus styling matches other inputs',
+      'Separator editor: scrollable list with fixed input at bottom, name field',
+      'Download standalone: build.ps1 creates ZIP, Help menu fetches it',
+    ]},
     { ver: '1.3.24', title: 'ZipCode decompression', items: [
       'Decompress ZipCode: detect 1!-4! file sets on disk and extract to new D64 tab',
       'Three compression methods: store (raw), fill (single byte), RLE',
@@ -11090,6 +11130,76 @@ document.getElementById('opt-download').addEventListener('click', function(e) {
     showModal('Download', [msg]);
   });
 });
+
+// ── CMD FD Partition Picker ───────────────────────────────────────────
+function showCmdFdPartitionPicker(buffer, fileName, formatName) {
+  return new Promise(function(resolve) {
+    var fdInfo = readCmdFdPartitions(buffer, formatName);
+    if (!fdInfo || fdInfo.partitions.length === 0) {
+      showModal('CMD FD Image', ['No partitions found in ' + fileName]);
+      resolve(null);
+      return;
+    }
+
+    // If only one non-system partition, auto-select it
+    var userParts = fdInfo.partitions.filter(function(p) { return p.type !== 5; });
+    if (userParts.length === 1) {
+      var part = userParts[0];
+      var extracted = extractCmdPartition(buffer, part);
+      if (extracted) {
+        resolve({ buffer: extracted, name: fileName + ' [' + part.name + ']' });
+      } else {
+        showModal('CMD FD Image', ['Failed to extract partition "' + part.name + '"']);
+        resolve(null);
+      }
+      return;
+    }
+
+    // Show picker modal
+    document.getElementById('modal-title').textContent = fdInfo.format + ' \u2014 ' + fileName;
+    var body = document.getElementById('modal-body');
+    var html = '<div style="margin-bottom:12px;color:var(--text-muted);font-size:12px">' +
+      fdInfo.partitions.length + ' partition(s) found. Select one to open:</div>';
+
+    for (var i = 0; i < fdInfo.partitions.length; i++) {
+      var p = fdInfo.partitions[i];
+      if (p.type === 5) continue; // skip system partition
+      var sizeKB = Math.round(p.sizeBytes / 1024);
+      html += '<div class="search-result" data-pidx="' + i + '" style="cursor:pointer;padding:8px">' +
+        '<b style="color:var(--accent)">' + escHtml(p.name) + '</b>' +
+        ' <span style="color:var(--text-muted)">(' + p.typeName + ', ' + sizeKB + ' KB, ' +
+        p.sizeBlocks + ' blocks)</span></div>';
+    }
+
+    body.innerHTML = html;
+
+    var footer = document.querySelector('#modal-overlay .modal-footer');
+    footer.innerHTML = '<button id="modal-close">Cancel</button>';
+    document.getElementById('modal-close').addEventListener('click', function() {
+      document.getElementById('modal-overlay').classList.remove('open');
+      resolve(null);
+    });
+
+    // Click a partition to open it
+    body.addEventListener('click', function handler(e) {
+      var row = e.target.closest('[data-pidx]');
+      if (!row) return;
+      body.removeEventListener('click', handler);
+      var idx = parseInt(row.getAttribute('data-pidx'), 10);
+      var part = fdInfo.partitions[idx];
+      var extracted = extractCmdPartition(buffer, part);
+      document.getElementById('modal-overlay').classList.remove('open');
+      if (extracted) {
+        resolve({ buffer: extracted, name: fileName + ' [' + part.name + ']' });
+      } else {
+        showModal('CMD FD Image', ['Failed to extract partition "' + part.name + '"']);
+        resolve(null);
+      }
+    });
+
+    document.getElementById('modal-overlay').classList.add('open');
+  });
+}
 
 // ── Theme toggle ─────────────────────────────────────────────────────
 const themeToggle = document.getElementById('theme-toggle');
