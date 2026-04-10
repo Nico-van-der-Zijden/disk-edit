@@ -216,7 +216,9 @@ function positionPicker() {
   var el = document.getElementById('petscii-picker');
   var rect = pickerTarget.getBoundingClientRect();
 
-  if (pickerStick) {
+  var inModal = !!pickerTarget.closest('.modal-overlay');
+
+  if (pickerStick && !inModal) {
     // Sticky: use absolute positioning so the picker extends the page
     el.style.position = 'absolute';
     var top = rect.bottom + window.scrollY + 4;
@@ -236,19 +238,46 @@ function positionPicker() {
         el.scrollIntoView({ block: 'end', behavior: 'smooth' });
       }
     });
+  } else if (pickerStick && inModal) {
+    // Sticky inside modal: absolute position below input, body scrolls to fit
+    el.style.position = 'absolute';
+    var mTop = rect.bottom + window.scrollY + 4;
+    var mLeft = rect.left + window.scrollX;
+    el.style.top = mTop + 'px';
+    el.style.left = mLeft + 'px';
+    requestAnimationFrame(function() {
+      var elRect = el.getBoundingClientRect();
+      if (elRect.right > window.innerWidth) {
+        el.style.left = Math.max(0, window.innerWidth - elRect.width - 8 + window.scrollX) + 'px';
+      }
+      elRect = el.getBoundingClientRect();
+      if (elRect.bottom > window.innerHeight) {
+        el.scrollIntoView({ block: 'end', behavior: 'smooth' });
+      }
+    });
   } else {
     // Non-sticky: fixed within viewport
     el.style.position = 'fixed';
     var ftop = rect.bottom + 4;
     var fleft = rect.left;
-    var pickerRect = el.getBoundingClientRect();
-    if (ftop + pickerRect.height > window.innerHeight) {
-      ftop = rect.top - pickerRect.height - 4;
-    }
-    if (fleft + pickerRect.width > window.innerWidth) {
-      fleft = window.innerWidth - pickerRect.width - 8;
-    }
-    el.style.top = Math.max(0, ftop) + 'px';
+    requestAnimationFrame(function() {
+      var pickerRect = el.getBoundingClientRect();
+      if (ftop + pickerRect.height > window.innerHeight) {
+        // Doesn't fit below — try above the input
+        var above = rect.top - pickerRect.height - 4;
+        if (above >= 0) {
+          el.style.top = above + 'px';
+        } else {
+          // Doesn't fit above either — position at bottom of viewport
+          el.style.top = Math.max(0, window.innerHeight - pickerRect.height - 4) + 'px';
+        }
+      }
+      if (fleft + pickerRect.width > window.innerWidth) {
+        fleft = window.innerWidth - pickerRect.width - 8;
+      }
+      el.style.left = Math.max(0, fleft) + 'px';
+    });
+    el.style.top = ftop + 'px';
     el.style.left = Math.max(0, fleft) + 'px';
   }
 }
@@ -260,6 +289,8 @@ function showPetsciiPicker(targetEl, maxLen) {
   pickerReverse = false;
   renderPicker();
   el.classList.add('open');
+  // Always appear above any open modal
+  if (typeof modalZCounter !== 'undefined') el.style.zIndex = modalZCounter + 5;
   positionPicker();
 
   // In sticky mode, follow the input when content scrolls

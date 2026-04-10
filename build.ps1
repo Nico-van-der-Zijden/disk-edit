@@ -1,4 +1,4 @@
-# Build script: create a single self-contained index.html
+# Build script: create a single self-contained index.html + ZIP
 # Inlines all JS, CSS, and fonts as base64 data URIs
 # Usage: powershell -ExecutionPolicy Bypass -File build.ps1
 
@@ -15,6 +15,16 @@ function FileToDataUri($path, $mime) {
     $b64 = [Convert]::ToBase64String($bytes)
     return "data:$mime;base64,$b64"
 }
+
+# Read version from cbm-editor.js
+$versionLine = Get-Content (Join-Path $srcDir "assets/js/cbm-editor.js") | Select-String 'major:\s*(\d+).*minor:\s*(\d+).*build:\s*(\d+)'
+if ($versionLine) {
+    $v = $versionLine.Matches[0].Groups
+    $version = "$($v[1].Value).$($v[2].Value).$($v[3].Value)"
+} else {
+    $version = "0.0.0"
+}
+Write-Host "Building CBM Disk Editor v$version..." -ForegroundColor Cyan
 
 $html = Get-Content $srcFile -Raw -Encoding UTF8
 
@@ -74,10 +84,20 @@ $html = [regex]::Replace($html, '(?:<!-- Matomo[^>]*-->\s*)?<script src="([^"]+)
     }
 })
 
-# Write output
+# Write HTML output
 [System.IO.File]::WriteAllText($outFile, $html, [System.Text.UTF8Encoding]::new($false))
 
 $size = (Get-Item $outFile).Length
 $sizeKB = [math]::Round($size / 1024)
 $sizeMB = [math]::Round($size / 1048576, 1)
-Write-Host "Built dist/index.html ($sizeKB KB / $sizeMB MB) - single file, no dependencies" -ForegroundColor Green
+Write-Host "  Built dist/index.html ($sizeKB KB / $sizeMB MB)" -ForegroundColor Green
+
+# 4. Create ZIP
+$zipName = "CBM Disk Editor $version.zip"
+$zipFile = Join-Path $distDir $zipName
+if (Test-Path $zipFile) { Remove-Item $zipFile }
+Compress-Archive -Path $outFile -DestinationPath $zipFile -CompressionLevel Optimal
+$zipSize = [math]::Round((Get-Item $zipFile).Length / 1024)
+Write-Host "  Built dist/$zipName ($zipSize KB)" -ForegroundColor Green
+
+Write-Host "Done! Single file, no dependencies." -ForegroundColor Cyan

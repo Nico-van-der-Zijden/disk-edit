@@ -1110,6 +1110,10 @@
     flex: 1; min-width: 160px; padding: 5px 8px;
     background: var(--bg-input); color: var(--text); border: 1px solid var(--border);
     border-radius: 3px; font-family: 'C64 Pro Mono', monospace; font-size: 13px;
+    outline: none;
+  }
+  .search-row input[type="text"]:focus {
+    border-color: var(--accent);
   }
   .search-row button {
     padding: 5px 14px; border: 1px solid var(--border); border-radius: 3px;
@@ -1663,9 +1667,17 @@
 
   /* --- File Viewer --- */
   /* --- Separator Editor --- */
+  .sep-editor-layout {
+    display: flex; flex-direction: column; height: 100%; overflow: hidden;
+  }
   .sep-editor-list {
     margin-bottom: 12px;
+    overflow-y: auto; flex: 1; min-height: 0;
   }
+  .sep-editor-form {
+    flex-shrink: 0; padding-top: 8px; border-top: 1px solid var(--border);
+  }
+  .modal-body:has(.sep-editor-layout) { overflow-y: hidden; display: flex; flex-direction: column; }
 
   .sep-editor-item {
     display: flex;
@@ -1895,6 +1907,8 @@
       <div class="separator"></div>
       <div class="option disabled" id="opt-lock">Lock File</div>
       <div class="option disabled" id="opt-splat">Splat File</div>
+      <div class="option disabled" id="opt-scratch">Scratch File</div>
+      <div class="option disabled" id="opt-unscratch">Unscratch File</div>
       <div class="option disabled has-submenu" id="opt-case">Name Case
         <div class="submenu">
           <div class="option" id="opt-case-upper">UPPERCASE</div>
@@ -1996,6 +2010,8 @@
       <div class="option" id="opt-shortcuts">Keyboard Shortcuts</div>
       <div class="separator"></div>
       <div class="option" id="opt-changelog">Changelog</div>
+      <div class="separator"></div>
+      <div class="option" id="opt-download">Download Standalone Version</div>
     </div>
   </div>
   <div class="spacer"></div>

@@ -383,8 +383,8 @@ function renderDisk(info) {
               // Skip separators: T/S points to directory track or is 0
               if (dt !== 0 && dt !== currentFormat.dirTrack) {
                 var recov = checkScratchedRecoverable(currentBuffer, e.entryOff);
-                if (recov === 'yes') icons += '<span class="dir-icon-recover" data-recover="' + e.entryOff + '" title="Recoverable \u2014 click to restore"><i class="fa-solid fa-heart-pulse"></i></span>';
-                else if (recov === 'partial') icons += '<span class="dir-icon-recover-partial" data-recover="' + e.entryOff + '" title="Partially recoverable \u2014 click for details"><i class="fa-solid fa-heart-crack"></i></span>';
+                if (recov === 'yes') icons += '<span class="dir-icon-recover" title="Recoverable \u2014 sector chain intact"><i class="fa-solid fa-heart-pulse"></i></span>';
+                else if (recov === 'partial') icons += '<span class="dir-icon-recover-partial" title="Partially recoverable \u2014 some sectors reused"><i class="fa-solid fa-heart-crack"></i></span>';
                 else icons += '<span class="dir-icon-recover-no" title="Not recoverable \u2014 sectors reused"><i class="fa-solid fa-skull"></i></span>';
               }
               return icons;
@@ -534,13 +534,6 @@ function bindDirSelection() {
         el.classList.add('selected');
         updateEntryMenuState();
         document.getElementById('opt-view-geos').click();
-        return;
-      }
-      // Recovery icon click — show chain details and offer restore
-      var recoverIcon = e.target.closest('[data-recover]');
-      if (recoverIcon) {
-        var recOff = parseInt(recoverIcon.getAttribute('data-recover'), 10);
-        showRecoveryDialog(recOff);
         return;
       }
       cancelActiveEdits();
@@ -1075,14 +1068,42 @@ function updateEntryMenuState() {
   document.getElementById('opt-insert-sep').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
   document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection || multiSelect || tape);
   document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection || multiSelect);
-  document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || inPartition || !currentBuffer || currentFormat !== DISK_FORMATS.d81 || !canInsertFile() || tape);
+  var supportsSubdirs = currentFormat === DISK_FORMATS.d81 || currentFormat === DISK_FORMATS.dnp;
+  document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || inPartition || !currentBuffer || !supportsSubdirs || !canInsertFile() || tape);
   // Multi-select compatible operations (all disabled for tape except copy/export)
   document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection || tape);
   document.getElementById('opt-align').classList.toggle('disabled', !hasSelection || tape);
   document.getElementById('opt-recalc-size').classList.toggle('disabled', !hasSelection || tape);
   document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection || tape);
-  document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection || tape);
-  document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection || tape);
+  var isCbmPartition = false;
+  if (hasSelection && !tape && currentBuffer) {
+    var pData = new Uint8Array(currentBuffer);
+    var pTypeIdx = pData[selectedEntryIndex + 2] & 0x07;
+    isCbmPartition = (pTypeIdx === 5 || pTypeIdx === 6);
+  }
+  document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection || tape || isCbmPartition);
+  document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection || tape || isCbmPartition);
+  var canScratch = false, canUnscratch = false;
+  if (hasSelection && !tape && currentBuffer) {
+    var uData = new Uint8Array(currentBuffer);
+    var uTypeByte = uData[selectedEntryIndex + 2];
+    var uClosed = (uTypeByte & 0x80) !== 0;
+    var uTypeIdx = uTypeByte & 0x07;
+    var uLocked = (uTypeByte & 0x40) !== 0;
+    if (uClosed && uTypeIdx >= 1 && uTypeIdx <= 4 && !isCbmPartition) {
+      canScratch = uLocked ? 'locked' : true;
+    }
+    if (!uClosed && uData[selectedEntryIndex + 3] !== 0 && uData[selectedEntryIndex + 3] !== currentFormat.dirTrack) {
+      var uRecov = checkScratchedRecoverable(currentBuffer, selectedEntryIndex);
+      canUnscratch = (uRecov === 'yes' || uRecov === 'partial');
+    }
+  }
+  var scratchEl = document.getElementById('opt-scratch');
+  var unscratchEl = document.getElementById('opt-unscratch');
+  scratchEl.style.display = canScratch ? '' : 'none';
+  scratchEl.classList.toggle('disabled', canScratch === 'locked');
+  unscratchEl.style.display = canUnscratch ? '' : 'none';
+  unscratchEl.classList.toggle('disabled', !canUnscratch);
   document.getElementById('opt-case').classList.toggle('disabled', !hasSelection || tape);
   // Disable file types not supported by the current format
   var supportedTypes = currentFormat.fileTypes || [0, 1, 2, 3, 4];
@@ -6409,7 +6430,9 @@ function showSearchModal(title, allTabs) {
     document.getElementById('modal-overlay').classList.remove('open');
   });
   document.getElementById('modal-overlay').classList.add('open');
-  input.focus();
+  requestAnimationFrame(function() {
+    input.focus();
+  });
 }
 
 document.getElementById('opt-find').addEventListener('click', function(e) {
@@ -7194,73 +7217,6 @@ function checkScratchedRecoverable(buffer, entryOff) {
   return 'no';
 }
 
-function showRecoveryDialog(entryOff) {
-  var data = new Uint8Array(currentBuffer);
-  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
-  var ft = data[entryOff + 3], fs = data[entryOff + 4];
-  var fmt = currentFormat;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
-
-  // Follow chain and check each sector
-  var chain = [], totalFree = 0, t = ft, s = fs, visited = {};
-  while (t !== 0) {
-    if (t < 1 || t > currentTracks || s >= fmt.sectorsPerTrack(t)) break;
-    var key = t + ':' + s;
-    if (visited[key]) break;
-    visited[key] = true;
-    var sfree = checkSectorFree(data, bamOff, t, s);
-    if (sfree) totalFree++;
-    chain.push({ t: t, s: s, free: sfree });
-    var off = sectorOffset(t, s);
-    if (off < 0) break;
-    t = data[off]; s = data[off + 1];
-  }
-
-  var html = '<div style="margin-bottom:12px">' +
-    '<b>File:</b> ' + escHtml(name) + '<br>' +
-    '<b>Chain:</b> ' + chain.length + ' sector' + (chain.length > 1 ? 's' : '') +
-    ' (' + totalFree + ' free, ' + (chain.length - totalFree) + ' reused)<br>' +
-    '<b>Sectors:</b> ' + chain.map(function(c) {
-      var col = c.free ? '#55a049' : '#883932';
-      return '<span style="color:' + col + '">$' + c.t.toString(16).toUpperCase().padStart(2, '0') +
-        ':$' + c.s.toString(16).toUpperCase().padStart(2, '0') + '</span>';
-    }).join(' \u2192 ') +
-    '</div>';
-
-  document.getElementById('modal-title').textContent = 'Recover \u2014 "' + name + '"';
-  var body = document.getElementById('modal-body');
-  body.innerHTML = html;
-
-  var footer = document.querySelector('#modal-overlay .modal-footer');
-  if (totalFree === chain.length) {
-    footer.className = 'modal-footer modal-footer-split';
-    footer.innerHTML =
-      '<div class="modal-footer-actions"><button id="recover-restore" class="modal-btn-secondary">Restore File</button></div>' +
-      '<div class="modal-footer-nav"><button id="modal-close">OK</button></div>';
-    document.getElementById('recover-restore').addEventListener('click', function() {
-      pushUndo();
-      // Set the closed bit to restore the file
-      data[entryOff + 2] |= 0x80;
-      // Mark sectors as used in BAM
-      for (var ri = 0; ri < chain.length; ri++) {
-        bamMarkSectorUsed(data, chain[ri].t, chain[ri].s, bamOff);
-      }
-      document.getElementById('modal-overlay').classList.remove('open');
-      footer.className = 'modal-footer';
-      var info = parseCurrentDir(currentBuffer);
-      renderDisk(info);
-      updateMenuState();
-    });
-  } else {
-    footer.innerHTML = '<button id="modal-close">OK</button>';
-  }
-  document.getElementById('modal-close').addEventListener('click', function() {
-    footer.className = 'modal-footer';
-    document.getElementById('modal-overlay').classList.remove('open');
-  });
-  document.getElementById('modal-overlay').classList.add('open');
-}
-
 function getFileAddresses(buffer, entryOff) {
   const data = new Uint8Array(buffer);
   const typeByte = data[entryOff + 2];
@@ -7884,7 +7840,8 @@ function showSeparatorEditor() {
   var editIdx = -1; // -1 = not editing, >= 0 = editing custom separator at this index
 
   function render() {
-    var html = '<div class="sep-editor-list">';
+    var html = '<div class="sep-editor-layout">';
+    html += '<div class="sep-editor-list">';
     // Default separators (read-only)
     for (var i = 0; i < DEFAULT_SEPARATORS.length; i++) {
       html += '<div class="sep-editor-item">';
@@ -7903,12 +7860,17 @@ function showSeparatorEditor() {
     }
     html += '</div>';
 
-    // Add/Edit form
-    html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">';
-    html += '<input type="text" id="sep-edit-input" class="sep-editor-input" maxlength="16" value="">';
+    // Add/Edit form (fixed at bottom)
+    html += '<div class="sep-editor-form">';
+    html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">';
+    html += '<input type="text" id="sep-edit-input" class="sep-editor-input" maxlength="16" value="" placeholder="Pattern">';
+    html += '<input type="text" id="sep-edit-name" style="flex:1;padding:4px 8px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:3px;font-size:12px;outline:none" value="' +
+      (editIdx >= 0 ? escHtml(customSeparators[editIdx].name || '') : '') + '" placeholder="Name (optional)">';
     html += '<button class="sep-editor-btn" id="sep-edit-save">' + (editIdx >= 0 ? 'Update' : 'Add') + '</button>';
     if (editIdx >= 0) html += '<button class="sep-editor-btn" id="sep-edit-cancel">Cancel</button>';
     html += '</div>';
+    html += '</div>';
+    html += '</div>'; // close sep-editor-layout
 
     return html;
   }
@@ -7943,11 +7905,14 @@ function showSeparatorEditor() {
           for (var k = 0; k < inp.value.length; k++) {
             bytes.push(unicodeToPetscii(inp.value[k]));
           }
+          var nameInput = document.getElementById('sep-edit-name');
+          var sepName = nameInput ? nameInput.value.trim() : '';
           if (editIdx >= 0) {
             customSeparators[editIdx].bytes = bytes;
+            customSeparators[editIdx].name = sepName;
           } else {
             if (separatorExists(bytes)) { render(); return; }
-            customSeparators.push({ name: 'Custom', bytes: bytes });
+            customSeparators.push({ name: sepName, bytes: bytes });
           }
           saveCustomSeparators();
           buildSepSubmenu();
@@ -9820,6 +9785,82 @@ document.getElementById('opt-splat').addEventListener('click', (e) => {
   renderDisk(info);
 });
 
+document.getElementById('opt-scratch').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  pushUndo();
+  var data = new Uint8Array(currentBuffer);
+  var entryOff = selectedEntryIndex;
+  var fmt = currentFormat;
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+
+  // Clear the closed bit (scratch the file)
+  data[entryOff + 2] &= ~0x80;
+
+  // Free all sectors in the chain in BAM
+  var t = data[entryOff + 3], s = data[entryOff + 4];
+  var visited = {};
+  while (t !== 0) {
+    if (t < 1 || t > currentTracks || s >= fmt.sectorsPerTrack(t)) break;
+    var key = t + ':' + s;
+    if (visited[key]) break;
+    visited[key] = true;
+    // Set the sector's bit in BAM (mark as free)
+    var base = (fmt._bamBase) ? fmt._bamBase(t) : getBamBitmapBase(t, bamOff);
+    data[base + Math.floor(s / 8)] |= (1 << (s % 8));
+    if (!fmt._bamBase) bamRecalcFree(data, t, bamOff);
+    var off = sectorOffset(t, s);
+    if (off < 0) break;
+    t = data[off]; s = data[off + 1];
+  }
+
+  var info = parseCurrentDir(currentBuffer);
+  renderDisk(info);
+  updateMenuState();
+  updateEntryMenuState();
+});
+
+document.getElementById('opt-unscratch').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  pushUndo();
+  var data = new Uint8Array(currentBuffer);
+  var entryOff = selectedEntryIndex;
+
+  // Set file type to PRG + closed
+  // Set closed bit, preserve original file type; default to PRG if type is DEL
+  if ((data[entryOff + 2] & 0x07) === 0) data[entryOff + 2] = 0x82;
+  else data[entryOff + 2] |= 0x80;
+
+  // Mark all sectors in the chain as used in BAM
+  var fmt = currentFormat;
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var t = data[entryOff + 3], s = data[entryOff + 4];
+  var visited = {}, sectorCount = 0;
+  while (t !== 0) {
+    if (t < 1 || t > currentTracks || s >= fmt.sectorsPerTrack(t)) break;
+    var key = t + ':' + s;
+    if (visited[key]) break;
+    visited[key] = true;
+    sectorCount++;
+    bamMarkSectorUsed(data, t, s, bamOff);
+    var off = sectorOffset(t, s);
+    if (off < 0) break;
+    t = data[off]; s = data[off + 1];
+  }
+
+  // Update block count in directory entry
+  data[entryOff + 30] = sectorCount & 0xFF;
+  data[entryOff + 31] = (sectorCount >> 8) & 0xFF;
+
+  var info = parseCurrentDir(currentBuffer);
+  renderDisk(info);
+  updateMenuState();
+  updateEntryMenuState();
+});
+
 document.querySelectorAll('#opt-change-type .submenu .option').forEach(el => {
   el.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -11015,6 +11056,39 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
     document.getElementById('modal-overlay').classList.remove('open');
   });
   document.getElementById('modal-overlay').classList.add('open');
+});
+
+// ── Download standalone version ──────────────────────────────────────
+document.getElementById('opt-download').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+
+  var errorMessages = [
+    'The hamster powering the download server is on a coffee break.',
+    'Looks like the 1541 drive is still formatting... please try again later!',
+    'LOAD"*",8,1 \u2014 ?FILE NOT FOUND ERROR',
+    'The standalone version went to get milk. Please try again later.',
+    'All the bytes are there, they\'re just not in the right order yet.',
+    'This file has been scratched. Recovery status: not recoverable \uD83D\uDC80',
+    'The bits got lost somewhere between track 18 and the internet.',
+    'PRESS PLAY ON TAPE... just kidding. Download not available right now.',
+  ];
+
+  var zipName = 'CBM Disk Editor ' + APP_VERSION_STRING + '.zip';
+
+  fetch('dist/' + zipName).then(function(response) {
+    if (!response.ok) throw new Error('not found');
+    return response.blob();
+  }).then(function(blob) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = zipName;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }).catch(function() {
+    var msg = errorMessages[Math.floor(Math.random() * errorMessages.length)];
+    showModal('Download', [msg]);
+  });
 });
 
 // ── Theme toggle ─────────────────────────────────────────────────────
