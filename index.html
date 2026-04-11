@@ -1583,6 +1583,28 @@
     color: #d20f39;
   }
 
+  .bam-compact-bar {
+    flex: 1;
+    height: 12px;
+    background: var(--bg-input);
+    border-radius: 2px;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  .bam-compact-fill {
+    height: 100%;
+    display: block;
+    border-radius: 2px;
+    transition: width 0.1s;
+  }
+  .bam-compact-info {
+    width: 7ch;
+    text-align: right;
+    font-size: 10px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
   .bam-sector:hover {
     outline: 1px solid var(--text);
   }
@@ -1844,14 +1866,14 @@
           <div class="option" data-format="d82" data-tracks="154">8250 (D82)</div>
           <div class="separator"></div>
           <div class="option" data-format="dnp" data-tracks="10">CMD Native (DNP)</div>
-          <div class="option has-submenu">CMD FD
+          <!--<div class="option has-submenu">CMD FD
             <div class="submenu">
               <div class="option" data-format="d1m" data-tracks="81">D1M - FD2000 DD</div>
               <div class="option" data-format="d2m" data-tracks="81">D2M - FD2000 HD</div>
               <div class="option" data-format="d4m" data-tracks="81">D4M - FD4000 ED</div>
             </div>
           </div>
-          <div class="option" data-format="dhd" data-tracks="1">CMD HD (DHD)</div>
+          <div class="option" data-format="dhd" data-tracks="1">CMD HD (DHD)</div>-->
         </div>
       </div>
       <div class="option" id="opt-open">Open...</div>

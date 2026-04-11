@@ -366,7 +366,7 @@ function renderDisk(info) {
           <span class="dir-blocks">${e.blocks}</span>
           <span class="dir-name">${nameHtml}</span>
           <span class="dir-type">${escHtml(e.type)}</span>
-          <span class="dir-ts">${(currentBuffer && !isTapeFormat()) ? ('$' + hex8(new Uint8Array(currentBuffer)[e.entryOff + 3]) + ' $' + hex8(new Uint8Array(currentBuffer)[e.entryOff + 4])) : ''}</span>
+          <span class="dir-ts">${(currentBuffer && !isTapeFormat() && e.entryOff + 4 < currentBuffer.byteLength) ? ('$' + hex8(new Uint8Array(currentBuffer)[e.entryOff + 3]) + ' $' + hex8(new Uint8Array(currentBuffer)[e.entryOff + 4])) : ''}</span>
           <span class="dir-addr">${addrHtml}</span>
           <span class="dir-icons">${(function() {
             var icons = '';
@@ -386,7 +386,7 @@ function renderDisk(info) {
             var d = new Uint8Array(currentBuffer);
             var ft = d[e.entryOff + 2] & 0x07;
             // CBM partition/directory icon
-            if (ft === 5) icons += '<span class="dir-icon-partition" data-offset="' + e.entryOff + '" title="Partition — double-click to open"><i class="fa-solid fa-folder"></i></span>';
+            if (ft === 5 || ft === 6) icons += '<span class="dir-icon-partition" data-offset="' + e.entryOff + '" title="Directory — double-click to open"><i class="fa-solid fa-folder"></i></span>';
             // Info icon for files with data
             if (ft >= 1 && ft <= 4 && d[e.entryOff + 3] > 0) icons += '<span class="dir-icon-info" data-offset="' + e.entryOff + '" title="File info"><i class="fa-solid fa-circle-info"></i></span>';
             // GEOS icon
@@ -404,7 +404,11 @@ function renderDisk(info) {
           <span class="dir-footer-blocks">${info.freeBlocks}</span>
           <span class="dir-footer-label">blocks free.</span>
           <span class="dir-footer-ts" id="footer-ts"></span>
-          <span class="dir-footer-tracks">${currentFormat.name} ${currentTracks} tracks</span>
+          <span class="dir-footer-tracks">${(function() {
+            var tab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
+            if (tab && tab.cmdFdBuffer) return tab.cmdFdFileName + ' \u2014 ' + tab.name.replace(/.*\[/, '').replace(']', '');
+            return currentFormat.name + ' ' + currentTracks + ' tracks';
+          })()}</span>
           <span class="dir-footer-health" id="footer-health" title="Disk health"></span>
         </div>
       </div>
@@ -572,10 +576,10 @@ function bindDirSelection() {
     el.addEventListener('dblclick', (e) => {
       // Check if this is a CBM partition — navigate into it
       var entryOff = parseInt(el.dataset.offset, 10);
-      if (currentBuffer && !currentPartition) {
+      if (currentBuffer) {
         var d = new Uint8Array(currentBuffer);
         var tb = d[entryOff + 2];
-        if ((tb & 0x87) === 0x85) { // closed CBM type
+        if ((tb & 0x87) === 0x85 || (tb & 0x87) === 0x86) { // closed CBM or DIR type
           enterPartition(entryOff);
           return;
         }
@@ -668,22 +672,54 @@ function bindDirSelection() {
 function enterPartition(entryOff) {
   if (!currentBuffer) return;
   var data = new Uint8Array(currentBuffer);
+  var typeIdx = data[entryOff + 2] & 0x07;
   var startTrack = data[entryOff + 3];
   var startSector = data[entryOff + 4];
   var partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
 
-  // Validate: partition must start at sector 0 and be a valid size
-  if (startSector !== 0) {
-    showModal('Partition Error', ['Partition does not start at sector 0 (not a subdirectory).']);
-    return;
-  }
-  if (partSize < 120 || partSize % 40 !== 0) {
-    showModal('Partition Error', ['Invalid partition size (' + partSize + ' sectors). Must be at least 120 and a multiple of 40.']);
+  // DNP directory (type $06): lightweight linked directory
+  if (typeIdx === 6) {
+    var hdrOff = sectorOffset(startTrack, startSector);
+    if (hdrOff < 0) {
+      showModal('Directory Error', ['Invalid header sector.']);
+      return;
+    }
+    var dirT = data[hdrOff + 0x00];
+    var dirS = data[hdrOff + 0x01];
+    if (dirT === 0) {
+      showModal('Directory Error', ['Directory has no entries.']);
+      return;
+    }
+
+    currentPartition = {
+      entryOff: entryOff, name: name,
+      dnpDir: true,
+      dnpHeaderT: startTrack, dnpHeaderS: startSector,
+      dnpDirT: dirT, dnpDirS: dirS
+    };
+    selectedEntryIndex = -1;
+
+    var info = parseDnpDirectory(currentBuffer, dirT, dirS, name, startTrack, startSector);
+    if (!info) {
+      currentPartition = null;
+      showModal('Directory Error', ['Failed to parse directory.']);
+      return;
+    }
+    renderDisk(info);
     return;
   }
 
-  // Check that the partition header looks formatted
+  // D81 CBM partition (type $05): contiguous track range
+  if (startSector !== 0) {
+    showModal('Partition Error', ['Partition does not start at sector 0.']);
+    return;
+  }
+  if (partSize < 120 || partSize % 40 !== 0) {
+    showModal('Partition Error', ['Invalid partition size (' + partSize + ' sectors).']);
+    return;
+  }
+
   var headerOff = sectorOffset(startTrack, 0);
   if (headerOff < 0) {
     showModal('Partition Error', ['Invalid partition start track ' + startTrack + '.']);
@@ -693,20 +729,110 @@ function enterPartition(entryOff) {
   currentPartition = { entryOff: entryOff, startTrack: startTrack, partSize: partSize, name: name };
   selectedEntryIndex = -1;
 
-  var info = parsePartition(currentBuffer, startTrack, partSize);
-  if (!info) {
+  var info2 = parsePartition(currentBuffer, startTrack, partSize);
+  if (!info2) {
     currentPartition = null;
     showModal('Partition Error', ['Failed to parse partition directory.']);
     return;
   }
-  renderDisk(info);
+  renderDisk(info2);
 }
 
 function leavePartition() {
+  if (currentPartition && currentPartition.dnpDir) {
+    // DNP directory: go to parent using header's parent reference
+    var data = new Uint8Array(currentBuffer);
+    var hdrOff = sectorOffset(currentPartition.dnpHeaderT, currentPartition.dnpHeaderS);
+    var parentHeaderT = data[hdrOff + 0x22];
+    var parentHeaderS = data[hdrOff + 0x23];
+
+    // If parent is the root header (T1/S1), go to root
+    if (parentHeaderT === currentFormat.headerTrack && parentHeaderS === currentFormat.headerSector) {
+      currentPartition = null;
+      selectedEntryIndex = -1;
+      var info = parseDisk(currentBuffer);
+      renderDisk(info);
+      return;
+    }
+
+    // Otherwise navigate to parent directory
+    var parentHdrOff = sectorOffset(parentHeaderT, parentHeaderS);
+    if (parentHdrOff >= 0) {
+      var pDirT = data[parentHdrOff + 0x00];
+      var pDirS = data[parentHdrOff + 0x01];
+      var pName = readPetsciiString(data, parentHdrOff + 0x04, 16);
+      currentPartition = {
+        dnpDir: true,
+        dnpHeaderT: parentHeaderT, dnpHeaderS: parentHeaderS,
+        dnpDirT: pDirT, dnpDirS: pDirS,
+        name: petsciiToReadable(pName).trim()
+      };
+      selectedEntryIndex = -1;
+      var info2 = parseDnpDirectory(currentBuffer, pDirT, pDirS, currentPartition.name, parentHeaderT, parentHeaderS);
+      renderDisk(info2);
+      return;
+    }
+  }
+
   currentPartition = null;
   selectedEntryIndex = -1;
-  var info = parseDisk(currentBuffer);
-  renderDisk(info);
+  var info3 = parseDisk(currentBuffer);
+  renderDisk(info3);
+}
+
+// Parse a DNP directory chain (type $06 DIR)
+function parseDnpDirectory(buffer, dirTrack, dirSector, dirName, headerT, headerS) {
+  var data = new Uint8Array(buffer);
+  var fmt = currentFormat;
+  var entries = [];
+  var t = dirTrack, s = dirSector;
+  var visited = {};
+
+  while (t !== 0) {
+    var key = t + ':' + s;
+    if (visited[key]) break;
+    visited[key] = true;
+    var off = sectorOffset(t, s);
+    if (off < 0) break;
+
+    for (var i = 0; i < fmt.entriesPerSector; i++) {
+      var entryOff = off + i * fmt.entrySize;
+      var typeByte = data[entryOff + 2];
+      if (typeByte === 0x00) continue;
+
+      var closed = (typeByte & 0x80) !== 0;
+      var locked = (typeByte & 0x40) !== 0;
+      var typeIdx = typeByte & 0x07;
+      var name = readPetsciiString(data, entryOff + 5, 16);
+      var blocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
+
+      if (!closed) {
+        var tName = FILE_TYPES[typeIdx] || 'DEL';
+        entries.push({ name: name, type: '*' + tName + (locked ? '<' : ' '), blocks: blocks, deleted: true, entryOff: entryOff });
+      } else {
+        entries.push({ name: name, type: fileTypeName(typeByte), blocks: blocks, deleted: false, entryOff: entryOff });
+      }
+    }
+
+    t = data[off]; s = data[off + 1];
+  }
+
+  // Count free blocks from main BAM (skip track 1)
+  var bamOffset = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var freeBlocks = 0;
+  for (var ft = 2; ft <= currentTracks; ft++) {
+    freeBlocks += fmt.readTrackFree(data, bamOffset, ft);
+  }
+
+  return {
+    diskName: dirName,
+    diskId: '',
+    freeBlocks: freeBlocks,
+    entries: entries,
+    format: 'DNP',
+    tracks: currentTracks,
+    isPartition: true
+  };
 }
 
 // ── Context menu on directory entries ─────────────────────────────────
@@ -1322,6 +1448,28 @@ function startEditing(el) {
 // escHtml is defined in cbm-format.js
 
 // ── Save helpers ──────────────────────────────────────────────────────
+function getSaveBuffer() {
+  // If this tab is a partition from a CMD FD/HD image, write partition back into container
+  var tab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
+  if (tab && tab.cmdFdBuffer && tab.cmdFdPartOffset >= 0) {
+    var container = new Uint8Array(tab.cmdFdBuffer.byteLength || tab.cmdFdBuffer.length);
+    container.set(new Uint8Array(tab.cmdFdBuffer));
+    var partData = new Uint8Array(currentBuffer);
+    var copyLen = Math.min(partData.length, tab.cmdFdPartSize);
+    container.set(partData.subarray(0, copyLen), tab.cmdFdPartOffset);
+    // Update the stored container too
+    tab.cmdFdBuffer = container.buffer;
+    return container.buffer;
+  }
+  return currentBuffer;
+}
+
+function getSaveFileName() {
+  var tab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
+  if (tab && tab.cmdFdFileName) return tab.cmdFdFileName;
+  return currentFileName;
+}
+
 function downloadD64(buffer, fileName) {
   const blob = new Blob([buffer], { type: 'application/octet-stream' });
   const a = document.createElement('a');
@@ -1628,6 +1776,17 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
     var tracks = parseInt(el.dataset.tracks, 10);
     const formatKey = el.dataset.format;
 
+    // DNP: prompt for number of tracks
+    if (formatKey === 'dnp') {
+      var tracksStr = await showInputModal('Number of tracks (2 - 255)', '255');
+      if (tracksStr === null) return;
+      tracks = parseInt(tracksStr, 10);
+      if (isNaN(tracks) || tracks < 2 || tracks > 255) {
+        showModal('New DNP', ['Invalid number. Enter 2 to 255.']);
+        return;
+      }
+    }
+
     // DHD: prompt for number of partitions
     if (formatKey === 'dhd') {
       var numStr = await showInputModal('Number of 1581 partitions (1-31)', '4');
@@ -1637,7 +1796,7 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
         showModal('New DHD', ['Invalid number. Enter 1 to 31.']);
         return;
       }
-      tracks = numParts; // pass partition count as tracks param
+      tracks = numParts;
     }
 
     var buf = createEmptyDisk(formatKey, tracks);
@@ -1648,9 +1807,9 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
     var origCmdBufNew = null, origCmdNameNew = null;
     if (formatKey === 'd1m' || formatKey === 'd2m' || formatKey === 'd4m' || formatKey === 'dhd') {
       origCmdBufNew = buf;
-      origCmdNameNew = 'New ' + formatKey.toUpperCase();
+      origCmdNameNew = formatKey.toUpperCase();
       var fmtName = formatKey.toUpperCase();
-      var picked = await showCmdFdPartitionPicker(buf, 'New ' + fmtName, fmtName);
+      var picked = await showCmdFdPartitionPicker(buf, fmtName, fmtName);
       if (!picked) return;
       buf = picked.buffer;
       fname = picked.name;
@@ -1663,7 +1822,7 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
     newDiskCount++;
     var tabName = fname || 'New Disk ' + newDiskCount;
     var tab = createTab(tabName, buf, fname);
-    if (origCmdBufNew) { tab.cmdFdBuffer = origCmdBufNew; tab.cmdFdFileName = origCmdNameNew; }
+    if (origCmdBufNew) { tab.cmdFdBuffer = origCmdBufNew; tab.cmdFdFileName = origCmdNameNew; tab.cmdFdPartOffset = picked.partOffset; tab.cmdFdPartSize = picked.partSize; }
     activeTabId = tab.id;
     const info = parseDisk(buf);
     renderDisk(info);
@@ -1763,6 +1922,8 @@ document.getElementById('opt-change-partition').addEventListener('click', async 
   tab.format = currentFormat;
   tab.tracks = currentTracks;
   tab.partition = null;
+  tab.cmdFdPartOffset = picked.partOffset;
+  tab.cmdFdPartSize = picked.partSize;
   tab.dirty = false;
 
   var info = parseCurrentDir(currentBuffer);
@@ -1775,7 +1936,7 @@ document.getElementById('opt-save').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || !currentFileName) return;
   closeMenus();
-  downloadD64(currentBuffer, currentFileName);
+  downloadD64(getSaveBuffer(), getSaveFileName());
   tabDirty = false;
   renderTabs();
 });
@@ -1784,12 +1945,19 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
-  const ext = currentFormat.ext || '.d64';
-  const defaultName = currentFileName || ('disk' + ext);
+  var tab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
+  var isCmdContainer = tab && tab.cmdFdBuffer && tab.cmdFdPartOffset >= 0;
+  var ext = isCmdContainer ? (/\.dhd$/i.test(tab.cmdFdFileName) ? '.dhd' : '.d' + tab.cmdFdFileName.match(/\.d(\w+)$/i)?.[1] || 'd81') : (currentFormat.ext || '.d64');
+  var defaultName = isCmdContainer ? (tab.cmdFdFileName || ('disk' + ext)) : (currentFileName || ('disk' + ext));
   const fileName = await showInputModal('Save As', defaultName);
   if (!fileName) return;
-  currentFileName = fileName.endsWith(ext) ? fileName : fileName + ext;
-  downloadD64(currentBuffer, currentFileName);
+  if (isCmdContainer) {
+    tab.cmdFdFileName = fileName;
+    downloadD64(getSaveBuffer(), fileName);
+  } else {
+    currentFileName = fileName.endsWith(ext) ? fileName : fileName + ext;
+    downloadD64(currentBuffer, currentFileName);
+  }
   tabDirty = false;
   updateTabName();
   updateMenuState();
@@ -2066,14 +2234,19 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     (hasOrphans ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-orphan"></span> Orphan</span>' : '') +
     '</div>';
 
-  // Sector number header
-  html += '<div class="bam-header">';
-  html += '<span class="bam-header-spacer"></span>';
-  html += '<span class="bam-header-sectors">';
-  for (var h = 0; h < maxSpt; h++) {
-    html += '<span class="bam-header-num">' + h.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+  // For large sector counts (DNP: 256/track), show compact summary per track
+  var compactMode = maxSpt > 40;
+
+  // Sector number header (skip for compact mode - too many columns)
+  if (!compactMode) {
+    html += '<div class="bam-header">';
+    html += '<span class="bam-header-spacer"></span>';
+    html += '<span class="bam-header-sectors">';
+    for (var h = 0; h < maxSpt; h++) {
+      html += '<span class="bam-header-num">' + h.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+    }
+    html += '</span></div>';
   }
-  html += '</span></div>';
 
   html += '<div class="bam-viewer">';
 
@@ -2088,6 +2261,25 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
 
     html += '<div class="bam-track">';
     html += '<span class="bam-track-num' + (bamCheck.errorTracks[t] ? ' error' : '') + '">$' + t.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+
+    if (compactMode) {
+      // Compact: show a progress bar instead of individual sectors
+      var tFree = 0, tUsed = 0;
+      for (var cs = 0; cs < spt; cs++) {
+        if (checkSectorFree(data, bamOff, t, cs)) tFree++; else tUsed++;
+      }
+      totalFree += tFree;
+      totalUsed += tUsed;
+      var pct = spt > 0 ? Math.round(tUsed / spt * 100) : 0;
+      var barColor = isDirTrack ? 'var(--accent)' : (pct > 90 ? '#883932' : pct > 70 ? '#bfce72' : 'var(--accent)');
+      html += '<span class="bam-compact-bar" title="T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
+        ' — ' + tFree + ' free, ' + tUsed + ' used">' +
+        '<span class="bam-compact-fill" style="width:' + pct + '%;background:' + barColor + '"></span></span>';
+      html += '<span class="bam-compact-info">' + tFree + '/' + spt + '</span>';
+      html += '</div>';
+      continue;
+    }
+
     html += '<span class="bam-sectors">';
 
     for (var s = 0; s < spt; s++) {
@@ -2165,8 +2357,8 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     var d = new Uint8Array(currentBuffer);
     var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
     var base = (fmt._bamBase) ? fmt._bamBase(bt) : getBamBitmapBase(bt, bOff);
-    var byteIdx = Math.floor(bs / 8);
-    var bitMask = 1 << (bs % 8);
+    var byteIdx = bs >> 3;
+    var bitMask = (fmt === DISK_FORMATS.dnp) ? (0x80 >> (bs & 7)) : (1 << (bs % 8));
     d[base + byteIdx] ^= bitMask;
     if (typeof fmt.writeTrackFree === 'function' && !fmt._bamBase) bamRecalcFree(d, bt, bOff);
 
@@ -2916,8 +3108,103 @@ document.getElementById('opt-interleave').addEventListener('click', function(e) 
 // ── Disk menu: Add Directory (D81 partition) ─────────────────────────
 document.getElementById('opt-add-partition').addEventListener('click', async function(e) {
   e.stopPropagation();
-  if (!currentBuffer || currentFormat !== DISK_FORMATS.d81 || currentPartition) return;
+  if (!currentBuffer) return;
   closeMenus();
+
+  // DNP: create lightweight directory (type $06)
+  if (currentFormat === DISK_FORMATS.dnp) {
+    var dnpName = await showInputModal('Directory Name', 'SUBDIR');
+    if (!dnpName) return;
+    dnpName = dnpName.toUpperCase().substring(0, 16);
+
+    pushUndo();
+    var data = new Uint8Array(currentBuffer);
+    var fmt = currentFormat;
+    var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+
+    // Allocate 2 sectors: header + first dir sector
+    var allocated = buildTrueAllocationMap(currentBuffer);
+    var sectorList = allocateSectors(allocated, 2);
+    if (sectorList.length < 2) {
+      showModal('Add Directory Error', ['Not enough free sectors.']);
+      return;
+    }
+
+    var hdrSec = sectorList[0];
+    var dirSec = sectorList[1];
+
+    // Find parent header T/S and current dir entry for back-navigation
+    var parentHeaderT = fmt.headerTrack;
+    var parentHeaderS = fmt.headerSector;
+    if (currentPartition && currentPartition.dnpHeaderT !== undefined) {
+      parentHeaderT = currentPartition.dnpHeaderT;
+      parentHeaderS = currentPartition.dnpHeaderS;
+    }
+
+    // Write header sector
+    var hdrOff = sectorOffset(hdrSec.track, hdrSec.sector);
+    for (var hi = 0; hi < 256; hi++) data[hdrOff + hi] = 0x00;
+    data[hdrOff + 0x00] = dirSec.track;  // dir chain T/S
+    data[hdrOff + 0x01] = dirSec.sector;
+    data[hdrOff + 0x02] = 0x48; // DOS type 'H'
+    // Copy name
+    for (var ni = 0; ni < 16; ni++) {
+      if (ni < dnpName.length) {
+        var ch = dnpName.charCodeAt(ni);
+        data[hdrOff + 0x04 + ni] = (ch >= 0x41 && ch <= 0x5A) ? ch : (ch >= 0x30 && ch <= 0x39) ? ch : 0x20;
+      } else {
+        data[hdrOff + 0x04 + ni] = 0xA0;
+      }
+    }
+    // Copy disk ID from root header
+    var rootHdrOff = sectorOffset(fmt.headerTrack, fmt.headerSector);
+    data[hdrOff + 0x16] = data[rootHdrOff + 0x16];
+    data[hdrOff + 0x17] = data[rootHdrOff + 0x17];
+    data[hdrOff + 0x18] = 0xA0;
+    data[hdrOff + 0x19] = 0x31; // '1'
+    data[hdrOff + 0x1A] = 0x48; // 'H'
+    // Self-reference
+    data[hdrOff + 0x20] = hdrSec.track;
+    data[hdrOff + 0x21] = hdrSec.sector;
+    // Parent header
+    data[hdrOff + 0x22] = parentHeaderT;
+    data[hdrOff + 0x23] = parentHeaderS;
+
+    // Write empty dir sector
+    var dirOff = sectorOffset(dirSec.track, dirSec.sector);
+    for (var di = 0; di < 256; di++) data[dirOff + di] = 0x00;
+    data[dirOff + 0x00] = 0x00;
+    data[dirOff + 0x01] = 0xFF;
+
+    // Mark sectors as used in BAM
+    bamMarkSectorUsed(data, hdrSec.track, hdrSec.sector, bamOff);
+    bamMarkSectorUsed(data, dirSec.track, dirSec.sector, bamOff);
+
+    // Create directory entry
+    var entryOff = findFreeDirEntry(currentBuffer);
+    if (entryOff < 0) {
+      showModal('Add Directory Error', ['No free directory entry.']);
+      return;
+    }
+    data[entryOff + 2] = 0x86; // DIR + closed
+    data[entryOff + 3] = hdrSec.track;
+    data[entryOff + 4] = hdrSec.sector;
+    for (var eni = 0; eni < 16; eni++) data[entryOff + 5 + eni] = data[hdrOff + 0x04 + eni];
+    for (var eu = 21; eu < 30; eu++) data[entryOff + eu] = 0x00;
+    data[entryOff + 30] = 2; // 2 blocks (header + dir)
+    data[entryOff + 31] = 0;
+
+    // Store parent entry reference in header
+    data[hdrOff + 0x24] = entryOff >> 8; // parent dir sector (approximate)
+    data[hdrOff + 0x25] = entryOff & 0xFF;
+
+    var info = currentPartition ? parsePartition(currentBuffer, currentPartition.startTrack, currentPartition.partSize) : parseDisk(currentBuffer);
+    renderDisk(info);
+    updateMenuState();
+    return;
+  }
+
+  if (currentFormat !== DISK_FORMATS.d81 || currentPartition) return;
 
   // Ask for partition name
   var name = await showInputModal('Directory Name', 'SUBDIR');
@@ -3504,7 +3791,7 @@ var GFX_PARSERS = {
   koala: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002), col: d.subarray(9002, Math.min(d.length, 10002)), bg: d.length > 10002 ? d[10002] & 0x0F : 0 }; },
   drp: function(d) { return { col: d.subarray(2, 1002), bg: d[1002], bm: d.subarray(1026, 9026), scr: d.subarray(9026, 10026), rowBg: d.subarray(10026, 10051) }; },
   vidcom: function(d) { return { scr: d.subarray(2, 1002), bm: d.subarray(1026, 9026), col: d.subarray(9026, 10026), bg: d[10050] }; },
-  aas: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002), col: d.subarray(9004, 10004), bg: d[9003] & 0x0F }; },
+  aas: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002), col: d.subarray(9018, 10018), bg: d[9003] & 0x0F }; },
   saracen: function(d) { return { bm: d.subarray(20, 8020), scr: d.subarray(8020, 9020), col: d.subarray(9020, 10020), bg: d[10020] & 0x0F }; },
   bmscr: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002) }; },
   bmonly: function(d) {
@@ -6737,6 +7024,10 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
 // ── Partition-aware parse helper ──────────────────────────────────────
 function parseCurrentDir(buffer) {
   if (currentPartition) {
+    if (currentPartition.dnpDir) {
+      return parseDnpDirectory(buffer, currentPartition.dnpDirT, currentPartition.dnpDirS,
+        currentPartition.name, currentPartition.dnpHeaderT, currentPartition.dnpHeaderS);
+    }
     return parsePartition(buffer, currentPartition.startTrack, currentPartition.partSize);
   }
   return parseDisk(buffer);
@@ -6747,11 +7038,19 @@ function parseCurrentDir(buffer) {
 // for the current context (root or partition)
 function getDirContext() {
   if (currentPartition) {
+    if (currentPartition.dnpDir) {
+      return {
+        dirTrack: currentPartition.dnpDirT, dirSector: currentPartition.dnpDirS,
+        dirTrackNum: currentPartition.dnpDirT,
+        bamOff: sectorOffset(currentFormat.bamTrack, currentFormat.bamSector),
+        maxDirSectors: 222 // DNP can expand directory freely
+      };
+    }
     var st = currentPartition.startTrack;
     return {
       dirTrack: st, dirSector: 3, dirTrackNum: st,
       bamOff: sectorOffset(st, 1),
-      maxDirSectors: 37 // same as D81 root (sectors 3-39 on the partition's first track)
+      maxDirSectors: 37
     };
   }
   return {
@@ -7133,9 +7432,21 @@ function insertFileEntry() {
   // No empty slots — allocate a new directory sector on the directory track
   const dirTrk = ctx.dirTrackNum;
   const spt = sectorsPerTrack(dirTrk);
+  // Build set of protected sectors (BAM, header, etc.) to avoid overwriting
+  var protectedSecs = new Set();
+  for (var pbi = 0; pbi < fmt.bamSectors.length; pbi++) {
+    if (fmt.bamSectors[pbi][0] === dirTrk) protectedSecs.add(fmt.bamSectors[pbi][1]);
+  }
+  // D81: header at sector 0
+  if (fmt.headerTrack === dirTrk) protectedSecs.add(fmt.headerSector);
+  // DNP: sectors 0-33 are system (boot + header + BAM)
+  if (fmt === DISK_FORMATS.dnp) {
+    for (var ps = 0; ps <= 33; ps++) protectedSecs.add(ps);
+  }
   let newSector = -1;
   for (let cs = 1; cs < spt; cs++) {
     if (visited.has(`${dirTrk}:${cs}`)) continue;
+    if (protectedSecs.has(cs)) continue;
     newSector = cs;
     break;
   }
@@ -7163,8 +7474,8 @@ function insertFileEntry() {
 function writeNewEntry(data, entryOff) {
   // Type: PRG, closed
   data[entryOff + 2] = 0x82;
-  // File start: directory track, sector 0 (placeholder)
-  data[entryOff + 3] = currentFormat.dirTrack;
+  // File start: 0/0 (no data yet)
+  data[entryOff + 3] = 0;
   data[entryOff + 4] = 0;
   // Filename: filled with 0xA0 (empty name)
   for (let i = 0; i < 16; i++) data[entryOff + 5 + i] = 0xA0;
@@ -8077,8 +8388,8 @@ function insertSeparator(pattern) {
   // Convert to a closed DEL with the separator pattern
   var data = new Uint8Array(currentBuffer);
   data[newOff + 2] = 0x80; // DEL, closed (not scratched)
-  data[newOff + 3] = 0x12; // track $12
-  data[newOff + 4] = 0x00; // sector $00
+  data[newOff + 3] = 0x00; // track 0
+  data[newOff + 4] = 0x00; // sector 0
   var patBytes = pattern.bytes || [];
   var patLen = patBytes.length;
   for (var i = 0; i < 16; i++) {
@@ -9166,6 +9477,10 @@ function buildTrueAllocationMap(buffer) {
     for (var bsi = 0; bsi < fmt.bamSectors.length; bsi++) {
       allocated[fmt.bamSectors[bsi][0] + ':' + fmt.bamSectors[bsi][1]] = true;
     }
+    // DNP: mark entire system area on track 1 (sectors 0-33: boot + header + BAM)
+    if (fmt === DISK_FORMATS.dnp) {
+      for (var ds = 0; ds <= 33; ds++) allocated['1:' + ds] = true;
+    }
   }
 
   // Follow directory chain
@@ -9872,7 +10187,11 @@ document.getElementById('opt-scratch').addEventListener('click', (e) => {
     visited[key] = true;
     // Set the sector's bit in BAM (mark as free)
     var base = (fmt._bamBase) ? fmt._bamBase(t) : getBamBitmapBase(t, bamOff);
-    data[base + Math.floor(s / 8)] |= (1 << (s % 8));
+    if (fmt === DISK_FORMATS.dnp) {
+      data[base + (s >> 3)] |= (0x80 >> (s & 7));
+    } else {
+      data[base + Math.floor(s / 8)] |= (1 << (s % 8));
+    }
     if (!fmt._bamBase) bamRecalcFree(data, t, bamOff);
     var off = sectorOffset(t, s);
     if (off < 0) break;
@@ -10508,7 +10827,7 @@ fileInput.addEventListener('change', () => {
         selectedEntryIndex = -1;
         parseDisk(currentBuffer);
         var tab = createTab(fname, currentBuffer, fname);
-        if (origCmdBuf) { tab.cmdFdBuffer = origCmdBuf; tab.cmdFdFileName = origCmdName; }
+        if (origCmdBuf) { tab.cmdFdBuffer = origCmdBuf; tab.cmdFdFileName = origCmdName; tab.cmdFdPartOffset = picked.partOffset; tab.cmdFdPartSize = picked.partSize; }
         activeTabId = tab.id;
       } catch (err) {
         showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
@@ -10594,7 +10913,7 @@ document.addEventListener('drop', function(e) {
           selectedEntryIndex = -1;
           parseDisk(currentBuffer);
           var tab = createTab(fname, currentBuffer, fname);
-          if (origCmdBuf2) { tab.cmdFdBuffer = origCmdBuf2; tab.cmdFdFileName = origCmdName2; }
+          if (origCmdBuf2) { tab.cmdFdBuffer = origCmdBuf2; tab.cmdFdFileName = origCmdName2; tab.cmdFdPartOffset = picked.partOffset; tab.cmdFdPartSize = picked.partSize; }
           activeTabId = tab.id;
         } catch (err) {
           showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
@@ -10862,6 +11181,16 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.27', title: 'Keyboard shortcuts remap, nested submenu nav, DNP BAM fix', items: [
+      'Keyboard shortcuts: remapped all Ctrl+letter conflicts with browser shortcuts',
+      'Ctrl+W/T/L/U/D/B/H/G/E/I all moved to Ctrl+Shift or Ctrl+Alt combos',
+      'Removed Ctrl+W (close tab) and Ctrl+Shift+W (close all) — browser conflicts',
+      'Nested submenu keyboard navigation: ArrowRight/Left traverses multiple levels',
+      'DNP BAM: fixed getBamBitmapBase for DNP format, sector 34 marked as used',
+      'Change Partition: always shows picker dialog (forceDialog)',
+      'CMD FD: creates multiple partitions to fill available space',
+      'DHD: prompts for partition count (1-31)',
+    ]},
     { ver: '1.3.26', title: 'New disk menu with CMD formats, DHD support', items: [
       'New menu: reorganized by drive type (1541/1571/1581/8050/8250/CMD)',
       'New: CMD Native (DNP) with formatted BAM and directory',
@@ -11225,7 +11554,7 @@ function showCmdFdPartitionPicker(buffer, fileName, formatName, forceDialog) {
       var part = userParts[0];
       var extracted = extractCmdPartition(buffer, part);
       if (extracted) {
-        resolve({ buffer: extracted, name: fileName + ' [' + part.name + ']' });
+        resolve({ buffer: extracted, name: fileName + ' [' + part.name + ']', partOffset: part.startByte, partSize: part.sizeBytes });
       } else {
         showModal('CMD Image', ['Failed to extract partition "' + part.name + '"']);
         resolve(null);
@@ -11268,9 +11597,9 @@ function showCmdFdPartitionPicker(buffer, fileName, formatName, forceDialog) {
       var extracted = extractCmdPartition(buffer, part);
       document.getElementById('modal-overlay').classList.remove('open');
       if (extracted) {
-        resolve({ buffer: extracted, name: fileName + ' [' + part.name + ']' });
+        resolve({ buffer: extracted, name: fileName + ' [' + part.name + ']', partOffset: part.startByte, partSize: part.sizeBytes });
       } else {
-        showModal('CMD FD Image', ['Failed to extract partition "' + part.name + '"']);
+        showModal('CMD Image', ['Failed to extract partition "' + part.name + '"']);
         resolve(null);
       }
     });

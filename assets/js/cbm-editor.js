@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 26 };
+var APP_VERSION = { major: 1, minor: 3, build: 27 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -105,7 +105,9 @@ function createTab(name, buffer, fileName) {
     undoStack: [],
     dirty: false,
     cmdFdBuffer: null,
-    cmdFdFileName: null
+    cmdFdFileName: null,
+    cmdFdPartOffset: -1,
+    cmdFdPartSize: -1
   };
   tabs.push(tab);
   return tab;
@@ -214,6 +216,31 @@ function checkBAMIntegrity(buffer) {
     if (entry.deleted) continue;
     var entryType = data[entry.entryOff + 2] & 0x07;
 
+    // DIR type (DNP subdirectory): header + dir chain are owned
+    if (entryType === 6 && fmt === DISK_FORMATS.dnp) {
+      var dt6 = data[entry.entryOff + 3];
+      var ds6 = data[entry.entryOff + 4];
+      // Header sector
+      sectorOwner[dt6 + ':' + ds6] = entry.name || '?';
+      // Follow dir chain from header bytes 0-1
+      var hOff6 = sectorOffset(dt6, ds6);
+      if (hOff6 >= 0) {
+        var dct = data[hOff6], dcs = data[hOff6 + 1];
+        var dv6 = {};
+        while (dct !== 0 && dct <= currentTracks) {
+          if (dcs >= fmt.sectorsPerTrack(dct)) break;
+          var dk6 = dct + ':' + dcs;
+          if (dv6[dk6]) break;
+          dv6[dk6] = true;
+          sectorOwner[dk6] = entry.name || '?';
+          var doff6 = sectorOffset(dct, dcs);
+          if (doff6 < 0) break;
+          dct = data[doff6]; dcs = data[doff6 + 1];
+        }
+      }
+      continue;
+    }
+
     // CBM partition: mark entire contiguous block as owned (don't follow chain)
     if (entryType === 5 && fmt === DISK_FORMATS.d81) {
       var partStart = data[entry.entryOff + 3];
@@ -243,12 +270,15 @@ function checkBAMIntegrity(buffer) {
     }
   }
 
-  // Check free count vs bitmap bits (byte-level for D81's 40 sectors per track)
+  // Check free count vs bitmap bits
   var bamErrors = [];
-  var errorTracks = {}; // track → true
+  var errorTracks = {};
+  var isDnp = fmt === DISK_FORMATS.dnp;
   for (var t = 1; t <= bamTracks; t++) {
     var spt = fmt.sectorsPerTrack(t);
     var storedFree = fmt.readTrackFree(data, bamOff, t);
+    // DNP doesn't store free counts, so skip count comparison
+    if (isDnp) continue;
     var actualFree = 0;
     var bbBase = getBamBitmapBase(t, bamOff);
     var numBytes = Math.ceil(spt / 8);
@@ -276,11 +306,8 @@ function checkBAMIntegrity(buffer) {
   for (t = 1; t <= bamTracks; t++) {
     if (t === fmt.dirTrack) continue;
     var spt2 = fmt.sectorsPerTrack(t);
-    var bbBase2 = getBamBitmapBase(t, bamOff);
     for (var s2 = 0; s2 < spt2; s2++) {
-      var byteIdx = Math.floor(s2 / 8);
-      var bitIdx = s2 % 8;
-      var isFree = (data[bbBase2 + byteIdx] & (1 << bitIdx)) !== 0;
+      var isFree = checkSectorFree(data, bamOff, t, s2);
       var isUsed = sectorOwner[t + ':' + s2] !== undefined;
       if (isFree && isUsed) {
         allocMismatch++;
