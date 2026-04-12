@@ -1068,23 +1068,18 @@ function detectFormat(bufferSize, buffer) {
       return { format: DISK_FORMATS.t64, tracks: 0 };
     }
   }
+  // DNP: multiple of 65536, at least 2 tracks, check header signature before size table
+  if (bufferSize >= 131072 && bufferSize % 65536 === 0 && bufferSize <= 16711680 && buffer) {
+    var dnpData = new Uint8Array(buffer);
+    // Header at T1/S1 (offset 256): byte 2 = format type 'H' ($48)
+    if (dnpData[258] === 0x48 || dnpData[0x119] === 0x31) {
+      return { format: DISK_FORMATS.dnp, tracks: bufferSize / 65536 };
+    }
+  }
   // Try each format's sizes
   for (const [key, fmt] of Object.entries(DISK_FORMATS)) {
     for (const size of fmt.sizes) {
       if (bufferSize === size.bytes) return { format: fmt, tracks: size.tracks };
-    }
-  }
-  // D1M/D2M/D4M: don't auto-detect here; handled in openCmdFdImage() in ui.js
-  // Falls through to DNP detection below if opened directly
-  // DNP: multiple of 65536, at least 2 tracks, not matching other formats
-  if (bufferSize >= 131072 && bufferSize % 65536 === 0 && bufferSize <= 16711680) {
-    var dnpTracks = bufferSize / 65536;
-    if (buffer) {
-      var dnpData = new Uint8Array(buffer);
-      // Header at T1/S1 (offset 256): byte 2 = format type 'H' ($48)
-      if (dnpData[258] === 0x48 || dnpData[0x119] === 0x31) {
-        return { format: DISK_FORMATS.dnp, tracks: dnpTracks };
-      }
     }
   }
   // Fallback: if larger than D64 40-track, check D64 variants
