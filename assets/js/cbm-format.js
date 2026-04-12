@@ -1115,7 +1115,7 @@ function sectorOffset(track, sector) {
 // Returns the byte offset of the bitmap bytes for a given track.
 // For partitions, track is absolute (disk-level) and bamOff is the partition BAM offset.
 function getBamBitmapBase(track, bamOff) {
-  if (currentPartition) {
+  if (currentPartition && !currentPartition.dnpDir) {
     var relTrack = track - currentPartition.startTrack + 1;
     if (relTrack <= 40) return bamOff + 0x10 + (relTrack - 1) * 6 + 1;
     return bamOff + 256 + 0x10 + (relTrack - 41) * 6 + 1;
@@ -1163,7 +1163,7 @@ function bamRecalcFree(data, track, bamOff) {
     }
   }
   // Write free count
-  if (currentPartition) {
+  if (currentPartition && !currentPartition.dnpDir) {
     var relTrack = track - currentPartition.startTrack + 1;
     if (relTrack <= 40) data[bamOff + 0x10 + (relTrack - 1) * 6] = free;
     else data[bamOff + 256 + 0x10 + (relTrack - 41) * 6] = free;

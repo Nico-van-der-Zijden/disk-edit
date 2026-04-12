@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 30 };
+var APP_VERSION = { major: 1, minor: 3, build: 31 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -210,65 +210,84 @@ function checkBAMIntegrity(buffer) {
 
   // Follow all file chains to build sector ownership map
   var sectorOwner = {};
-  var info = parseDisk(buffer);
-  for (var fi = 0; fi < info.entries.length; fi++) {
-    var entry = info.entries[fi];
-    if (entry.deleted) continue;
-    var entryType = data[entry.entryOff + 2] & 0x07;
 
-    // DIR type (DNP subdirectory): header + dir chain are owned
-    if (fmt.subdirLinked && entryType === fmt.subdirType) {
-      var dt6 = data[entry.entryOff + 3];
-      var ds6 = data[entry.entryOff + 4];
-      // Header sector
-      sectorOwner[dt6 + ':' + ds6] = entry.name || '?';
-      // Follow dir chain from header bytes 0-1
-      var hOff6 = sectorOffset(dt6, ds6);
-      if (hOff6 >= 0) {
-        var dct = data[hOff6], dcs = data[hOff6 + 1];
-        var dv6 = {};
-        while (dct !== 0 && dct <= currentTracks) {
-          if (dcs >= fmt.sectorsPerTrack(dct)) break;
-          var dk6 = dct + ':' + dcs;
-          if (dv6[dk6]) break;
-          dv6[dk6] = true;
-          sectorOwner[dk6] = entry.name || '?';
-          var doff6 = sectorOffset(dct, dcs);
-          if (doff6 < 0) break;
-          dct = data[doff6]; dcs = data[doff6 + 1];
-        }
-      }
-      continue;
-    }
-
-    // CBM partition: mark entire contiguous block as owned (don't follow chain)
-    if (!fmt.subdirLinked && entryType === fmt.subdirType) {
-      var partStart = data[entry.entryOff + 3];
-      var partSize = data[entry.entryOff + 30] | (data[entry.entryOff + 31] << 8);
-      var partTracks = Math.floor(partSize / 40);
-      for (var pt = partStart; pt < partStart + partTracks && pt <= currentTracks; pt++) {
-        var pspt = fmt.sectorsPerTrack(pt);
-        for (var ps = 0; ps < pspt; ps++) {
-          sectorOwner[pt + ':' + ps] = entry.name || '?';
-        }
-      }
-      continue;
-    }
-
-    var ft = data[entry.entryOff + 3];
-    var fs = data[entry.entryOff + 4];
+  // Follow a file's sector chain, marking each sector as owned
+  function followFileChain(ft, fs, ownerName) {
     var visited = {};
     while (ft !== 0 && ft <= currentTracks) {
       if (fs >= fmt.sectorsPerTrack(ft)) break;
       var key = ft + ':' + fs;
       if (visited[key]) break;
       visited[key] = true;
-      sectorOwner[key] = entry.name || '?';
+      sectorOwner[key] = ownerName;
       var soff = sectorOffset(ft, fs);
       if (soff < 0) break;
       ft = data[soff]; fs = data[soff + 1];
     }
   }
+
+  // Walk a directory chain, processing file entries and recursing into linked subdirs
+  function walkIntegrityDir(dirT, dirS, parentName) {
+    var dirVisited = {};
+    while (dirT !== 0 && dirT <= currentTracks) {
+      if (dirS >= fmt.sectorsPerTrack(dirT)) break;
+      var dk = dirT + ':' + dirS;
+      if (dirVisited[dk]) break;
+      dirVisited[dk] = true;
+      sectorOwner[dk] = parentName || 'Directory';
+      var doff = sectorOffset(dirT, dirS);
+      if (doff < 0) break;
+
+      for (var i = 0; i < fmt.entriesPerSector; i++) {
+        var entOff = doff + i * fmt.entrySize;
+        var tb = data[entOff + 2];
+        var typeIdx = tb & 0x07;
+        var closed = (tb & 0x80) !== 0;
+        if (typeIdx === 0 && !closed) continue;
+        var eName = readPetsciiString(data, entOff + 5, 16);
+        if (!eName.trim() && typeIdx === 0) continue;
+        var et = data[entOff + 3], es = data[entOff + 4];
+        var ownerName = eName || '?';
+
+        // Linked subdirectory: mark header + recurse
+        if (fmt.subdirLinked && typeIdx === fmt.subdirType && closed) {
+          sectorOwner[et + ':' + es] = ownerName;
+          var hOff = sectorOffset(et, es);
+          if (hOff >= 0) walkIntegrityDir(data[hOff], data[hOff + 1], ownerName);
+          continue;
+        }
+
+        // CBM partition: mark entire contiguous block
+        if (!fmt.subdirLinked && typeIdx === fmt.subdirType && closed) {
+          var partStart = et;
+          var partSize = data[entOff + 30] | (data[entOff + 31] << 8);
+          var partTracks = Math.floor(partSize / 40);
+          for (var pt = partStart; pt < partStart + partTracks && pt <= currentTracks; pt++) {
+            var pspt = fmt.sectorsPerTrack(pt);
+            for (var ps = 0; ps < pspt; ps++) {
+              sectorOwner[pt + ':' + ps] = ownerName;
+            }
+          }
+          continue;
+        }
+
+        // Regular file: follow sector chain
+        if (closed) {
+          followFileChain(et, es, ownerName);
+          // REL file: also follow side-sector chain
+          if (typeIdx === 4) {
+            var sst = data[entOff + 0x15], sss = data[entOff + 0x16];
+            followFileChain(sst, sss, ownerName + ' (SS)');
+          }
+        }
+      }
+
+      dirT = data[doff]; dirS = data[doff + 1];
+    }
+  }
+
+  // Start from root directory
+  walkIntegrityDir(fmt.dirTrack, fmt.dirSector, 'Directory');
 
   // Check free count vs bitmap bits
   var bamErrors = [];
@@ -686,9 +705,11 @@ function validateDisk(buffer) {
     allocated[t] = new Uint8Array(fmt.sectorsPerTrack(Math.max(t, 1)));
   }
 
-  // Mark all system sectors (BAM + header) as allocated
-  for (var bsi = 0; bsi < fmt.bamSectors.length; bsi++) {
-    allocated[fmt.bamSectors[bsi][0]][fmt.bamSectors[bsi][1]] = 1;
+  // Mark all system sectors (BAM + header + format-specific) as allocated
+  var sysTracks = fmt.getSkipTracks();
+  for (var stk in sysTracks) {
+    var ps = fmt.getProtectedSectors(parseInt(stk));
+    for (var psi = 0; psi < ps.length; psi++) allocated[parseInt(stk)][ps[psi]] = 1;
   }
 
   function followChain(startTrack, startSector, label) {
@@ -723,74 +744,93 @@ function validateDisk(buffer) {
     return { blocks, error: false };
   }
 
-  let dirTrack = fmt.dirTrack, dirSector = fmt.dirSector;
-  const dirSectors = [];
-  const dirVisited = new Set();
-  while (dirTrack !== 0) {
-    const key = `${dirTrack}:${dirSector}`;
-    if (dirVisited.has(key)) { log.push('ERROR: circular directory chain'); break; }
-    dirVisited.add(key);
-    if (dirTrack < 1 || dirTrack > numTracks || dirSector < 0 || dirSector >= fmt.sectorsPerTrack(dirTrack)) {
-      log.push(`ERROR: illegal directory sector track ${dirTrack} sector ${dirSector}`);
-      break;
-    }
-    allocated[dirTrack][dirSector] = 1;
-    dirSectors.push({ track: dirTrack, sector: dirSector });
-    const off = sectorOffset(dirTrack, dirSector);
-    dirTrack = data[off + 0];
-    dirSector = data[off + 1];
-  }
-
+  // Walk a directory chain, collecting dir sectors and processing entries.
+  // For linked subdirs, recurses into subdirectory entries.
   let splatCount = 0;
-  for (const ds of dirSectors) {
-    const off = sectorOffset(ds.track, ds.sector);
-    for (let i = 0; i < fmt.entriesPerSector; i++) {
-      const entryOff = off + i * fmt.entrySize;
-      const typeByte = data[entryOff + 2];
-      const fileType = typeByte & 0x07;
-      const closed = (typeByte & 0x80) !== 0;
-      if (fileType === 0 && !closed) continue;
-      const name = readPetsciiString(data, entryOff + 5, 16);
-      if (!name.trim() && fileType === 0) continue;
-      const fileTrack = data[entryOff + 3];
-      const fileSector = data[entryOff + 4];
-      var rname = petsciiToReadable(name);
-      if (!closed) {
-        log.push('Removed splat file: "' + rname + '"');
-        data[entryOff + 2] = 0x00;
-        splatCount++;
-        continue;
+  function walkValidateDir(dTrack, dSector, dirVisited) {
+    while (dTrack !== 0) {
+      const key = `${dTrack}:${dSector}`;
+      if (dirVisited.has(key)) { log.push('ERROR: circular directory chain'); break; }
+      dirVisited.add(key);
+      if (dTrack < 1 || dTrack > numTracks || dSector < 0 || dSector >= fmt.sectorsPerTrack(dTrack)) {
+        log.push(`ERROR: illegal directory sector track ${dTrack} sector ${dSector}`);
+        break;
       }
+      allocated[dTrack][dSector] = 1;
 
-      // CBM partition: mark the entire contiguous block as allocated (don't follow chain)
-      if (!fmt.subdirLinked && fileType === fmt.subdirType) {
-        const partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
-        const partTracks = Math.floor(partSize / 40);
-        var label = 'Partition "' + rname + '"';
-        if (fileTrack < 1 || fileTrack > numTracks || fileSector !== 0) {
-          log.push(`  ERROR: ${label}: invalid start track ${fileTrack} sector ${fileSector}`);
+      const off = sectorOffset(dTrack, dSector);
+      for (let i = 0; i < fmt.entriesPerSector; i++) {
+        const entryOff = off + i * fmt.entrySize;
+        const typeByte = data[entryOff + 2];
+        const fileType = typeByte & 0x07;
+        const closed = (typeByte & 0x80) !== 0;
+        if (fileType === 0 && !closed) continue;
+        const name = readPetsciiString(data, entryOff + 5, 16);
+        if (!name.trim() && fileType === 0) continue;
+        const fileTrack = data[entryOff + 3];
+        const fileSector = data[entryOff + 4];
+        var rname = petsciiToReadable(name);
+        if (!closed) {
+          log.push('Removed splat file: "' + rname + '"');
+          data[entryOff + 2] = 0x00;
+          splatCount++;
           continue;
         }
-        for (let pt = fileTrack; pt < fileTrack + partTracks && pt <= numTracks; pt++) {
-          const spt = fmt.sectorsPerTrack(pt);
-          for (let ps = 0; ps < spt; ps++) {
-            if (allocated[pt][ps]) {
-              log.push(`  ERROR: ${label}: cross-linked at track ${pt} sector ${ps}`);
-            }
-            allocated[pt][ps] = 1;
+
+        // Linked subdirectory: mark header + recurse into its dir chain
+        if (fmt.subdirLinked && fileType === fmt.subdirType) {
+          var sdLabel = 'Directory "' + rname + '"';
+          if (fileTrack < 1 || fileTrack > numTracks) {
+            log.push(`  ERROR: ${sdLabel}: invalid header track ${fileTrack}`);
+            continue;
           }
+          if (allocated[fileTrack][fileSector]) {
+            log.push(`  ERROR: ${sdLabel}: cross-linked header at track ${fileTrack} sector ${fileSector}`);
+            continue;
+          }
+          allocated[fileTrack][fileSector] = 1; // header sector
+          var hdrOff = sectorOffset(fileTrack, fileSector);
+          if (hdrOff >= 0) {
+            walkValidateDir(data[hdrOff], data[hdrOff + 1], dirVisited);
+          }
+          continue;
         }
-        continue;
+
+        // CBM partition: mark the entire contiguous block as allocated (don't follow chain)
+        if (!fmt.subdirLinked && fileType === fmt.subdirType) {
+          const partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
+          const partTracks = Math.floor(partSize / 40);
+          var label = 'Partition "' + rname + '"';
+          if (fileTrack < 1 || fileTrack > numTracks || fileSector !== 0) {
+            log.push(`  ERROR: ${label}: invalid start track ${fileTrack} sector ${fileSector}`);
+            continue;
+          }
+          for (let pt = fileTrack; pt < fileTrack + partTracks && pt <= numTracks; pt++) {
+            const spt = fmt.sectorsPerTrack(pt);
+            for (let ps = 0; ps < spt; ps++) {
+              if (allocated[pt][ps]) {
+                log.push(`  ERROR: ${label}: cross-linked at track ${pt} sector ${ps}`);
+              }
+              allocated[pt][ps] = 1;
+            }
+          }
+          continue;
+        }
+
+        var label = '"' + rname + '"';
+        const result = followChain(fileTrack, fileSector, label);
+        const expectedBlocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
+        if (result.blocks !== expectedBlocks && !result.error) {
+          log.push(`  Warning: ${label}: block count ${expectedBlocks} in directory, actual ${result.blocks}`);
+        }
       }
 
-      var label = '"' + rname + '"';
-      const result = followChain(fileTrack, fileSector, label);
-      const expectedBlocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
-      if (result.blocks !== expectedBlocks && !result.error) {
-        log.push(`  Warning: ${label}: block count ${expectedBlocks} in directory, actual ${result.blocks}`);
-      }
+      dTrack = data[off + 0];
+      dSector = data[off + 1];
     }
   }
+
+  walkValidateDir(fmt.dirTrack, fmt.dirSector, new Set());
 
   // Rebuild BAM (byte-level to handle D81's 40 sectors per track)
   const bamTracks = fmt.bamTracksRange(numTracks);
@@ -805,7 +845,7 @@ function validateDisk(buffer) {
     for (let s = 0; s < spt; s++) {
       if (!allocated[t][s]) {
         free++;
-        newBytes[Math.floor(s / 8)] |= (1 << (s % 8));
+        newBytes[s >> 3] |= fmt.bamBitMask(s);
       }
     }
 

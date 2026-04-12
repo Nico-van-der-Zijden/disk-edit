@@ -11268,6 +11268,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.31', title: 'Fix DNP BAM corruption, validate, and integrity check', items: [
+      'Fixed BAM writes going to wrong offset inside DNP subdirectories',
+      'Validate and BAM integrity check now recurse into linked subdirectories',
+      'Validate BAM rebuild uses correct MSB-first bit order for DNP',
+      'Validate marks all format-specific system sectors as allocated',
+      'REL side-sector chains followed during recursive integrity walk',
+    ]},
     { ver: '1.3.30', title: 'Format-driven interleave/BAM, DNP subdir directory expansion', items: [
       'Interleave presets and defaults moved into DISK_FORMATS definitions',
       'BAM free count check uses format property instead of DNP comparison',
