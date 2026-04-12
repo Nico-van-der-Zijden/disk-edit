@@ -2011,6 +2011,12 @@ function parseDisk(buffer) {
   currentFormat = detected.format;
   currentTracks = detected.tracks;
 
+  // Reset interleave to format defaults
+  if (detected.format.defaultInterleave) {
+    fileInterleave = detected.format.defaultInterleave;
+    dirInterleave = 3; // standard directory interleave for all formats
+  }
+
   // Tape images use their own parsers
   if (currentFormat === DISK_FORMATS.tap) return parseTAP(buffer);
   if (currentFormat === DISK_FORMATS.t64) return parseT64(buffer);

@@ -498,7 +498,7 @@ function cancelActiveEdits() {
 }
 
 function bindDirSelection() {
-  const entries = document.querySelectorAll('.dir-entry:not(.dir-header-row)');
+  const entries = document.querySelectorAll('.dir-entry:not(.dir-header-row):not(.dir-parent-row)');
   let dragSrcOffset = null;
 
   entries.forEach(el => {
@@ -3140,7 +3140,7 @@ document.getElementById('opt-interleave').addEventListener('click', function(e) 
   document.getElementById('modal-title').textContent = 'Set Interleave';
   var body = document.getElementById('modal-body');
   body.innerHTML =
-    '<div class="text-md text-muted mb-lg">Sector interleave used when writing new files and directory sectors.</div>' +
+    '<div class="text-md text-muted mb-lg">Sector interleave for ' + currentFormat.name + '. Resets to format default when opening a new disk.</div>' +
     '<div class="form-row">' +
       '<label class="form-label">Directory:</label>' +
       '<input type="text" id="il-dir" maxlength="2" value="' + dirInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input wide">' +
