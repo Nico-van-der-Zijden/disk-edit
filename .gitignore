@@ -5,6 +5,9 @@ ExampleDisks/*
 !ExampleDisks/.gitkeep
 .claude/
 
+# Internal development notes
+TODO.md
+
 # Analytics (site-specific, not needed for development)
 assets/js/matomo.js
 
