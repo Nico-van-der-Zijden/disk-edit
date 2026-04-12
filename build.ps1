@@ -51,7 +51,22 @@ if (Test-Path $faCssPath) {
     Write-Host "  Inlined FontAwesome CSS + fonts" -ForegroundColor DarkGray
 }
 
-# 2. Inline C64 Pro Mono font (woff2 and ttf) in the existing @font-face
+# 2. Inline app CSS files (assets/css/*.css)
+$html = [regex]::Replace($html, '<link rel="stylesheet" href="(assets/css/[^"]+)">', {
+    param($match)
+    $cssFile = $match.Groups[1].Value
+    $cssPath = Join-Path $srcDir $cssFile
+    if (Test-Path $cssPath) {
+        $css = Get-Content $cssPath -Raw -Encoding UTF8
+        Write-Host "  Inlined $cssFile" -ForegroundColor DarkGray
+        return "<style>`n$css`n</style>"
+    } else {
+        Write-Warning "CSS file not found: $cssPath"
+        return $match.Value
+    }
+})
+
+# 3. Inline C64 Pro Mono font (woff2 and ttf) in the @font-face declarations
 $html = [regex]::Replace($html, "url\('assets/webfonts/([^']+)'\)", {
     param($m)
     $fontFile = Join-Path $srcDir "assets/webfonts/$($m.Groups[1].Value)"
@@ -65,7 +80,7 @@ $html = [regex]::Replace($html, "url\('assets/webfonts/([^']+)'\)", {
 })
 Write-Host "  Inlined C64 Pro Mono fonts" -ForegroundColor DarkGray
 
-# 3. Inline JS files (skip matomo.js for dist builds)
+# 4. Inline JS files (skip matomo.js for dist builds)
 $html = [regex]::Replace($html, '(?:<!-- Matomo[^>]*-->\s*)?<script src="([^"]+)"></script>', {
     param($match)
     $jsFile = $match.Groups[1].Value
@@ -92,7 +107,7 @@ $sizeKB = [math]::Round($size / 1024)
 $sizeMB = [math]::Round($size / 1048576, 1)
 Write-Host "  Built dist/index.html ($sizeKB KB / $sizeMB MB)" -ForegroundColor Green
 
-# 4. Create ZIP
+# 5. Create ZIP
 $zipName = "CBM Disk Editor $version.zip"
 $zipFile = Join-Path $distDir $zipName
 if (Test-Path $zipFile) { Remove-Item $zipFile }

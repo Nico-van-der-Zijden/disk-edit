@@ -1,0 +1,100 @@
+  /* --- Hex Editor --- */
+  .c64-screen {
+    background: #352879;
+    padding: 8px;
+    border-radius: 4px;
+    font-family: 'C64 Pro Mono', monospace;
+    font-size: 12px;
+    line-height: 1;
+  }
+
+  .c64-screen-row {
+    white-space: pre;
+    height: 1.2em;
+  }
+
+  .c64-screen-char {
+    display: inline-block;
+    width: 1ch;
+  }
+
+  .basic-listing {
+    font-family: 'C64 Pro Mono', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    background: #352879;
+    color: #6C5EB5;
+    padding: 10px 12px;
+    border-radius: 4px;
+  }
+
+  .basic-line { white-space: pre-wrap; word-break: break-all; }
+  .basic-linenum { color: #6C5EB5; }
+  .basic-keyword { color: #6C5EB5; }
+  .basic-string { color: #588D43; }
+  .basic-rem { color: #6C6C6C; }
+  .basic-ctrl { color: #9A6759; font-family: inherit; font-size: 10px; }
+
+  /* geoWrite document viewer */
+  .geowrite-doc {
+    font-family: serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #d0d0d0;
+    max-width: 640px;
+    margin: 0 auto;
+  }
+  .geowrite-page {
+    margin-bottom: 16px;
+    padding-bottom: 16px;
+    border-bottom: 1px dashed var(--border);
+  }
+  .geowrite-page:last-child { border-bottom: none; margin-bottom: 0; }
+  .geowrite-para { margin: 0 0 4px 0; min-height: 1em; }
+  .geowrite-img { margin: 8px 0; image-rendering: pixelated; background: #fff; }
+  .geowrite-tab { display: inline-block; min-width: 40px; }
+  .geowrite-pagebreak { text-align: center; color: #6C6C6C; font-size: 11px; margin: 8px 0; }
+
+  /* REL record viewer */
+  .rel-record {
+    font-family: 'C64 Pro Mono', monospace; font-size: 12px;
+    border-bottom: 1px solid var(--border); padding: 2px 8px;
+  }
+  .rel-record-num { color: #6C5EB5; display: inline-block; min-width: 50px; }
+  .rel-record-hex { color: var(--text-muted); }
+  .rel-record-ascii { color: var(--accent); margin-left: 12px; }
+
+  /* Search results */
+  .search-form { margin-bottom: 12px; flex-shrink: 0; }
+  .search-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .search-row input[type="text"] {
+    flex: 1; min-width: 160px; padding: 5px 8px;
+    background: var(--bg-input); color: var(--text); border: 1px solid var(--border);
+    border-radius: 3px; font-family: 'C64 Pro Mono', monospace; font-size: 13px;
+    outline: none;
+  }
+  .search-row input[type="text"]:focus {
+    border-color: var(--accent);
+  }
+  .search-row button {
+    padding: 5px 14px; border: 1px solid var(--border); border-radius: 3px;
+    background: var(--bg-panel); color: var(--text); cursor: pointer; font-size: 12px;
+  }
+  .search-row button:hover { background: var(--hover); }
+  .search-scopes { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text); margin-bottom: 8px; }
+  .search-scopes label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+  .modal-body:has(.search-layout) { overflow-y: hidden; display: flex; flex-direction: column; }
+  .search-layout { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+  .search-results { overflow-y: auto; flex: 1; min-height: 0; }
+  .search-result {
+    padding: 3px 8px; cursor: pointer;
+    font-size: 12px; border-bottom: 1px solid var(--border);
+  }
+  .search-result:hover { background: var(--hover); }
+  .search-result-ts { color: #6C5EB5; }
+  .search-result-pet { color: var(--text-muted); }
+  .search-result-match { color: #B8C76F; }
+  .search-tab-header { font-weight: bold; padding: 6px 8px; color: #70A4B2; font-size: 12px; }
+  .search-no-results { color: var(--text-muted); padding: 12px; text-align: center; }
+  .search-spinner { text-align: center; padding: 20px; color: var(--text-muted); }
+

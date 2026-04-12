@@ -1,0 +1,67 @@
+  @font-face {
+    font-family: 'C64 Pro Mono';
+    src: url('assets/webfonts/C64_Pro_Mono-STYLE.woff2') format('woff2'),
+         url('assets/webfonts/C64_Pro_Mono-STYLE.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+  }
+
+  :root {
+    --bg: #252836;
+    --bg-menu: #2c2f40;
+    --bg-panel: #2a2d3c;
+    --text: #c8ccd8;
+    --text-muted: #7a7f98;
+    --border: #3e4258;
+    --accent: #6c5eb5;
+    --hover: #333750;
+    --menu-hover: #3a3e58;
+    --placeholder-bg: #2e3142;
+    --hover-edit: #444868;
+    --selected-bg: #3d3578;
+    --selected-text: #a0a8e8;
+  }
+
+  [data-theme="light"] {
+    --bg: #d8dce8;
+    --bg-menu: #c4c8d8;
+    --bg-panel: #cdd1e0;
+    --text: #282b4a;
+    --text-muted: #6e7190;
+    --border: #a0a4b8;
+    --accent: #352879;
+    --hover: #b4b8cc;
+    --menu-hover: #a8acc2;
+    --placeholder-bg: #bcc0d0;
+    --hover-edit: #9ca0b8;
+    --selected-bg: #352879;
+    --selected-text: #588d43;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-user-modify: unset; }
+
+  ::selection { background: var(--accent); color: var(--selected-text); }
+
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--selected-text); }
+
+  body {
+    font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", "Courier New", monospace;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    -ms-content-zooming: none;
+  }
+
+  body, .menubar, .dir-listing, .dir-entry, .disk-header, .dir-footer {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .editable, .dir-name.editing, .blocks-input, .name-input, .header-input, .hex-input, .sep-editor-input {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+

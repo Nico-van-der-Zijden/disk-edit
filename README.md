@@ -100,8 +100,19 @@ Output:
 ## Project Structure
 
 ```
-index.html              Main application (HTML + CSS)
+index.html              Main application (HTML)
 assets/
+  css/
+    base.css            Variables, fonts, reset, scrollbar
+    menus.css           Menu bar and submenus
+    layout.css          Content area, tab bar, empty state
+    directory.css       Disk panel, header, directory listing
+    petscii.css         PETSCII character picker
+    modal.css           Modal dialogs
+    editors.css         Hex editor, geoWrite, REL, search results
+    utilities.css       Utility classes, form elements, code tags
+    bam.css             BAM viewer, compact bars, canvas map
+    viewers.css         Error bytes, file viewer, separator editor
   js/
     cbm-format.js       Disk format definitions, BAM operations, GCR decoder
     cbm-editor.js       Version, tabs, undo, BAM integrity, disk optimizer

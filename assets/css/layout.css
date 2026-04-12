@@ -1,0 +1,116 @@
+  /* --- Content --- */
+  .content {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 24px 16px;
+  }
+
+  .empty-state {
+    text-align: center;
+    color: var(--text-muted);
+    margin-top: 80px;
+    font-size: 14px;
+    line-height: 2;
+  }
+
+  .empty-state a {
+    color: var(--selected-text);
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .empty-state a:hover {
+    text-decoration: underline;
+  }
+
+  .empty-drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 40px 32px;
+    margin: 0 auto;
+    max-width: 420px;
+    transition: border-color 0.2s, background 0.2s;
+  }
+
+  .empty-drop-zone:hover {
+    border-color: var(--selected-text);
+  }
+
+  /* --- Tab Bar --- */
+  .tab-bar {
+    display: flex;
+    gap: 2px;
+    padding: 4px 10px 0;
+    background: var(--bg);
+    overflow-x: auto;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tab-bar:empty { display: none; }
+
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 4px 4px 0 0;
+    color: var(--text-muted);
+    white-space: nowrap;
+    max-width: 180px;
+    overflow: hidden;
+  }
+
+  .tab.active {
+    background: var(--bg);
+    color: var(--selected-text);
+    border-color: var(--accent);
+    border-bottom: 1px solid var(--bg);
+  }
+
+  .tab:hover:not(.active) {
+    color: var(--text);
+    background: var(--hover);
+  }
+
+  .tape-warning {
+    color: #c0a050;
+    font-size: 12px;
+  }
+
+  .tape-warning .fa-triangle-exclamation {
+    margin-right: 4px;
+  }
+
+  .tab-tape-badge {
+    font-size: 9px;
+    background: var(--accent);
+    color: #fff;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+  }
+
+  .tab-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tab-close {
+    font-size: 10px;
+    opacity: 0.5;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .tab-close:hover {
+    opacity: 1;
+    color: #9A6759;
+  }
+

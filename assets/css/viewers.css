@@ -1,0 +1,183 @@
+  /* --- Error Byte Viewer --- */
+  .error-sector {
+    width: 18px;
+    height: 12px;
+    border-radius: 2px;
+    cursor: pointer;
+    flex-shrink: 0;
+    font-size: 7px;
+    line-height: 12px;
+    text-align: center;
+    font-family: "Cascadia Code", "Consolas", monospace;
+  }
+
+  .error-sector.ok {
+    background: var(--accent);
+    opacity: 0.25;
+  }
+
+  .error-sector.err {
+    background: #f38ba8;
+    color: var(--bg);
+  }
+
+  [data-theme="light"] .error-sector.err {
+    background: #d20f39;
+    color: #fff;
+  }
+
+  .error-sector.no-data {
+    background: var(--border);
+    opacity: 0.3;
+  }
+
+  /* --- File Viewer --- */
+  /* --- Separator Editor --- */
+  .sep-editor-layout {
+    display: flex; flex-direction: column; height: 100%; overflow: hidden;
+  }
+  .sep-editor-list {
+    margin-bottom: 12px;
+    overflow-y: auto; flex: 1; min-height: 0;
+  }
+  .sep-editor-form {
+    flex-shrink: 0; padding-top: 8px; border-top: 1px solid var(--border);
+  }
+  .modal-body:has(.sep-editor-layout) { overflow-y: hidden; display: flex; flex-direction: column; }
+
+  .sep-editor-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sep-editor-preview {
+    font-family: 'C64 Pro Mono', monospace;
+    font-size: 13px;
+    flex: 1;
+    white-space: pre;
+  }
+
+  .sep-editor-btn {
+    padding: 2px 8px;
+    font-size: 11px;
+    font-family: inherit;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .sep-editor-btn:hover {
+    background: var(--hover);
+  }
+
+  .sep-editor-btn.danger:hover {
+    background: #f38ba8;
+    color: var(--bg);
+    border-color: #f38ba8;
+  }
+
+  .sep-editor-input {
+    font-family: 'C64 Pro Mono', monospace;
+    font-size: 14px;
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 4px 8px;
+    color: var(--text);
+    outline: none;
+  }
+
+  .hex-nav-field {
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    min-width: 3ch;
+    display: inline-block;
+    text-align: center;
+  }
+
+  .hex-nav-field:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .hex-nav-field .hex-input {
+    width: 3ch;
+    font-size: inherit;
+  }
+
+  .hex-nav-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .hex-nav-arrows {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .hex-nav-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 10px;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    cursor: pointer;
+    font-size: 7px;
+    color: var(--text-muted);
+    background: var(--bg);
+    line-height: 1;
+  }
+
+  .hex-nav-btn:hover {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+
+  .hex-byte.editing {
+    background: var(--bg);
+    outline: 1px solid var(--accent);
+    border-radius: 2px;
+    color: var(--accent);
+  }
+
+  .hex-byte.modified {
+    color: #f9e2af;
+  }
+
+  [data-theme="light"] .hex-byte.modified {
+    color: #df8e1d;
+  }
+
+  .hex-highlight {
+    background: rgba(184,199,111,0.3);
+    border-radius: 2px;
+    outline: 1px solid #B8C76F;
+  }
+
+  .hex-ascii {
+    color: var(--accent);
+    font-family: 'C64 Pro Mono', monospace;
+  }
+
+  .hex-separator {
+    width: 1px;
+    background: var(--border);
+    margin: 0 8px;
+    flex-shrink: 0;
+  }
+
+

@@ -1,0 +1,128 @@
+  /* --- PETSCII Keyboard Picker --- */
+  .petscii-picker {
+    display: none;
+    position: fixed;
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    z-index: 250;
+    box-shadow: 0 8px 32px rgba(0,0,0,.4);
+  }
+
+  .petscii-picker.open {
+    display: block;
+  }
+
+  .petscii-modifiers {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+
+  .petscii-mod {
+    padding: 4px 12px;
+    font-family: inherit;
+    font-size: 11px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  .petscii-mod.active {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+
+  .petscii-mod:hover:not(.active):not(.disabled) {
+    background: var(--hover);
+  }
+
+  .petscii-mod.disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .petscii-kb-row {
+    display: flex;
+    gap: 3px;
+    margin-bottom: 3px;
+    justify-content: center;
+  }
+
+  .petscii-key {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: 'C64 Pro Mono', monospace;
+    font-size: 14px;
+    color: var(--text);
+    background: var(--bg);
+    flex-shrink: 0;
+  }
+
+  .petscii-key:hover {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+
+  .petscii-key.wide {
+    width: auto;
+    padding: 0 10px;
+    font-size: 11px;
+  }
+
+  .petscii-key.space {
+    width: 180px;
+  }
+
+  .petscii-key.rev-char {
+    background: var(--text);
+    color: var(--bg);
+  }
+
+  .petscii-key.rev-char:hover {
+    background: var(--accent);
+    color: var(--bg);
+  }
+
+  .petscii-key.unsafe {
+    border-color: #f38ba8;
+    color: #f38ba8;
+  }
+
+  [data-theme="light"] .petscii-key.unsafe {
+    border-color: #d20f39;
+    color: #d20f39;
+  }
+
+  .petscii-key.unsafe:hover {
+    background: #f38ba8;
+    color: var(--bg);
+    border-color: #f38ba8;
+  }
+
+  .petscii-key.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .petscii-key.disabled:hover {
+    background: var(--bg);
+    color: var(--text);
+    border-color: var(--border);
+  }
+
+  .petscii-key.empty {
+    visibility: hidden;
+  }
+
