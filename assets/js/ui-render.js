@@ -434,7 +434,7 @@ function enterPartition(entryOff) {
     showModal('Partition Error', ['Partition does not start at sector 0.']);
     return;
   }
-  if (partSize < 120 || partSize % 40 !== 0) {
+  if (partSize < 120 || partSize % currentFormat.partitionSpt !== 0) {
     showModal('Partition Error', ['Invalid partition size (' + partSize + ' sectors).']);
     return;
   }

@@ -353,12 +353,12 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       '<span class="bam-tab" data-bam-view="summary">Summary</span>' +
       '</div>';
     // Canvas map placeholder — drawn after modal opens
-    var cellSize = 8;
-    var gap = 1;
-    var step = cellSize + gap;
-    var labelW = 30; // left margin for track numbers
-    var canvasW = labelW + maxSpt * step + gap;
-    var canvasH = bamTracks * step + gap;
+    var cellW = 12, cellH = 8;  // match HTML bam-sector proportions (18x12 scaled down)
+    var gap = 2;
+    var stepX = cellW + gap, stepY = cellH + gap;
+    var labelW = 32; // left margin for track numbers
+    var canvasW = labelW + maxSpt * stepX + gap;
+    var canvasH = bamTracks * stepY + gap;
     var mapLegend = '<div class="bam-legend">' +
       '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent)"></span> Used</span>' +
       '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent);opacity:0.25"></span> Free</span>' +
@@ -400,35 +400,55 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   var bamCanvas = document.getElementById('bam-map-canvas');
   if (bamCanvas) {
     var ctx2d = bamCanvas.getContext('2d');
-    var isDark = document.documentElement.getAttribute('data-theme') !== 'light';
-    // Color palette matching CSS BAM colors
-    var colUsed = isDark ? '#6c5eb5' : '#352879';
-    var colFree = isDark ? 'rgba(108,94,181,0.25)' : 'rgba(53,40,121,0.25)';
-    var colDirUsed = isDark ? '#f9e2af' : '#df8e1d';
-    var colDirFree = isDark ? 'rgba(249,226,175,0.3)' : 'rgba(223,142,29,0.3)';
-    var colError = '#f38ba8';
-    var colOrphan = isDark ? 'rgba(250,179,135,0.6)' : 'rgba(254,100,11,0.6)';
-    var colBg = isDark ? '#1e1e2e' : '#eff1f5';
+    // Read colors from CSS via computed styles on temporary elements
+    var cs = getComputedStyle(document.documentElement);
+    var accent = cs.getPropertyValue('--accent').trim();
+    var bgColor = cs.getPropertyValue('--bg').trim();
 
-    ctx2d.fillStyle = colBg;
+    // Create temporary elements to read BAM sector colors from CSS classes
+    function getCssColor(cls, opacity) {
+      var el = document.createElement('span');
+      el.className = 'bam-sector ' + cls;
+      el.style.display = 'none';
+      document.body.appendChild(el);
+      var style = getComputedStyle(el);
+      var bg = style.backgroundColor;
+      var op = parseFloat(style.opacity);
+      document.body.removeChild(el);
+      if (op < 1) {
+        // Apply opacity to the color
+        var m = bg.match(/\d+/g);
+        if (m) return 'rgba(' + m[0] + ',' + m[1] + ',' + m[2] + ',' + op + ')';
+      }
+      return bg;
+    }
+    var colUsed = getCssColor('used', 1);
+    var colFree = getCssColor('free', 1);
+    var colDirUsed = getCssColor('dir-used', 1);
+    var colDirFree = getCssColor('dir-free', 1);
+    var colError = getCssColor('error', 1);
+    var colOrphan = getCssColor('orphan', 1);
+
+    ctx2d.fillStyle = bgColor;
     ctx2d.fillRect(0, 0, bamCanvas.width, bamCanvas.height);
 
     // Draw track labels and sector blocks
-    var colLabel = isDark ? '#a6adc8' : '#4c4f69';
-    ctx2d.font = '9px monospace';
+    var colLabel = cs.getPropertyValue('--text-muted').trim();
+    ctx2d.font = '10px monospace';
     ctx2d.textBaseline = 'middle';
+    var radius = 2; // rounded corner radius matching CSS bam-sector
 
     for (var mt = 1; mt <= bamTracks; mt++) {
       var mSpt = fmt.sectorsPerTrack(mt);
       var mIsDirTrack = (mt === fmt.dirTrack);
-      var my = (mt - 1) * step + gap;
+      var my = (mt - 1) * stepY + gap;
 
       // Track number label
       ctx2d.fillStyle = bamCheck.errorTracks[mt] ? colError : colLabel;
-      ctx2d.fillText('$' + mt.toString(16).toUpperCase().padStart(2, '0'), 2, my + cellSize / 2);
+      ctx2d.fillText('$' + mt.toString(16).toUpperCase().padStart(2, '0'), 2, my + cellH / 2);
 
       for (var ms = 0; ms < mSpt; ms++) {
-        var mx = labelW + ms * step + gap;
+        var mx = labelW + ms * stepX + gap;
         var mFree = checkSectorFree(data, bamOff, mt, ms);
         var mKey = mt + ':' + ms;
         var mError = bamCheck.errorSectors[mKey];
@@ -442,7 +462,9 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
         } else {
           ctx2d.fillStyle = mFree ? colFree : colUsed;
         }
-        ctx2d.fillRect(mx, my, cellSize, cellSize);
+        ctx2d.beginPath();
+        ctx2d.roundRect(mx, my, cellW, cellH, radius);
+        ctx2d.fill();
       }
     }
 
@@ -454,8 +476,8 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       var x = e.clientX - rect.left - labelW;
       var y = e.clientY - rect.top;
       return {
-        sector: Math.floor((x - gap * 0.5) / step),
-        track: Math.floor((y - gap * 0.5) / step) + 1
+        sector: Math.floor((x - gap * 0.5) / stepX),
+        track: Math.floor((y - gap * 0.5) / stepY) + 1
       };
     }
 
@@ -1361,11 +1383,12 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
     showModal('Add Directory Error', ['Minimum is 80 blocks (2 data tracks).']);
     return;
   }
-  // Round up to next multiple of 40
-  var dataTracks = Math.ceil(desiredBlocks / 40);
+  // Round up to next multiple of sectors-per-track
+  var pSpt = currentFormat.partitionSpt;
+  var dataTracks = Math.ceil(desiredBlocks / pSpt);
   var numTracks = dataTracks + 1; // +1 for system track (header, BAM, dir)
-  var partSectors = numTracks * 40;
-  var actualBlocks = dataTracks * 40;
+  var partSectors = numTracks * pSpt;
+  var actualBlocks = dataTracks * pSpt;
 
   // Build true allocation map to find contiguous free tracks
   var allocated = buildTrueAllocationMap(currentBuffer);

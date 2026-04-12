@@ -298,8 +298,8 @@ function removeFileEntry(buffer, entryOff) {
   if (!currentFormat.subdirLinked && (typeByte & 0x07) === currentFormat.subdirType) {
     var partStart = data[entryOff + 3];
     var partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
-    var partTracks = Math.floor(partSize / 40);
     var fmt = currentFormat;
+    var partTracks = Math.floor(partSize / fmt.partitionSpt);
     var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
 
     for (var pt = partStart; pt < partStart + partTracks; pt++) {

@@ -261,7 +261,7 @@ function checkBAMIntegrity(buffer) {
         if (!fmt.subdirLinked && typeIdx === fmt.subdirType && closed) {
           var partStart = et;
           var partSize = data[entOff + 30] | (data[entOff + 31] << 8);
-          var partTracks = Math.floor(partSize / 40);
+          var partTracks = Math.floor(partSize / fmt.partitionSpt);
           for (var pt = partStart; pt < partStart + partTracks && pt <= currentTracks; pt++) {
             var pspt = fmt.sectorsPerTrack(pt);
             for (var ps = 0; ps < pspt; ps++) {
@@ -466,7 +466,7 @@ function optimizeDisk(buffer, interleave, defragment) {
       if (ptb === 5) {
         var partStart = data[pe.entryOff + 3];
         var partSize = data[pe.entryOff + 30] | (data[pe.entryOff + 31] << 8);
-        var partTracks = Math.floor(partSize / 40);
+        var partTracks = Math.floor(partSize / fmt.partitionSpt);
         for (var pt = partStart; pt < partStart + partTracks && pt <= currentTracks; pt++) {
           var pspt = fmt.sectorsPerTrack(pt);
           for (var ps = 0; ps < pspt; ps++) {
@@ -807,7 +807,7 @@ function validateDisk(buffer) {
         // CBM partition: mark the entire contiguous block as allocated (don't follow chain)
         if (!fmt.subdirLinked && fileType === fmt.subdirType) {
           const partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
-          const partTracks = Math.floor(partSize / 40);
+          const partTracks = Math.floor(partSize / fmt.partitionSpt);
           var label = 'Partition "' + rname + '"';
           if (fileTrack < 1 || fileTrack > numTracks || fileSector !== 0) {
             log.push(`  ERROR: ${label}: invalid start track ${fileTrack} sector ${fileSector}`);
@@ -890,7 +890,7 @@ function validateDisk(buffer) {
 function validatePartition(buffer, startTrack, partSize) {
   const data = new Uint8Array(buffer);
   const fmt = currentFormat;
-  const numPartTracks = Math.floor(partSize / 40);
+  const numPartTracks = Math.floor(partSize / fmt.partitionSpt);
   const partBamOff = sectorOffset(startTrack, 1);
   const log = [];
 
@@ -1046,7 +1046,7 @@ function scanOrphanedChains(buffer) {
   var minTrack = 1, maxTrack = currentTracks;
   if (currentPartition) {
     minTrack = currentPartition.startTrack;
-    maxTrack = currentPartition.startTrack + Math.floor(currentPartition.partSize / 40) - 1;
+    maxTrack = currentPartition.startTrack + Math.floor(currentPartition.partSize / currentFormat.partitionSpt) - 1;
   }
 
   // Step 2: Classify unowned sectors

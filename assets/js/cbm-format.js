@@ -291,6 +291,10 @@ const DISK_FORMATS = {
     supportsSubdirs: true,
     subdirType: 5,      // CBM partition type
     subdirLinked: false, // contiguous track block
+    partitionSpt: 40,   // sectors per track within D81 partitions
+    partitionBamOffset: 0x10, // BAM entry offset within partition BAM sector
+    partitionBamEntrySize: 6, // bytes per track in partition BAM
+    partitionDirSector: 3,    // directory starts at sector 3 in partitions
     defaultInterleave: 1,
     hasBamFreeCounts: true,
     interleavePresets: [
@@ -1337,13 +1341,23 @@ function sectorOffset(track, sector) {
 }
 
 // ── BAM byte-level helpers (partition-aware, handles D81 >32 sectors) ─
+// Partition BAM: returns byte offset for a track's BAM entry (free count byte)
+// relTrack is 1-based relative to partition start
+function getPartitionBamEntry(bamOff, relTrack) {
+  var fmt = currentFormat;
+  var spt = fmt.partitionSpt;
+  var off = fmt.partitionBamOffset;
+  var esz = fmt.partitionBamEntrySize;
+  if (relTrack <= spt) return bamOff + off + (relTrack - 1) * esz;
+  return bamOff + 256 + off + (relTrack - spt - 1) * esz;
+}
+
 // Returns the byte offset of the bitmap bytes for a given track.
 // For partitions, track is absolute (disk-level) and bamOff is the partition BAM offset.
 function getBamBitmapBase(track, bamOff) {
   if (currentPartition && !currentPartition.dnpDir) {
     var relTrack = track - currentPartition.startTrack + 1;
-    if (relTrack <= 40) return bamOff + 0x10 + (relTrack - 1) * 6 + 1;
-    return bamOff + 256 + 0x10 + (relTrack - 41) * 6 + 1;
+    return getPartitionBamEntry(bamOff, relTrack) + 1;
   }
   var fmt = currentFormat;
   if (fmt.isSectorFree) return fmt._bamBase(track); // CMD native (DNP/D1M/D2M/D4M): own BAM layout
@@ -1390,8 +1404,7 @@ function bamRecalcFree(data, track, bamOff) {
   // Write free count
   if (currentPartition && !currentPartition.dnpDir) {
     var relTrack = track - currentPartition.startTrack + 1;
-    if (relTrack <= 40) data[bamOff + 0x10 + (relTrack - 1) * 6] = free;
-    else data[bamOff + 256 + 0x10 + (relTrack - 41) * 6] = free;
+    data[getPartitionBamEntry(bamOff, relTrack)] = free;
   } else {
     currentFormat.writeTrackFree(data, bamOff, track, free);
   }
@@ -2330,7 +2343,7 @@ function parsePartition(buffer, startTrack, partSize) {
   // Partition BAM is at (startTrack, 1) and (startTrack, 2)
   // Count free blocks from the partition's own BAM
   const partBamOff = sectorOffset(startTrack, 1);
-  const numPartTracks = Math.floor(partSize / 40);
+  const numPartTracks = Math.floor(partSize / fmt.partitionSpt);
   let freeBlocks = 0;
   for (let t = 1; t <= numPartTracks; t++) {
     // Skip the partition's own system track (track 1 = first track of partition)

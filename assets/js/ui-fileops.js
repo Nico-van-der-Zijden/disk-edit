@@ -1028,7 +1028,7 @@ function allocateSectors(allocated, numSectors) {
   if (currentPartition && !currentPartition.dnpDir) {
     // Inside a D81 partition: use partition's tracks (skip track 1 = system track)
     var st = currentPartition.startTrack;
-    var numPartTracks = Math.floor(currentPartition.partSize / 40);
+    var numPartTracks = Math.floor(currentPartition.partSize / fmt.partitionSpt);
     // Partition's "directory track" is the start track; data goes on tracks 2+ (absolute: st+1, st+2, ...)
     for (var pt = 2; pt <= numPartTracks; pt++) trackOrder.push(st + pt - 1);
     interleave = fmt.defaultInterleave;
