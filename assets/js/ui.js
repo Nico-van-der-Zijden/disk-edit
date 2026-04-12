@@ -7433,6 +7433,7 @@ function insertFileEntry() {
   const dirTrk = ctx.dirTrackNum;
   const spt = sectorsPerTrack(dirTrk);
   // Build set of protected sectors (BAM, header, etc.) to avoid overwriting
+  var fmt = currentFormat;
   var protectedSecs = new Set();
   for (var pbi = 0; pbi < fmt.bamSectors.length; pbi++) {
     if (fmt.bamSectors[pbi][0] === dirTrk) protectedSecs.add(fmt.bamSectors[pbi][1]);
@@ -9567,6 +9568,10 @@ function allocateSectors(allocated, numSectors) {
     var skipTracks = {};
     skipTracks[dirTrack] = true;
     if (fmt.bamTrack !== dirTrack) skipTracks[fmt.bamTrack] = true;
+    // Skip all tracks containing BAM sectors (e.g. D71 track 53)
+    for (var bi = 0; bi < fmt.bamSectors.length; bi++) {
+      skipTracks[fmt.bamSectors[bi][0]] = true;
+    }
     var maxBamTrack = fmt.bamTracksRange(currentTracks);
     for (var t = dirTrack - 1; t >= 1; t--) { if (!skipTracks[t]) trackOrder.push(t); }
     for (var t2 = dirTrack + 1; t2 <= maxBamTrack; t2++) { if (!skipTracks[t2]) trackOrder.push(t2); }
@@ -10116,9 +10121,19 @@ function findFreeDirEntry(buffer) {
   // No empty slot — allocate new directory sector
   var dirTrk = ctx.dirTrackNum;
   var spt = sectorsPerTrack(dirTrk);
+  // Build set of protected sectors (BAM, header, etc.) to avoid overwriting
+  var protectedSecs = {};
+  for (var pbi = 0; pbi < fmt.bamSectors.length; pbi++) {
+    if (fmt.bamSectors[pbi][0] === dirTrk) protectedSecs[fmt.bamSectors[pbi][1]] = true;
+  }
+  if (fmt.headerTrack === dirTrk) protectedSecs[fmt.headerSector] = true;
+  if (fmt === DISK_FORMATS.dnp) {
+    for (var ps = 0; ps <= 33; ps++) protectedSecs[ps] = true;
+  }
   var newSector = -1;
   for (var cs = 1; cs < spt; cs++) {
     if (visited[dirTrk + ':' + cs]) continue;
+    if (protectedSecs[cs]) continue;
     newSector = cs;
     break;
   }
@@ -11181,6 +11196,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.28', title: 'Fix directory expansion overwriting BAM/header sectors', items: [
+      'Fixed directory expansion in paste/import overwriting BAM and header sectors on D81/DNP',
+      'Fixed directory expansion in insert overwriting BAM sectors (missing format variable)',
+      'Fixed D71 file allocation potentially overwriting side-2 BAM at track 53',
+      'All directory expansion paths now skip protected sectors (BAM, header, system)',
+    ]},
     { ver: '1.3.27', title: 'Keyboard shortcuts remap, nested submenu nav, DNP BAM fix', items: [
       'Keyboard shortcuts: remapped all Ctrl+letter conflicts with browser shortcuts',
       'Ctrl+W/T/L/U/D/B/H/G/E/I all moved to Ctrl+Shift or Ctrl+Alt combos',
