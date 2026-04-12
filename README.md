@@ -112,8 +112,14 @@ No web server required - works directly from the filesystem.
 
 The build script creates a single self-contained HTML file with all JS, CSS, and fonts inlined:
 
+**Windows (PowerShell):**
 ```powershell
 powershell -ExecutionPolicy Bypass -File build.ps1
+```
+
+**macOS / Linux:**
+```bash
+./build.sh
 ```
 
 Output:
