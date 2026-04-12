@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 28 };
+var APP_VERSION = { major: 1, minor: 3, build: 29 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -217,7 +217,7 @@ function checkBAMIntegrity(buffer) {
     var entryType = data[entry.entryOff + 2] & 0x07;
 
     // DIR type (DNP subdirectory): header + dir chain are owned
-    if (entryType === 6 && fmt === DISK_FORMATS.dnp) {
+    if (fmt.subdirLinked && entryType === fmt.subdirType) {
       var dt6 = data[entry.entryOff + 3];
       var ds6 = data[entry.entryOff + 4];
       // Header sector
@@ -242,7 +242,7 @@ function checkBAMIntegrity(buffer) {
     }
 
     // CBM partition: mark entire contiguous block as owned (don't follow chain)
-    if (entryType === 5 && fmt === DISK_FORMATS.d81) {
+    if (!fmt.subdirLinked && entryType === fmt.subdirType) {
       var partStart = data[entry.entryOff + 3];
       var partSize = data[entry.entryOff + 30] | (data[entry.entryOff + 31] << 8);
       var partTracks = Math.floor(partSize / 40);
@@ -346,7 +346,7 @@ function optimizeDisk(buffer, interleave, defragment) {
     var typeIdx = typeByte & 0x07;
 
     // Skip CBM partitions — they are contiguous track blocks
-    if (typeIdx === 5 && fmt === DISK_FORMATS.d81) {
+    if (!fmt.subdirLinked && typeIdx === fmt.subdirType) {
       log.push('Skipped partition: "' + petsciiToReadable(entry.name) + '"');
       continue;
     }
@@ -430,8 +430,8 @@ function optimizeDisk(buffer, interleave, defragment) {
     dirT = data[doff]; dirS = data[doff + 1];
   }
 
-  // Also protect CBM partition sectors (D81)
-  if (fmt === DISK_FORMATS.d81) {
+  // Also protect CBM partition sectors (contiguous block subdirs)
+  if (fmt.supportsSubdirs && !fmt.subdirLinked) {
     for (fi = 0; fi < info.entries.length; fi++) {
       var pe = info.entries[fi];
       if (pe.deleted) continue;
@@ -498,9 +498,7 @@ function optimizeDisk(buffer, interleave, defragment) {
   // Phase 3: Build track order and reallocate each file
   var dirTrack = fmt.dirTrack;
   var trackOrder = [];
-  var skipTracks = {};
-  skipTracks[dirTrack] = true;
-  if (fmt.bamTrack !== dirTrack) skipTracks[fmt.bamTrack] = true;
+  var skipTracks = fmt.getSkipTracks();
 
   if (defragment) {
     // Sequential from track 1, skipping system tracks
@@ -766,7 +764,7 @@ function validateDisk(buffer) {
       }
 
       // CBM partition: mark the entire contiguous block as allocated (don't follow chain)
-      if (fileType === 5 && fmt === DISK_FORMATS.d81) {
+      if (!fmt.subdirLinked && fileType === fmt.subdirType) {
         const partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
         const partTracks = Math.floor(partSize / 40);
         var label = 'Partition "' + rname + '"';

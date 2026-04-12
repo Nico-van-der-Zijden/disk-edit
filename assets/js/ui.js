@@ -579,7 +579,7 @@ function bindDirSelection() {
       if (currentBuffer) {
         var d = new Uint8Array(currentBuffer);
         var tb = d[entryOff + 2];
-        if ((tb & 0x87) === 0x85 || (tb & 0x87) === 0x86) { // closed CBM or DIR type
+        if (currentFormat.supportsSubdirs && (tb & 0x07) === currentFormat.subdirType && (tb & 0x80)) { // closed subdir type
           enterPartition(entryOff);
           return;
         }
@@ -678,8 +678,8 @@ function enterPartition(entryOff) {
   var partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
 
-  // DNP directory (type $06): lightweight linked directory
-  if (typeIdx === 6) {
+  // Linked directory (e.g. DNP): header + dir chain
+  if (currentFormat.subdirLinked && typeIdx === currentFormat.subdirType) {
     var hdrOff = sectorOffset(startTrack, startSector);
     if (hdrOff < 0) {
       showModal('Directory Error', ['Invalid header sector.']);
@@ -743,8 +743,8 @@ function leavePartition() {
     // DNP directory: go to parent using header's parent reference
     var data = new Uint8Array(currentBuffer);
     var hdrOff = sectorOffset(currentPartition.dnpHeaderT, currentPartition.dnpHeaderS);
-    var parentHeaderT = data[hdrOff + 0x22];
-    var parentHeaderS = data[hdrOff + 0x23];
+    var parentHeaderT = data[hdrOff + currentFormat.subdirParentRef];
+    var parentHeaderS = data[hdrOff + currentFormat.subdirParentRef + 1];
 
     // If parent is the root header (T1/S1), go to root
     if (parentHeaderT === currentFormat.headerTrack && parentHeaderS === currentFormat.headerSector) {
@@ -833,6 +833,75 @@ function parseDnpDirectory(buffer, dirTrack, dirSector, dirName, headerT, header
     tracks: currentTracks,
     isPartition: true
   };
+}
+
+// ── Linked subdirectory helpers ──────────────────────────────────────
+// Count linked subdirectories (recursively) by walking the root directory
+function countLinkedSubdirs(buffer) {
+  var data = new Uint8Array(buffer);
+  var fmt = currentFormat;
+  var count = 0;
+
+  function walkDir(dirT, dirS) {
+    var visited = {};
+    while (dirT !== 0) {
+      var key = dirT + ':' + dirS;
+      if (visited[key]) break;
+      visited[key] = true;
+      var off = sectorOffset(dirT, dirS);
+      if (off < 0) break;
+      for (var i = 0; i < fmt.entriesPerSector; i++) {
+        var entOff = off + i * fmt.entrySize;
+        var tb = data[entOff + 2];
+        if ((tb & 0x07) === fmt.subdirType && (tb & 0x80)) {
+          count++;
+          var ht = data[entOff + 3], hs = data[entOff + 4];
+          var hOff = sectorOffset(ht, hs);
+          if (hOff >= 0) walkDir(data[hOff], data[hOff + 1]);
+        }
+      }
+      dirT = data[off]; dirS = data[off + 1];
+    }
+  }
+
+  walkDir(fmt.dirTrack, fmt.dirSector);
+  return count;
+}
+
+// Update the ID region in all linked subdirectory headers to match the root header
+function updateLinkedSubdirIds(buffer) {
+  var data = new Uint8Array(buffer);
+  var fmt = currentFormat;
+  var rootHdrOff = sectorOffset(fmt.headerTrack, fmt.headerSector);
+
+  function walkDir(dirT, dirS) {
+    var visited = {};
+    while (dirT !== 0) {
+      var key = dirT + ':' + dirS;
+      if (visited[key]) break;
+      visited[key] = true;
+      var off = sectorOffset(dirT, dirS);
+      if (off < 0) break;
+      for (var i = 0; i < fmt.entriesPerSector; i++) {
+        var entOff = off + i * fmt.entrySize;
+        var tb = data[entOff + 2];
+        if ((tb & 0x07) === fmt.subdirType && (tb & 0x80)) {
+          var ht = data[entOff + 3], hs = data[entOff + 4];
+          var hOff = sectorOffset(ht, hs);
+          if (hOff >= 0) {
+            // Copy ID region from root header
+            for (var idi = 0; idi < fmt.idLength; idi++) {
+              data[hOff + fmt.idOffset + idi] = data[rootHdrOff + fmt.idOffset + idi];
+            }
+            walkDir(data[hOff], data[hOff + 1]);
+          }
+        }
+      }
+      dirT = data[off]; dirS = data[off + 1];
+    }
+  }
+
+  walkDir(fmt.dirTrack, fmt.dirSector);
 }
 
 // ── Context menu on directory entries ─────────────────────────────────
@@ -1188,8 +1257,8 @@ function updateEntryMenuState() {
   document.getElementById('opt-insert-sep').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
   document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection || multiSelect || tape);
   document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection || multiSelect);
-  var supportsSubdirs = currentFormat === DISK_FORMATS.d81 || currentFormat === DISK_FORMATS.dnp;
-  document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || inPartition || !currentBuffer || !supportsSubdirs || !canInsertFile() || tape);
+  var noNesting = inPartition && !currentFormat.subdirLinked; // D81: no nesting; DNP: nesting allowed
+  document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || noNesting || !currentBuffer || !currentFormat.supportsSubdirs || !canInsertFile() || tape);
   // Multi-select compatible operations (all disabled for tape except copy/export)
   document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection || tape);
   document.getElementById('opt-align').classList.toggle('disabled', !hasSelection || tape);
@@ -1417,13 +1486,31 @@ function startEditing(el) {
     hidePetsciiPicker();
   }
 
-  function commitEdit() {
+  async function commitEdit() {
     if (reverted) return;
     let value = filterC64Input(input.value, maxLen);
     if (currentBuffer) {
       pushUndo();
       if (field === 'name') writeDiskName(currentBuffer, value, input._petsciiOverrides);
       else if (field === 'id') writeDiskId(currentBuffer, value, input._petsciiOverrides);
+
+      // For formats with linked subdirs, offer to update subdirectory headers
+      if (field === 'id' && currentFormat.subdirLinked && !currentPartition) {
+        var subdirCount = countLinkedSubdirs(currentBuffer);
+        if (subdirCount > 0) {
+          var choice = await showChoiceModal(
+            'Update Subdirectories',
+            subdirCount + ' subdirector' + (subdirCount === 1 ? 'y' : 'ies') + ' found. Update ' + (subdirCount === 1 ? 'its' : 'their') + ' ID to match?',
+            [
+              { label: 'No', value: 'no', secondary: true },
+              { label: 'Yes', value: 'yes' }
+            ]
+          );
+          if (choice === 'yes') {
+            updateLinkedSubdirIds(currentBuffer);
+          }
+        }
+      }
     }
     cleanup();
     setDisplay(value);
@@ -1969,7 +2056,7 @@ document.getElementById('opt-validate').addEventListener('click', (e) => {
   closeMenus();
   pushUndo();
   var log;
-  if (currentPartition) {
+  if (currentPartition && !currentPartition.dnpDir) {
     log = validatePartition(currentBuffer, currentPartition.startTrack, currentPartition.partSize);
   } else {
     log = validateDisk(currentBuffer);
@@ -2358,7 +2445,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
     var base = (fmt._bamBase) ? fmt._bamBase(bt) : getBamBitmapBase(bt, bOff);
     var byteIdx = bs >> 3;
-    var bitMask = (fmt === DISK_FORMATS.dnp) ? (0x80 >> (bs & 7)) : (1 << (bs % 8));
+    var bitMask = fmt.bamBitMask(bs);
     d[base + byteIdx] ^= bitMask;
     if (typeof fmt.writeTrackFree === 'function' && !fmt._bamBase) bamRecalcFree(d, bt, bOff);
 
@@ -3111,11 +3198,11 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
   if (!currentBuffer) return;
   closeMenus();
 
-  // DNP: create lightweight directory (type $06)
-  if (currentFormat === DISK_FORMATS.dnp) {
-    var dnpName = await showInputModal('Directory Name', 'SUBDIR');
-    if (!dnpName) return;
-    dnpName = dnpName.toUpperCase().substring(0, 16);
+  // Linked directory: header sector + dir chain (e.g. CMD Native DIR type)
+  if (currentFormat.subdirLinked) {
+    var name = await showInputModal('Directory Name', 'SUBDIR');
+    if (!name) return;
+    name = name.toUpperCase().substring(0, 16);
 
     pushUndo();
     var data = new Uint8Array(currentBuffer);
@@ -3133,7 +3220,7 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
     var hdrSec = sectorList[0];
     var dirSec = sectorList[1];
 
-    // Find parent header T/S and current dir entry for back-navigation
+    // Find parent header T/S for back-navigation
     var parentHeaderT = fmt.headerTrack;
     var parentHeaderS = fmt.headerSector;
     if (currentPartition && currentPartition.dnpHeaderT !== undefined) {
@@ -3146,29 +3233,27 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
     for (var hi = 0; hi < 256; hi++) data[hdrOff + hi] = 0x00;
     data[hdrOff + 0x00] = dirSec.track;  // dir chain T/S
     data[hdrOff + 0x01] = dirSec.sector;
-    data[hdrOff + 0x02] = 0x48; // DOS type 'H'
-    // Copy name
-    for (var ni = 0; ni < 16; ni++) {
-      if (ni < dnpName.length) {
-        var ch = dnpName.charCodeAt(ni);
-        data[hdrOff + 0x04 + ni] = (ch >= 0x41 && ch <= 0x5A) ? ch : (ch >= 0x30 && ch <= 0x39) ? ch : 0x20;
+    data[hdrOff + 0x02] = fmt.dosVersion;
+    // Write name at format's name offset
+    for (var ni = 0; ni < fmt.nameLength; ni++) {
+      if (ni < name.length) {
+        var ch = name.charCodeAt(ni);
+        data[hdrOff + fmt.nameOffset + ni] = (ch >= 0x41 && ch <= 0x5A) ? ch : (ch >= 0x30 && ch <= 0x39) ? ch : 0x20;
       } else {
-        data[hdrOff + 0x04 + ni] = 0xA0;
+        data[hdrOff + fmt.nameOffset + ni] = 0xA0;
       }
     }
-    // Copy disk ID from root header
+    // Copy disk ID region from root header (includes pad + DOS type)
     var rootHdrOff = sectorOffset(fmt.headerTrack, fmt.headerSector);
-    data[hdrOff + 0x16] = data[rootHdrOff + 0x16];
-    data[hdrOff + 0x17] = data[rootHdrOff + 0x17];
-    data[hdrOff + 0x18] = 0xA0;
-    data[hdrOff + 0x19] = 0x31; // '1'
-    data[hdrOff + 0x1A] = 0x48; // 'H'
+    for (var idi = 0; idi < fmt.idLength; idi++) {
+      data[hdrOff + fmt.idOffset + idi] = data[rootHdrOff + fmt.idOffset + idi];
+    }
     // Self-reference
-    data[hdrOff + 0x20] = hdrSec.track;
-    data[hdrOff + 0x21] = hdrSec.sector;
+    data[hdrOff + fmt.subdirSelfRef] = hdrSec.track;
+    data[hdrOff + fmt.subdirSelfRef + 1] = hdrSec.sector;
     // Parent header
-    data[hdrOff + 0x22] = parentHeaderT;
-    data[hdrOff + 0x23] = parentHeaderS;
+    data[hdrOff + fmt.subdirParentRef] = parentHeaderT;
+    data[hdrOff + fmt.subdirParentRef + 1] = parentHeaderS;
 
     // Write empty dir sector
     var dirOff = sectorOffset(dirSec.track, dirSec.sector);
@@ -3186,25 +3271,25 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
       showModal('Add Directory Error', ['No free directory entry.']);
       return;
     }
-    data[entryOff + 2] = 0x86; // DIR + closed
+    data[entryOff + 2] = 0x80 | fmt.subdirType; // subdir type + closed
     data[entryOff + 3] = hdrSec.track;
     data[entryOff + 4] = hdrSec.sector;
-    for (var eni = 0; eni < 16; eni++) data[entryOff + 5 + eni] = data[hdrOff + 0x04 + eni];
+    for (var eni = 0; eni < fmt.nameLength; eni++) data[entryOff + 5 + eni] = data[hdrOff + fmt.nameOffset + eni];
     for (var eu = 21; eu < 30; eu++) data[entryOff + eu] = 0x00;
     data[entryOff + 30] = 2; // 2 blocks (header + dir)
     data[entryOff + 31] = 0;
 
     // Store parent entry reference in header
-    data[hdrOff + 0x24] = entryOff >> 8; // parent dir sector (approximate)
-    data[hdrOff + 0x25] = entryOff & 0xFF;
+    data[hdrOff + fmt.subdirParentEntry] = entryOff >> 8;
+    data[hdrOff + fmt.subdirParentEntry + 1] = entryOff & 0xFF;
 
-    var info = currentPartition ? parsePartition(currentBuffer, currentPartition.startTrack, currentPartition.partSize) : parseDisk(currentBuffer);
+    var info = parseCurrentDir(currentBuffer);
     renderDisk(info);
     updateMenuState();
     return;
   }
 
-  if (currentFormat !== DISK_FORMATS.d81 || currentPartition) return;
+  if (currentFormat.subdirLinked || !currentFormat.supportsSubdirs || currentPartition) return;
 
   // Ask for partition name
   var name = await showInputModal('Directory Name', 'SUBDIR');
@@ -3272,8 +3357,8 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
     return;
   }
 
-  // Type: CBM ($85), closed
-  data[entryOff + 2] = 0x85;
+  // Subdir type + closed
+  data[entryOff + 2] = 0x80 | currentFormat.subdirType;
   // Start track/sector (sector must be 0)
   data[entryOff + 3] = startTrack;
   data[entryOff + 4] = 0;
@@ -7316,7 +7401,7 @@ function removeFileEntry(buffer, entryOff) {
 
   // If removing a CBM partition, free its tracks in the root BAM
   var typeByte = data[entryOff + 2];
-  if ((typeByte & 0x07) === 5 && currentFormat === DISK_FORMATS.d81) {
+  if (!currentFormat.subdirLinked && (typeByte & 0x07) === currentFormat.subdirType) {
     var partStart = data[entryOff + 3];
     var partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
     var partTracks = Math.floor(partSize / 40);
@@ -7432,18 +7517,8 @@ function insertFileEntry() {
   // No empty slots — allocate a new directory sector on the directory track
   const dirTrk = ctx.dirTrackNum;
   const spt = sectorsPerTrack(dirTrk);
-  // Build set of protected sectors (BAM, header, etc.) to avoid overwriting
-  var fmt = currentFormat;
-  var protectedSecs = new Set();
-  for (var pbi = 0; pbi < fmt.bamSectors.length; pbi++) {
-    if (fmt.bamSectors[pbi][0] === dirTrk) protectedSecs.add(fmt.bamSectors[pbi][1]);
-  }
-  // D81: header at sector 0
-  if (fmt.headerTrack === dirTrk) protectedSecs.add(fmt.headerSector);
-  // DNP: sectors 0-33 are system (boot + header + BAM)
-  if (fmt === DISK_FORMATS.dnp) {
-    for (var ps = 0; ps <= 33; ps++) protectedSecs.add(ps);
-  }
+  // Protected sectors (BAM, header, system) — defined per format
+  var protectedSecs = new Set(currentFormat.getProtectedSectors(dirTrk));
   let newSector = -1;
   for (let cs = 1; cs < spt; cs++) {
     if (visited.has(`${dirTrk}:${cs}`)) continue;
@@ -8430,7 +8505,7 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
   var removeEntryOff = selectedEntryIndex;
   var data = new Uint8Array(currentBuffer);
   var typeByte = data[removeEntryOff + 2];
-  var isCBM = (typeByte & 0x07) === 5 && currentFormat === DISK_FORMATS.d81;
+  var isCBM = !currentFormat.subdirLinked && (typeByte & 0x07) === currentFormat.subdirType;
 
   // Check if this is a CBM partition with files inside
   if (isCBM) {
@@ -9467,81 +9542,95 @@ function buildTrueAllocationMap(buffer) {
   var fmt = currentFormat;
   var allocated = {}; // "t:s" -> true
 
-  if (currentPartition) {
-    // Inside a partition: mark partition system sectors (header, BAM1, BAM2, dir sectors)
+  if (currentPartition && !currentPartition.dnpDir) {
+    // Inside a D81 partition: mark partition system sectors (header, BAM1, BAM2)
     var st = currentPartition.startTrack;
     allocated[st + ':0'] = true; // header
     allocated[st + ':1'] = true; // BAM1
     allocated[st + ':2'] = true; // BAM2
   } else {
-    // Root: mark all system sectors (BAM + header) as allocated
-    for (var bsi = 0; bsi < fmt.bamSectors.length; bsi++) {
-      allocated[fmt.bamSectors[bsi][0] + ':' + fmt.bamSectors[bsi][1]] = true;
-    }
-    // DNP: mark entire system area on track 1 (sectors 0-33: boot + header + BAM)
-    if (fmt === DISK_FORMATS.dnp) {
-      for (var ds = 0; ds <= 33; ds++) allocated['1:' + ds] = true;
+    // Root or linked subdir: mark all protected sectors (BAM, header, system)
+    var sysTracks = fmt.getSkipTracks();
+    for (var st2 in sysTracks) {
+      var ps = fmt.getProtectedSectors(parseInt(st2));
+      for (var psi = 0; psi < ps.length; psi++) allocated[st2 + ':' + ps[psi]] = true;
     }
   }
 
-  // Follow directory chain
-  var ctx = getDirContext();
-  var dirT = ctx.dirTrack, dirS = ctx.dirSector;
-  var dirVisited = {};
-  var dirEntries = [];
+  // Walk a directory chain, mark its sectors and all file chains as allocated.
+  // For linked subdirs, recurse into subdirectory entries.
+  function walkDirectory(dirT, dirS) {
+    while (dirT !== 0) {
+      var key = dirT + ':' + dirS;
+      if (allocated[key]) break; // already visited (also prevents loops)
+      allocated[key] = true;
 
-  while (dirT !== 0) {
-    var key = dirT + ':' + dirS;
-    if (dirVisited[key]) break;
-    dirVisited[key] = true;
-    allocated[key] = true;
+      var off = sectorOffset(dirT, dirS);
+      if (off < 0) break;
 
-    var off = sectorOffset(dirT, dirS);
-    if (off < 0) break;
+      for (var i = 0; i < fmt.entriesPerSector; i++) {
+        var entOff = off + i * fmt.entrySize;
+        var typeByte = data[entOff + 2];
+        var typeIdx = typeByte & 0x07;
+        if (typeIdx === 0 && !(typeByte & 0x80)) continue;
 
-    for (var i = 0; i < fmt.entriesPerSector; i++) {
-      dirEntries.push(off + i * fmt.entrySize);
-    }
+        var ft = data[entOff + 3], fs = data[entOff + 4];
 
-    dirT = data[off]; dirS = data[off + 1];
-  }
+        // Linked subdirectory: mark header + recurse into its dir chain
+        if (fmt.subdirLinked && typeIdx === fmt.subdirType && (typeByte & 0x80)) {
+          var hdrKey = ft + ':' + fs;
+          if (!allocated[hdrKey]) {
+            allocated[hdrKey] = true;
+            var hdrOff = sectorOffset(ft, fs);
+            if (hdrOff >= 0) {
+              walkDirectory(data[hdrOff], data[hdrOff + 1]);
+            }
+          }
+          continue;
+        }
 
-  // Follow every file's sector chain (including deleted/splat files that have data)
-  for (var di = 0; di < dirEntries.length; di++) {
-    var entOff = dirEntries[di];
-    var typeByte = data[entOff + 2];
-    var typeIdx = typeByte & 0x07;
-    if (typeIdx === 0 && !(typeByte & 0x80)) continue;
+        // Follow file sector chain
+        var fileVisited = {};
+        while (ft !== 0) {
+          if (ft < 1 || ft > currentTracks) break;
+          if (fs >= fmt.sectorsPerTrack(ft)) break;
+          var fkey = ft + ':' + fs;
+          if (fileVisited[fkey]) break;
+          fileVisited[fkey] = true;
+          allocated[fkey] = true;
+          var foff = sectorOffset(ft, fs);
+          if (foff < 0) break;
+          ft = data[foff]; fs = data[foff + 1];
+        }
 
-    var ft = data[entOff + 3], fs = data[entOff + 4];
-    var fileVisited = {};
-    while (ft !== 0) {
-      if (ft < 1 || ft > currentTracks) break;
-      if (fs >= fmt.sectorsPerTrack(ft)) break;
-      var fkey = ft + ':' + fs;
-      if (fileVisited[fkey]) break;
-      fileVisited[fkey] = true;
-      allocated[fkey] = true;
-      var foff = sectorOffset(ft, fs);
-      if (foff < 0) break;
-      ft = data[foff]; fs = data[foff + 1];
-    }
-
-    if (typeIdx === 4) {
-      var sst = data[entOff + 0x15], sss = data[entOff + 0x16];
-      var ssVisited = {};
-      while (sst !== 0) {
-        var sskey = sst + ':' + sss;
-        if (ssVisited[sskey]) break;
-        ssVisited[sskey] = true;
-        if (sst < 1 || sst > currentTracks) break;
-        if (sss >= fmt.sectorsPerTrack(sst)) break;
-        allocated[sskey] = true;
-        var ssoff = sectorOffset(sst, sss);
-        if (ssoff < 0) break;
-        sst = data[ssoff]; sss = data[ssoff + 1];
+        // REL file side-sector chain
+        if (typeIdx === 4) {
+          var sst = data[entOff + 0x15], sss = data[entOff + 0x16];
+          var ssVisited = {};
+          while (sst !== 0) {
+            var sskey = sst + ':' + sss;
+            if (ssVisited[sskey]) break;
+            ssVisited[sskey] = true;
+            if (sst < 1 || sst > currentTracks) break;
+            if (sss >= fmt.sectorsPerTrack(sst)) break;
+            allocated[sskey] = true;
+            var ssoff = sectorOffset(sst, sss);
+            if (ssoff < 0) break;
+            sst = data[ssoff]; sss = data[ssoff + 1];
+          }
+        }
       }
+
+      dirT = data[off]; dirS = data[off + 1];
     }
+  }
+
+  // For linked subdirs, always walk from root to cover all directories
+  if (fmt.subdirLinked && currentPartition && currentPartition.dnpDir) {
+    walkDirectory(fmt.dirTrack, fmt.dirSector);
+  } else {
+    var ctx = getDirContext();
+    walkDirectory(ctx.dirTrack, ctx.dirSector);
   }
 
   return allocated;
@@ -9556,8 +9645,8 @@ function allocateSectors(allocated, numSectors) {
   var trackOrder = [];
   var interleave;
 
-  if (currentPartition) {
-    // Inside a partition: use partition's tracks (skip track 1 = system track)
+  if (currentPartition && !currentPartition.dnpDir) {
+    // Inside a D81 partition: use partition's tracks (skip track 1 = system track)
     var st = currentPartition.startTrack;
     var numPartTracks = Math.floor(currentPartition.partSize / 40);
     // Partition's "directory track" is the start track; data goes on tracks 2+ (absolute: st+1, st+2, ...)
@@ -9565,13 +9654,7 @@ function allocateSectors(allocated, numSectors) {
     interleave = 1; // D81 interleave
   } else {
     var dirTrack = fmt.dirTrack;
-    var skipTracks = {};
-    skipTracks[dirTrack] = true;
-    if (fmt.bamTrack !== dirTrack) skipTracks[fmt.bamTrack] = true;
-    // Skip all tracks containing BAM sectors (e.g. D71 track 53)
-    for (var bi = 0; bi < fmt.bamSectors.length; bi++) {
-      skipTracks[fmt.bamSectors[bi][0]] = true;
-    }
+    var skipTracks = fmt.getSkipTracks();
     var maxBamTrack = fmt.bamTracksRange(currentTracks);
     for (var t = dirTrack - 1; t >= 1; t--) { if (!skipTracks[t]) trackOrder.push(t); }
     for (var t2 = dirTrack + 1; t2 <= maxBamTrack; t2++) { if (!skipTracks[t2]) trackOrder.push(t2); }
@@ -10121,19 +10204,12 @@ function findFreeDirEntry(buffer) {
   // No empty slot — allocate new directory sector
   var dirTrk = ctx.dirTrackNum;
   var spt = sectorsPerTrack(dirTrk);
-  // Build set of protected sectors (BAM, header, etc.) to avoid overwriting
-  var protectedSecs = {};
-  for (var pbi = 0; pbi < fmt.bamSectors.length; pbi++) {
-    if (fmt.bamSectors[pbi][0] === dirTrk) protectedSecs[fmt.bamSectors[pbi][1]] = true;
-  }
-  if (fmt.headerTrack === dirTrk) protectedSecs[fmt.headerSector] = true;
-  if (fmt === DISK_FORMATS.dnp) {
-    for (var ps = 0; ps <= 33; ps++) protectedSecs[ps] = true;
-  }
+  // Protected sectors (BAM, header, system) — defined per format
+  var protectedSecs = fmt.getProtectedSectors(dirTrk);
   var newSector = -1;
   for (var cs = 1; cs < spt; cs++) {
     if (visited[dirTrk + ':' + cs]) continue;
-    if (protectedSecs[cs]) continue;
+    if (protectedSecs.indexOf(cs) !== -1) continue;
     newSector = cs;
     break;
   }
@@ -10201,13 +10277,7 @@ document.getElementById('opt-scratch').addEventListener('click', (e) => {
     if (visited[key]) break;
     visited[key] = true;
     // Set the sector's bit in BAM (mark as free)
-    var base = (fmt._bamBase) ? fmt._bamBase(t) : getBamBitmapBase(t, bamOff);
-    if (fmt === DISK_FORMATS.dnp) {
-      data[base + (s >> 3)] |= (0x80 >> (s & 7));
-    } else {
-      data[base + Math.floor(s / 8)] |= (1 << (s % 8));
-    }
-    if (!fmt._bamBase) bamRecalcFree(data, t, bamOff);
+    bamMarkSectorFree(data, t, s, bamOff);
     var off = sectorOffset(t, s);
     if (off < 0) break;
     t = data[off]; s = data[off + 1];
@@ -11196,6 +11266,18 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.29', title: 'Centralize format properties, DNP subdirectory fixes', items: [
+      'Centralized protected sectors, skip tracks, and BAM bit order into DISK_FORMATS',
+      'Added getProtectedSectors(), getSkipTracks(), bamBitMask() format methods',
+      'Added bamMarkSectorFree() function, removing duplicated inline bit manipulation',
+      'Subdirectory support driven by format properties: supportsSubdirs, subdirType, subdirLinked',
+      'DNP: nested subdirectories supported (Add Directory enabled inside subdirs)',
+      'DNP: file paste/import in subdirectories no longer corrupts disk',
+      'DNP: allocation map now walks all directories recursively',
+      'DNP: disk ID change offers to update subdirectory headers',
+      'DNP: disk ID now displays DOS type (1H) like other formats',
+      'Removed all hardcoded format checks (DISK_FORMATS.dnp/d81) from allocation and subdir code',
+    ]},
     { ver: '1.3.28', title: 'Fix directory expansion overwriting BAM/header sectors', items: [
       'Fixed directory expansion in paste/import overwriting BAM and header sectors on D81/DNP',
       'Fixed directory expansion in insert overwriting BAM sectors (missing format variable)',

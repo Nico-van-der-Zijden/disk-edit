@@ -271,6 +271,9 @@ const DISK_FORMATS = {
     entrySize: 32,
     doubleSidedFlag: 0x00,
     fileTypes: [0, 1, 2, 3, 4, 5],  // DEL, SEQ, PRG, USR, REL, CBM
+    supportsSubdirs: true,
+    subdirType: 5,      // CBM partition type
+    subdirLinked: false, // contiguous track block
     sizes: [
       { tracks: 80, bytes: 819200, label: '80 Tracks' },
       { tracks: 80, bytes: 822400, label: '80 Tracks + Errors' },
@@ -586,12 +589,18 @@ const DISK_FORMATS = {
     nameOffset: 0x04,
     nameLength: 16,
     idOffset: 0x16,
-    idLength: 2,
+    idLength: 5,      // 2-byte ID + pad + 2-byte DOS type (same layout as D64)
     maxDirSectors: 222, // sectors 34-255 on track 1
     entriesPerSector: 8,
     entrySize: 32,
     doubleSidedFlag: 0x00,
     fileTypes: [0, 1, 2, 3, 4, 5, 6], // DEL, SEQ, PRG, USR, REL, CBM, DIR
+    supportsSubdirs: true,
+    subdirType: 6,      // DIR type
+    subdirLinked: true,  // header sector + linked dir chain
+    subdirSelfRef: 0x20,   // header offset: self T/S (2 bytes)
+    subdirParentRef: 0x22, // header offset: parent header T/S (2 bytes)
+    subdirParentEntry: 0x24, // header offset: parent dir entry ref (2 bytes)
     sizes: [], // variable size — detected by file size being multiple of 65536
     sectorsPerTrack(t) { return 256; },
     bamTracksRange(numTracks) { return numTracks; },
@@ -693,6 +702,64 @@ const DISK_FORMATS = {
     writeTrackBitmap: function() {},
     initBAM: function() {},
   },
+};
+
+// ── Protected sector helpers (shared defaults) ─────────────────────
+// Returns sector numbers on the given track that must not be used for
+// file data or directory expansion (BAM, header, system sectors).
+function _defaultGetProtectedSectors(track) {
+  var secs = [];
+  for (var i = 0; i < this.bamSectors.length; i++) {
+    if (this.bamSectors[i][0] === track) secs.push(this.bamSectors[i][1]);
+  }
+  if (this.headerTrack === track && secs.indexOf(this.headerSector) === -1) {
+    secs.push(this.headerSector);
+  }
+  return secs;
+}
+
+// Returns object of tracks to skip entirely during file sector allocation.
+function _defaultGetSkipTracks() {
+  var tracks = {};
+  tracks[this.dirTrack] = true;
+  tracks[this.bamTrack] = true;
+  for (var i = 0; i < this.bamSectors.length; i++) {
+    tracks[this.bamSectors[i][0]] = true;
+  }
+  return tracks;
+}
+
+// Returns the bit mask for a sector in the BAM bitmap byte.
+// Default: LSB-first (D64/D71/D81/D80/D82). DNP overrides to MSB-first.
+function _defaultBamBitMask(sector) {
+  return 1 << (sector % 8);
+}
+
+// Assign defaults to all formats, then override for DNP
+(function() {
+  var fmts = Object.keys(DISK_FORMATS);
+  for (var i = 0; i < fmts.length; i++) {
+    var fmt = DISK_FORMATS[fmts[i]];
+    if (!fmt.getProtectedSectors) fmt.getProtectedSectors = _defaultGetProtectedSectors;
+    if (!fmt.getSkipTracks) fmt.getSkipTracks = _defaultGetSkipTracks;
+    if (!fmt.bamBitMask) fmt.bamBitMask = _defaultBamBitMask;
+  }
+})();
+
+// DNP: MSB-first bit order (sector 0 = bit 7, sector 7 = bit 0)
+DISK_FORMATS.dnp.bamBitMask = function(sector) {
+  return 0x80 >> (sector & 7);
+};
+
+// DNP: sectors 0-33 on track 1 are all system (boot + header + BAM + reserved)
+DISK_FORMATS.dnp.getProtectedSectors = function(track) {
+  var secs = _defaultGetProtectedSectors.call(this, track);
+  if (track === 1) {
+    for (var s = 0; s <= 33; s++) {
+      if (secs.indexOf(s) === -1) secs.push(s);
+    }
+  }
+  return secs;
 };
 
 // ── Active format ────────────────────────────────────────────────────
@@ -1032,12 +1099,14 @@ function checkSectorFree(data, bamOff, track, sector) {
 // Clear a sector's bit in the BAM (mark as used) and recalculate the track's free count.
 function bamMarkSectorUsed(data, track, sector, bamOff) {
   var base = getBamBitmapBase(track, bamOff);
-  if (currentFormat === DISK_FORMATS.dnp) {
-    // DNP uses MSB-first bit order
-    data[base + (sector >> 3)] &= ~(0x80 >> (sector & 7));
-  } else {
-    data[base + Math.floor(sector / 8)] &= ~(1 << (sector % 8));
-  }
+  data[base + (sector >> 3)] &= ~currentFormat.bamBitMask(sector);
+  bamRecalcFree(data, track, bamOff);
+}
+
+// Set a sector's bit in the BAM (mark as free) and recalculate the track's free count.
+function bamMarkSectorFree(data, track, sector, bamOff) {
+  var base = getBamBitmapBase(track, bamOff);
+  data[base + (sector >> 3)] |= currentFormat.bamBitMask(sector);
   bamRecalcFree(data, track, bamOff);
 }
 
@@ -2109,22 +2178,27 @@ function createDnpImage(numTracks) {
   // Track 1, Sector 0: boot block (reserved, all zeros)
 
   // Track 1, Sector 1: partition header
+  var fmt = DISK_FORMATS.dnp;
   var hdrOff = 256; // T1/S1
-  data[hdrOff + 0x00] = 0x01; // dir track
-  data[hdrOff + 0x01] = 0x22; // dir sector (34)
-  data[hdrOff + 0x02] = 0x48; // DOS type 'H'
-  for (var i = 0; i < 16; i++) data[hdrOff + 0x04 + i] = 0xA0; // disk name
-  data[hdrOff + 0x16] = 0xA0; data[hdrOff + 0x17] = 0xA0; // disk ID
-  data[hdrOff + 0x18] = 0xA0;
-  data[hdrOff + 0x19] = 0x31; // DOS version '1'
-  data[hdrOff + 0x1A] = 0x48; // format type 'H'
-  data[hdrOff + 0x20] = 0x01; data[hdrOff + 0x21] = 0x01; // root dir header (self)
-  data[hdrOff + 0x22] = 0x00; data[hdrOff + 0x23] = 0x00; // parent header (none)
+  data[hdrOff + 0x00] = fmt.dirTrack;
+  data[hdrOff + 0x01] = fmt.dirSector;
+  data[hdrOff + 0x02] = fmt.dosVersion;
+  for (var i = 0; i < fmt.nameLength; i++) data[hdrOff + fmt.nameOffset + i] = 0xA0; // disk name
+  // Disk ID + pad + DOS type (same layout as D64/D81: 2-byte ID, pad, 2-byte DOS type)
+  data[hdrOff + fmt.idOffset + 0] = 0xA0; // ID byte 1
+  data[hdrOff + fmt.idOffset + 1] = 0xA0; // ID byte 2
+  data[hdrOff + fmt.idOffset + 2] = 0xA0; // pad
+  data[hdrOff + fmt.idOffset + 3] = fmt.dosType.charCodeAt(0);
+  data[hdrOff + fmt.idOffset + 4] = fmt.dosType.charCodeAt(1);
+  data[hdrOff + fmt.subdirSelfRef] = fmt.headerTrack;
+  data[hdrOff + fmt.subdirSelfRef + 1] = fmt.headerSector; // root dir header (self)
+  data[hdrOff + fmt.subdirParentRef] = 0x00;
+  data[hdrOff + fmt.subdirParentRef + 1] = 0x00; // parent header (none)
 
   // Track 1, Sector 2: first BAM sector (has 32-byte header + tracks 1-7 bitmap)
   var bam0Off = 2 * 256;
-  data[bam0Off + 0x02] = 0x48; // DOS type 'H'
-  data[bam0Off + 0x03] = 0xB7; // complement (~$48)
+  data[bam0Off + 0x02] = fmt.dosVersion;
+  data[bam0Off + 0x03] = ~fmt.dosVersion & 0xFF; // complement
   data[bam0Off + 0x04] = 0xA0; data[bam0Off + 0x05] = 0xA0; // disk ID
   data[bam0Off + 0x06] = 0xC0; // I/O byte
   data[bam0Off + 0x08] = numTracks; // last available track
