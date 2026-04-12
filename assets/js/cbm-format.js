@@ -24,6 +24,14 @@ const DISK_FORMATS = {
     entrySize: 32,
     doubleSidedFlag: 0x00,
     fileTypes: [0, 1, 2, 3, 4],  // DEL, SEQ, PRG, USR, REL
+    defaultInterleave: 10,
+    hasBamFreeCounts: true,
+    interleavePresets: [
+      { value: 10, label: '1541 Standard', desc: 'Interleave 10 \u2014 stock CBM DOS, compatible with everything' },
+      { value: 6, label: '1541 Optimized', desc: 'Interleave 6 \u2014 faster on stock hardware, no fast loader needed' },
+      { value: 4, label: 'Fast Loader', desc: 'Interleave 4 \u2014 for SpeedDOS, DolphinDOS, JiffyDOS and similar' },
+    ],
+    interleaveDefault: 1, // index into presets
     sizes: [
       { tracks: 35, bytes: 174848, label: '35 Tracks' },
       { tracks: 35, bytes: 175531, label: '35 Tracks + Errors' },
@@ -122,6 +130,15 @@ const DISK_FORMATS = {
     entrySize: 32,
     doubleSidedFlag: 0x80,
     fileTypes: [0, 1, 2, 3, 4],  // DEL, SEQ, PRG, USR, REL
+    defaultInterleave: 6,
+    hasBamFreeCounts: true,
+    interleavePresets: [
+      { value: 6, label: '1571 Standard', desc: 'Interleave 6 \u2014 stock 1571 DOS, native double-sided mode' },
+      { value: 5, label: '1571 Optimized', desc: 'Interleave 5 \u2014 slightly faster with burst transfer' },
+      { value: 10, label: '1541 Compatible', desc: 'Interleave 10 \u2014 safe for 1541 mode on a 1571' },
+      { value: 4, label: 'Fast Loader', desc: 'Interleave 4 \u2014 for SpeedDOS, JiffyDOS and similar' },
+    ],
+    interleaveDefault: 0,
     sizes: [
       { tracks: 70, bytes: 349696, label: '70 Tracks' },
       { tracks: 70, bytes: 351062, label: '70 Tracks + Errors' },
@@ -274,6 +291,13 @@ const DISK_FORMATS = {
     supportsSubdirs: true,
     subdirType: 5,      // CBM partition type
     subdirLinked: false, // contiguous track block
+    defaultInterleave: 1,
+    hasBamFreeCounts: true,
+    interleavePresets: [
+      { value: 1, label: '1581 Standard', desc: 'Interleave 1 \u2014 stock 1581 burst mode, maximum speed' },
+      { value: 2, label: '1581 Compatible', desc: 'Interleave 2 \u2014 safer for slower interfaces or emulators' },
+    ],
+    interleaveDefault: 0,
     sizes: [
       { tracks: 80, bytes: 819200, label: '80 Tracks' },
       { tracks: 80, bytes: 822400, label: '80 Tracks + Errors' },
@@ -400,6 +424,13 @@ const DISK_FORMATS = {
     entrySize: 32,
     doubleSidedFlag: 0x00,
     fileTypes: [0, 1, 2, 3, 4],
+    defaultInterleave: 6,
+    hasBamFreeCounts: true,
+    interleavePresets: [
+      { value: 6, label: '8050/8250 Standard', desc: 'Interleave 6 \u2014 stock CBM DOS for IEEE-488 drives' },
+      { value: 5, label: '8050/8250 Optimized', desc: 'Interleave 5 \u2014 tighter timing, faster loading' },
+    ],
+    interleaveDefault: 0,
     sizes: [
       { tracks: 77, bytes: 533248, label: '77 Tracks' },
     ],
@@ -496,6 +527,13 @@ const DISK_FORMATS = {
     entrySize: 32,
     doubleSidedFlag: 0x00,
     fileTypes: [0, 1, 2, 3, 4],
+    defaultInterleave: 6,
+    hasBamFreeCounts: true,
+    interleavePresets: [
+      { value: 6, label: '8050/8250 Standard', desc: 'Interleave 6 \u2014 stock CBM DOS for IEEE-488 drives' },
+      { value: 5, label: '8050/8250 Optimized', desc: 'Interleave 5 \u2014 tighter timing, faster loading' },
+    ],
+    interleaveDefault: 0,
     sizes: [
       { tracks: 154, bytes: 1066496, label: '154 Tracks' },
     ],
@@ -601,6 +639,12 @@ const DISK_FORMATS = {
     subdirSelfRef: 0x20,   // header offset: self T/S (2 bytes)
     subdirParentRef: 0x22, // header offset: parent header T/S (2 bytes)
     subdirParentEntry: 0x24, // header offset: parent dir entry ref (2 bytes)
+    defaultInterleave: 1,
+    hasBamFreeCounts: false,
+    interleavePresets: [
+      { value: 1, label: 'CMD Native', desc: 'Interleave 1 \u2014 CMD HD/FD native mode' },
+    ],
+    interleaveDefault: 0,
     sizes: [], // variable size — detected by file size being multiple of 65536
     sectorsPerTrack(t) { return 256; },
     bamTracksRange(numTracks) { return numTracks; },

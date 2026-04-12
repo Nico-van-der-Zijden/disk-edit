@@ -2890,37 +2890,9 @@ document.getElementById('opt-optimize').addEventListener('click', function(e) {
 
   var fmt = currentFormat;
 
-  // Presets per drive type: value, label, description, default flag
-  var presets, defaultPreset;
-  if (fmt === DISK_FORMATS.d81) {
-    presets = [
-      { value: 1, label: '1581 Standard', desc: 'Interleave 1 \u2014 stock 1581 burst mode, maximum speed' },
-      { value: 2, label: '1581 Compatible', desc: 'Interleave 2 \u2014 safer for slower interfaces or emulators' },
-    ];
-    defaultPreset = 0;
-  } else if (fmt === DISK_FORMATS.d71) {
-    presets = [
-      { value: 6, label: '1571 Standard', desc: 'Interleave 6 \u2014 stock 1571 DOS, native double-sided mode' },
-      { value: 5, label: '1571 Optimized', desc: 'Interleave 5 \u2014 slightly faster with burst transfer' },
-      { value: 10, label: '1541 Compatible', desc: 'Interleave 10 \u2014 safe for 1541 mode on a 1571' },
-      { value: 4, label: 'Fast Loader', desc: 'Interleave 4 \u2014 for SpeedDOS, JiffyDOS and similar' },
-    ];
-    defaultPreset = 0;
-  } else if (fmt === DISK_FORMATS.d80 || fmt === DISK_FORMATS.d82) {
-    presets = [
-      { value: 6, label: '8050/8250 Standard', desc: 'Interleave 6 \u2014 stock CBM DOS for IEEE-488 drives' },
-      { value: 5, label: '8050/8250 Optimized', desc: 'Interleave 5 \u2014 tighter timing, faster loading' },
-    ];
-    defaultPreset = 0;
-  } else {
-    // D64
-    presets = [
-      { value: 10, label: '1541 Standard', desc: 'Interleave 10 \u2014 stock CBM DOS, compatible with everything' },
-      { value: 6, label: '1541 Optimized', desc: 'Interleave 6 \u2014 faster on stock hardware, no fast loader needed' },
-      { value: 4, label: 'Fast Loader', desc: 'Interleave 4 \u2014 for SpeedDOS, DolphinDOS, JiffyDOS and similar' },
-    ];
-    defaultPreset = 1;
-  }
+  // Presets from format definition
+  var presets = fmt.interleavePresets || [{ value: fmt.defaultInterleave, label: 'Default', desc: 'Default interleave for this format' }];
+  var defaultPreset = fmt.interleaveDefault || 0;
 
   document.getElementById('modal-title').textContent = 'Optimize Disk';
   var body = document.getElementById('modal-body');
@@ -6906,7 +6878,7 @@ function showGoToSector() {
   row.appendChild(tLabel);
 
   var trackInput = createHexInput({
-    value: currentFormat.bamTrack || 18,
+    value: currentFormat.bamTrack,
     maxBytes: 1,
     validate: function(v) { return v >= 1 && v <= currentTracks; }
   });
@@ -7522,20 +7494,30 @@ function insertFileEntry() {
     s = data[off + 1];
   }
 
-  // No empty slots — allocate a new directory sector on the directory track
-  const dirTrk = ctx.dirTrackNum;
-  const spt = sectorsPerTrack(dirTrk);
-  // Protected sectors (BAM, header, system) — defined per format
-  var protectedSecs = new Set(currentFormat.getProtectedSectors(dirTrk));
-  let newSector = -1;
-  for (let cs = 1; cs < spt; cs++) {
-    if (visited.has(`${dirTrk}:${cs}`)) continue;
-    if (protectedSecs.has(cs)) continue;
-    newSector = cs;
-    break;
-  }
+  // No empty slots — allocate a new directory sector
+  var dirTrk, newSector;
 
-  if (newSector === -1) return -1;
+  if (currentFormat.subdirLinked && currentPartition && currentPartition.dnpDir) {
+    // Linked subdirs: directory can span any track
+    var allocated = buildTrueAllocationMap(currentBuffer);
+    var secList = allocateSectors(allocated, 1);
+    if (secList.length === 0) return -1;
+    dirTrk = secList[0].track;
+    newSector = secList[0].sector;
+  } else {
+    // Standard: allocate on the directory track only
+    dirTrk = ctx.dirTrackNum;
+    const spt = sectorsPerTrack(dirTrk);
+    var protectedSecs = new Set(currentFormat.getProtectedSectors(dirTrk));
+    newSector = -1;
+    for (let cs = 1; cs < spt; cs++) {
+      if (visited.has(`${dirTrk}:${cs}`)) continue;
+      if (protectedSecs.has(cs)) continue;
+      newSector = cs;
+      break;
+    }
+    if (newSector === -1) return -1;
+  }
 
   if (lastOff >= 0) {
     data[lastOff] = dirTrk;
@@ -9659,14 +9641,14 @@ function allocateSectors(allocated, numSectors) {
     var numPartTracks = Math.floor(currentPartition.partSize / 40);
     // Partition's "directory track" is the start track; data goes on tracks 2+ (absolute: st+1, st+2, ...)
     for (var pt = 2; pt <= numPartTracks; pt++) trackOrder.push(st + pt - 1);
-    interleave = 1; // D81 interleave
+    interleave = fmt.defaultInterleave;
   } else {
     var dirTrack = fmt.dirTrack;
     var skipTracks = fmt.getSkipTracks();
     var maxBamTrack = fmt.bamTracksRange(currentTracks);
     for (var t = dirTrack - 1; t >= 1; t--) { if (!skipTracks[t]) trackOrder.push(t); }
     for (var t2 = dirTrack + 1; t2 <= maxBamTrack; t2++) { if (!skipTracks[t2]) trackOrder.push(t2); }
-    interleave = (fmt === DISK_FORMATS.d81) ? 1 : fileInterleave;
+    interleave = fileInterleave;
   }
   var sectorList = [];
   var lastSector = 0;
@@ -9744,7 +9726,8 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData) {
   }
 
   // Reserve a directory entry before writing any data (fail early)
-  var entryOff = findFreeDirEntry(currentBuffer);
+  // Pass allocated map so linked subdir expansion doesn't reuse file sectors
+  var entryOff = findFreeDirEntry(currentBuffer, allocated);
   if (entryOff < 0) {
     showModal('Write Error', ['No free directory entry available.']);
     return false;
@@ -10180,7 +10163,7 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock)
 
 // Find a free directory entry (typeByte === 0x00 with all entry bytes zeroed)
 // Also allocates a new directory sector if needed (like insertFileEntry but without writing an entry)
-function findFreeDirEntry(buffer) {
+function findFreeDirEntry(buffer, preAllocated) {
   var data = new Uint8Array(buffer);
   var fmt = currentFormat;
   var ctx = getDirContext();
@@ -10210,18 +10193,29 @@ function findFreeDirEntry(buffer) {
   }
 
   // No empty slot — allocate new directory sector
-  var dirTrk = ctx.dirTrackNum;
-  var spt = sectorsPerTrack(dirTrk);
-  // Protected sectors (BAM, header, system) — defined per format
-  var protectedSecs = fmt.getProtectedSectors(dirTrk);
-  var newSector = -1;
-  for (var cs = 1; cs < spt; cs++) {
-    if (visited[dirTrk + ':' + cs]) continue;
-    if (protectedSecs.indexOf(cs) !== -1) continue;
-    newSector = cs;
-    break;
+  var dirTrk, newSector;
+
+  if (fmt.subdirLinked && currentPartition && currentPartition.dnpDir) {
+    // Linked subdirs: directory can span any track, use allocateSectors
+    var allocMap = preAllocated || buildTrueAllocationMap(buffer);
+    var secList = allocateSectors(allocMap, 1);
+    if (secList.length === 0) return -1;
+    dirTrk = secList[0].track;
+    newSector = secList[0].sector;
+  } else {
+    // Standard: allocate on the directory track only
+    dirTrk = ctx.dirTrackNum;
+    var spt = sectorsPerTrack(dirTrk);
+    var protectedSecs = fmt.getProtectedSectors(dirTrk);
+    newSector = -1;
+    for (var cs = 1; cs < spt; cs++) {
+      if (visited[dirTrk + ':' + cs]) continue;
+      if (protectedSecs.indexOf(cs) !== -1) continue;
+      newSector = cs;
+      break;
+    }
+    if (newSector === -1) return -1;
   }
-  if (newSector === -1) return -1;
 
   if (lastOff >= 0) {
     data[lastOff] = dirTrk;
@@ -11274,6 +11268,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.30', title: 'Format-driven interleave/BAM, DNP subdir directory expansion', items: [
+      'Interleave presets and defaults moved into DISK_FORMATS definitions',
+      'BAM free count check uses format property instead of DNP comparison',
+      'DNP subdirectory expansion allocates dir sectors from any free track',
+      'Fixed directory expansion collision with file sectors during paste',
+      'Partition validation uses format SPT instead of hardcoded 40',
+      'Removed BAM track fallback value',
+    ]},
     { ver: '1.3.29', title: 'Centralize format properties, DNP subdirectory fixes', items: [
       'Centralized protected sectors, skip tracks, and BAM bit order into DISK_FORMATS',
       'Added getProtectedSectors(), getSkipTracks(), bamBitMask() format methods',

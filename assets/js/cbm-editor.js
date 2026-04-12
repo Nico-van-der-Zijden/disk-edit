@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 29 };
+var APP_VERSION = { major: 1, minor: 3, build: 30 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -273,12 +273,11 @@ function checkBAMIntegrity(buffer) {
   // Check free count vs bitmap bits
   var bamErrors = [];
   var errorTracks = {};
-  var isDnp = fmt === DISK_FORMATS.dnp;
   for (var t = 1; t <= bamTracks; t++) {
     var spt = fmt.sectorsPerTrack(t);
     var storedFree = fmt.readTrackFree(data, bamOff, t);
-    // DNP doesn't store free counts, so skip count comparison
-    if (isDnp) continue;
+    // Skip count comparison for formats without per-track free counts
+    if (!fmt.hasBamFreeCounts) continue;
     var actualFree = 0;
     var bbBase = getBamBitmapBase(t, bamOff);
     var numBytes = Math.ceil(spt / 8);
@@ -899,7 +898,7 @@ function validatePartition(buffer, startTrack, partSize) {
     if (dirVisited.has(key)) { log.push('ERROR: circular directory chain'); break; }
     dirVisited.add(key);
     const relT = dirTrack - startTrack + 1;
-    if (relT < 1 || relT > numPartTracks || dirSector < 0 || dirSector >= 40) {
+    if (relT < 1 || relT > numPartTracks || dirSector < 0 || dirSector >= fmt.sectorsPerTrack(dirTrack)) {
       log.push(`ERROR: illegal directory sector track ${dirTrack} sector ${dirSector}`);
       break;
     }
