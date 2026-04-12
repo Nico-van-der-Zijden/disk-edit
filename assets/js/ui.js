@@ -405,8 +405,6 @@ function renderDisk(info) {
           <span class="dir-footer-label">blocks free.</span>
           <span class="dir-footer-ts" id="footer-ts"></span>
           <span class="dir-footer-tracks">${(function() {
-            var tab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
-            if (tab && tab.cmdFdBuffer) return tab.cmdFdFileName + ' \u2014 ' + tab.name.replace(/.*\[/, '').replace(']', '');
             return currentFormat.name + ' ' + currentTracks + ' tracks';
           })()}</span>
           <span class="dir-footer-health" id="footer-health" title="Disk health"></span>
@@ -1551,24 +1549,10 @@ function startEditing(el) {
 
 // ── Save helpers ──────────────────────────────────────────────────────
 function getSaveBuffer() {
-  // If this tab is a partition from a CMD FD/HD image, write partition back into container
-  var tab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
-  if (tab && tab.cmdFdBuffer && tab.cmdFdPartOffset >= 0) {
-    var container = new Uint8Array(tab.cmdFdBuffer.byteLength || tab.cmdFdBuffer.length);
-    container.set(new Uint8Array(tab.cmdFdBuffer));
-    var partData = new Uint8Array(currentBuffer);
-    var copyLen = Math.min(partData.length, tab.cmdFdPartSize);
-    container.set(partData.subarray(0, copyLen), tab.cmdFdPartOffset);
-    // Update the stored container too
-    tab.cmdFdBuffer = container.buffer;
-    return container.buffer;
-  }
   return currentBuffer;
 }
 
 function getSaveFileName() {
-  var tab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
-  if (tab && tab.cmdFdFileName) return tab.cmdFdFileName;
   return currentFileName;
 }
 
@@ -1587,7 +1571,7 @@ function updateMenuState() {
   document.getElementById('opt-close').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-close-all').classList.toggle('disabled', tabs.length === 0);
   var activeTab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
-  document.getElementById('opt-change-partition').classList.toggle('disabled', !activeTab || !activeTab.cmdFdBuffer);
+  document.getElementById('opt-change-partition').classList.toggle('disabled', true); // CMD container support removed
   document.getElementById('opt-save').classList.toggle('disabled', !hasDisk || !currentFileName || tape);
   document.getElementById('opt-save-as').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-validate').classList.toggle('disabled', !hasDisk || tape);
@@ -1889,33 +1873,9 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
       }
     }
 
-    // DHD: prompt for number of partitions
-    if (formatKey === 'dhd') {
-      var numStr = await showInputModal('Number of 1581 partitions (1-31)', '4');
-      if (numStr === null) return;
-      var numParts = parseInt(numStr, 10);
-      if (isNaN(numParts) || numParts < 1 || numParts > 31) {
-        showModal('New DHD', ['Invalid number. Enter 1 to 31.']);
-        return;
-      }
-      tracks = numParts;
-    }
-
     var buf = createEmptyDisk(formatKey, tracks);
     if (!buf) return;
     var fname = null;
-
-    // CMD FD/HD: run through partition picker to extract the formatted partition
-    var origCmdBufNew = null, origCmdNameNew = null;
-    if (formatKey === 'd1m' || formatKey === 'd2m' || formatKey === 'd4m' || formatKey === 'dhd') {
-      origCmdBufNew = buf;
-      origCmdNameNew = formatKey.toUpperCase();
-      var fmtName = formatKey.toUpperCase();
-      var picked = await showCmdFdPartitionPicker(buf, fmtName, fmtName);
-      if (!picked) return;
-      buf = picked.buffer;
-      fname = picked.name;
-    }
 
     currentBuffer = buf;
     currentFileName = fname;
@@ -1924,7 +1884,6 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
     newDiskCount++;
     var tabName = fname || 'New Disk ' + newDiskCount;
     var tab = createTab(tabName, buf, fname);
-    if (origCmdBufNew) { tab.cmdFdBuffer = origCmdBufNew; tab.cmdFdFileName = origCmdNameNew; tab.cmdFdPartOffset = picked.partOffset; tab.cmdFdPartSize = picked.partSize; }
     activeTabId = tab.id;
     const info = parseDisk(buf);
     renderDisk(info);
@@ -2004,32 +1963,7 @@ document.getElementById('opt-close-all').addEventListener('click', (e) => {
 document.getElementById('opt-change-partition').addEventListener('click', async (e) => {
   e.stopPropagation();
   closeMenus();
-  var tab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
-  if (!tab || !tab.cmdFdBuffer) return;
-
-  var fmtName = /\.dhd$/i.test(tab.cmdFdFileName || '') ? 'DHD' : undefined;
-  var picked = await showCmdFdPartitionPicker(tab.cmdFdBuffer, tab.cmdFdFileName, fmtName, true);
-  if (!picked) return;
-
-  // Replace current tab's buffer with the new partition
-  currentBuffer = picked.buffer;
-  currentFileName = picked.name;
-  currentPartition = null;
-  selectedEntryIndex = -1;
-  parseDisk(currentBuffer);
-
-  tab.buffer = currentBuffer;
-  tab.fileName = currentFileName;
-  tab.name = picked.name;
-  tab.format = currentFormat;
-  tab.tracks = currentTracks;
-  tab.partition = null;
-  tab.cmdFdPartOffset = picked.partOffset;
-  tab.cmdFdPartSize = picked.partSize;
-  tab.dirty = false;
-
-  var info = parseCurrentDir(currentBuffer);
-  renderDisk(info);
+  // CMD container support removed (DHD too large for browser use)
   renderTabs();
   updateMenuState();
 });
@@ -2047,16 +1981,11 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
-  var tab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
-  var isCmdContainer = tab && tab.cmdFdBuffer && tab.cmdFdPartOffset >= 0;
-  var ext = isCmdContainer ? (/\.dhd$/i.test(tab.cmdFdFileName) ? '.dhd' : '.d' + tab.cmdFdFileName.match(/\.d(\w+)$/i)?.[1] || 'd81') : (currentFormat.ext || '.d64');
-  var defaultName = isCmdContainer ? (tab.cmdFdFileName || ('disk' + ext)) : (currentFileName || ('disk' + ext));
+  var ext = currentFormat.ext || '.d64';
+  var defaultName = currentFileName || ('disk' + ext);
   const fileName = await showInputModal('Save As', defaultName);
   if (!fileName) return;
-  if (isCmdContainer) {
-    tab.cmdFdFileName = fileName;
-    downloadD64(getSaveBuffer(), fileName);
-  } else {
+  {
     currentFileName = fileName.endsWith(ext) ? fileName : fileName + ext;
     downloadD64(currentBuffer, currentFileName);
   }
@@ -9560,6 +9489,12 @@ function buildTrueAllocationMap(buffer) {
       var ps = fmt.getProtectedSectors(parseInt(st2));
       for (var psi = 0; psi < ps.length; psi++) allocated[st2 + ':' + ps[psi]] = true;
     }
+    // Also mark protected sectors on non-skip tracks (e.g. D1M/D2M/D4M system partition on track 26)
+    for (var et = 1; et <= currentTracks; et++) {
+      if (sysTracks[et]) continue; // already handled above
+      var eps = fmt.getProtectedSectors(et);
+      for (var epi = 0; epi < eps.length; epi++) allocated[et + ':' + eps[epi]] = true;
+    }
   }
 
   // Walk a directory chain, mark its sectors and all file chains as allocated.
@@ -10910,26 +10845,12 @@ fileInput.addEventListener('change', () => {
         var buf = results[i].buffer;
         var fname = results[i].name;
 
-        // CMD FD/HD images: show partition picker
-        var origCmdBuf = null, origCmdName = null;
-        var isCmdFd = isCmdImage(buf) || /\.dhd$/i.test(fname);
-        if (isCmdFd) {
-          origCmdBuf = buf;
-          origCmdName = fname;
-          var fmtName = /\.dhd$/i.test(fname) ? 'DHD' : undefined;
-          var picked = await showCmdFdPartitionPicker(buf, fname, fmtName);
-          if (!picked) continue; // user cancelled
-          buf = picked.buffer;
-          fname = picked.name;
-        }
-
         currentBuffer = buf;
         currentFileName = fname;
         currentPartition = null;
         selectedEntryIndex = -1;
         parseDisk(currentBuffer);
         var tab = createTab(fname, currentBuffer, fname);
-        if (origCmdBuf) { tab.cmdFdBuffer = origCmdBuf; tab.cmdFdFileName = origCmdName; tab.cmdFdPartOffset = picked.partOffset; tab.cmdFdPartSize = picked.partSize; }
         activeTabId = tab.id;
       } catch (err) {
         showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
@@ -10968,7 +10889,7 @@ document.addEventListener('drop', function(e) {
   var files = Array.from(e.dataTransfer.files);
   if (files.length === 0) return;
 
-  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dhd', '.dnp'];
+  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp'];
   var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
   var diskFiles = [];
   var importFiles = [];
@@ -10997,25 +10918,12 @@ document.addEventListener('drop', function(e) {
           var buf = results[i].buffer;
           var fname = results[i].name;
 
-          var origCmdBuf2 = null, origCmdName2 = null;
-          var isCmdFd2 = isCmdImage(buf) || /\.dhd$/i.test(fname);
-          if (isCmdFd2) {
-            origCmdBuf2 = buf;
-            origCmdName2 = fname;
-            var fmtName2 = /\.dhd$/i.test(fname) ? 'DHD' : undefined;
-            var picked = await showCmdFdPartitionPicker(buf, fname, fmtName2);
-            if (!picked) continue;
-            buf = picked.buffer;
-            fname = picked.name;
-          }
-
           currentBuffer = buf;
           currentFileName = fname;
           currentPartition = null;
           selectedEntryIndex = -1;
           parseDisk(currentBuffer);
           var tab = createTab(fname, currentBuffer, fname);
-          if (origCmdBuf2) { tab.cmdFdBuffer = origCmdBuf2; tab.cmdFdFileName = origCmdName2; tab.cmdFdPartOffset = picked.partOffset; tab.cmdFdPartSize = picked.partSize; }
           activeTabId = tab.id;
         } catch (err) {
           showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
@@ -11108,7 +11016,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '<div style="font-size:11px;color:' + C64_COLORS[13] + ';margin-top:4px"><i class="fa-solid fa-cannabis"></i> OOK EEN TREKJE? <i class="fa-solid fa-joint"></i></div>' +
     '</div>' +
     '<div class="text-base line-tall">' +
-      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), G64 (GCR), DNP (CMD), D1M/D2M/D4M (CMD FD), DHD (CMD HD), X64, T64 (tape), TAP (raw tape), CVT (GEOS)<br>' +
+      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), G64 (GCR), DNP (CMD), D1M/D2M/D4M (CMD FD), X64, T64 (tape), TAP (raw tape), CVT (GEOS)<br>' +
       '<b>Features:</b><br>' +
       '&bull; Directory editing: rename, insert, remove, sort, align, lock, splat<br>' +
       '&bull; Hex sector editor with track/sector navigation and search highlighting<br>' +
@@ -11284,6 +11192,17 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.32', title: 'D1M/D2M/D4M as native CMD format, remove DHD', items: [
+      'D1M/D2M/D4M: proper DISK_FORMATS definitions as CMD native partitions',
+      'D1M (FD-2000 DD): 81 tracks, 40 sectors/track, 829 KB',
+      'D2M (FD-2000 HD): 81 tracks, 80 sectors/track, 1.6 MB',
+      'D4M (FD-4000 ED): 81 tracks, 160 sectors/track, 3.2 MB',
+      'System partition at track 26 with DevBlock and partition directory',
+      'BAM, subdirectories, validate, integrity check all work correctly',
+      'Removed DHD (CMD Hard Drive) support \u2014 files too large for browser',
+      'Removed CMD container/partition-picker infrastructure',
+      'Fixed getBamBitmapBase to use isSectorFree presence for CMD native detection',
+    ]},
     { ver: '1.3.31', title: 'Fix DNP BAM corruption, validate, and integrity check', items: [
       'Fixed BAM writes going to wrong offset inside DNP subdirectories',
       'Validate and BAM integrity check now recurse into linked subdirectories',

@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 31 };
+var APP_VERSION = { major: 1, minor: 3, build: 32 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -288,6 +288,15 @@ function checkBAMIntegrity(buffer) {
 
   // Start from root directory
   walkIntegrityDir(fmt.dirTrack, fmt.dirSector, 'Directory');
+
+  // Mark format-specific system sectors as owned (e.g. D1M/D2M/D4M track 26)
+  for (var pst = 1; pst <= currentTracks; pst++) {
+    if (pst === fmt.dirTrack) continue; // dir track already skipped in orphan check
+    var protSecs = fmt.getProtectedSectors(pst);
+    for (var psi2 = 0; psi2 < protSecs.length; psi2++) {
+      sectorOwner[pst + ':' + protSecs[psi2]] = 'System';
+    }
+  }
 
   // Check free count vs bitmap bits
   var bamErrors = [];
@@ -706,10 +715,9 @@ function validateDisk(buffer) {
   }
 
   // Mark all system sectors (BAM + header + format-specific) as allocated
-  var sysTracks = fmt.getSkipTracks();
-  for (var stk in sysTracks) {
-    var ps = fmt.getProtectedSectors(parseInt(stk));
-    for (var psi = 0; psi < ps.length; psi++) allocated[parseInt(stk)][ps[psi]] = 1;
+  for (var stk = 1; stk <= numTracks; stk++) {
+    var ps = fmt.getProtectedSectors(stk);
+    for (var psi = 0; psi < ps.length; psi++) allocated[stk][ps[psi]] = 1;
   }
 
   function followChain(startTrack, startSector, label) {

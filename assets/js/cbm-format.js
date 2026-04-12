@@ -685,6 +685,222 @@ const DISK_FORMATS = {
     initBAM() {},
   },
 
+  // D1M — CMD FD-2000 Double Density (81 tracks, 40 sectors/track)
+  d1m: {
+    name: 'D1M',
+    ext: '.d1m',
+    dirTrack: 1,
+    dirSector: 34,
+    headerTrack: 1,
+    headerSector: 1,
+    bamTrack: 1,
+    bamSector: 1,
+    bamSectors: [[1,1]],
+    dosVersion: 0x48,
+    dosType: '1H',
+    nameOffset: 0x04,
+    nameLength: 16,
+    idOffset: 0x16,
+    idLength: 5,
+    maxDirSectors: 6, // sectors 34-39 on track 1 (40 SPT)
+    entriesPerSector: 8,
+    entrySize: 32,
+    doubleSidedFlag: 0x00,
+    fileTypes: [0, 1, 2, 3, 4, 5, 6],
+    supportsSubdirs: true,
+    subdirType: 6,
+    subdirLinked: true,
+    subdirSelfRef: 0x20,
+    subdirParentRef: 0x22,
+    subdirParentEntry: 0x24,
+    defaultInterleave: 1,
+    hasBamFreeCounts: false,
+    interleavePresets: [
+      { value: 1, label: 'FD-2000 Standard', desc: 'Interleave 1 \u2014 CMD FD-2000 native mode' },
+    ],
+    interleaveDefault: 0,
+    sizes: [
+      { tracks: 81, bytes: 829440, label: '81 Tracks' },
+      { tracks: 81, bytes: 832680, label: '81 Tracks + Errors' },
+    ],
+    sectorsPerTrack(t) { return 40; },
+    bamTracksRange(numTracks) { return numTracks; },
+    _bamBase(track) {
+      var bamSec = 2 + (track >> 3);
+      var bamByteOff = (track & 7) * 32;
+      return sectorOffset(1, bamSec) + bamByteOff;
+    },
+    isSectorFree(data, bamOff, track, sector) {
+      var base = this._bamBase(track);
+      if (base < 0 || base + 32 > data.length) return false;
+      return (data[base + (sector >> 3)] & (0x80 >> (sector & 7))) !== 0;
+    },
+    readTrackFree(data, bamOff, track) {
+      var base = this._bamBase(track);
+      if (base < 0 || base + 32 > data.length) return 0;
+      var spt = this.sectorsPerTrack(track);
+      var numBytes = Math.ceil(spt / 8);
+      var free = 0;
+      for (var i = 0; i < numBytes; i++) {
+        var b = data[base + i];
+        while (b) { free += b & 1; b >>= 1; }
+      }
+      return free;
+    },
+    writeTrackFree() {},
+    readTrackBitmap(data, bamOff, track) {
+      var base = this._bamBase(track);
+      if (base < 0 || base + 32 > data.length) return 0;
+      return data[base] | (data[base+1] << 8) | (data[base+2] << 16) | ((data[base+3] << 24) >>> 0);
+    },
+    writeTrackBitmap() {},
+    initBAM() {},
+  },
+
+  // D2M — CMD FD-2000 High Density (81 tracks, 80 sectors/track)
+  d2m: {
+    name: 'D2M',
+    ext: '.d2m',
+    dirTrack: 1,
+    dirSector: 34,
+    headerTrack: 1,
+    headerSector: 1,
+    bamTrack: 1,
+    bamSector: 1,
+    bamSectors: [[1,1]],
+    dosVersion: 0x48,
+    dosType: '1H',
+    nameOffset: 0x04,
+    nameLength: 16,
+    idOffset: 0x16,
+    idLength: 5,
+    maxDirSectors: 46, // sectors 34-79 on track 1 (80 SPT)
+    entriesPerSector: 8,
+    entrySize: 32,
+    doubleSidedFlag: 0x00,
+    fileTypes: [0, 1, 2, 3, 4, 5, 6],
+    supportsSubdirs: true,
+    subdirType: 6,
+    subdirLinked: true,
+    subdirSelfRef: 0x20,
+    subdirParentRef: 0x22,
+    subdirParentEntry: 0x24,
+    defaultInterleave: 1,
+    hasBamFreeCounts: false,
+    interleavePresets: [
+      { value: 1, label: 'FD-2000 Standard', desc: 'Interleave 1 \u2014 CMD FD-2000 native mode' },
+    ],
+    interleaveDefault: 0,
+    sizes: [
+      { tracks: 81, bytes: 1658880, label: '81 Tracks' },
+      { tracks: 81, bytes: 1665360, label: '81 Tracks + Errors' },
+    ],
+    sectorsPerTrack(t) { return 80; },
+    bamTracksRange(numTracks) { return numTracks; },
+    _bamBase(track) {
+      var bamSec = 2 + (track >> 3);
+      var bamByteOff = (track & 7) * 32;
+      return sectorOffset(1, bamSec) + bamByteOff;
+    },
+    isSectorFree(data, bamOff, track, sector) {
+      var base = this._bamBase(track);
+      if (base < 0 || base + 32 > data.length) return false;
+      return (data[base + (sector >> 3)] & (0x80 >> (sector & 7))) !== 0;
+    },
+    readTrackFree(data, bamOff, track) {
+      var base = this._bamBase(track);
+      if (base < 0 || base + 32 > data.length) return 0;
+      var spt = this.sectorsPerTrack(track);
+      var numBytes = Math.ceil(spt / 8);
+      var free = 0;
+      for (var i = 0; i < numBytes; i++) {
+        var b = data[base + i];
+        while (b) { free += b & 1; b >>= 1; }
+      }
+      return free;
+    },
+    writeTrackFree() {},
+    readTrackBitmap(data, bamOff, track) {
+      var base = this._bamBase(track);
+      if (base < 0 || base + 32 > data.length) return 0;
+      return data[base] | (data[base+1] << 8) | (data[base+2] << 16) | ((data[base+3] << 24) >>> 0);
+    },
+    writeTrackBitmap() {},
+    initBAM() {},
+  },
+
+  // D4M — CMD FD-4000 Extra Density (81 tracks, 160 sectors/track)
+  d4m: {
+    name: 'D4M',
+    ext: '.d4m',
+    dirTrack: 1,
+    dirSector: 34,
+    headerTrack: 1,
+    headerSector: 1,
+    bamTrack: 1,
+    bamSector: 1,
+    bamSectors: [[1,1]],
+    dosVersion: 0x48,
+    dosType: '1H',
+    nameOffset: 0x04,
+    nameLength: 16,
+    idOffset: 0x16,
+    idLength: 5,
+    maxDirSectors: 126, // sectors 34-159 on track 1 (160 SPT)
+    entriesPerSector: 8,
+    entrySize: 32,
+    doubleSidedFlag: 0x00,
+    fileTypes: [0, 1, 2, 3, 4, 5, 6],
+    supportsSubdirs: true,
+    subdirType: 6,
+    subdirLinked: true,
+    subdirSelfRef: 0x20,
+    subdirParentRef: 0x22,
+    subdirParentEntry: 0x24,
+    defaultInterleave: 1,
+    hasBamFreeCounts: false,
+    interleavePresets: [
+      { value: 1, label: 'FD-4000 Standard', desc: 'Interleave 1 \u2014 CMD FD-4000 native mode' },
+    ],
+    interleaveDefault: 0,
+    sizes: [
+      { tracks: 81, bytes: 3317760, label: '81 Tracks' },
+      { tracks: 81, bytes: 3330720, label: '81 Tracks + Errors' },
+    ],
+    sectorsPerTrack(t) { return 160; },
+    bamTracksRange(numTracks) { return numTracks; },
+    _bamBase(track) {
+      var bamSec = 2 + (track >> 3);
+      var bamByteOff = (track & 7) * 32;
+      return sectorOffset(1, bamSec) + bamByteOff;
+    },
+    isSectorFree(data, bamOff, track, sector) {
+      var base = this._bamBase(track);
+      if (base < 0 || base + 32 > data.length) return false;
+      return (data[base + (sector >> 3)] & (0x80 >> (sector & 7))) !== 0;
+    },
+    readTrackFree(data, bamOff, track) {
+      var base = this._bamBase(track);
+      if (base < 0 || base + 32 > data.length) return 0;
+      var spt = this.sectorsPerTrack(track);
+      var numBytes = Math.ceil(spt / 8);
+      var free = 0;
+      for (var i = 0; i < numBytes; i++) {
+        var b = data[base + i];
+        while (b) { free += b & 1; b >>= 1; }
+      }
+      return free;
+    },
+    writeTrackFree() {},
+    readTrackBitmap(data, bamOff, track) {
+      var base = this._bamBase(track);
+      if (base < 0 || base + 32 > data.length) return 0;
+      return data[base] | (data[base+1] << 8) | (data[base+2] << 16) | ((data[base+3] << 24) >>> 0);
+    },
+    writeTrackBitmap() {},
+    initBAM() {},
+  },
+
   // TAP tape image (read-only, raw pulse data)
   tap: {
     name: 'TAP',
@@ -790,13 +1006,10 @@ function _defaultBamBitMask(sector) {
   }
 })();
 
-// DNP: MSB-first bit order (sector 0 = bit 7, sector 7 = bit 0)
-DISK_FORMATS.dnp.bamBitMask = function(sector) {
-  return 0x80 >> (sector & 7);
-};
-
-// DNP: sectors 0-33 on track 1 are all system (boot + header + BAM + reserved)
-DISK_FORMATS.dnp.getProtectedSectors = function(track) {
+// CMD native formats: MSB-first bit order (sector 0 = bit 7, sector 7 = bit 0)
+// Sectors 0-33 on track 1 are system (boot + header + BAM + reserved)
+var _cmdBamBitMask = function(sector) { return 0x80 >> (sector & 7); };
+var _cmdGetProtectedSectors = function(track) {
   var secs = _defaultGetProtectedSectors.call(this, track);
   if (track === 1) {
     for (var s = 0; s <= 33; s++) {
@@ -805,6 +1018,23 @@ DISK_FORMATS.dnp.getProtectedSectors = function(track) {
   }
   return secs;
 };
+['dnp', 'd1m', 'd2m', 'd4m'].forEach(function(k) {
+  DISK_FORMATS[k].bamBitMask = _cmdBamBitMask;
+  DISK_FORMATS[k].getProtectedSectors = _cmdGetProtectedSectors;
+});
+
+// D1M/D2M/D4M: also protect system partition sectors on track 26
+var _cmdFdGetProtectedSectors = function(track) {
+  var secs = _cmdGetProtectedSectors.call(this, track);
+  if (track === 26) {
+    // System partition: sector 5 (DevBlock) + sectors 8-11 (partition directory)
+    [5, 8, 9, 10, 11].forEach(function(s) { if (secs.indexOf(s) === -1) secs.push(s); });
+  }
+  return secs;
+};
+['d1m', 'd2m', 'd4m'].forEach(function(k) {
+  DISK_FORMATS[k].getProtectedSectors = _cmdFdGetProtectedSectors;
+});
 
 // ── Active format ────────────────────────────────────────────────────
 var currentFormat = DISK_FORMATS.d64;
@@ -989,14 +1219,9 @@ function extractGCRSector(trackData, trackSize, track, sector) {
 }
 
 // ── CMD FD partition table reader ─────────────────────────────────────
-var CMD_FD_SIZES = {
-  829440: { name: 'D1M', spt: 40 },
-  832680: { name: 'D1M', spt: 40 },
-  1658880: { name: 'D2M', spt: 80 },
-  1665360: { name: 'D2M', spt: 80 },
-  3317760: { name: 'D4M', spt: 160 },
-  3330720: { name: 'D4M', spt: 160 },
-};
+// CMD_FD_SIZES is now only used for DHD (CMD Hard Drive) container detection.
+// D1M/D2M/D4M are detected via DISK_FORMATS size tables as native CMD formats.
+var CMD_FD_SIZES = {};
 
 var CMD_PART_TYPES = { 0: 'Empty', 1: 'Native', 2: '1541', 3: '1571', 4: '1581', 5: 'System' };
 
@@ -1121,8 +1346,8 @@ function getBamBitmapBase(track, bamOff) {
     return bamOff + 256 + 0x10 + (relTrack - 41) * 6 + 1;
   }
   var fmt = currentFormat;
-  if (fmt === DISK_FORMATS.dnp) return fmt._bamBase(track);
-  if (fmt === DISK_FORMATS.d81) return fmt._bamBase(bamOff, track) + 1;
+  if (fmt.isSectorFree) return fmt._bamBase(track); // CMD native (DNP/D1M/D2M/D4M): own BAM layout
+  if (fmt._bamBase) return fmt._bamBase(bamOff, track) + 1; // D81: BAM base + 1 (skip free count byte)
   if (fmt === DISK_FORMATS.d71 && track > 35) return fmt._bam2Off(bamOff) + (track - 36) * 3;
   if (fmt === DISK_FORMATS.d80 || fmt === DISK_FORMATS.d82) return fmt._bamEntryBase(bamOff, track) + 1;
   return bamOff + 4 * track + 1;
@@ -2176,14 +2401,9 @@ function parsePartition(buffer, startTrack, partSize) {
 
 // ── Create empty disk image ──────────────────────────────────────────
 function createEmptyDisk(formatKey, numTracks) {
-  // CMD FD images: create with partition table + default 1581 partition
-  if (formatKey === 'd1m' || formatKey === 'd2m' || formatKey === 'd4m' || formatKey === 'dhd') {
-    return createCmdFdImage(formatKey, numTracks);
-  }
-
-  // DNP: create a native CMD partition
-  if (formatKey === 'dnp') {
-    return createDnpImage(numTracks || 10);
+  // CMD native formats: DNP, D1M, D2M, D4M
+  if (formatKey === 'dnp' || formatKey === 'd1m' || formatKey === 'd2m' || formatKey === 'd4m') {
+    return createCmdNativeImage(formatKey, numTracks);
   }
 
   const fmt = DISK_FORMATS[formatKey || 'd64'];
@@ -2215,131 +2435,128 @@ function createEmptyDisk(formatKey, numTracks) {
   return data.buffer;
 }
 
-function createDnpImage(numTracks) {
-  // DNP: 256 sectors per track, 256 bytes per sector
-  var size = numTracks * 256 * 256;
+function createCmdNativeImage(formatKey, numTracks) {
+  var fmt = DISK_FORMATS[formatKey] || DISK_FORMATS.dnp;
+  var spt = fmt.sectorsPerTrack(1);
+  numTracks = numTracks || fmt.sizes[0].tracks;
+  var size = numTracks * spt * 256;
   var data = new Uint8Array(size);
 
-  // Track 1, Sector 0: boot block (reserved, all zeros)
-
-  // Track 1, Sector 1: partition header
-  var fmt = DISK_FORMATS.dnp;
-  var hdrOff = 256; // T1/S1
+  // Track 1, Sector 1: partition header (track 1 starts at offset 0)
+  var hdrOff = 1 * 256;
   data[hdrOff + 0x00] = fmt.dirTrack;
   data[hdrOff + 0x01] = fmt.dirSector;
   data[hdrOff + 0x02] = fmt.dosVersion;
-  for (var i = 0; i < fmt.nameLength; i++) data[hdrOff + fmt.nameOffset + i] = 0xA0; // disk name
-  // Disk ID + pad + DOS type (same layout as D64/D81: 2-byte ID, pad, 2-byte DOS type)
-  data[hdrOff + fmt.idOffset + 0] = 0xA0; // ID byte 1
-  data[hdrOff + fmt.idOffset + 1] = 0xA0; // ID byte 2
-  data[hdrOff + fmt.idOffset + 2] = 0xA0; // pad
+  for (var i = 0; i < fmt.nameLength; i++) data[hdrOff + fmt.nameOffset + i] = 0xA0;
+  data[hdrOff + fmt.idOffset + 0] = 0xA0;
+  data[hdrOff + fmt.idOffset + 1] = 0xA0;
+  data[hdrOff + fmt.idOffset + 2] = 0xA0;
   data[hdrOff + fmt.idOffset + 3] = fmt.dosType.charCodeAt(0);
   data[hdrOff + fmt.idOffset + 4] = fmt.dosType.charCodeAt(1);
   data[hdrOff + fmt.subdirSelfRef] = fmt.headerTrack;
-  data[hdrOff + fmt.subdirSelfRef + 1] = fmt.headerSector; // root dir header (self)
+  data[hdrOff + fmt.subdirSelfRef + 1] = fmt.headerSector;
   data[hdrOff + fmt.subdirParentRef] = 0x00;
-  data[hdrOff + fmt.subdirParentRef + 1] = 0x00; // parent header (none)
+  data[hdrOff + fmt.subdirParentRef + 1] = 0x00;
 
-  // Track 1, Sector 2: first BAM sector (has 32-byte header + tracks 1-7 bitmap)
+  // Track 1, Sector 2: first BAM sector (32-byte header + tracks 1-7 bitmap)
   var bam0Off = 2 * 256;
   data[bam0Off + 0x02] = fmt.dosVersion;
-  data[bam0Off + 0x03] = ~fmt.dosVersion & 0xFF; // complement
-  data[bam0Off + 0x04] = 0xA0; data[bam0Off + 0x05] = 0xA0; // disk ID
+  data[bam0Off + 0x03] = ~fmt.dosVersion & 0xFF;
+  data[bam0Off + 0x04] = 0xA0; data[bam0Off + 0x05] = 0xA0;
   data[bam0Off + 0x06] = 0xC0; // I/O byte
-  data[bam0Off + 0x08] = numTracks; // last available track
-  // Slot 0 (offset 0-31) is the header above
-  // Slots 1-7 (offset 32-255) are tracks 1-7 bitmap, set to $FF (all free)
+  data[bam0Off + 0x08] = numTracks;
+  // Slots 1-7 (offset 32-255): tracks 1-7 bitmap, all free
   for (var b = 32; b < 256; b++) data[bam0Off + b] = 0xFF;
 
-  // Track 1, Sectors 3-33: remaining BAM sectors (NO header, 8 tracks each at offset 0)
+  // Track 1, Sectors 3-33: remaining BAM sectors (8 tracks each, no header)
   for (var s = 3; s <= 33; s++) {
     var sOff = s * 256;
     for (var b2 = 0; b2 < 256; b2++) data[sOff + b2] = 0xFF;
   }
 
-  // Mark track 1 sectors 0-34 as used (MSB-first bit order!)
-  // Track 1 bitmap is at sector 2, offset 32 (slot 1)
-  var t1bm = bam0Off + 32;
+  // Mark track 1 sectors 0-34 as used in BAM (MSB-first bit order)
+  var t1bm = bam0Off + 32; // track 1 bitmap at sector 2 offset 32
   for (var us = 0; us <= 34; us++) {
-    data[t1bm + (us >> 3)] &= ~(0x80 >> (us & 7)); // MSB-first
+    data[t1bm + (us >> 3)] &= ~(0x80 >> (us & 7));
+  }
+
+  // Clear unused BAM bits for tracks with fewer than 256 sectors
+  // (D1M: 40 spt, D2M: 80 spt, D4M: 160 spt — unused bits should be 0)
+  if (spt < 256) {
+    for (var bt = 1; bt <= numTracks; bt++) {
+      var bamSec = 2 + (bt >> 3);
+      var bamSlotOff = bamSec * 256 + (bt & 7) * 32;
+      var usedBytes = Math.ceil(spt / 8);
+      // Clear bits for sectors >= spt in the last used byte
+      if (spt % 8 !== 0) {
+        var lastByte = usedBytes - 1;
+        var validBits = spt % 8;
+        // MSB-first: keep top 'validBits' bits, clear the rest
+        var mask = 0xFF << (8 - validBits);
+        if (bt !== 1) data[bamSlotOff + lastByte] &= mask; // track 1 already handled above
+      }
+      // Zero out padding bytes beyond the last used byte
+      for (var pb = usedBytes; pb < 32; pb++) {
+        data[bamSlotOff + pb] = 0x00;
+      }
+    }
   }
 
   // Track 1, Sector 34: first directory sector
   var dirOff = 34 * 256;
   data[dirOff + 0] = 0x00; data[dirOff + 1] = 0xFF;
 
-  return data.buffer;
-}
+  // D1M/D2M/D4M: write system partition on track 26 and mark sectors used in BAM
+  if (formatKey !== 'dnp' && numTracks >= 26) {
+    var t26off = 25 * spt * 256; // track 26 base offset (tracks are 1-based, so track 26 = offset 25*spt*256)
 
-function createCmdFdImage(formatKey, requestedParts) {
-  var spt, totalSize;
-  if (formatKey === 'd1m') { spt = 40; totalSize = 829440; }
-  else if (formatKey === 'd2m') { spt = 80; totalSize = 1658880; }
-  else if (formatKey === 'd4m') { spt = 160; totalSize = 3317760; }
-  else {
-    // DHD: size based on requested partitions
-    var dhdParts = requestedParts || 4;
-    spt = 256;
-    totalSize = spt * 256 + dhdParts * 819200; // system track + N partitions
-  }
+    // Sector 5: DevBlock (device information)
+    var devOff = t26off + 5 * 256;
+    for (var di = 0; di < 256; di++) data[devOff + di] = 0xFF; // filled with $FF
+    data[devOff + 0x00] = 0x43; // 'C' — CMD signature
+    data[devOff + 0x01] = 0x4D; // 'M'
+    data[devOff + 0x02] = 0x44; // 'D'
+    data[devOff + 0x04] = 0x08; // default device number (8)
+    data[devOff + 0x05] = 0x01; // default partition (1)
 
-  var data = new Uint8Array(totalSize);
-  var d81 = DISK_FORMATS.d81;
-  var partSize1581 = 819200; // bytes per 1581 partition
+    // Sectors 8-11: system partition directory (empty, $00-filled)
+    for (var sp = 8; sp <= 11; sp++) {
+      var spOff = t26off + sp * 256;
+      for (var spi = 0; spi < 256; spi++) data[spOff + spi] = 0x00;
+    }
+    // Sector 8: link to sector 9
+    data[t26off + 8 * 256 + 0] = 26; // next dir sector track
+    data[t26off + 8 * 256 + 1] = 9;
+    // Sector 9: link to sector 10
+    data[t26off + 9 * 256 + 0] = 26;
+    data[t26off + 9 * 256 + 1] = 10;
+    // Sector 10: link to sector 11
+    data[t26off + 10 * 256 + 0] = 26;
+    data[t26off + 10 * 256 + 1] = 11;
+    // Sector 11: end of chain
+    data[t26off + 11 * 256 + 0] = 0x00;
+    data[t26off + 11 * 256 + 1] = 0xFF;
 
-  // Calculate how many 1581 partitions fit
-  var systemTrackSize = spt * 256;
-  var availableBytes = totalSize - systemTrackSize;
-  var numPartitions = Math.floor(availableBytes / partSize1581);
-  if (numPartitions < 1) numPartitions = 1;
-  if (numPartitions > 31) numPartitions = 31;
+    // Write a default partition entry in sector 8 (first entry = this native partition)
+    var pe = t26off + 8 * 256 + 2; // first entry starts at byte 2 of the dir sector
+    data[pe + 0] = 0x01; // type: native
+    // Name: "PARTITION 1"
+    var pname = 'PARTITION 1';
+    for (var pni = 0; pni < 16; pni++) {
+      data[pe + 4 + pni] = pni < pname.length ? pname.charCodeAt(pni) : 0xA0;
+    }
 
-  for (var pn = 0; pn < numPartitions; pn++) {
-    var partStartByte = systemTrackSize + pn * partSize1581;
-    var partSizeBytes = Math.min(partSize1581, totalSize - partStartByte);
-    if (partSizeBytes < partSize1581) break; // don't create partial partitions
-
-    var partStartBlock = partStartByte / 512;
-    var partSizeBlocks = partSizeBytes / 512;
-
-    // Write partition table entry (32 bytes each, 8 per sector starting at sector 1)
-    var entrySecIdx = 1 + Math.floor(pn / 8);
-    var entryInSec = pn % 8;
-    var ptOff = entrySecIdx * 256 + entryInSec * 32;
-
-    data[ptOff + 0] = 0x04; // type: 1581 emulation
-    data[ptOff + 1] = (partStartBlock >> 16) & 0xFF;
-    data[ptOff + 2] = (partStartBlock >> 8) & 0xFF;
-    data[ptOff + 3] = partStartBlock & 0xFF;
-    data[ptOff + 5] = (partSizeBlocks >> 16) & 0xFF;
-    data[ptOff + 6] = (partSizeBlocks >> 8) & 0xFF;
-    data[ptOff + 7] = partSizeBlocks & 0xFF;
-
-    // Partition name
-    var nameStr = 'PARTITION ' + (pn + 1);
-    while (nameStr.length < 16) nameStr += ' ';
-    for (var ni = 0; ni < 16; ni++) data[ptOff + 8 + ni] = nameStr.charCodeAt(ni);
-
-    // Format the 1581 partition
-    var savedFmt = currentFormat;
-    var savedTracks = currentTracks;
-    currentFormat = d81;
-    currentTracks = 80;
-
-    var partData = data.subarray(partStartByte, partStartByte + partSizeBytes);
-    var offsets81 = getTrackOffsets(d81, 80);
-    var bamOff81 = offsets81[d81.bamTrack] + d81.bamSector * 256;
-    d81.initBAM(partData, bamOff81, 80);
-    var dirOff81 = offsets81[d81.dirTrack] + d81.dirSector * 256;
-    partData[dirOff81 + 0] = 0x00;
-    partData[dirOff81 + 1] = 0xFF;
-
-    currentFormat = savedFmt;
-    currentTracks = savedTracks;
+    // Mark system sectors as used in BAM (track 26: sectors 5, 8-11)
+    // Track 26 BAM: sector = 2 + (26 >> 3) = 5, offset = (26 & 7) * 32 = 2 * 32 = 64
+    var t26bmOff = 5 * 256 + 64; // BAM sector 5 on track 1, byte offset 64
+    [5, 8, 9, 10, 11].forEach(function(ss) {
+      data[t26bmOff + (ss >> 3)] &= ~(0x80 >> (ss & 7));
+    });
   }
 
   return data.buffer;
 }
+
 
 // ── Safe PETSCII characters ──────────────────────────────────────────
 var allowUnsafeChars = localStorage.getItem('cbm-allowUnsafe') === 'true';
