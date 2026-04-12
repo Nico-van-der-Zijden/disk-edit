@@ -69,9 +69,11 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '<br>' +
       '<b>Technical references:</b><br>' +
       '&bull; <a href="https://vice-emu.sourceforge.io/vice_17.html" target="_blank" class="link">VICE Manual</a> — disk image format documentation<br>' +
+      '&bull; <a href="https://ist.uwaterloo.ca/~schepers/formats.html" target="_blank" class="link">Peter Schepers</a> — D64, D71, D81, D80, D82, D2M-DNP format specifications<br>' +
       '&bull; <a href="https://www.oxyron.de/html/opcodes02.html" target="_blank" class="link">Oxyron 6502 Opcode Table</a> — illegal opcode reference<br>' +
       '&bull; <a href="https://c64-wiki.com/" target="_blank" class="link">C64-Wiki</a> — Commodore 64 technical reference<br>' +
       '&bull; <a href="https://sta.c64.org/" target="_blank" class="link">STA\'s C64 pages</a> — disk format details<br>' +
+      '&bull; <a href="https://github.com/OpenCBM/libcbmimage" target="_blank" class="link">libcbmimage</a> — CBM disk image library (CMD FD/HD reference)<br>' +
       '&bull; <a href="https://csdb.dk/" target="_blank" class="link">CSDb</a> — C64 Scene Database<br>' +
       '&bull; <a href="https://www.zimmers.net/anonftp/pub/cbm/" target="_blank" class="link">Zimmers.net</a> — CBM file archive and GEOS format documentation<br>' +
     '</div>';

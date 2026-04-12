@@ -174,6 +174,20 @@ ExampleDisks/           Example disk images for testing
 - **Font**: [C64 Pro Mono](https://style64.org/c64-truetype) by Style64
 - **Icons**: [FontAwesome](https://fontawesome.com/) (Free)
 
+### Technical References
+
+- [VICE Manual](https://vice-emu.sourceforge.io/vice_17.html) — Disk image format documentation
+- [Peter Schepers](https://ist.uwaterloo.ca/~schepers/formats.html) — D64, D71, D81, D80, D82, D2M-DNP format specifications
+- [libcbmimage](https://github.com/OpenCBM/libcbmimage) — CBM disk image library (CMD FD/HD reference)
+- [Inside geoWrite](https://www.pagetable.com/?p=1471) by Michael Steil — geoWrite file format documentation
+- [geowrite2rtf](https://github.com/mist64/geowrite2rtf) by Michael Steil — CVT/geoWrite parsing reference
+- [Thornton2](https://thornton2.com/programming/geos/compaction-strategy.html) — GEOS bitmap compaction strategy
+- [Oxyron 6502 Opcode Table](https://www.oxyron.de/html/opcodes02.html) — Illegal opcode reference
+- [C64-Wiki](https://c64-wiki.com/) — Commodore 64 technical reference
+- [STA's C64 pages](https://sta.c64.org/) — Disk format details
+- [CSDb](https://csdb.dk/) — C64 Scene Database
+- [Zimmers.net](https://www.zimmers.net/anonftp/pub/cbm/) — CBM file archive and GEOS format documentation
+
 ## License
 
 See [LICENSE](LICENSE) for details.
