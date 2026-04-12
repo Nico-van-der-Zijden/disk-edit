@@ -410,6 +410,14 @@ function renderTabs() {
       closeTab(parseInt(el.dataset.tabClose, 10));
     });
   });
+
+  // Update browser tab title
+  var activeTab = tabs.find(function(t) { return t.id === activeTabId; });
+  if (activeTab) {
+    document.title = (activeTab.dirty ? '* ' : '') + activeTab.name + ' \u2014 CBM Disk Editor';
+  } else {
+    document.title = 'CBM Disk Editor';
+  }
 }
 
 document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {

@@ -21,6 +21,29 @@ A browser-based disk image editor for Commodore 8-bit computers. No installation
 | TAP | Tape | Raw tape pulse data (read-only) |
 | CVT | GEOS | GEOS Convert file format |
 
+### Format Detection
+
+Formats are detected by file size, with magic byte checks for ambiguous cases:
+
+| Format | File Size (bytes) | With Error Bytes | Notes |
+|--------|-------------------|------------------|-------|
+| D64 35t | 174,848 | 175,531 | Default |
+| D64 40t | 196,608 | 197,376 | |
+| D64 42t | 205,312 | 206,114 | |
+| D71 70t | 349,696 | 351,062 | |
+| D71 80t | 393,216 | 394,752 | |
+| D81 | 819,200 | 822,400 | |
+| D80 | 533,248 | — | |
+| D82 | 1,066,496 | — | |
+| D1M | 829,440 | 832,680 | |
+| D2M | 1,658,880 | 1,665,360 | |
+| D4M | 3,317,760 | 3,330,720 | |
+| DNP | n × 65,536 | — | Header byte `$48` at offset 258 |
+| G64 | Variable | — | Magic: `GCR-1541` at offset 0 |
+| X64 | Variable | — | Magic: `C1541` at offset 0 |
+| T64 | Variable | — | Magic: `C64` at offset 0 |
+| TAP | Variable | — | Magic: `C64-TAPE-RAW` at offset 0 |
+
 ## Features
 
 ### Directory Editing
