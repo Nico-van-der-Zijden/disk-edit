@@ -347,8 +347,29 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   var html = bamWarnings;
 
   if (forceCompact) {
-    // Only summary available for high-SPT formats
-    html += summaryHtml;
+    // High-SPT: Map + Summary tabs
+    html += '<div class="bam-tabs">' +
+      '<span class="bam-tab active" data-bam-view="map">Map</span>' +
+      '<span class="bam-tab" data-bam-view="summary">Summary</span>' +
+      '</div>';
+    // Canvas map placeholder — drawn after modal opens
+    var cellSize = 8;
+    var gap = 1;
+    var step = cellSize + gap;
+    var labelW = 30; // left margin for track numbers
+    var canvasW = labelW + maxSpt * step + gap;
+    var canvasH = bamTracks * step + gap;
+    var mapLegend = '<div class="bam-legend">' +
+      '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent)"></span> Used</span>' +
+      '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent);opacity:0.25"></span> Free</span>' +
+      '<span class="bam-legend-item"><span class="bam-legend-box bam-sector dir-used"></span> Dir Used</span>' +
+      '<span class="bam-legend-item"><span class="bam-legend-box bam-sector dir-free"></span> Dir Free</span>' +
+      (hasErrors ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-error"></span> BAM Error</span>' : '') +
+      (hasOrphans ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-orphan"></span> Orphan</span>' : '') +
+      '</div>';
+    html += '<div class="bam-view-content" data-bam-view="map">' + mapLegend +
+      '<div class="bam-map-scroll"><canvas id="bam-map-canvas" width="' + canvasW + '" height="' + canvasH + '" style="cursor:crosshair;display:block"></canvas></div></div>';
+    html += '<div class="bam-view-content" data-bam-view="summary" style="display:none">' + summaryHtml + '</div>';
   } else {
     // Tab switcher
     html += '<div class="bam-tabs">' +
@@ -374,6 +395,114 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       });
     });
   });
+
+  // Draw canvas map for high-SPT formats
+  var bamCanvas = document.getElementById('bam-map-canvas');
+  if (bamCanvas) {
+    var ctx2d = bamCanvas.getContext('2d');
+    var isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+    // Color palette matching CSS BAM colors
+    var colUsed = isDark ? '#6c5eb5' : '#352879';
+    var colFree = isDark ? 'rgba(108,94,181,0.25)' : 'rgba(53,40,121,0.25)';
+    var colDirUsed = isDark ? '#f9e2af' : '#df8e1d';
+    var colDirFree = isDark ? 'rgba(249,226,175,0.3)' : 'rgba(223,142,29,0.3)';
+    var colError = '#f38ba8';
+    var colOrphan = isDark ? 'rgba(250,179,135,0.6)' : 'rgba(254,100,11,0.6)';
+    var colBg = isDark ? '#1e1e2e' : '#eff1f5';
+
+    ctx2d.fillStyle = colBg;
+    ctx2d.fillRect(0, 0, bamCanvas.width, bamCanvas.height);
+
+    // Draw track labels and sector blocks
+    var colLabel = isDark ? '#a6adc8' : '#4c4f69';
+    ctx2d.font = '9px monospace';
+    ctx2d.textBaseline = 'middle';
+
+    for (var mt = 1; mt <= bamTracks; mt++) {
+      var mSpt = fmt.sectorsPerTrack(mt);
+      var mIsDirTrack = (mt === fmt.dirTrack);
+      var my = (mt - 1) * step + gap;
+
+      // Track number label
+      ctx2d.fillStyle = bamCheck.errorTracks[mt] ? colError : colLabel;
+      ctx2d.fillText('$' + mt.toString(16).toUpperCase().padStart(2, '0'), 2, my + cellSize / 2);
+
+      for (var ms = 0; ms < mSpt; ms++) {
+        var mx = labelW + ms * step + gap;
+        var mFree = checkSectorFree(data, bamOff, mt, ms);
+        var mKey = mt + ':' + ms;
+        var mError = bamCheck.errorSectors[mKey];
+        var mOrphan = bamCheck.orphanSectors[mKey];
+        if (mIsDirTrack) {
+          ctx2d.fillStyle = mFree ? colDirFree : colDirUsed;
+        } else if (mError) {
+          ctx2d.fillStyle = colError;
+        } else if (mOrphan) {
+          ctx2d.fillStyle = colOrphan;
+        } else {
+          ctx2d.fillStyle = mFree ? colFree : colUsed;
+        }
+        ctx2d.fillRect(mx, my, cellSize, cellSize);
+      }
+    }
+
+    var mapContainer = bamCanvas.parentNode;
+    var lastTitle = '';
+
+    function mapCoordsFromEvent(e) {
+      var rect = bamCanvas.getBoundingClientRect();
+      var x = e.clientX - rect.left - labelW;
+      var y = e.clientY - rect.top;
+      return {
+        sector: Math.floor((x - gap * 0.5) / step),
+        track: Math.floor((y - gap * 0.5) / step) + 1
+      };
+    }
+
+    bamCanvas.addEventListener('mousemove', function(e) {
+      var pos = mapCoordsFromEvent(e);
+      if (pos.track < 1 || pos.track > bamTracks || pos.sector < 0 || pos.sector >= fmt.sectorsPerTrack(pos.track)) {
+        if (lastTitle) { bamCanvas.title = ''; lastTitle = ''; }
+        return;
+      }
+      var ttKey = pos.track + ':' + pos.sector;
+      var ttOwner = sectorOwner[ttKey];
+      var ttFree = checkSectorFree(data, bamOff, pos.track, pos.sector);
+      var tt = 'T:$' + pos.track.toString(16).toUpperCase().padStart(2, '0') +
+        ' S:$' + pos.sector.toString(16).toUpperCase().padStart(2, '0');
+      if (bamCheck.errorSectors[ttKey]) tt += ' \u26a0 BAM error';
+      else if (bamCheck.orphanSectors[ttKey]) tt += ' (orphan)';
+      else if (ttFree) tt += ' (free)';
+      else if (ttOwner) tt += ' (' + petsciiToReadable(ttOwner) + ')';
+      else tt += ' (used)';
+      if (tt !== lastTitle) { bamCanvas.title = tt; lastTitle = tt; }
+    });
+
+    // Click to open sector editor
+    bamCanvas.addEventListener('click', function(e) {
+      var pos = mapCoordsFromEvent(e);
+      var mt3 = pos.track, ms3 = pos.sector;
+      if (mt3 < 1 || mt3 > bamTracks || ms3 < 0 || ms3 >= fmt.sectorsPerTrack(mt3)) return;
+      document.getElementById('modal-overlay').classList.remove('open');
+      showSectorHexEditor(mt3, ms3);
+    });
+
+    // Right-click to toggle free/used
+    bamCanvas.addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+      var pos = mapCoordsFromEvent(e);
+      var mt4 = pos.track, ms4 = pos.sector;
+      if (mt4 < 1 || mt4 > bamTracks || ms4 < 0 || ms4 >= fmt.sectorsPerTrack(mt4)) return;
+      pushUndo();
+      var d = new Uint8Array(currentBuffer);
+      var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+      var base2 = (fmt.isSectorFree) ? fmt._bamBase(mt4) : getBamBitmapBase(mt4, bOff);
+      d[base2 + (ms4 >> 3)] ^= fmt.bamBitMask(ms4);
+      if (typeof fmt.writeTrackFree === 'function' && !fmt.isSectorFree) bamRecalcFree(d, mt4, bOff);
+      document.getElementById('modal-overlay').classList.remove('open');
+      document.getElementById('opt-view-bam').click();
+    });
+  }
 
   // Click on a sector block to open sector editor
   bamBody.addEventListener('click', function(e) {
