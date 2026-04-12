@@ -1,3 +1,14 @@
-dist/
+dist/*
+!dist/.gitkeep
 disks/
+ExampleDisks/*
+!ExampleDisks/.gitkeep
 .claude/
+
+# Analytics (site-specific, not needed for development)
+assets/js/matomo.js
+
+# Web server config files
+web.config
+.htaccess
+nginx.conf
