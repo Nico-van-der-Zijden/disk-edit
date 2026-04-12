@@ -2312,17 +2312,25 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   // Build the BAM visualization
   var hasErrors = bamCheck.allocMismatch > 0;
   var hasOrphans = bamCheck.orphanCount > 0;
-  var html = '<div class="bam-legend">' +
-    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent)"></span> Used</span>' +
-    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent);opacity:0.25"></span> Free</span>' +
-    '<span class="bam-legend-item"><span class="bam-legend-box bam-sector dir-used"></span> Dir Used</span>' +
-    '<span class="bam-legend-item"><span class="bam-legend-box bam-sector dir-free"></span> Dir Free</span>' +
-    (hasErrors ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-error"></span> BAM Error</span>' : '') +
-    (hasOrphans ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-orphan"></span> Orphan</span>' : '') +
-    '</div>';
-
-  // For large sector counts (DNP: 256/track), show compact summary per track
   var compactMode = maxSpt > 40;
+  var html;
+  if (compactMode) {
+    html = '<div class="bam-legend">' +
+      '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#6c9bd2"></span> 0-50%</span>' +
+      '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#4a7ab5"></span> 50-70%</span>' +
+      '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#2d5a8e"></span> 70-90%</span>' +
+      '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#1a3a5c"></span> 90-100%</span>' +
+      '</div>';
+  } else {
+    html = '<div class="bam-legend">' +
+      '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent)"></span> Used</span>' +
+      '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent);opacity:0.25"></span> Free</span>' +
+      '<span class="bam-legend-item"><span class="bam-legend-box bam-sector dir-used"></span> Dir Used</span>' +
+      '<span class="bam-legend-item"><span class="bam-legend-box bam-sector dir-free"></span> Dir Free</span>' +
+      (hasErrors ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-error"></span> BAM Error</span>' : '') +
+      (hasOrphans ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-orphan"></span> Orphan</span>' : '') +
+      '</div>';
+  }
 
   // Sector number header (skip for compact mode - too many columns)
   if (!compactMode) {
@@ -2358,7 +2366,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       totalFree += tFree;
       totalUsed += tUsed;
       var pct = spt > 0 ? Math.round(tUsed / spt * 100) : 0;
-      var barColor = isDirTrack ? 'var(--accent)' : (pct > 90 ? '#883932' : pct > 70 ? '#bfce72' : 'var(--accent)');
+      var barColor = pct > 90 ? '#1a3a5c' : pct > 70 ? '#2d5a8e' : pct > 50 ? '#4a7ab5' : '#6c9bd2';
       html += '<span class="bam-compact-bar" title="T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
         ' — ' + tFree + ' free, ' + tUsed + ' used">' +
         '<span class="bam-compact-fill" style="width:' + pct + '%;background:' + barColor + '"></span></span>';
