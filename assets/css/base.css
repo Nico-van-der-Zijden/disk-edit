@@ -1,7 +1,7 @@
   @font-face {
     font-family: 'C64 Pro Mono';
-    src: url('assets/webfonts/C64_Pro_Mono-STYLE.woff2') format('woff2'),
-         url('assets/webfonts/C64_Pro_Mono-STYLE.ttf') format('truetype');
+    src: url('../webfonts/C64_Pro_Mono-STYLE.woff2') format('woff2'),
+         url('../webfonts/C64_Pro_Mono-STYLE.ttf') format('truetype');
     font-weight: normal;
     font-style: normal;
   }
