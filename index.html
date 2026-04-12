@@ -1605,6 +1605,26 @@
     flex-shrink: 0;
   }
 
+  .bam-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .bam-tab {
+    padding: 5px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--text-muted);
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .bam-tab:hover { color: var(--text); }
+  .bam-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
   .bam-sector:hover {
     outline: 1px solid var(--text);
   }

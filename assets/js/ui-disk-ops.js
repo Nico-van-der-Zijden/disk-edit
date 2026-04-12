@@ -230,20 +230,51 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     if (spt > maxSpt) maxSpt = spt;
   }
 
-  // Build the BAM visualization
+  // Build both views: sector detail and summary
   var hasErrors = bamCheck.allocMismatch > 0;
   var hasOrphans = bamCheck.orphanCount > 0;
-  var compactMode = maxSpt > 40;
-  var html;
-  if (compactMode) {
-    html = '<div class="bam-legend">' +
-      '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#6c9bd2"></span> 0-50%</span>' +
-      '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#4a7ab5"></span> 50-70%</span>' +
-      '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#2d5a8e"></span> 70-90%</span>' +
-      '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#1a3a5c"></span> 90-100%</span>' +
-      '</div>';
-  } else {
-    html = '<div class="bam-legend">' +
+  var forceCompact = maxSpt > 40; // DNP/D2M/D4M: too many sectors for detail view
+
+  // Collect per-track stats for both views
+  var trackStats = []; // [{free, used, spt}] indexed by track (1-based)
+  var totalFree = 0, totalUsed = 0;
+  for (t = 1; t <= bamTracks; t++) {
+    spt = fmt.sectorsPerTrack(t);
+    var tFree = 0, tUsed = 0;
+    for (var cs = 0; cs < spt; cs++) {
+      if (checkSectorFree(data, bamOff, t, cs)) tFree++; else tUsed++;
+    }
+    totalFree += tFree;
+    totalUsed += tUsed;
+    trackStats[t] = { free: tFree, used: tUsed, spt: spt };
+  }
+
+  // ── Build Summary view (compact bars) ──
+  var summaryLegend = '<div class="bam-legend">' +
+    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#6c9bd2"></span> 0-50%</span>' +
+    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#4a7ab5"></span> 50-70%</span>' +
+    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#2d5a8e"></span> 70-90%</span>' +
+    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#1a3a5c"></span> 90-100%</span>' +
+    '</div>';
+  var summaryHtml = summaryLegend + '<div class="bam-viewer">';
+  for (t = 1; t <= bamTracks; t++) {
+    var ts = trackStats[t];
+    var pct = ts.spt > 0 ? Math.round(ts.used / ts.spt * 100) : 0;
+    var barColor = pct > 90 ? '#1a3a5c' : pct > 70 ? '#2d5a8e' : pct > 50 ? '#4a7ab5' : '#6c9bd2';
+    summaryHtml += '<div class="bam-track">';
+    summaryHtml += '<span class="bam-track-num' + (bamCheck.errorTracks[t] ? ' error' : '') + '">$' + t.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+    summaryHtml += '<span class="bam-compact-bar" title="T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
+      ' \u2014 ' + ts.free + ' free, ' + ts.used + ' used (' + pct + '%)">' +
+      '<span class="bam-compact-fill" style="width:' + pct + '%;background:' + barColor + '"></span></span>';
+    summaryHtml += '<span class="bam-compact-info">' + ts.free + '/' + ts.spt + '</span>';
+    summaryHtml += '</div>';
+  }
+  summaryHtml += '</div>';
+
+  // ── Build Sectors view (individual blocks) — skip if forced compact ──
+  var sectorsHtml = '';
+  if (!forceCompact) {
+    var sectorLegend = '<div class="bam-legend">' +
       '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent)"></span> Used</span>' +
       '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent);opacity:0.25"></span> Free</span>' +
       '<span class="bam-legend-item"><span class="bam-legend-box bam-sector dir-used"></span> Dir Used</span>' +
@@ -251,102 +282,98 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       (hasErrors ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-error"></span> BAM Error</span>' : '') +
       (hasOrphans ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-orphan"></span> Orphan</span>' : '') +
       '</div>';
-  }
 
-  // Sector number header (skip for compact mode - too many columns)
-  if (!compactMode) {
-    html += '<div class="bam-header">';
-    html += '<span class="bam-header-spacer"></span>';
-    html += '<span class="bam-header-sectors">';
+    sectorsHtml = sectorLegend;
+    sectorsHtml += '<div class="bam-header">';
+    sectorsHtml += '<span class="bam-header-spacer"></span>';
+    sectorsHtml += '<span class="bam-header-sectors">';
     for (var h = 0; h < maxSpt; h++) {
-      html += '<span class="bam-header-num">' + h.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+      sectorsHtml += '<span class="bam-header-num">' + h.toString(16).toUpperCase().padStart(2, '0') + '</span>';
     }
-    html += '</span></div>';
+    sectorsHtml += '</span></div>';
+
+    sectorsHtml += '<div class="bam-viewer">';
+    for (t = 1; t <= bamTracks; t++) {
+      spt = fmt.sectorsPerTrack(t);
+      var isDirTrack = (t === fmt.dirTrack);
+      sectorsHtml += '<div class="bam-track">';
+      sectorsHtml += '<span class="bam-track-num' + (bamCheck.errorTracks[t] ? ' error' : '') + '">$' + t.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+      sectorsHtml += '<span class="bam-sectors">';
+
+      for (var s = 0; s < spt; s++) {
+        var isFree = checkSectorFree(data, bamOff, t, s);
+        var sKey = t + ':' + s;
+        var isError = bamCheck.errorSectors[sKey];
+        var isOrphan = bamCheck.orphanSectors[sKey];
+        var owner = sectorOwner[sKey];
+        var cls = 'bam-sector';
+        if (isDirTrack) {
+          cls += isFree ? ' dir-free' : ' dir-used';
+        } else if (isError) {
+          cls += ' error';
+        } else if (isOrphan) {
+          cls += ' orphan';
+        } else {
+          cls += isFree ? ' free' : ' used';
+        }
+
+        var tooltip = 'T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
+          ' S:$' + s.toString(16).toUpperCase().padStart(2, '0');
+        if (isError) {
+          tooltip += ' \u26a0 BAM says free, used by: ' + petsciiToReadable(owner);
+        } else if (isOrphan) {
+          tooltip += ' (orphan \u2014 used in BAM but no file)';
+        } else if (isFree) {
+          tooltip += ' (free)';
+        } else if (isDirTrack) {
+          tooltip += ' (directory)';
+        } else if (owner) {
+          tooltip += ' (' + petsciiToReadable(owner) + ')';
+        } else {
+          tooltip += ' (used)';
+        }
+
+        sectorsHtml += '<span class="' + cls + '" data-t="' + t + '" data-s="' + s + '" title="' + escHtml(tooltip) + '"></span>';
+      }
+
+      sectorsHtml += '</span></div>';
+    }
+    sectorsHtml += '</div>';
   }
 
-  html += '<div class="bam-viewer">';
-
-  var totalFree = 0;
-  var totalUsed = 0;
-
-  for (t = 1; t <= bamTracks; t++) {
-    spt = fmt.sectorsPerTrack(t);
-    var free = fmt.readTrackFree(data, bamOff, t);
-    var bm = fmt.readTrackBitmap(data, bamOff, t);
-    var isDirTrack = (t === fmt.dirTrack);
-
-    html += '<div class="bam-track">';
-    html += '<span class="bam-track-num' + (bamCheck.errorTracks[t] ? ' error' : '') + '">$' + t.toString(16).toUpperCase().padStart(2, '0') + '</span>';
-
-    if (compactMode) {
-      // Compact: show a progress bar instead of individual sectors
-      var tFree = 0, tUsed = 0;
-      for (var cs = 0; cs < spt; cs++) {
-        if (checkSectorFree(data, bamOff, t, cs)) tFree++; else tUsed++;
-      }
-      totalFree += tFree;
-      totalUsed += tUsed;
-      var pct = spt > 0 ? Math.round(tUsed / spt * 100) : 0;
-      var barColor = pct > 90 ? '#1a3a5c' : pct > 70 ? '#2d5a8e' : pct > 50 ? '#4a7ab5' : '#6c9bd2';
-      html += '<span class="bam-compact-bar" title="T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
-        ' — ' + tFree + ' free, ' + tUsed + ' used">' +
-        '<span class="bam-compact-fill" style="width:' + pct + '%;background:' + barColor + '"></span></span>';
-      html += '<span class="bam-compact-info">' + tFree + '/' + spt + '</span>';
-      html += '</div>';
-      continue;
-    }
-
-    html += '<span class="bam-sectors">';
-
-    for (var s = 0; s < spt; s++) {
-      var isFree = checkSectorFree(data, bamOff, t, s);
-      var sKey = t + ':' + s;
-      var isError = bamCheck.errorSectors[sKey];
-      var isOrphan = bamCheck.orphanSectors[sKey];
-      var owner = sectorOwner[sKey];
-      var cls = 'bam-sector';
-      if (isDirTrack) {
-        cls += isFree ? ' dir-free' : ' dir-used';
-      } else if (isError) {
-        cls += ' error';
-      } else if (isOrphan) {
-        cls += ' orphan';
-      } else {
-        cls += isFree ? ' free' : ' used';
-      }
-      if (isFree) totalFree++; else totalUsed++;
-
-      var tooltip = 'T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
-        ' S:$' + s.toString(16).toUpperCase().padStart(2, '0');
-      if (isError) {
-        tooltip += ' \u26a0 BAM says free, used by: ' + petsciiToReadable(owner);
-      } else if (isOrphan) {
-        tooltip += ' (orphan \u2014 used in BAM but no file)';
-      } else if (isFree) {
-        tooltip += ' (free)';
-      } else if (isDirTrack) {
-        tooltip += ' (directory)';
-      } else if (owner) {
-        tooltip += ' (' + petsciiToReadable(owner) + ')';
-      } else {
-        tooltip += ' (used)';
-      }
-
-      html += '<span class="' + cls + '" data-t="' + t + '" data-s="' + s + '" title="' + escHtml(tooltip) + '"></span>';
-    }
-
-    html += '</span>';
-    html += '</div>';
-  }
-
-  html += '</div>';
-
+  // ── Compose final HTML with tabs ──
   var title = 'BAM \u2014 ' + totalFree + ' free, ' + totalUsed + ' used of ' +
     (totalFree + totalUsed) + ' sectors';
-  html = bamWarnings + html;
+  var html = bamWarnings;
+
+  if (forceCompact) {
+    // Only summary available for high-SPT formats
+    html += summaryHtml;
+  } else {
+    // Tab switcher
+    html += '<div class="bam-tabs">' +
+      '<span class="bam-tab active" data-bam-view="sectors">Sectors</span>' +
+      '<span class="bam-tab" data-bam-view="summary">Summary</span>' +
+      '</div>';
+    html += '<div class="bam-view-content" data-bam-view="sectors">' + sectorsHtml + '</div>';
+    html += '<div class="bam-view-content" data-bam-view="summary" style="display:none">' + summaryHtml + '</div>';
+  }
+
   showModal(title, []);
   var bamBody = document.getElementById('modal-body');
   bamBody.innerHTML = html;
+
+  // Tab switching
+  bamBody.querySelectorAll('.bam-tab').forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      bamBody.querySelectorAll('.bam-tab').forEach(function(t) { t.classList.remove('active'); });
+      tab.classList.add('active');
+      var view = tab.getAttribute('data-bam-view');
+      bamBody.querySelectorAll('.bam-view-content').forEach(function(c) {
+        c.style.display = c.getAttribute('data-bam-view') === view ? '' : 'none';
+      });
+    });
+  });
 
   // Click on a sector block to open sector editor
   bamBody.addEventListener('click', function(e) {
