@@ -443,6 +443,7 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     if (hasChanges) {
       pushUndo();
       for (var c2 = 0; c2 < 256; c2++) data[off + c2] = working[c2];
+      renderTabs();
     }
     document.removeEventListener('keydown', onKeyDown);
     document.getElementById('modal-overlay').classList.remove('open');
@@ -671,11 +672,13 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
   function closeEditor(save) {
     document.removeEventListener('keydown', onKeyDown);
     if (save) {
+      pushUndo();
       // Write working copy back to disk buffer
       for (var i = 0; i < 256; i++) data[off + i] = working[i];
       // Re-render disk view
       var info = parseCurrentDir(currentBuffer);
       renderDisk(info);
+      renderTabs();
     }
     document.getElementById('modal-overlay').classList.remove('open');
     footer.className = origFooterClass;
