@@ -1125,6 +1125,21 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
+  // Ctrl+A: select all files
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'a' && currentBuffer) {
+    e.preventDefault();
+    var entries = document.querySelectorAll('.dir-entry:not(.dir-header-row):not(.dir-parent-row)');
+    selectedEntries = [];
+    entries.forEach(function(el) {
+      el.classList.add('selected');
+      var off = parseInt(el.dataset.offset, 10);
+      if (!isNaN(off)) selectedEntries.push(off);
+    });
+    if (selectedEntries.length > 0) selectedEntryIndex = selectedEntries[0];
+    updateEntryMenuState();
+    return;
+  }
+
   // Ctrl+Alt+L/R/C/J: alignment shortcuts
   var alignKeys = { KeyL: 'left', KeyR: 'right', KeyC: 'center', KeyJ: 'justify' };
   if (e.ctrlKey && e.altKey && alignKeys[e.code] && selectedEntryIndex >= 0) {
@@ -11178,6 +11193,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
     ]},
     { title: 'File Operations', shortcuts: [
       ['Ctrl + C', 'Copy selected file(s)'],
+      ['Ctrl + A', 'Select all files'],
       ['Ctrl + V', 'Paste file (works across tabs)'],
       ['Ctrl + Shift + I', 'Insert file'],
       ['Ctrl + Alt + E', 'Export selected file(s)'],
