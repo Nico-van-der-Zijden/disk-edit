@@ -341,16 +341,51 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     sectorsHtml += '</div>';
   }
 
+  // ── Build optional Partitions panel (D1M/D2M/D4M only) ──
+  var partsTabHtml = '', partsPanelHtml = '';
+  var fmtKey = (fmt.name || '').toLowerCase();
+  if (fmtKey === 'd1m' || fmtKey === 'd2m' || fmtKey === 'd4m') {
+    partsTabHtml = '<span class="bam-tab" data-bam-view="partitions">Partitions</span>';
+    var parts = readCmdFdSysPartitions(currentBuffer, fmtKey, currentTracks);
+    var panel;
+    if (!parts) {
+      panel = '<div class="bam-partitions-empty" style="padding:12px;color:var(--text-muted)">' +
+        'No CMD FD system partition on this disk (magic "CMD FD SERIES" not found on track ' +
+        currentTracks + ' sector 5).</div>';
+    } else {
+      panel = '<table class="bam-partitions" style="width:100%;border-collapse:collapse">' +
+        '<thead><tr>' +
+        '<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Type</th>' +
+        '<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Name</th>' +
+        '<th style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--border)">Start block</th>' +
+        '<th style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--border)">Size (blocks)</th>' +
+        '</tr></thead><tbody>';
+      for (var pi = 0; pi < parts.length; pi++) {
+        var p = parts[pi];
+        panel += '<tr>' +
+          '<td style="padding:4px 8px">' + escHtml(p.typeName) + '</td>' +
+          '<td style="padding:4px 8px"><b>' + escHtml(p.name) + '</b></td>' +
+          '<td style="padding:4px 8px;text-align:right;font-family:monospace">' + p.startBlock + '</td>' +
+          '<td style="padding:4px 8px;text-align:right;font-family:monospace">' + p.sizeBlocks + '</td>' +
+          '</tr>';
+      }
+      panel += '</tbody></table>';
+    }
+    partsPanelHtml = '<div class="bam-view-content" data-bam-view="partitions" style="display:none">' +
+      panel + '</div>';
+  }
+
   // ── Compose final HTML with tabs ──
   var title = 'BAM \u2014 ' + totalFree + ' free, ' + totalUsed + ' used of ' +
     (totalFree + totalUsed) + ' sectors';
   var html = bamWarnings;
 
   if (forceCompact) {
-    // High-SPT: Map + Summary tabs
+    // High-SPT: Map + Summary (+ Partitions for CMD FD) tabs
     html += '<div class="bam-tabs">' +
       '<span class="bam-tab active" data-bam-view="map">Map</span>' +
       '<span class="bam-tab" data-bam-view="summary">Summary</span>' +
+      partsTabHtml +
       '</div>';
     // Canvas map placeholder — drawn after modal opens
     var cellW = 12, cellH = 8;  // match HTML bam-sector proportions (18x12 scaled down)
@@ -370,14 +405,17 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     html += '<div class="bam-view-content" data-bam-view="map">' + mapLegend +
       '<div class="bam-map-scroll"><canvas id="bam-map-canvas" width="' + canvasW + '" height="' + canvasH + '" style="cursor:crosshair;display:block"></canvas></div></div>';
     html += '<div class="bam-view-content" data-bam-view="summary" style="display:none">' + summaryHtml + '</div>';
+    html += partsPanelHtml;
   } else {
-    // Tab switcher
+    // Tab switcher — Sectors + Summary (+ Partitions for D1M)
     html += '<div class="bam-tabs">' +
       '<span class="bam-tab active" data-bam-view="sectors">Sectors</span>' +
       '<span class="bam-tab" data-bam-view="summary">Summary</span>' +
+      partsTabHtml +
       '</div>';
     html += '<div class="bam-view-content" data-bam-view="sectors">' + sectorsHtml + '</div>';
     html += '<div class="bam-view-content" data-bam-view="summary" style="display:none">' + summaryHtml + '</div>';
+    html += partsPanelHtml;
   }
 
   showModal(title, []);

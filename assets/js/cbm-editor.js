@@ -289,11 +289,16 @@ function checkBAMIntegrity(buffer) {
   // Start from root directory
   walkIntegrityDir(fmt.dirTrack, fmt.dirSector, 'Directory');
 
-  // Mark format-specific system sectors as owned (e.g. D1M/D2M/D4M track 26)
+  // Mark format-specific system sectors as owned. Skip "BAM-omitted" sectors —
+  // these are protected from allocation but intentionally marked *free* in the main
+  // BAM (e.g. CMD FD system partition on the last track of D1M/D2M/D4M). Owning them
+  // here would falsely trigger allocMismatch because BAM-free + owned = mismatch.
   for (var pst = 1; pst <= currentTracks; pst++) {
     if (pst === fmt.dirTrack) continue; // dir track already skipped in orphan check
     var protSecs = fmt.getProtectedSectors(pst);
+    var bamOmitted = fmt.getBamOmittedSectors ? fmt.getBamOmittedSectors(pst) : [];
     for (var psi2 = 0; psi2 < protSecs.length; psi2++) {
+      if (bamOmitted.indexOf(protSecs[psi2]) !== -1) continue;
       sectorOwner[pst + ':' + protSecs[psi2]] = 'System';
     }
   }
@@ -846,12 +851,17 @@ function validateDisk(buffer) {
   for (let t = 1; t <= bamTracks; t++) {
     const spt = fmt.sectorsPerTrack(t);
     const numBytes = Math.ceil(spt / 8);
+    // BAM-omitted sectors (e.g. CMD FD system partition on last track) are
+    // protected from allocation but must remain marked *free* in the main BAM
+    // to stay consistent with VICE/DirMaster output.
+    const bamOmitted = fmt.getBamOmittedSectors ? fmt.getBamOmittedSectors(t) : [];
 
     // Build new bitmap bytes and free count from allocation table
     let free = 0;
     const newBytes = new Uint8Array(numBytes);
     for (let s = 0; s < spt; s++) {
-      if (!allocated[t][s]) {
+      const alloc = allocated[t][s] && bamOmitted.indexOf(s) === -1;
+      if (!alloc) {
         free++;
         newBytes[s >> 3] |= fmt.bamBitMask(s);
       }

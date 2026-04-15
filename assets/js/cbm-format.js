@@ -1027,17 +1027,24 @@ var _cmdGetProtectedSectors = function(track) {
   DISK_FORMATS[k].getProtectedSectors = _cmdGetProtectedSectors;
 });
 
-// D1M/D2M/D4M: also protect system partition sectors on track 26
+// D1M/D2M/D4M: also protect CMD FD system partition sectors on the last track
+// (signature sector 5 + partition directory chain sectors 8-11, per VICE fsimage-create.c).
+// These sectors are protected from file allocation but VICE leaves them marked *free*
+// in the main BAM — see getBamOmittedSectors below so the integrity checker matches.
+var _CMD_FD_SYS_SECTORS = [5, 8, 9, 10, 11];
 var _cmdFdGetProtectedSectors = function(track) {
   var secs = _cmdGetProtectedSectors.call(this, track);
-  if (track === 26) {
-    // System partition: sector 5 (DevBlock) + sectors 8-11 (partition directory)
-    [5, 8, 9, 10, 11].forEach(function(s) { if (secs.indexOf(s) === -1) secs.push(s); });
+  if (track === currentTracks) {
+    _CMD_FD_SYS_SECTORS.forEach(function(s) { if (secs.indexOf(s) === -1) secs.push(s); });
   }
   return secs;
 };
+var _cmdFdGetBamOmittedSectors = function(track) {
+  return track === currentTracks ? _CMD_FD_SYS_SECTORS.slice() : [];
+};
 ['d1m', 'd2m', 'd4m'].forEach(function(k) {
   DISK_FORMATS[k].getProtectedSectors = _cmdFdGetProtectedSectors;
+  DISK_FORMATS[k].getBamOmittedSectors = _cmdFdGetBamOmittedSectors;
 });
 
 // ── Active format ────────────────────────────────────────────────────
@@ -2412,6 +2419,134 @@ function parsePartition(buffer, startTrack, partSize) {
 
 
 
+// ── CMD FD system partition (D1M/D2M/D4M, track 81) ──────────────────
+// Per-format constants captured byte-exact from VICE-formatted reference disks.
+// Signature sector psize bytes at +0x71 (hi) / +0xA9 (lo); partition-1 size at +0x1E/+0x1F.
+var _CMD_FD_SIG = {
+  d1m: { sigHi71: 0x06, sigLoA9: 0x40, partSizeHi1E: 0x06, partSizeLo1F: 0x00 },
+  d2m: { sigHi71: 0x0C, sigLoA9: 0x80, partSizeHi1E: 0x0C, partSizeLo1F: 0x80 },
+  d4m: { sigHi71: 0x19, sigLoA9: 0x00, partSizeHi1E: 0x19, partSizeLo1F: 0x00 },
+};
+var _CMD_FD_MAGIC = 'CMD FD SERIES   '; // 16 bytes at t81 s5 + 0xF0
+// VICE partition type codes (vdrive-dir.c:945)
+var _CMD_FD_TYPE_NAMES = {
+  0x00: 'Empty',
+  0x01: 'Native',
+  0x02: '1541',
+  0x03: '1571',
+  0x04: '1581',
+  0x05: 'CMD81',
+  0x06: 'Print',
+  0x07: 'Foreign',
+  0xFF: 'System',
+};
+
+// Write the CMD FD system partition on the last track of a D1M/D2M/D4M image.
+function writeCmdFdSystemPartition(data, formatKey, numTracks) {
+  var cfg = _CMD_FD_SIG[formatKey];
+  if (!cfg) return;
+  var fmt = DISK_FORMATS[formatKey];
+  var spt = fmt.sectorsPerTrack(1);
+  var tLast = (numTracks - 1) * spt * 256; // last-track base offset
+
+  // ── Signature sector (s5): mostly 0xFF with per-format psize markers + magic ──
+  var sigOff = tLast + 5 * 256;
+  for (var i = 0; i < 256; i++) data[sigOff + i] = 0xFF;
+  data[sigOff + 0x00] = 0x00;
+  data[sigOff + 0x38] = 0x00; data[sigOff + 0x39] = 0x00;       // partition-area offset (=0)
+  data[sigOff + 0x70] = 0x00; data[sigOff + 0x71] = cfg.sigHi71; // psize high
+  data[sigOff + 0xA8] = 0x00; data[sigOff + 0xA9] = cfg.sigLoA9; // psize low
+  data[sigOff + 0xE0] = 0x00; data[sigOff + 0xE1] = 0x00;
+  data[sigOff + 0xE2] = 0x01; data[sigOff + 0xE3] = 0x01;         // default-partition fields
+  for (var z = 0xE4; z < 0xF0; z++) data[sigOff + z] = 0x00;
+  for (var m = 0; m < 16; m++) data[sigOff + 0xF0 + m] = _CMD_FD_MAGIC.charCodeAt(m);
+
+  // ── Partition directory chain (s8 -> s9 -> s10 -> s11), zero-fill first ──
+  for (var s = 8; s <= 11; s++) {
+    var so = tLast + s * 256;
+    for (var k = 0; k < 256; k++) data[so + k] = 0x00;
+  }
+  var s8  = tLast +  8 * 256;
+  var s9  = tLast +  9 * 256;
+  var s10 = tLast + 10 * 256;
+  var s11 = tLast + 11 * 256;
+  // Chain-link bytes (VICE's exact pattern; first entry of s8 happens to start with 01 01)
+  data[s8  + 0] = 0x01; data[s8  + 1] = 0x01;
+  data[s9  + 0] = 0x01; data[s9  + 1] = 0x02;
+  data[s10 + 0] = 0x01; data[s10 + 1] = 0x03;
+  data[s11 + 0] = 0x00; data[s11 + 1] = 0xFF;
+
+  // Entry 0 in s8 — SYSTEM (type 0xFF)
+  data[s8 + 0x02] = 0xFF;
+  // +0x03..+0x04 already 0x00
+  var sysName = 'SYSTEM';
+  for (var n = 0; n < 16; n++) {
+    data[s8 + 0x05 + n] = n < sysName.length ? sysName.charCodeAt(n) : 0xA0;
+  }
+  // +0x15..+0x1F already 0x00 (size = 0 for SYSTEM)
+
+  // Entry 1 in s8 — PARTITION 1 (native, type 0x01)
+  var e1 = s8 + 0x20;
+  data[e1 + 0x00] = 0x00; data[e1 + 0x01] = 0x00;
+  data[e1 + 0x02] = 0x01;
+  var pName = 'PARTITION 1';
+  for (var p = 0; p < 16; p++) {
+    data[e1 + 0x05 + p] = p < pName.length ? pName.charCodeAt(p) : 0xA0;
+  }
+  // Start LBA (+0x15..+0x17) left 0; size at +0x1D..+0x1F
+  data[e1 + 0x1E] = cfg.partSizeHi1E;
+  data[e1 + 0x1F] = cfg.partSizeLo1F;
+}
+
+// Read the CMD FD system partition table from the last track.
+// Returns null if the "CMD FD SERIES   " magic is absent, otherwise an array of
+// { type, typeName, name, startBlock, sizeBlocks } for each populated entry.
+function readCmdFdSysPartitions(buffer, formatKey, numTracks) {
+  if (!_CMD_FD_SIG[formatKey]) return null;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var fmt = DISK_FORMATS[formatKey];
+  var spt = fmt.sectorsPerTrack(1);
+  var tLast = (numTracks - 1) * spt * 256;
+  if (tLast + 12 * 256 > data.length) return null;
+
+  // Magic check at t_last sector 5 offset 0xF0
+  var sigOff = tLast + 5 * 256;
+  for (var m = 0; m < 16; m++) {
+    if (data[sigOff + 0xF0 + m] !== _CMD_FD_MAGIC.charCodeAt(m)) return null;
+  }
+
+  var partitions = [];
+  var dirSectors = [8, 9, 10, 11];
+  for (var si = 0; si < dirSectors.length; si++) {
+    var so = tLast + dirSectors[si] * 256;
+    // 8 entries per sector, 32 bytes each
+    for (var ei = 0; ei < 8; ei++) {
+      var e = so + ei * 32;
+      var type = data[e + 0x02];
+      // Skip unused slots. The chain-link bytes at offsets 0/1 of each sector
+      // overlap entry 0's first two bytes, so we only classify by type.
+      if (type === 0x00) continue;
+
+      var name = '';
+      for (var ni = 0; ni < 16; ni++) {
+        var ch = data[e + 0x05 + ni];
+        if (ch === 0xA0 || ch === 0x00) break;
+        name += String.fromCharCode(ch);
+      }
+      var startBlock = (data[e + 0x15] << 16) | (data[e + 0x16] << 8) | data[e + 0x17];
+      var sizeBlocks = (data[e + 0x1D] << 16) | (data[e + 0x1E] << 8) | data[e + 0x1F];
+      partitions.push({
+        type: type,
+        typeName: _CMD_FD_TYPE_NAMES[type] || ('0x' + type.toString(16)),
+        name: name,
+        startBlock: startBlock,
+        sizeBlocks: sizeBlocks,
+      });
+    }
+  }
+  return partitions;
+}
+
 // ── Create empty disk image ──────────────────────────────────────────
 function createEmptyDisk(formatKey, numTracks) {
   // CMD native formats: DNP, D1M, D2M, D4M
@@ -2519,52 +2654,12 @@ function createCmdNativeImage(formatKey, numTracks) {
   var dirOff = 34 * 256;
   data[dirOff + 0] = 0x00; data[dirOff + 1] = 0xFF;
 
-  // D1M/D2M/D4M: write system partition on track 26 and mark sectors used in BAM
-  if (formatKey !== 'dnp' && numTracks >= 26) {
-    var t26off = 25 * spt * 256; // track 26 base offset (tracks are 1-based, so track 26 = offset 25*spt*256)
-
-    // Sector 5: DevBlock (device information)
-    var devOff = t26off + 5 * 256;
-    for (var di = 0; di < 256; di++) data[devOff + di] = 0xFF; // filled with $FF
-    data[devOff + 0x00] = 0x43; // 'C' — CMD signature
-    data[devOff + 0x01] = 0x4D; // 'M'
-    data[devOff + 0x02] = 0x44; // 'D'
-    data[devOff + 0x04] = 0x08; // default device number (8)
-    data[devOff + 0x05] = 0x01; // default partition (1)
-
-    // Sectors 8-11: system partition directory (empty, $00-filled)
-    for (var sp = 8; sp <= 11; sp++) {
-      var spOff = t26off + sp * 256;
-      for (var spi = 0; spi < 256; spi++) data[spOff + spi] = 0x00;
-    }
-    // Sector 8: link to sector 9
-    data[t26off + 8 * 256 + 0] = 26; // next dir sector track
-    data[t26off + 8 * 256 + 1] = 9;
-    // Sector 9: link to sector 10
-    data[t26off + 9 * 256 + 0] = 26;
-    data[t26off + 9 * 256 + 1] = 10;
-    // Sector 10: link to sector 11
-    data[t26off + 10 * 256 + 0] = 26;
-    data[t26off + 10 * 256 + 1] = 11;
-    // Sector 11: end of chain
-    data[t26off + 11 * 256 + 0] = 0x00;
-    data[t26off + 11 * 256 + 1] = 0xFF;
-
-    // Write a default partition entry in sector 8 (first entry = this native partition)
-    var pe = t26off + 8 * 256 + 2; // first entry starts at byte 2 of the dir sector
-    data[pe + 0] = 0x01; // type: native
-    // Name: "PARTITION 1"
-    var pname = 'PARTITION 1';
-    for (var pni = 0; pni < 16; pni++) {
-      data[pe + 4 + pni] = pni < pname.length ? pname.charCodeAt(pni) : 0xA0;
-    }
-
-    // Mark system sectors as used in BAM (track 26: sectors 5, 8-11)
-    // Track 26 BAM: sector = 2 + (26 >> 3) = 5, offset = (26 & 7) * 32 = 2 * 32 = 64
-    var t26bmOff = 5 * 256 + 64; // BAM sector 5 on track 1, byte offset 64
-    [5, 8, 9, 10, 11].forEach(function(ss) {
-      data[t26bmOff + (ss >> 3)] &= ~(0x80 >> (ss & 7));
-    });
+  // D1M/D2M/D4M: write CMD FD system partition on the last track.
+  // Note: VICE intentionally leaves t_last s5 & s8-11 marked free in the main BAM —
+  // allocation is prevented via fmt.getProtectedSectors(), not via BAM bits. Matching
+  // that behaviour keeps the free-block count consistent with VICE/DirMaster.
+  if (formatKey !== 'dnp' && _CMD_FD_SIG[formatKey]) {
+    writeCmdFdSystemPartition(data, formatKey, numTracks);
   }
 
   return data.buffer;
