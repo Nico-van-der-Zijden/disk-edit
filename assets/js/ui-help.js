@@ -190,6 +190,15 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.33', title: 'D1M/D2M/D4M: CMD FD system partition byte-exact to VICE', items: [
+      'Fixed: system partition now written on the last track (track 81), not track 26',
+      'Writer is byte-exact to VICE fsimage-create.c for D1M/D2M/D4M signature sector and partition directory chain',
+      'Added "CMD FD SERIES" magic at track 81 sector 5 +0xF0 (required for VICE to recognise the disk)',
+      'New BAM viewer Partitions tab lists SYSTEM + PARTITION 1 entries with type, start block, and size',
+      'Fixed 5-blocks-short bug: free-block count now matches VICE (3205 / 6445 / 12925 for D1M/D2M/D4M)',
+      'Integrity check no longer flags CMD FD system sectors as allocation errors (VICE leaves them marked free in the main BAM)',
+      'Validate Disk preserves the VICE-style BAM instead of reverting it',
+    ]},
     { ver: '1.3.32', title: 'D1M/D2M/D4M as native CMD format, remove DHD', items: [
       'D1M/D2M/D4M: proper DISK_FORMATS definitions as CMD native partitions',
       'D1M (FD-2000 DD): 81 tracks, 40 sectors/track, 829 KB',
