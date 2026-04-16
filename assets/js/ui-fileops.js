@@ -775,7 +775,7 @@ document.getElementById('opt-export-txt-gw').addEventListener('click', function(
 });
 
 // ── File menu: Copy / Paste ──────────────────────────────────────────
-document.getElementById('opt-copy').addEventListener('click', (e) => {
+document.getElementById('opt-copy').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
@@ -783,15 +783,32 @@ document.getElementById('opt-copy').addEventListener('click', (e) => {
   var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
   clipboard = [];
 
+  var total = entries.length;
+  var skipped = [];
+
+  // Show progress for multi-file copy
+  if (total > 1) {
+    var body = document.getElementById('modal-body');
+    var footer = document.querySelector('#modal-overlay .modal-footer');
+    document.getElementById('modal-title').textContent = 'Copying Files';
+    body.innerHTML =
+      '<div id="copy-status" style="margin-bottom:8px;font-size:12px;color:var(--text-muted)"></div>' +
+      '<div style="background:var(--bg-main);border:1px solid var(--border);border-radius:3px;height:16px;overflow:hidden">' +
+        '<div id="copy-bar" style="height:100%;width:0%;background:var(--accent);transition:width 0.15s"></div>' +
+      '</div>';
+    footer.innerHTML = '';
+    document.getElementById('modal-overlay').classList.add('open');
+  }
+
   for (var ci = 0; ci < entries.length; ci++) {
     var entOff = entries[ci];
     var typeIdx, nameBytes, geosBytes, geosInfoBlock;
+    var fileName = '';
 
     if (isTapeFormat()) {
       var tapeEntry = getTapeEntry(entOff);
       if (!tapeEntry) continue;
-      typeIdx = tapeEntry.type.trim() === 'SEQ' ? 1 : 2; // SEQ=1, PRG=2
-      // Convert PUA name back to PETSCII bytes
+      typeIdx = tapeEntry.type.trim() === 'SEQ' ? 1 : 2;
       nameBytes = new Uint8Array(16);
       for (var ni = 0; ni < 16 && ni < tapeEntry.name.length; ni++) {
         nameBytes[ni] = unicodeToPetscii(tapeEntry.name[ni]);
@@ -799,12 +816,17 @@ document.getElementById('opt-copy').addEventListener('click', (e) => {
       for (var pi = tapeEntry.name.length; pi < 16; pi++) nameBytes[pi] = 0xA0;
       geosBytes = new Uint8Array(9);
       geosInfoBlock = null;
+      fileName = petsciiToReadable(tapeEntry.name).trim();
     } else {
       var typeByte = data[entOff + 2];
       typeIdx = typeByte & 0x07;
-      if (typeIdx < 1 || typeIdx > 4) continue;
       nameBytes = new Uint8Array(16);
       for (var i = 0; i < 16; i++) nameBytes[i] = data[entOff + 5 + i];
+      fileName = petsciiToReadable(readPetsciiString(data, entOff + 5, 16)).trim() || '?';
+      if (typeIdx < 1 || typeIdx > 4) {
+        skipped.push({ name: fileName, reason: 'Unsupported file type' });
+        continue;
+      }
       geosBytes = new Uint8Array(9);
       for (var g = 0; g < 9; g++) geosBytes[g] = data[entOff + 21 + g];
       geosInfoBlock = null;
@@ -819,17 +841,31 @@ document.getElementById('opt-copy').addEventListener('click', (e) => {
       }
     }
 
-    // GEOS VLIR files: directory T/S points to the VLIR index sector, not to
-    // file data. Capture each record's chain separately so paste can rebuild
-    // the file correctly. Non-VLIR (including Sequential GEOS) uses readFileData.
+    // Update progress
+    if (total > 1) {
+      document.getElementById('copy-status').textContent = (ci + 1) + ' / ' + total + ': ' + fileName;
+      document.getElementById('copy-bar').style.width = Math.round(((ci + 1) / total) * 100) + '%';
+      await new Promise(function(r) { setTimeout(r, 0); });
+    }
+
     var vlirRecords = null;
     var fileData = null;
     if (isVlirFile(data, entOff)) {
       vlirRecords = readVLIRRecordsForCopy(currentBuffer, entOff);
-      if (!vlirRecords || vlirRecords.length === 0) continue;
+      if (!vlirRecords || vlirRecords.length === 0) {
+        skipped.push({ name: fileName, reason: 'Empty VLIR file (no records)' });
+        continue;
+      }
     } else {
       var result = readFileData(currentBuffer, entOff);
-      if (result.error || result.data.length === 0) continue;
+      if (result.error) {
+        skipped.push({ name: fileName, reason: result.error });
+        continue;
+      }
+      if (result.data.length === 0) {
+        skipped.push({ name: fileName, reason: 'Empty file (no data)' });
+        continue;
+      }
       fileData = new Uint8Array(result.data);
     }
 
@@ -842,6 +878,20 @@ document.getElementById('opt-copy').addEventListener('click', (e) => {
       vlirRecords: vlirRecords
     });
   }
+
+  // Show summary for multi-file copy
+  if (total > 1) {
+    var lines = [];
+    lines.push(clipboard.length + ' file(s) copied to clipboard.');
+    if (skipped.length > 0) {
+      lines.push(skipped.length + ' file(s) skipped:');
+      for (var si = 0; si < skipped.length; si++) {
+        lines.push('  ' + skipped[si].name + ' \u2014 ' + skipped[si].reason);
+      }
+    }
+    showModal('Copy Complete', lines);
+  }
+
   updateEntryMenuState();
 });
 
@@ -869,13 +919,35 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     }
   }
 
+  // Show progress modal
+  var total = clipboard.length;
+  var body = document.getElementById('modal-body');
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  document.getElementById('modal-title').textContent = 'Pasting Files';
+  body.innerHTML =
+    '<div id="paste-status" style="margin-bottom:8px;font-size:12px;color:var(--text-muted)"></div>' +
+    '<div style="background:var(--bg-main);border:1px solid var(--border);border-radius:3px;height:16px;overflow:hidden">' +
+      '<div id="paste-bar" style="height:100%;width:0%;background:var(--accent);transition:width 0.15s"></div>' +
+    '</div>';
+  footer.innerHTML = '';
+  document.getElementById('modal-overlay').classList.add('open');
+
   var pasted = 0;
-  var remaining = clipboard.length;
-  for (var pi = 0; pi < clipboard.length; pi++) {
+  var skipped = []; // { name, reason }
+
+  for (var pi = 0; pi < total; pi++) {
     var item = clipboard[pi];
+    var fileName = petsciiToReadable(readPetsciiString(item.nameBytes, 0, 16)).trim() || '?';
+
+    // Update progress
+    document.getElementById('paste-status').textContent = (pi + 1) + ' / ' + total + ': ' + fileName;
+    document.getElementById('paste-bar').style.width = Math.round(((pi + 1) / total) * 100) + '%';
+
+    // Yield to browser for repaint
+    await new Promise(function(r) { setTimeout(r, 0); });
+
     var success;
     if (item.vlirRecords) {
-      // GEOS VLIR file — rebuild on the destination with full record structure
       success = writeVlirFileToDisk(
         item.typeIdx | 0x80,
         item.nameBytes,
@@ -893,22 +965,34 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     if (success) {
       pasted++;
     } else {
-      // write*FileToDisk already showed the error — stop here
-      remaining = clipboard.length - pi - 1;
+      skipped.push({ name: fileName, reason: 'Disk full or no directory space' });
       break;
     }
   }
 
+  // Add remaining files that weren't attempted
+  for (var ri = pasted + skipped.length; ri < total; ri++) {
+    var rItem = clipboard[ri];
+    var rName = petsciiToReadable(readPetsciiString(rItem.nameBytes, 0, 16)).trim() || '?';
+    skipped.push({ name: rName, reason: 'Not attempted (previous file failed)' });
+  }
+
+  // Show summary
   if (pasted > 0) {
     var info = parseCurrentDir(currentBuffer);
     renderDisk(info);
-    if (pasted === clipboard.length) {
-      showModal('Paste Complete', [pasted + ' file(s) pasted successfully.']);
-    } else {
-      showModal('Paste Incomplete', [pasted + ' of ' + clipboard.length + ' file(s) pasted.', remaining + ' file(s) could not be pasted (disk full or no directory space).']);
+  }
+
+  var lines = [];
+  if (pasted > 0) lines.push(pasted + ' file(s) pasted successfully.');
+  if (skipped.length > 0) {
+    lines.push(skipped.length + ' file(s) not pasted:');
+    for (var si = 0; si < skipped.length; si++) {
+      lines.push('  ' + skipped[si].name + ' \u2014 ' + skipped[si].reason);
     }
   }
-  // If pasted === 0, writeFileToDisk already showed the error
+  if (lines.length === 0) lines.push('No files pasted.');
+  showModal(pasted === total ? 'Paste Complete' : 'Paste Incomplete', lines);
 });
 
 // ── File menu: Import File ────────────────────────────────────────────
