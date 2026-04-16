@@ -380,12 +380,8 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     (totalFree + totalUsed) + ' sectors';
   var html = bamWarnings;
 
-  // Disk Map tab content (radial/spiral visualization)
+  // Disk Map tab content (radial visualization)
   var diskMapHtml = '<div class="disk-map-wrap">' +
-    '<div class="disk-map-toggle">' +
-      '<button class="disk-map-toggle-btn active" data-disk-map-mode="rings">Rings</button>' +
-      '<button class="disk-map-toggle-btn" data-disk-map-mode="spiral">Spiral</button>' +
-    '</div>' +
     '<canvas class="disk-map-canvas" id="disk-map-canvas"></canvas>' +
     '</div>';
 
@@ -616,7 +612,6 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     var dmCx = dmSize / 2, dmCy = dmSize / 2;
     var dmOuterR = dmSize / 2 - 10;
     var dmInnerR = dmSize * 0.08; // spindle hole
-    var dmMode = 'rings';
     var dmHitMap = []; // { track, sector, path }
 
     function dmSectorColor(t, s) {
@@ -682,55 +677,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       }
     }
 
-    function drawSpiral() {
-      dmHitMap = [];
-      dmCtx.fillStyle = dmBg;
-      dmCtx.fillRect(0, 0, dmSize, dmSize);
-      var totalSectors = 0;
-      for (var tc = 1; tc <= bamTracks; tc++) totalSectors += fmt.sectorsPerTrack(tc);
-      var turns = bamTracks * 0.6;
-      var dotR = Math.max(2, Math.min(6, dmOuterR / Math.sqrt(totalSectors) * 0.9));
-      var idx = 0;
-
-      for (var t = 1; t <= bamTracks; t++) {
-        var spt = fmt.sectorsPerTrack(t);
-        for (var s = 0; s < spt; s++) {
-          var progress = idx / totalSectors;
-          var radius = dmOuterR - progress * (dmOuterR - dmInnerR - dotR * 2);
-          var angle = progress * turns * Math.PI * 2 - Math.PI / 2;
-          var px = dmCx + radius * Math.cos(angle);
-          var py = dmCy + radius * Math.sin(angle);
-          var path = new Path2D();
-          path.arc(px, py, dotR, 0, Math.PI * 2);
-          dmCtx.fillStyle = dmSectorColor(t, s);
-          dmCtx.fill(path);
-          dmHitMap.push({ track: t, sector: s, path: path });
-          idx++;
-        }
-      }
-      // Center dot
-      dmCtx.beginPath();
-      dmCtx.arc(dmCx, dmCy, dmInnerR * 0.5, 0, Math.PI * 2);
-      dmCtx.fillStyle = dmMuted;
-      dmCtx.fill();
-    }
-
-    function drawDiskMap() {
-      if (dmMode === 'spiral') drawSpiral();
-      else drawRings();
-    }
-
-    drawDiskMap();
-
-    // Toggle between rings and spiral
-    bamBody.querySelectorAll('.disk-map-toggle-btn').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        bamBody.querySelectorAll('.disk-map-toggle-btn').forEach(function(b) { b.classList.remove('active'); });
-        btn.classList.add('active');
-        dmMode = btn.getAttribute('data-disk-map-mode');
-        drawDiskMap();
-      });
-    });
+    drawRings();
 
     // Hover tooltip
     var dmLastTitle = '';

@@ -244,31 +244,3 @@
     cursor: crosshair;
   }
 
-  .disk-map-toggle {
-    display: inline-flex;
-    background: var(--hover);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    overflow: hidden;
-    font-size: 11px;
-  }
-
-  .disk-map-toggle-btn {
-    padding: 3px 10px;
-    border: none;
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 11px;
-  }
-
-  .disk-map-toggle-btn:hover {
-    color: var(--text);
-  }
-
-  .disk-map-toggle-btn.active {
-    background: var(--selected-bg);
-    color: var(--selected-text);
-  }
-

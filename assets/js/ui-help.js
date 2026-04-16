@@ -191,11 +191,9 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
-    { ver: '1.3.39', title: 'Disk Map: radial and spiral BAM visualization', items: [
-      'New "Disk Map" tab in the BAM viewer with two visualization modes',
-      'Concentric rings mode: tracks as rings with sectors as arcs, mirroring real disk geometry',
-      'Spiral mode: all sectors in a continuous spiral from outer to inner tracks',
-      'Toggle button to switch between rings and spiral views',
+    { ver: '1.3.39', title: 'Disk Map: radial BAM visualization', items: [
+      'New "Disk Map" tab in the BAM viewer showing the disk as concentric rings',
+      'Tracks as rings with sectors as arcs, mirroring real physical disk geometry',
       'Variable sectors-per-track visible (D64 zones, D80/D82 zones)',
       'Hover shows track/sector, file ownership, and BAM status',
       'Click opens the hex sector editor',
