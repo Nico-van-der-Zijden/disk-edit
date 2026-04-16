@@ -2003,6 +2003,8 @@ function escHtml(s) {
 
 // ── File type names (shared across all CBM formats) ──────────────────
 const FILE_TYPES = ['DEL', 'SEQ', 'PRG', 'USR', 'REL', 'CBM', 'DIR'];
+var FILE_TYPE = {};
+FILE_TYPES.forEach(function(name, idx) { FILE_TYPE[name] = idx; });
 
 function fileTypeName(typeByte) {
   const closed = (typeByte & 0x80) !== 0;

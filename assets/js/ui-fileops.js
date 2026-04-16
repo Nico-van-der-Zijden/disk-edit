@@ -1009,7 +1009,7 @@ function buildTrueAllocationMap(buffer) {
         }
 
         // REL file side-sector chain
-        if (typeIdx === 4) {
+        if (typeIdx === FILE_TYPE.REL) {
           var sst = data[entOff + 0x15], sss = data[entOff + 0x16];
           var ssVisited = {};
           while (sst !== 0) {
@@ -1022,6 +1022,41 @@ function buildTrueAllocationMap(buffer) {
             var ssoff = sectorOffset(sst, sss);
             if (ssoff < 0) break;
             sst = data[ssoff]; sss = data[ssoff + 1];
+          }
+        }
+
+        // GEOS file: mark info block and (for VLIR) follow record chains
+        // (skip REL files — byte 0x17 is record length, 0x18 could be non-zero)
+        if (data[entOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
+          var geosInfoT = data[entOff + 0x15];
+          var geosInfoS = data[entOff + 0x16];
+          if (geosInfoT >= 1 && geosInfoT <= currentTracks &&
+              geosInfoS < fmt.sectorsPerTrack(geosInfoT)) {
+            allocated[geosInfoT + ':' + geosInfoS] = true;
+          }
+          // VLIR: walk index sector and follow each record's chain
+          if (data[entOff + 0x17] === 0x01) {
+            var vlirT2 = data[entOff + 3], vlirS2 = data[entOff + 4];
+            var vlirOff2 = sectorOffset(vlirT2, vlirS2);
+            if (vlirOff2 >= 0) {
+              for (var vri2 = 0; vri2 < 127; vri2++) {
+                var recT2 = data[vlirOff2 + 2 + vri2 * 2];
+                var recS2 = data[vlirOff2 + 2 + vri2 * 2 + 1];
+                if (recT2 === 0 && recS2 === 0) break;
+                if (recT2 === 0) continue; // empty slot
+                var vft2 = recT2, vfs2 = recS2;
+                while (vft2 !== 0) {
+                  if (vft2 < 1 || vft2 > currentTracks) break;
+                  if (vfs2 >= fmt.sectorsPerTrack(vft2)) break;
+                  var vkey2 = vft2 + ':' + vfs2;
+                  if (allocated[vkey2]) break;
+                  allocated[vkey2] = true;
+                  var voff2 = sectorOffset(vft2, vfs2);
+                  if (voff2 < 0) break;
+                  vft2 = data[voff2]; vfs2 = data[voff2 + 1];
+                }
+              }
+            }
           }
         }
       }
@@ -1469,7 +1504,7 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock)
     return false;
   }
 
-  var entryOff = findFreeDirEntry(currentBuffer);
+  var entryOff = findFreeDirEntry(currentBuffer, allocated);
   if (entryOff < 0) {
     currentBuffer = snapshot;
     showModal('Write Error', ['No free directory entry available.']);

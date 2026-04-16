@@ -276,7 +276,7 @@ function checkBAMIntegrity(buffer) {
         if (closed) {
           followFileChain(et, es, ownerName);
           // REL file: also follow side-sector chain
-          if (typeIdx === 4) {
+          if (typeIdx === FILE_TYPE.REL) {
             var sst = data[entOff + 0x15], sss = data[entOff + 0x16];
             followFileChain(sst, sss, ownerName + ' (SS)');
           }
@@ -386,7 +386,7 @@ function optimizeDisk(buffer, interleave, defragment) {
 
     // Skip REL files — side-sector chains have internal T/S pointers
     // Their sectors will be protected via the protectedSectors map below
-    if (typeIdx === 4) {
+    if (typeIdx === FILE_TYPE.REL) {
       log.push('Skipped REL file: "' + petsciiToReadable(entry.name) + '"');
       continue;
     }
@@ -833,9 +833,41 @@ function validateDisk(buffer) {
 
         var label = '"' + rname + '"';
         const result = followChain(fileTrack, fileSector, label);
+        var totalBlocks = result.blocks;
+
+        // GEOS file: track info block and VLIR record chains
+        // (skip REL files — byte 0x17 is record length, 0x18 could be non-zero)
+        var geosFileType = data[entryOff + 0x18];
+        if (geosFileType > 0 && fileType !== FILE_TYPE.REL) {
+          var infoT = data[entryOff + 0x15];
+          var infoS = data[entryOff + 0x16];
+          if (infoT >= 1 && infoT <= numTracks && infoS < fmt.sectorsPerTrack(infoT)) {
+            if (allocated[infoT][infoS]) {
+              log.push(`  ERROR: ${label}: cross-linked info block at track ${infoT} sector ${infoS}`);
+            } else {
+              allocated[infoT][infoS] = 1;
+              totalBlocks++;
+            }
+          }
+          // VLIR: follow each record's sector chain from the index
+          if (data[entryOff + 0x17] === 0x01) {
+            var vlirOff = sectorOffset(fileTrack, fileSector);
+            if (vlirOff >= 0) {
+              for (var vri = 0; vri < 127; vri++) {
+                var recT = data[vlirOff + 2 + vri * 2];
+                var recS = data[vlirOff + 2 + vri * 2 + 1];
+                if (recT === 0 && recS === 0) break;
+                if (recT === 0) continue; // empty slot
+                var recResult = followChain(recT, recS, label + ' record ' + vri);
+                totalBlocks += recResult.blocks;
+              }
+            }
+          }
+        }
+
         const expectedBlocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
-        if (result.blocks !== expectedBlocks && !result.error) {
-          log.push(`  Warning: ${label}: block count ${expectedBlocks} in directory, actual ${result.blocks}`);
+        if (totalBlocks !== expectedBlocks && !result.error) {
+          log.push(`  Warning: ${label}: block count ${expectedBlocks} in directory, actual ${totalBlocks}`);
         }
       }
 
@@ -989,9 +1021,42 @@ function validatePartition(buffer, startTrack, partSize) {
       }
       var label = '"' + rname + '"';
       const result = followChain(fileTrack, fileSector, label);
+      var totalBlocks = result.blocks;
+
+      // GEOS file: track info block and VLIR record chains
+      // (skip REL files — byte 0x17 is record length, 0x18 could be non-zero)
+      var geosFileType = data[entryOff + 0x18];
+      if (geosFileType > 0 && fileType !== FILE_TYPE.REL) {
+        var infoT = data[entryOff + 0x15];
+        var infoS = data[entryOff + 0x16];
+        var infoRelT = infoT - startTrack + 1;
+        if (infoRelT >= 1 && infoRelT <= numPartTracks && infoS < 40) {
+          if (allocated[infoRelT][infoS]) {
+            log.push(`  ERROR: ${label}: cross-linked info block at track ${infoT} sector ${infoS}`);
+          } else {
+            allocated[infoRelT][infoS] = 1;
+            totalBlocks++;
+          }
+        }
+        // VLIR: follow each record's sector chain from the index
+        if (data[entryOff + 0x17] === 0x01) {
+          var vlirOff = sectorOffset(fileTrack, fileSector);
+          if (vlirOff >= 0) {
+            for (var vri = 0; vri < 127; vri++) {
+              var recT = data[vlirOff + 2 + vri * 2];
+              var recS = data[vlirOff + 2 + vri * 2 + 1];
+              if (recT === 0 && recS === 0) break;
+              if (recT === 0) continue; // empty slot
+              var recResult = followChain(recT, recS, label + ' record ' + vri);
+              totalBlocks += recResult.blocks;
+            }
+          }
+        }
+      }
+
       const expectedBlocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
-      if (result.blocks !== expectedBlocks && !result.error) {
-        log.push(`  Warning: ${label}: block count ${expectedBlocks} in directory, actual ${result.blocks}`);
+      if (totalBlocks !== expectedBlocks && !result.error) {
+        log.push(`  Warning: ${label}: block count ${expectedBlocks} in directory, actual ${totalBlocks}`);
       }
     }
   }
