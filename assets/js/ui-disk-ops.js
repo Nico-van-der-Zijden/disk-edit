@@ -1049,7 +1049,7 @@ document.getElementById('opt-optimize').addEventListener('click', function(e) {
     '<input type="radio" name="opt-preset" value="custom">' +
     '<span class="opt-preset-content">' +
       '<span class="opt-preset-label">Custom</span>' +
-      '<span class="opt-preset-desc">Interleave: <input type="text" id="opt-il-custom" maxlength="2" value="' + fmt.defaultInterleave.toString(16).toUpperCase() + '" class="hex-input"></span>' +
+      '<span class="opt-preset-desc">Interleave: <input type="text" id="opt-il-custom" maxlength="2" value="' + fmt.defaultInterleave.toString(16).toUpperCase() + '" class="hex-input" placeholder="' + fmt.defaultInterleave.toString(16).toUpperCase() + '"></span>' +
     '</span>' +
   '</label>';
   html += '</div>';
