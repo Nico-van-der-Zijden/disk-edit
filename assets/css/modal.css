@@ -122,48 +122,29 @@
     color: var(--text) !important;
   }
 
-  /* --- Split button (primary action + dropdown arrow) --- */
-  .split-btn {
-    display: inline-flex;
-    align-items: stretch;
-    border-radius: 3px;
-    overflow: hidden;
+  /* --- Dropdown button (button with integrated arrow + popup menu) --- */
+  .dropdown-btn-wrap {
+    position: relative;
+    display: inline-block;
   }
 
-  .split-btn-main {
+  .dropdown-btn {
     font-family: inherit;
     font-size: 13px;
-    padding: 6px 16px;
+    padding: 6px 20px;
     border: 1px solid var(--border);
-    border-right: none;
-    border-radius: 3px 0 0 3px;
+    border-radius: 3px;
     background: transparent;
     color: var(--text-muted);
     cursor: pointer;
   }
 
-  .split-btn-main:hover {
+  .dropdown-btn:hover {
     background: var(--hover);
     color: var(--text);
   }
 
-  .split-btn-arrow {
-    font-family: inherit;
-    font-size: 11px;
-    padding: 6px 6px;
-    border: 1px solid var(--border);
-    border-radius: 0 3px 3px 0;
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-  }
-
-  .split-btn-arrow:hover {
-    background: var(--hover);
-    color: var(--text);
-  }
-
-  .split-btn-menu {
+  .dropdown-btn-menu {
     display: none;
     position: absolute;
     bottom: 100%;
@@ -174,15 +155,15 @@
     padding: 2px 0;
     margin-bottom: 4px;
     z-index: 210;
-    min-width: 140px;
+    min-width: 100%;
     box-shadow: 0 -2px 8px rgba(0,0,0,0.3);
   }
 
-  .split-btn-menu.open {
+  .dropdown-btn-menu.open {
     display: block;
   }
 
-  .split-btn-menu-item {
+  .dropdown-btn-menu-item {
     display: block;
     width: 100%;
     padding: 5px 12px;
@@ -193,9 +174,10 @@
     border: none;
     color: var(--text);
     cursor: pointer;
+    white-space: nowrap;
   }
 
-  .split-btn-menu-item:hover {
+  .dropdown-btn-menu-item:hover {
     background: var(--hover);
   }
 

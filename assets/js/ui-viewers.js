@@ -1287,21 +1287,134 @@ function showFileGfxViewer(entryOff) {
     return document.querySelector('#modal-body .gfx-canvas');
   }
 
+  function downloadBlob(blob, filename) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
   function savePng() {
     var c = getCanvas();
     if (!c) return;
-    var a = document.createElement('a');
-    a.href = c.toDataURL('image/png');
-    a.download = safeName + '.png';
-    a.click();
+    c.toBlob(function(blob) { downloadBlob(blob, safeName + '.png'); }, 'image/png');
   }
 
-  function canvasToSvg(c) {
+  function saveJpg() {
+    var c = getCanvas();
+    if (!c) return;
+    c.toBlob(function(blob) { downloadBlob(blob, safeName + '.jpg'); }, 'image/jpeg', 0.95);
+  }
+
+  function saveGif() {
+    var c = getCanvas();
+    if (!c) return;
     var w = c.width, h = c.height;
-    var ctx = c.getContext('2d');
-    var img = ctx.getImageData(0, 0, w, h);
-    var px = img.data;
-    // Build color map: group pixels by color for efficient SVG output
+    var px = c.getContext('2d').getImageData(0, 0, w, h).data;
+    // Build indexed palette from canvas pixels (C64 images have ≤16 colors)
+    var palette = [], colorIdx = {};
+    for (var i = 0; i < px.length; i += 4) {
+      var key = (px[i] << 16) | (px[i + 1] << 8) | px[i + 2];
+      if (colorIdx[key] === undefined) {
+        colorIdx[key] = palette.length;
+        palette.push(key);
+      }
+    }
+    // GIF needs power-of-2 palette; find minimum size
+    var bits = 1;
+    while ((1 << bits) < palette.length) bits++;
+    var palSize = 1 << bits;
+    // Pad palette to power-of-2
+    while (palette.length < palSize) palette.push(0);
+    // Build indexed pixel data
+    var indices = new Uint8Array(w * h);
+    for (var p = 0; p < w * h; p++) {
+      var k = (px[p * 4] << 16) | (px[p * 4 + 1] << 8) | px[p * 4 + 2];
+      indices[p] = colorIdx[k];
+    }
+    // GIF LZW compression (variable-length code output)
+    var minCode = Math.max(2, bits);
+    var clearCode = 1 << minCode;
+    var eoiCode = clearCode + 1;
+    var codeSize = minCode + 1;
+    var nextCode = eoiCode + 1;
+    var maxCode = 1 << codeSize;
+    var table = {};
+    var buffer = [], bitBuf = 0, bitPos = 0;
+    function emit(code) {
+      bitBuf |= code << bitPos;
+      bitPos += codeSize;
+      while (bitPos >= 8) { buffer.push(bitBuf & 0xFF); bitBuf >>= 8; bitPos -= 8; }
+    }
+    function resetTable() {
+      table = {};
+      for (var t = 0; t < clearCode; t++) table[String(t)] = t;
+      codeSize = minCode + 1;
+      nextCode = eoiCode + 1;
+      maxCode = 1 << codeSize;
+    }
+    resetTable();
+    emit(clearCode);
+    var prev = String(indices[0]);
+    for (var gi = 1; gi < indices.length; gi++) {
+      var cur = String(indices[gi]);
+      var combined = prev + ',' + cur;
+      if (table[combined] !== undefined) {
+        prev = combined;
+      } else {
+        emit(table[prev]);
+        if (nextCode < 4096) {
+          table[combined] = nextCode++;
+          if (nextCode > maxCode && codeSize < 12) { codeSize++; maxCode = 1 << codeSize; }
+        } else {
+          emit(clearCode);
+          resetTable();
+        }
+        prev = cur;
+      }
+    }
+    emit(table[prev]);
+    emit(eoiCode);
+    if (bitPos > 0) buffer.push(bitBuf & 0xFF);
+    // Build sub-blocks (max 255 bytes each)
+    var subBlocks = [];
+    for (var sb = 0; sb < buffer.length; sb += 255) {
+      var chunk = buffer.slice(sb, sb + 255);
+      subBlocks.push(chunk.length);
+      for (var ci = 0; ci < chunk.length; ci++) subBlocks.push(chunk[ci]);
+    }
+    subBlocks.push(0); // block terminator
+    // Assemble GIF87a binary
+    var gif = [];
+    function writeStr(s) { for (var si = 0; si < s.length; si++) gif.push(s.charCodeAt(si)); }
+    function writeU16(v) { gif.push(v & 0xFF); gif.push((v >> 8) & 0xFF); }
+    writeStr('GIF89a');
+    writeU16(w); writeU16(h);
+    gif.push(0x80 | ((bits - 1) << 4) | (bits - 1)); // GCT flag + color resolution + GCT size
+    gif.push(0); // bg color index
+    gif.push(0); // pixel aspect ratio
+    // Global Color Table
+    for (var gc = 0; gc < palSize; gc++) {
+      gif.push((palette[gc] >> 16) & 0xFF);
+      gif.push((palette[gc] >> 8) & 0xFF);
+      gif.push(palette[gc] & 0xFF);
+    }
+    // Image Descriptor
+    gif.push(0x2C);
+    writeU16(0); writeU16(0); writeU16(w); writeU16(h);
+    gif.push(0); // no local color table
+    gif.push(minCode); // LZW minimum code size
+    for (var sbi = 0; sbi < subBlocks.length; sbi++) gif.push(subBlocks[sbi]);
+    gif.push(0x3B); // trailer
+    downloadBlob(new Blob([new Uint8Array(gif)], { type: 'image/gif' }), safeName + '.gif');
+  }
+
+  function saveSvg() {
+    var c = getCanvas();
+    if (!c) return;
+    var w = c.width, h = c.height;
+    var px = c.getContext('2d').getImageData(0, 0, w, h).data;
     var colorRuns = {};
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
@@ -1329,60 +1442,47 @@ function showFileGfxViewer(entryOff) {
       parts.push('</g>');
     }
     parts.push('</svg>');
-    return parts.join('');
+    downloadBlob(new Blob([parts.join('')], { type: 'image/svg+xml' }), safeName + '.svg');
   }
 
-  function saveSvg() {
-    var c = getCanvas();
-    if (!c) return;
-    var svg = canvasToSvg(c);
-    var blob = new Blob([svg], { type: 'image/svg+xml' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = safeName + '.svg';
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }
+  var formats = [
+    { label: 'PNG', save: savePng },
+    { label: 'JPG', save: saveJpg },
+    { label: 'GIF', save: saveGif },
+    { label: 'SVG', save: saveSvg }
+  ];
 
-  // Split button: default action (PNG) + dropdown for format selection
-  var actionsDiv = document.createElement('div');
-  actionsDiv.className = 'modal-footer-actions';
-  actionsDiv.style.position = 'relative';
+  // Dropdown button: "Save as PNG ▾" with format menu
+  var wrap = document.createElement('div');
+  wrap.className = 'dropdown-btn-wrap';
 
-  var splitBtn = document.createElement('div');
-  splitBtn.className = 'split-btn';
-
-  var mainBtn = document.createElement('button');
-  mainBtn.className = 'split-btn-main';
-  mainBtn.textContent = 'Save as PNG';
-  mainBtn.addEventListener('click', savePng);
-
-  var arrowBtn = document.createElement('button');
-  arrowBtn.className = 'split-btn-arrow';
-  arrowBtn.innerHTML = '&#9662;';
+  var btn = document.createElement('button');
+  btn.className = 'dropdown-btn';
+  btn.textContent = 'Save as PNG \u25be';
+  var currentSave = savePng;
 
   var menu = document.createElement('div');
-  menu.className = 'split-btn-menu';
+  menu.className = 'dropdown-btn-menu';
 
-  var pngItem = document.createElement('button');
-  pngItem.className = 'split-btn-menu-item';
-  pngItem.textContent = 'Save as PNG';
-  pngItem.addEventListener('click', function() { menu.classList.remove('open'); savePng(); });
+  for (var fi = 0; fi < formats.length; fi++) {
+    (function(fmt) {
+      var item = document.createElement('button');
+      item.className = 'dropdown-btn-menu-item';
+      item.textContent = 'Save as ' + fmt.label;
+      item.addEventListener('click', function() {
+        menu.classList.remove('open');
+        btn.textContent = 'Save as ' + fmt.label + ' \u25be';
+        currentSave = fmt.save;
+        fmt.save();
+      });
+      menu.appendChild(item);
+    })(formats[fi]);
+  }
 
-  var svgItem = document.createElement('button');
-  svgItem.className = 'split-btn-menu-item';
-  svgItem.textContent = 'Save as SVG';
-  svgItem.addEventListener('click', function() { menu.classList.remove('open'); saveSvg(); });
+  wrap.appendChild(btn);
+  wrap.appendChild(menu);
 
-  menu.appendChild(pngItem);
-  menu.appendChild(svgItem);
-
-  splitBtn.appendChild(mainBtn);
-  splitBtn.appendChild(arrowBtn);
-  actionsDiv.appendChild(splitBtn);
-  actionsDiv.appendChild(menu);
-
-  arrowBtn.addEventListener('click', function(ev) {
+  btn.addEventListener('click', function(ev) {
     ev.stopPropagation();
     menu.classList.toggle('open');
   });
@@ -1391,6 +1491,9 @@ function showFileGfxViewer(entryOff) {
   });
 
   footer.innerHTML = '';
+  var actionsDiv = document.createElement('div');
+  actionsDiv.className = 'modal-footer-actions';
+  actionsDiv.appendChild(wrap);
   footer.appendChild(actionsDiv);
 
   var navDiv = document.createElement('div');

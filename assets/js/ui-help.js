@@ -191,6 +191,15 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.38', title: 'Graphics export: PNG, JPG, GIF, SVG with dropdown button', items: [
+      'Graphics viewer now supports four export formats: PNG, JPG, GIF, and SVG',
+      'Dropdown button replaces split button \u2014 click to open format menu, label shows last-used format',
+      'GIF export uses an inline GIF89a encoder with LZW compression (zero dependencies)',
+      'SVG export generates pixel-accurate scalable graphics with crispEdges rendering',
+      'Extracted showProgressModal() helper for reusable progress modals',
+      'Refactored: replaced magic number 40 with fmt.sectorsPerTrack() in validatePartition',
+      'Refactored: replaced magic number 5 with FILE_TYPE.CBM in optimizer',
+    ]},
     { ver: '1.3.37', title: 'UX improvements and interleave preset fixes', items: [
       'Copy and paste operations now show a progress modal with file names and a progress bar',
       'Summary after copy/paste lists skipped files with specific reasons',
