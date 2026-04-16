@@ -1666,31 +1666,31 @@ var GEOS_STRUCTURE_TYPES = {
 };
 
 var GEOS_SIGNATURE = 'GEOS format V1.0';
-var GEOS_SIG_OFFSET = 0xAD; // offset within BAM sector
+var GEOS_SIG_OFFSET = 0xAD; // offset within header sector
 
-// Check if the GEOS signature is present in the BAM sector
+// Check if the GEOS signature is present in the header sector
 function hasGeosSignature(buffer) {
   if (!buffer) return false;
   var data = new Uint8Array(buffer);
-  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
-  if (bamOff < 0) return false;
+  var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector);
+  if (hdrOff < 0) return false;
   for (var i = 0; i < GEOS_SIGNATURE.length; i++) {
-    if (data[bamOff + GEOS_SIG_OFFSET + i] !== GEOS_SIGNATURE.charCodeAt(i)) return false;
+    if (data[hdrOff + GEOS_SIG_OFFSET + i] !== GEOS_SIGNATURE.charCodeAt(i)) return false;
   }
   return true;
 }
 
-// Write the GEOS signature to the BAM sector
+// Write the GEOS signature to the header sector
 function writeGeosSignature(buffer) {
   var data = new Uint8Array(buffer);
-  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
-  if (bamOff < 0) return;
+  var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector);
+  if (hdrOff < 0) return;
   for (var i = 0; i < GEOS_SIGNATURE.length; i++) {
-    data[bamOff + GEOS_SIG_OFFSET + i] = GEOS_SIGNATURE.charCodeAt(i);
+    data[hdrOff + GEOS_SIG_OFFSET + i] = GEOS_SIGNATURE.charCodeAt(i);
   }
   // Also set the "border" byte at 0xAB to 0x00 (GEOS uses this)
-  data[bamOff + 0xAB] = 0x00;
-  data[bamOff + 0xAC] = 0x00;
+  data[hdrOff + 0xAB] = 0x00;
+  data[hdrOff + 0xAC] = 0x00;
 }
 
 // Check if a disk has GEOS formatting (border sector signature at T18/S0 offset 0xAD)
