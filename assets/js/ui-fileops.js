@@ -824,7 +824,7 @@ document.getElementById('opt-copy').addEventListener('click', (e) => {
     // the file correctly. Non-VLIR (including Sequential GEOS) uses readFileData.
     var vlirRecords = null;
     var fileData = null;
-    if (geosInfoBlock && geosInfoBlock[0x02] === 0x01) {
+    if (isVlirFile(data, entOff)) {
       vlirRecords = readVLIRRecordsForCopy(currentBuffer, entOff);
       if (!vlirRecords || vlirRecords.length === 0) continue;
     } else {
