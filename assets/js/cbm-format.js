@@ -28,8 +28,7 @@ const DISK_FORMATS = {
     hasBamFreeCounts: true,
     interleavePresets: [
       { value: 10, label: '1541 Standard', desc: 'Interleave 10 \u2014 stock CBM DOS, compatible with everything' },
-      { value: 6, label: '1541 Optimized', desc: 'Interleave 6 \u2014 faster on stock hardware, no fast loader needed' },
-      { value: 4, label: 'Fast Loader', desc: 'Interleave 4 \u2014 for SpeedDOS, DolphinDOS, JiffyDOS and similar' },
+      { value: 6, label: '1541 JiffyDOS', desc: 'Interleave 6 \u2014 optimized for JiffyDOS ROM, also faster on stock hardware' },
     ],
     interleaveDefault: 1, // index into presets
     sizes: [
@@ -136,7 +135,7 @@ const DISK_FORMATS = {
       { value: 6, label: '1571 Standard', desc: 'Interleave 6 \u2014 stock 1571 DOS, native double-sided mode' },
       { value: 5, label: '1571 Optimized', desc: 'Interleave 5 \u2014 slightly faster with burst transfer' },
       { value: 10, label: '1541 Compatible', desc: 'Interleave 10 \u2014 safe for 1541 mode on a 1571' },
-      { value: 4, label: 'Fast Loader', desc: 'Interleave 4 \u2014 for SpeedDOS, JiffyDOS and similar' },
+      { value: 4, label: '1571 JiffyDOS', desc: 'Interleave 4 \u2014 optimized for JiffyDOS ROM in 1571 mode' },
     ],
     interleaveDefault: 0,
     sizes: [

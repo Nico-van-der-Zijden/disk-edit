@@ -76,6 +76,7 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '&bull; <a href="https://github.com/OpenCBM/libcbmimage" target="_blank" class="link">libcbmimage</a> — CBM disk image library (CMD FD/HD reference)<br>' +
       '&bull; <a href="https://csdb.dk/" target="_blank" class="link">CSDb</a> — C64 Scene Database<br>' +
       '&bull; <a href="https://www.zimmers.net/anonftp/pub/cbm/" target="_blank" class="link">Zimmers.net</a> — CBM file archive and GEOS format documentation<br>' +
+      '&bull; <a href="https://archive.org/details/JiffyDos_V6_Users_Manual" target="_blank" class="link">JiffyDOS V6 User\'s Manual</a> — sector interleave and fast loader reference<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
