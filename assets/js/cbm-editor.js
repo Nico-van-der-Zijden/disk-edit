@@ -280,6 +280,28 @@ function checkBAMIntegrity(buffer) {
             var sst = data[entOff + 0x15], sss = data[entOff + 0x16];
             followFileChain(sst, sss, ownerName + ' (SS)');
           }
+          // GEOS file: track info block and (for VLIR) follow record chains
+          if (data[entOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
+            var geosInfoT = data[entOff + 0x15];
+            var geosInfoS = data[entOff + 0x16];
+            if (geosInfoT >= 1 && geosInfoT <= currentTracks &&
+                geosInfoS < fmt.sectorsPerTrack(geosInfoT)) {
+              sectorOwner[geosInfoT + ':' + geosInfoS] = ownerName;
+            }
+            // VLIR: walk index sector and follow each record's chain
+            if (data[entOff + 0x17] === 0x01) {
+              var vlirOff = sectorOffset(et, es);
+              if (vlirOff >= 0) {
+                for (var vri = 0; vri < 127; vri++) {
+                  var recT = data[vlirOff + 2 + vri * 2];
+                  var recS = data[vlirOff + 2 + vri * 2 + 1];
+                  if (recT === 0 && recS === 0) break;
+                  if (recT === 0) continue; // empty slot
+                  followFileChain(recT, recS, ownerName);
+                }
+              }
+            }
+          }
         }
       }
 
