@@ -11,7 +11,8 @@ var selectedEntries = []; // multi-select: array of entryOff values
 var showAddresses = localStorage.getItem('cbm-showAddresses') !== 'false';
 var showTrackSector = localStorage.getItem('cbm-showTrackSector') !== 'false';
 var currentPartition = null; // null = root, or { entryOff, startTrack, partSize, name }
-var clipboard = []; // array of { typeIdx, nameBytes, geosBytes, geosInfoBlock, data }
+var clipboard = []; // array of { typeIdx, nameBytes, geosBytes, geosInfoBlock, data, vlirRecords }
+                    // data is null for GEOS VLIR files; vlirRecords is null for everything else
 var dirInterleave = 3;   // directory sector interleave
 var fileInterleave = 10; // file data sector interleave
 

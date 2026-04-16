@@ -190,6 +190,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.34', title: 'Fix copy/paste of GEOS VLIR files', items: [
+      'Copying a GEOS VLIR file (applications, geoWrite docs, fonts, photo albums, geoPaint) previously grabbed only the VLIR index sector as "file data"',
+      'Pasted VLIR files ended up tiny and unusable \u2014 wrong size, wrong data, stale sector pointers from the source disk',
+      'Copy now detects VLIR via info-block structure byte and captures each record\u2019s sector chain separately',
+      'Paste rebuilds the VLIR index and record chains on the destination disk',
+      'GEOS Sequential files and non-GEOS files keep the existing linear-chain code path',
+    ]},
     { ver: '1.3.33', title: 'D1M/D2M/D4M: CMD FD system partition byte-exact to VICE', items: [
       'Fixed: system partition now written on the last track (track 81), not track 26',
       'Writer is byte-exact to VICE fsimage-create.c for D1M/D2M/D4M signature sector and partition directory chain',

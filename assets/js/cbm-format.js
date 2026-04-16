@@ -1820,6 +1820,58 @@ function readVLIRRecords(buffer, entryOff) {
   return records;
 }
 
+// Read VLIR records in the format expected by writeVlirFileToDisk (and CVT import):
+//   end marker (00/00)  -> null
+//   empty slot (00/FF)  -> { data: null }
+//   populated record    -> { data: Uint8Array }
+// Unlike readVLIRRecords (which is lossy), this preserves the end-vs-empty distinction
+// so a VLIR file can be copied and pasted without losing its index structure.
+function readVLIRRecordsForCopy(buffer, entryOff) {
+  var data = new Uint8Array(buffer);
+  var fmt = currentFormat;
+  var indexT = data[entryOff + 3];
+  var indexS = data[entryOff + 4];
+  if (indexT === 0) return [];
+  var idxOff = sectorOffset(indexT, indexS);
+  if (idxOff < 0) return [];
+
+  var records = [];
+  for (var ri = 0; ri < 127; ri++) {
+    var recT = data[idxOff + 2 + ri * 2];
+    var recS = data[idxOff + 2 + ri * 2 + 1];
+    if (recT === 0 && recS === 0) {
+      records.push(null); // end marker — stop
+      break;
+    }
+    if (recT === 0 && recS === 0xFF) {
+      records.push({ data: null }); // empty slot
+      continue;
+    }
+    // Populated record: follow sector chain
+    var bytes = [];
+    var visited = {};
+    var t = recT, s = recS;
+    while (t !== 0) {
+      if (t < 1 || t > currentTracks) break;
+      if (s >= fmt.sectorsPerTrack(t)) break;
+      var key = t + ':' + s;
+      if (visited[key]) break;
+      visited[key] = true;
+      var off = sectorOffset(t, s);
+      if (off < 0) break;
+      var nextT = data[off], nextS = data[off + 1];
+      if (nextT === 0) {
+        for (var i = 2; i <= nextS && i < 256; i++) bytes.push(data[off + i]);
+      } else {
+        for (var j = 2; j < 256; j++) bytes.push(data[off + j]);
+      }
+      t = nextT; s = nextS;
+    }
+    records.push({ data: new Uint8Array(bytes) });
+  }
+  return records;
+}
+
 // Decompress GEOS bitmap data (geoPaint compression).
 // code < 64: next 'code' bytes are literal data
 // code 64-127: fill (code-64) cards with next 8-byte pattern

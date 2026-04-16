@@ -817,15 +817,27 @@ document.getElementById('opt-copy').addEventListener('click', (e) => {
       }
     }
 
-    var result = readFileData(currentBuffer, entOff);
-    if (result.error || result.data.length === 0) continue;
+    // GEOS VLIR files: directory T/S points to the VLIR index sector, not to
+    // file data. Capture each record's chain separately so paste can rebuild
+    // the file correctly. Non-VLIR (including Sequential GEOS) uses readFileData.
+    var vlirRecords = null;
+    var fileData = null;
+    if (geosInfoBlock && geosInfoBlock[0x02] === 0x01) {
+      vlirRecords = readVLIRRecordsForCopy(currentBuffer, entOff);
+      if (!vlirRecords || vlirRecords.length === 0) continue;
+    } else {
+      var result = readFileData(currentBuffer, entOff);
+      if (result.error || result.data.length === 0) continue;
+      fileData = new Uint8Array(result.data);
+    }
 
     clipboard.push({
       typeIdx: typeIdx,
       nameBytes: nameBytes,
       geosBytes: geosBytes,
       geosInfoBlock: geosInfoBlock,
-      data: new Uint8Array(result.data)
+      data: fileData,
+      vlirRecords: vlirRecords
     });
   }
   updateEntryMenuState();
@@ -859,14 +871,27 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
   var remaining = clipboard.length;
   for (var pi = 0; pi < clipboard.length; pi++) {
     var item = clipboard[pi];
-    var geosData = null;
-    if (item.geosBytes || item.geosInfoBlock) {
-      geosData = { geosBytes: item.geosBytes, geosInfoBlock: item.geosInfoBlock };
+    var success;
+    if (item.vlirRecords) {
+      // GEOS VLIR file — rebuild on the destination with full record structure
+      success = writeVlirFileToDisk(
+        item.typeIdx | 0x80,
+        item.nameBytes,
+        item.vlirRecords,
+        item.geosBytes,
+        item.geosInfoBlock
+      );
+    } else {
+      var geosData = null;
+      if (item.geosBytes || item.geosInfoBlock) {
+        geosData = { geosBytes: item.geosBytes, geosInfoBlock: item.geosInfoBlock };
+      }
+      success = writeFileToDisk(item.typeIdx, item.nameBytes, item.data, geosData);
     }
-    if (writeFileToDisk(item.typeIdx, item.nameBytes, item.data, geosData)) {
+    if (success) {
       pasted++;
     } else {
-      // writeFileToDisk already showed the error — stop here
+      // write*FileToDisk already showed the error — stop here
       remaining = clipboard.length - pi - 1;
       break;
     }
