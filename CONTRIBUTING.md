@@ -48,14 +48,110 @@ The codebase is organized as global functions across multiple JS files loaded in
 
 - **`forEachFileSector(data, entryOff, callback)`** walks all sectors of a file including GEOS info blocks, VLIR record chains, and REL side-sector chains. Use this instead of writing manual chain-walking loops.
 - **`isVlirFile(data, entryOff)`** detects GEOS VLIR files. Use this instead of inline byte checks.
-- **`FILE_TYPE.REL`**, **`FILE_TYPE.CBM`**, etc. are named constants. Use these instead of magic numbers for file type checks.
-- **`showProgressModal(title)`** returns `{ status, bar, update(idx, total, label) }` for progress dialogs.
+- **`FILE_TYPE.REL`**, **`FILE_TYPE.CBM`**, etc. are named constants derived from the `FILE_TYPES` array. Use these instead of magic numbers for file type checks.
+- **`showProgressModal(title)`** returns `{ status, bar, update(idx, total, label) }` for progress dialogs with browser-yield built in.
 
 ### File structure conventions
 
 - GEOS files have an info block sector at directory entry bytes `0x15`/`0x16`, and VLIR files store a record index at the directory T/S (bytes 3-4) instead of a data chain.
 - REL files have a side-sector chain at bytes `0x15`/`0x16`.
 - When adding code that walks file sectors, always handle GEOS and REL structures via `forEachFileSector` or explicit checks.
+
+## Architecture Deep-Dives
+
+### Undo System
+
+The undo system uses full-buffer snapshots stored per tab.
+
+- **`pushUndo()`** (`cbm-editor.js`) copies the entire `currentBuffer` onto the tab's `undoStack` (max depth: 20). Called before every destructive operation — directory edits, sector changes, file writes, BAM modifications.
+- **`popUndo()`** restores the most recent snapshot and re-renders the disk.
+- **`clearUndo()`** empties the stack when a tab is closed.
+
+Each tab stores its own `undoStack` array. On tab switch, `saveActiveTab()` persists the current state (buffer, format, tracks, partition, undo stack) into the tab object, and `loadTab()` restores it.
+
+This is a simple, reliable approach. The trade-off is memory: each undo level stores a full copy of the disk image (175 KB for D64, 819 KB for D81, up to 3.3 MB for D4M). At 20 levels, a D81 uses ~16 MB of undo memory. This is acceptable for browser apps.
+
+### Tab and Disk State
+
+All disk operations use global state variables:
+
+| Variable | Set by | Purpose |
+|----------|--------|---------|
+| `currentBuffer` | Tab load / file open | Raw disk image as ArrayBuffer |
+| `currentFormat` | `parseDisk()` | Format object from `DISK_FORMATS` (d64, d71, d81, etc.) |
+| `currentTracks` | `parseDisk()` | Track count (35, 70, 80, etc.) |
+| `currentPartition` | Partition navigation | null for root, or `{ startTrack, partSize, ... }` for D81/DNP partitions |
+
+Tabs store snapshots of all these values plus metadata (filename, dirty flag, undo stack, tape entries for T64/TAP). The `saveActiveTab()` / `loadTab()` functions copy globals to/from the active tab object on every switch.
+
+### BAM Integrity Model
+
+There are two separate BAM checking systems:
+
+**`checkBAMIntegrity()`** (BAM viewer) — read-only analysis:
+- Walks all directory entries, follows every file's sector chains via `forEachFileSector`, builds a `sectorOwner` map
+- Compares sector ownership against the BAM bitmap
+- Reports: free-count mismatches per track (`bamErrors`), sectors owned but marked free (`allocMismatch`), sectors marked used but unowned (`orphanCount`)
+- Does not modify the disk
+
+**`validateDisk()`** (Disk > Validate) — repairs the disk:
+- Walks all files with its own `followChain` that detects cross-links, circular references, and illegal track/sector values
+- Removes splat files (unclosed directory entries)
+- Rebuilds the BAM bitmap from scratch based on actual sector ownership
+- Reports all errors and corrections in a log
+
+**`buildTrueAllocationMap()`** — used by the sector allocator:
+- Walks all files via `forEachFileSector` to build a `{ "track:sector": true }` map
+- Used by `allocateSectors()` to find genuinely free sectors without trusting the BAM
+- Also used by the orphaned chain scanner and recalculate-free
+
+**BAM bit operations** (`cbm-format.js`):
+- `bamMarkSectorUsed()` clears the sector's bit in the BAM bitmap, then calls `bamRecalcFree()` to recount and write the track's free count
+- `bamMarkSectorFree()` sets the bit and recounts
+- Each format defines its own `bamBitMask()` — LSB-first for D64/D71/D81, MSB-first for CMD formats (DNP/D1M/D2M/D4M)
+
+### GCR Decoding (G64 Support)
+
+G64 images store raw GCR-encoded disk data as read by the drive head. The decoder converts this to a standard D64.
+
+1. **`decodeG64toD64(g64)`** reads the G64 header (half-track count, offset table), then iterates each track calling `extractGCRSector()` for every expected sector
+2. **`extractGCRSector()`** scans for sync marks (consecutive `0xFF` bytes), decodes the sector header (track, sector, checksum), finds the data sync, and decodes 325 GCR bytes into 256 data bytes
+3. **`decodeGCR5()`** converts 5 GCR bytes to 4 data bytes using a 32-entry lookup table (`GCR_DECODE`). Each 5-bit GCR nybble maps to a 4-bit value
+4. Track wrap-around is handled by doubling the track buffer so sectors that span the physical index hole are decoded correctly
+
+### GEOS Viewer Architecture
+
+GEOS files use the VLIR (Variable Length Index Record) structure where the directory T/S points to an index sector containing up to 127 record pointers.
+
+**Record access:**
+- `readVLIRRecords()` follows the index and returns data per record (lossy — trims trailing nulls)
+- `readVLIRRecordsForCopy()` preserves the end-marker vs empty-slot distinction for lossless copy/paste
+
+**Viewer dispatch** (`ui-viewers.js`): The GEOS file type byte and info block class name determine which viewer is shown:
+
+| Viewer | GEOS Type | Records Used |
+|--------|-----------|--------------|
+| geoPaint | Paint image (0x14) | All records — each is 2 card rows (1448 bytes), decompressed via `decompressGeosBitmap()` |
+| Photo Scrap | Scrap (0x15) | Sequential file — entire chain is header + compressed bitmap |
+| Photo Album | Album (0x18) | Each VLIR record is one scrap image |
+| geoWrite | Document (0x07/0x13) | Records 0-60 = text pages, records 64-126 = inline images |
+| GEOS Font | Font (0x08) | Each record = one font size with metrics + bitmap |
+
+**geoWrite rendering** parses styled text with font IDs, alignment, and spacing. Inline images from records 64-126 are decompressed and rendered as data-URL `<img>` elements.
+
+### Build Process
+
+The build script (`build.ps1` for Windows, `build.sh` for macOS/Linux) creates a single self-contained HTML file:
+
+1. Reads the version from `cbm-editor.js`
+2. Inlines all CSS files as `<style>` tags
+3. Converts font files (.woff2, .ttf) to base64 data URIs in `@font-face` rules
+4. Converts FontAwesome font references to inline base64
+5. Inlines all JS files as `<script>` tags
+6. Writes `dist/index.html` (~1-2 MB, zero external dependencies)
+7. Creates `dist/CBM Disk Editor X.Y.Z.zip` for distribution
+
+The output runs from the filesystem without a web server.
 
 ## Testing
 
