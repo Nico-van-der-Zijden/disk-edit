@@ -1095,15 +1095,41 @@ document.getElementById('opt-optimize').addEventListener('click', function(e) {
 
   var okBtn = document.createElement('button');
   okBtn.textContent = 'Optimize';
+
+  // Validate custom interleave and update button/input state
+  function validateCustomInput() {
+    var selected = body.querySelector('input[name="opt-preset"]:checked');
+    if (!selected || selected.value !== 'custom') {
+      customInput.classList.remove('invalid');
+      okBtn.disabled = false;
+      return;
+    }
+    var cStr = customInput.value.trim();
+    if (cStr === '') {
+      customInput.classList.remove('invalid');
+      okBtn.disabled = false;
+      return;
+    }
+    var val = parseInt(cStr, 16);
+    var valid = !isNaN(val) && val >= 1 && val <= 20;
+    customInput.classList.toggle('invalid', !valid);
+    okBtn.disabled = !valid;
+  }
+  customInput.addEventListener('input', validateCustomInput);
+  presetLabels.forEach(function(label) {
+    label.querySelector('input[type="radio"]').addEventListener('change', validateCustomInput);
+  });
+
   okBtn.addEventListener('click', function() {
     var selected = body.querySelector('input[name="opt-preset"]:checked');
     var ilVal;
     if (selected.value === 'custom') {
       var cStr = customInput.value.trim();
-      ilVal = parseInt(cStr, 16);
-      if (isNaN(ilVal) || ilVal < 1 || ilVal > 20) {
-        customInput.focus();
-        return;
+      if (cStr === '') {
+        ilVal = fmt.defaultInterleave;
+      } else {
+        ilVal = parseInt(cStr, 16);
+        if (isNaN(ilVal) || ilVal < 1 || ilVal > 20) return;
       }
     } else {
       ilVal = parseInt(selected.value, 10);

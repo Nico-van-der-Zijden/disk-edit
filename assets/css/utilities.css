@@ -133,6 +133,7 @@
   .opt-preset-desc .hex-input {
     width: 28px;
     margin-left: 2px;
+    text-align: right;
   }
 
   .opt-defrag-row {
