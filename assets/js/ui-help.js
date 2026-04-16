@@ -191,6 +191,17 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.39', title: 'Disk Map: radial and spiral BAM visualization', items: [
+      'New "Disk Map" tab in the BAM viewer with two visualization modes',
+      'Concentric rings mode: tracks as rings with sectors as arcs, mirroring real disk geometry',
+      'Spiral mode: all sectors in a continuous spiral from outer to inner tracks',
+      'Toggle button to switch between rings and spiral views',
+      'Variable sectors-per-track visible (D64 zones, D80/D82 zones)',
+      'Hover shows track/sector, file ownership, and BAM status',
+      'Click opens the hex sector editor',
+      'Disk name displayed in the center spindle hole',
+      'Works on all supported formats including CMD high-SPT disks',
+    ]},
     { ver: '1.3.38', title: 'Graphics export: PNG, JPG, GIF, SVG with dropdown button', items: [
       'Graphics viewer now supports four export formats: PNG, JPG, GIF, and SVG',
       'Dropdown button replaces split button \u2014 click to open format menu, label shows last-used format',

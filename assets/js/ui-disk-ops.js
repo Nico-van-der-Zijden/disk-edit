@@ -380,11 +380,21 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     (totalFree + totalUsed) + ' sectors';
   var html = bamWarnings;
 
+  // Disk Map tab content (radial/spiral visualization)
+  var diskMapHtml = '<div class="disk-map-wrap">' +
+    '<div class="disk-map-toggle">' +
+      '<button class="disk-map-toggle-btn active" data-disk-map-mode="rings">Rings</button>' +
+      '<button class="disk-map-toggle-btn" data-disk-map-mode="spiral">Spiral</button>' +
+    '</div>' +
+    '<canvas class="disk-map-canvas" id="disk-map-canvas"></canvas>' +
+    '</div>';
+
   if (forceCompact) {
-    // High-SPT: Map + Summary (+ Partitions for CMD FD) tabs
+    // High-SPT: Map + Summary + Disk Map (+ Partitions for CMD FD) tabs
     html += '<div class="bam-tabs">' +
       '<span class="bam-tab active" data-bam-view="map">Map</span>' +
       '<span class="bam-tab" data-bam-view="summary">Summary</span>' +
+      '<span class="bam-tab" data-bam-view="diskmap">Disk Map</span>' +
       partsTabHtml +
       '</div>';
     // Canvas map placeholder — drawn after modal opens
@@ -405,16 +415,19 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     html += '<div class="bam-view-content" data-bam-view="map">' + mapLegend +
       '<div class="bam-map-scroll"><canvas id="bam-map-canvas" width="' + canvasW + '" height="' + canvasH + '" style="cursor:crosshair;display:block"></canvas></div></div>';
     html += '<div class="bam-view-content" data-bam-view="summary" style="display:none">' + summaryHtml + '</div>';
+    html += '<div class="bam-view-content" data-bam-view="diskmap" style="display:none">' + diskMapHtml + '</div>';
     html += partsPanelHtml;
   } else {
-    // Tab switcher — Sectors + Summary (+ Partitions for D1M)
+    // Tab switcher — Sectors + Summary + Disk Map (+ Partitions for D1M)
     html += '<div class="bam-tabs">' +
       '<span class="bam-tab active" data-bam-view="sectors">Sectors</span>' +
       '<span class="bam-tab" data-bam-view="summary">Summary</span>' +
+      '<span class="bam-tab" data-bam-view="diskmap">Disk Map</span>' +
       partsTabHtml +
       '</div>';
     html += '<div class="bam-view-content" data-bam-view="sectors">' + sectorsHtml + '</div>';
     html += '<div class="bam-view-content" data-bam-view="summary" style="display:none">' + summaryHtml + '</div>';
+    html += '<div class="bam-view-content" data-bam-view="diskmap" style="display:none">' + diskMapHtml + '</div>';
     html += partsPanelHtml;
   }
 
@@ -561,6 +574,190 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       if (typeof fmt.writeTrackFree === 'function' && !fmt.isSectorFree) bamRecalcFree(d, mt4, bOff);
       document.getElementById('modal-overlay').classList.remove('open');
       document.getElementById('opt-view-bam').click();
+    });
+  }
+
+  // ── Disk Map (radial/spiral) canvas ──────────────────────────────────
+  var diskMapCanvas = document.getElementById('disk-map-canvas');
+  if (diskMapCanvas) {
+    var dmCtx = diskMapCanvas.getContext('2d');
+    var dmCs = getComputedStyle(document.documentElement);
+    var dmBg = dmCs.getPropertyValue('--bg').trim();
+    var dmAccent = dmCs.getPropertyValue('--accent').trim();
+    var dmMuted = dmCs.getPropertyValue('--text-muted').trim();
+    var dmText = dmCs.getPropertyValue('--text').trim();
+
+    // Reuse getCssColor if it exists, or define locally
+    function dmGetColor(cls) {
+      var el = document.createElement('span');
+      el.className = 'bam-sector ' + cls;
+      el.style.display = 'none';
+      document.body.appendChild(el);
+      var style = getComputedStyle(el);
+      var bg = style.backgroundColor;
+      var op = parseFloat(style.opacity);
+      document.body.removeChild(el);
+      if (op < 1) {
+        var m = bg.match(/\d+/g);
+        if (m) return 'rgba(' + m[0] + ',' + m[1] + ',' + m[2] + ',' + op + ')';
+      }
+      return bg;
+    }
+    var dmColUsed = dmGetColor('used');
+    var dmColFree = dmGetColor('free');
+    var dmColDirUsed = dmGetColor('dir-used');
+    var dmColDirFree = dmGetColor('dir-free');
+    var dmColError = dmGetColor('error');
+    var dmColOrphan = dmGetColor('orphan');
+
+    var dmSize = Math.min(520, window.innerWidth - 80, window.innerHeight - 260);
+    diskMapCanvas.width = dmSize;
+    diskMapCanvas.height = dmSize;
+    var dmCx = dmSize / 2, dmCy = dmSize / 2;
+    var dmOuterR = dmSize / 2 - 10;
+    var dmInnerR = dmSize * 0.08; // spindle hole
+    var dmMode = 'rings';
+    var dmHitMap = []; // { track, sector, path }
+
+    function dmSectorColor(t, s) {
+      var key = t + ':' + s;
+      var isDirTrack = (t === fmt.dirTrack);
+      var isFree = checkSectorFree(data, bamOff, t, s);
+      if (isDirTrack) return isFree ? dmColDirFree : dmColDirUsed;
+      if (bamCheck.errorSectors[key]) return dmColError;
+      if (bamCheck.orphanSectors[key]) return dmColOrphan;
+      return isFree ? dmColFree : dmColUsed;
+    }
+
+    function dmTooltip(t, s) {
+      var key = t + ':' + s;
+      var tt = 'T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
+        ' S:$' + s.toString(16).toUpperCase().padStart(2, '0');
+      if (bamCheck.errorSectors[key]) tt += ' \u26a0 BAM error';
+      else if (bamCheck.orphanSectors[key]) tt += ' (orphan)';
+      else if (checkSectorFree(data, bamOff, t, s)) tt += ' (free)';
+      else if (sectorOwner[key]) tt += ' (' + petsciiToReadable(sectorOwner[key]) + ')';
+      else tt += ' (used)';
+      return tt;
+    }
+
+    function drawRings() {
+      dmHitMap = [];
+      dmCtx.fillStyle = dmBg;
+      dmCtx.fillRect(0, 0, dmSize, dmSize);
+      var ringWidth = (dmOuterR - dmInnerR) / bamTracks;
+      var sectorGap = 0.008; // radians between sectors
+      var trackGap = 1; // pixels between tracks
+
+      for (var t = 1; t <= bamTracks; t++) {
+        var spt = fmt.sectorsPerTrack(t);
+        var outerR = dmOuterR - (t - 1) * ringWidth;
+        var innerR = outerR - ringWidth + trackGap;
+        for (var s = 0; s < spt; s++) {
+          var startA = (s / spt) * Math.PI * 2 - Math.PI / 2 + sectorGap / 2;
+          var endA = ((s + 1) / spt) * Math.PI * 2 - Math.PI / 2 - sectorGap / 2;
+          var path = new Path2D();
+          path.arc(dmCx, dmCy, outerR, startA, endA);
+          path.arc(dmCx, dmCy, innerR, endA, startA, true);
+          path.closePath();
+          dmCtx.fillStyle = dmSectorColor(t, s);
+          dmCtx.fill(path);
+          dmHitMap.push({ track: t, sector: s, path: path });
+        }
+      }
+      // Spindle hole
+      dmCtx.beginPath();
+      dmCtx.arc(dmCx, dmCy, dmInnerR, 0, Math.PI * 2);
+      dmCtx.fillStyle = dmBg;
+      dmCtx.fill();
+      // Disk name in center
+      var diskInfo = parseCurrentDir(currentBuffer);
+      if (diskInfo && diskInfo.diskName) {
+        dmCtx.fillStyle = dmMuted;
+        dmCtx.font = '10px monospace';
+        dmCtx.textAlign = 'center';
+        dmCtx.textBaseline = 'middle';
+        var dName = petsciiToReadable(diskInfo.diskName).trim();
+        dmCtx.fillText(dName, dmCx, dmCy);
+      }
+    }
+
+    function drawSpiral() {
+      dmHitMap = [];
+      dmCtx.fillStyle = dmBg;
+      dmCtx.fillRect(0, 0, dmSize, dmSize);
+      var totalSectors = 0;
+      for (var tc = 1; tc <= bamTracks; tc++) totalSectors += fmt.sectorsPerTrack(tc);
+      var turns = bamTracks * 0.6;
+      var dotR = Math.max(2, Math.min(6, dmOuterR / Math.sqrt(totalSectors) * 0.9));
+      var idx = 0;
+
+      for (var t = 1; t <= bamTracks; t++) {
+        var spt = fmt.sectorsPerTrack(t);
+        for (var s = 0; s < spt; s++) {
+          var progress = idx / totalSectors;
+          var radius = dmOuterR - progress * (dmOuterR - dmInnerR - dotR * 2);
+          var angle = progress * turns * Math.PI * 2 - Math.PI / 2;
+          var px = dmCx + radius * Math.cos(angle);
+          var py = dmCy + radius * Math.sin(angle);
+          var path = new Path2D();
+          path.arc(px, py, dotR, 0, Math.PI * 2);
+          dmCtx.fillStyle = dmSectorColor(t, s);
+          dmCtx.fill(path);
+          dmHitMap.push({ track: t, sector: s, path: path });
+          idx++;
+        }
+      }
+      // Center dot
+      dmCtx.beginPath();
+      dmCtx.arc(dmCx, dmCy, dmInnerR * 0.5, 0, Math.PI * 2);
+      dmCtx.fillStyle = dmMuted;
+      dmCtx.fill();
+    }
+
+    function drawDiskMap() {
+      if (dmMode === 'spiral') drawSpiral();
+      else drawRings();
+    }
+
+    drawDiskMap();
+
+    // Toggle between rings and spiral
+    bamBody.querySelectorAll('.disk-map-toggle-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        bamBody.querySelectorAll('.disk-map-toggle-btn').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        dmMode = btn.getAttribute('data-disk-map-mode');
+        drawDiskMap();
+      });
+    });
+
+    // Hover tooltip
+    var dmLastTitle = '';
+    diskMapCanvas.addEventListener('mousemove', function(e) {
+      var rect = diskMapCanvas.getBoundingClientRect();
+      var mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      for (var hi = dmHitMap.length - 1; hi >= 0; hi--) {
+        if (dmCtx.isPointInPath(dmHitMap[hi].path, mx, my)) {
+          var tt = dmTooltip(dmHitMap[hi].track, dmHitMap[hi].sector);
+          if (tt !== dmLastTitle) { diskMapCanvas.title = tt; dmLastTitle = tt; }
+          return;
+        }
+      }
+      if (dmLastTitle) { diskMapCanvas.title = ''; dmLastTitle = ''; }
+    });
+
+    // Click to open sector editor
+    diskMapCanvas.addEventListener('click', function(e) {
+      var rect = diskMapCanvas.getBoundingClientRect();
+      var mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      for (var hi = dmHitMap.length - 1; hi >= 0; hi--) {
+        if (dmCtx.isPointInPath(dmHitMap[hi].path, mx, my)) {
+          document.getElementById('modal-overlay').classList.remove('open');
+          showSectorHexEditor(dmHitMap[hi].track, dmHitMap[hi].sector);
+          return;
+        }
+      }
     });
   }
 
