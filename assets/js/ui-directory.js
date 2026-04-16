@@ -631,23 +631,57 @@ function getFileAddresses(buffer, entryOff) {
 
 function countActualBlocks(buffer, entryOff) {
   const data = new Uint8Array(buffer);
+  const fmt = currentFormat;
   let t = data[entryOff + 3];
   let s = data[entryOff + 4];
   if (t === 0) return 0;
 
-  const visited = new Set();
-  let blocks = 0;
-  while (t !== 0) {
-    if (t < 1 || t > currentTracks) break;
-    if (s < 0 || s >= sectorsPerTrack(t)) break;
-    const key = `${t}:${s}`;
-    if (visited.has(key)) break;
-    visited.add(key);
-    blocks++;
-    const off = sectorOffset(t, s);
-    t = data[off + 0];
-    s = data[off + 1];
+  function followChain(ft, fs) {
+    var count = 0;
+    var visited = {};
+    while (ft !== 0) {
+      if (ft < 1 || ft > currentTracks) break;
+      if (fs < 0 || fs >= sectorsPerTrack(ft)) break;
+      var key = ft + ':' + fs;
+      if (visited[key]) break;
+      visited[key] = true;
+      count++;
+      var off = sectorOffset(ft, fs);
+      ft = data[off]; fs = data[off + 1];
+    }
+    return count;
   }
+
+  var blocks = followChain(t, s);
+  var typeIdx = data[entryOff + 2] & 0x07;
+
+  // REL file: also count side-sector chain
+  if (typeIdx === FILE_TYPE.REL) {
+    blocks += followChain(data[entryOff + 0x15], data[entryOff + 0x16]);
+  }
+
+  // GEOS file: count info block and (for VLIR) record chains
+  if (data[entryOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
+    var infoT = data[entryOff + 0x15];
+    var infoS = data[entryOff + 0x16];
+    if (infoT >= 1 && infoT <= currentTracks && infoS < fmt.sectorsPerTrack(infoT)) {
+      blocks++; // info block
+    }
+    // VLIR: follow each record's sector chain from the index
+    if (data[entryOff + 0x17] === 0x01) {
+      var vlirOff = sectorOffset(t, s);
+      if (vlirOff >= 0) {
+        for (var vri = 0; vri < 127; vri++) {
+          var recT = data[vlirOff + 2 + vri * 2];
+          var recS = data[vlirOff + 2 + vri * 2 + 1];
+          if (recT === 0 && recS === 0) break;
+          if (recT === 0) continue; // empty slot
+          blocks += followChain(recT, recS);
+        }
+      }
+    }
+  }
+
   return blocks;
 }
 
