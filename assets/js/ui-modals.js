@@ -59,6 +59,29 @@ document.getElementById('modal-close').addEventListener('click', () => {
   document.getElementById('modal-overlay').classList.remove('open');
 });
 
+// Show a progress modal with a title, status text, and progress bar.
+// Returns { status, bar, update(idx, total, label) }.
+function showProgressModal(title) {
+  document.getElementById('modal-title').textContent = title;
+  var body = document.getElementById('modal-body');
+  body.innerHTML =
+    '<div class="text-md text-muted mb-md" id="progress-status"></div>' +
+    '<div class="progress-track"><div class="progress-fill" id="progress-bar"></div></div>';
+  document.querySelector('#modal-overlay .modal-footer').innerHTML = '';
+  var status = document.getElementById('progress-status');
+  var bar = document.getElementById('progress-bar');
+  document.getElementById('modal-overlay').classList.add('open');
+  return {
+    status: status,
+    bar: bar,
+    update: function(idx, total, label) {
+      if (status) status.textContent = (idx + 1) + ' / ' + total + ': ' + label;
+      if (bar) bar.style.width = Math.round(((idx + 1) / total) * 100) + '%';
+      return new Promise(function(r) { setTimeout(r, 0); });
+    }
+  };
+}
+
 // Show a modal with custom buttons, returns a promise resolving to the button value
 // Optional items array shows a list below the message
 function showChoiceModal(title, message, buttons, items) {

@@ -786,19 +786,7 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
   var total = entries.length;
   var skipped = [];
 
-  // Show progress for multi-file copy
-  var progressStatus = null, progressBar = null;
-  if (total > 1) {
-    document.getElementById('modal-title').textContent = 'Copying Files';
-    var body = document.getElementById('modal-body');
-    body.innerHTML =
-      '<div class="text-md text-muted mb-md" id="copy-status"></div>' +
-      '<div class="progress-track"><div class="progress-fill" id="copy-bar"></div></div>';
-    document.querySelector('#modal-overlay .modal-footer').innerHTML = '';
-    progressStatus = document.getElementById('copy-status');
-    progressBar = document.getElementById('copy-bar');
-    document.getElementById('modal-overlay').classList.add('open');
-  }
+  var progress = total > 1 ? showProgressModal('Copying Files') : null;
 
   for (var ci = 0; ci < entries.length; ci++) {
     var entOff = entries[ci];
@@ -841,12 +829,7 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
       }
     }
 
-    // Update progress
-    if (progressStatus) {
-      progressStatus.textContent = (ci + 1) + ' / ' + total + ': ' + fileName;
-      progressBar.style.width = Math.round(((ci + 1) / total) * 100) + '%';
-      await new Promise(function(r) { setTimeout(r, 0); });
-    }
+    if (progress) await progress.update(ci, total, fileName);
 
     var vlirRecords = null;
     var fileData = null;
@@ -915,34 +898,17 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     }
   }
 
-  // Show progress modal
   var total = clipboard.length;
-  var body = document.getElementById('modal-body');
-  var footer = document.querySelector('#modal-overlay .modal-footer');
-  document.getElementById('modal-title').textContent = 'Pasting Files';
-  body.innerHTML =
-    '<div class="text-md text-muted mb-md" id="paste-status"></div>' +
-    '<div class="progress-track"><div class="progress-fill" id="paste-bar"></div></div>';
-  footer.innerHTML = '';
-  var pasteStatus = document.getElementById('paste-status');
-  var pasteBar = document.getElementById('paste-bar');
-  document.getElementById('modal-overlay').classList.add('open');
+  var progress = showProgressModal('Pasting Files');
 
   var pasted = 0;
-  var skipped = []; // { name, reason }
+  var skipped = [];
 
   for (var pi = 0; pi < total; pi++) {
     var item = clipboard[pi];
     var fileName = petsciiToReadable(readPetsciiString(item.nameBytes, 0, 16)).trim() || '?';
 
-    // Update progress
-    if (pasteStatus) {
-      pasteStatus.textContent = (pi + 1) + ' / ' + total + ': ' + fileName;
-      pasteBar.style.width = Math.round(((pi + 1) / total) * 100) + '%';
-    }
-
-    // Yield to browser for repaint
-    await new Promise(function(r) { setTimeout(r, 0); });
+    await progress.update(pi, total, fileName);
 
     var success;
     if (item.vlirRecords) {
@@ -968,14 +934,12 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     }
   }
 
-  // Add remaining files that weren't attempted
   for (var ri = pasted + skipped.length; ri < total; ri++) {
     var rItem = clipboard[ri];
     var rName = petsciiToReadable(readPetsciiString(rItem.nameBytes, 0, 16)).trim() || '?';
     skipped.push({ name: rName, reason: 'Not attempted (previous file failed)' });
   }
 
-  // Show summary
   if (pasted > 0) {
     var info = parseCurrentDir(currentBuffer);
     renderDisk(info);

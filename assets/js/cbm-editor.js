@@ -458,7 +458,7 @@ function optimizeDisk(buffer, interleave, defragment) {
       var pe = info.entries[fi];
       if (pe.deleted) continue;
       var ptb = data[pe.entryOff + 2] & 0x07;
-      if (ptb === 5) {
+      if (ptb === FILE_TYPE.CBM) {
         var partStart = data[pe.entryOff + 3];
         var partSize = data[pe.entryOff + 30] | (data[pe.entryOff + 31] << 8);
         var partTracks = Math.floor(partSize / fmt.partitionSpt);
@@ -998,7 +998,7 @@ function validatePartition(buffer, startTrack, partSize) {
         var infoT = data[entryOff + 0x15];
         var infoS = data[entryOff + 0x16];
         var infoRelT = infoT - startTrack + 1;
-        if (infoRelT >= 1 && infoRelT <= numPartTracks && infoS < 40) {
+        if (infoRelT >= 1 && infoRelT <= numPartTracks && infoS < fmt.sectorsPerTrack(infoT)) {
           if (allocated[infoRelT][infoS]) {
             log.push(`  ERROR: ${label}: cross-linked info block at track ${infoT} sector ${infoS}`);
           } else {
