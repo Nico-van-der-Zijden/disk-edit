@@ -190,6 +190,18 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.36', title: 'GEOS overhaul: centralized sector walking, VLIR copy fix, BAM integrity', items: [
+      'Fixed VLIR copy detection: was checking info block icon width (byte 0x02) instead of dir entry structure type (byte 0x17) \u2014 VLIR files were never detected during copy',
+      'GEOS signature now written to header sector, not BAM sector \u2014 fixes D81 BAM corruption on GEOS disk conversion',
+      'Centralized all file sector walking into forEachFileSector() \u2014 single source of truth for GEOS info blocks, VLIR record chains, and REL side-sector chains',
+      'Added isVlirFile() helper replacing 5 duplicated 3-part VLIR detection conditions',
+      'Scratch/unscratch now correctly frees/marks all GEOS and REL sectors in BAM',
+      'Disk optimizer skips GEOS VLIR files (protects all their sectors from reallocation)',
+      'Set Actual File Size, BAM viewer, recalculate-free, export, drag-export all GEOS/REL-aware',
+      'Block count in writeFileToDisk now includes GEOS info block sector',
+      'Scratched file recovery indicator checks all GEOS/REL sectors',
+      'GEOS-aware validation: correctly tracks all sectors unlike 1541 DOS validate',
+    ]},
     { ver: '1.3.35', title: 'Fix GEOS BAM validation and allocation tracking', items: [
       'Validate and BAM rebuild now correctly track GEOS info block sectors and VLIR record chains',
       'Previously only the VLIR index sector was followed, causing BAM errors after pasting GEOS files',
