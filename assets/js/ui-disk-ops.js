@@ -271,6 +271,62 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   }
   summaryHtml += '</div>';
 
+  // ── Per-file fragmentation table ──
+  var dirInfo = parseCurrentDir(currentBuffer);
+  var fragFiles = [];
+  for (var fi = 0; fi < dirInfo.entries.length; fi++) {
+    var fe = dirInfo.entries[fi];
+    if (fe.deleted) continue;
+    var ftb = data[fe.entryOff + 2];
+    if (!(ftb & 0x80)) continue;
+    var fti = ftb & 0x07;
+    if (fti === 0) continue;
+    var sectors = [];
+    forEachFileSector(data, fe.entryOff, function(ft2, fs2) {
+      sectors.push({ t: ft2, s: fs2 });
+    });
+    if (sectors.length < 2) continue;
+    // Count non-adjacent transitions (different track or non-sequential sector with interleave)
+    var jumps = 0;
+    for (var si2 = 1; si2 < sectors.length; si2++) {
+      if (sectors[si2].t !== sectors[si2 - 1].t) jumps++;
+      // Same track but not the expected next sector — count as fragmented
+      else if (Math.abs(sectors[si2].s - sectors[si2 - 1].s) > fmt.sectorsPerTrack(sectors[si2].t) / 2) jumps++;
+    }
+    var fragPct = Math.round(jumps / (sectors.length - 1) * 100);
+    var fname = petsciiToReadable(fe.name || '').trim() || '?';
+    fragFiles.push({ name: fname, blocks: sectors.length, jumps: jumps, pct: fragPct });
+  }
+  fragFiles.sort(function(a, b) { return b.pct - a.pct; });
+  var diskFragPct = 0;
+  if (fragFiles.length > 0) {
+    var totalJumps = 0, totalTrans = 0;
+    for (var ff = 0; ff < fragFiles.length; ff++) {
+      totalJumps += fragFiles[ff].jumps;
+      totalTrans += fragFiles[ff].blocks - 1;
+    }
+    diskFragPct = totalTrans > 0 ? Math.round(totalJumps / totalTrans * 100) : 0;
+  }
+  summaryHtml += '<div style="margin-top:12px;font-size:12px;font-weight:bold;color:var(--text-muted)">Fragmentation: ' + diskFragPct + '%</div>';
+  summaryHtml += '<table style="width:100%;border-collapse:collapse;margin-top:4px;font-size:11px">';
+  summaryHtml += '<tr style="color:var(--text-muted);border-bottom:1px solid var(--border)">' +
+    '<td style="padding:2px 8px 2px 0">File</td>' +
+    '<td style="padding:2px 8px;text-align:right">Blocks</td>' +
+    '<td style="padding:2px 8px;text-align:right">Frag</td>' +
+    '<td style="padding:2px 0;width:80px"></td></tr>';
+  for (var ffi = 0; ffi < fragFiles.length; ffi++) {
+    var f = fragFiles[ffi];
+    var barCol = f.pct === 0 ? 'var(--accent)' : f.pct <= 30 ? '#6c9bd2' : f.pct <= 60 ? '#fab387' : '#f38ba8';
+    summaryHtml += '<tr>' +
+      '<td style="padding:2px 8px 2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</td>' +
+      '<td style="padding:2px 8px;text-align:right">' + f.blocks + '</td>' +
+      '<td style="padding:2px 8px;text-align:right">' + f.pct + '%</td>' +
+      '<td style="padding:2px 0"><div style="background:var(--hover);border-radius:2px;height:8px;overflow:hidden">' +
+        '<div style="width:' + Math.max(f.pct > 0 ? 3 : 0, f.pct) + '%;height:100%;background:' + barCol + '"></div>' +
+      '</div></td></tr>';
+  }
+  summaryHtml += '</table>';
+
   // ── Build Sectors view (individual blocks) — skip if forced compact ──
   var sectorsHtml = '';
   if (!forceCompact) {

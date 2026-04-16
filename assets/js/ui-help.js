@@ -191,6 +191,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.40', title: 'Per-file fragmentation scores in BAM Summary', items: [
+      'BAM viewer Summary tab now shows a per-file fragmentation table',
+      'Each file shows block count, fragmentation percentage, and a color-coded bar',
+      'Disk-wide fragmentation percentage displayed as a header',
+      'Files sorted by fragmentation (most fragmented first)',
+      'Fragmentation measured by non-adjacent sector transitions (track jumps)',
+      'Color coding: green (0%), blue (\u226430%), orange (\u226460%), red (>60%)',
+    ]},
     { ver: '1.3.39', title: 'Disk Map: radial BAM visualization', items: [
       'New "Disk Map" tab in the BAM viewer showing the disk as concentric rings',
       'Tracks as rings with sectors as arcs, mirroring real physical disk geometry',
