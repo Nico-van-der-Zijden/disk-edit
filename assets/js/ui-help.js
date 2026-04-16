@@ -190,6 +190,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.35', title: 'Fix GEOS BAM validation and allocation tracking', items: [
+      'Validate and BAM rebuild now correctly track GEOS info block sectors and VLIR record chains',
+      'Previously only the VLIR index sector was followed, causing BAM errors after pasting GEOS files',
+      'Fixes block count mismatch warnings for GEOS Sequential files (info block was uncounted)',
+      'buildTrueAllocationMap now sees all GEOS sectors, preventing allocator from reusing them',
+      'Added FILE_TYPE lookup object derived from FILE_TYPES array, replacing magic numbers',
+      'REL files excluded from GEOS detection to prevent false positives (byte 0x17 overlap)',
+    ]},
     { ver: '1.3.34', title: 'Fix copy/paste of GEOS VLIR files', items: [
       'Copying a GEOS VLIR file (applications, geoWrite docs, fonts, photo albums, geoPaint) previously grabbed only the VLIR index sector as "file data"',
       'Pasted VLIR files ended up tiny and unusable \u2014 wrong size, wrong data, stale sector pointers from the source disk',
