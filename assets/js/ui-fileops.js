@@ -787,6 +787,7 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
   var skipped = [];
 
   // Show progress for multi-file copy
+  var progressStatus = null, progressBar = null;
   if (total > 1) {
     var body = document.getElementById('modal-body');
     var footer = document.querySelector('#modal-overlay .modal-footer');
@@ -797,6 +798,8 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
         '<div id="copy-bar" style="height:100%;width:0%;background:var(--accent);transition:width 0.15s"></div>' +
       '</div>';
     footer.innerHTML = '';
+    progressStatus = document.getElementById('copy-status');
+    progressBar = document.getElementById('copy-bar');
     document.getElementById('modal-overlay').classList.add('open');
   }
 
@@ -842,9 +845,9 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
     }
 
     // Update progress
-    if (total > 1) {
-      document.getElementById('copy-status').textContent = (ci + 1) + ' / ' + total + ': ' + fileName;
-      document.getElementById('copy-bar').style.width = Math.round(((ci + 1) / total) * 100) + '%';
+    if (progressStatus) {
+      progressStatus.textContent = (ci + 1) + ' / ' + total + ': ' + fileName;
+      progressBar.style.width = Math.round(((ci + 1) / total) * 100) + '%';
       await new Promise(function(r) { setTimeout(r, 0); });
     }
 
@@ -930,6 +933,8 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
       '<div id="paste-bar" style="height:100%;width:0%;background:var(--accent);transition:width 0.15s"></div>' +
     '</div>';
   footer.innerHTML = '';
+  var pasteStatus = document.getElementById('paste-status');
+  var pasteBar = document.getElementById('paste-bar');
   document.getElementById('modal-overlay').classList.add('open');
 
   var pasted = 0;
@@ -940,8 +945,10 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     var fileName = petsciiToReadable(readPetsciiString(item.nameBytes, 0, 16)).trim() || '?';
 
     // Update progress
-    document.getElementById('paste-status').textContent = (pi + 1) + ' / ' + total + ': ' + fileName;
-    document.getElementById('paste-bar').style.width = Math.round(((pi + 1) / total) * 100) + '%';
+    if (pasteStatus) {
+      pasteStatus.textContent = (pi + 1) + ' / ' + total + ': ' + fileName;
+      pasteBar.style.width = Math.round(((pi + 1) / total) * 100) + '%';
+    }
 
     // Yield to browser for repaint
     await new Promise(function(r) { setTimeout(r, 0); });
