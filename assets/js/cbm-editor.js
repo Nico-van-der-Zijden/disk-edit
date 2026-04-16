@@ -413,6 +413,13 @@ function optimizeDisk(buffer, interleave, defragment) {
       continue;
     }
 
+    // Skip GEOS VLIR files — record chains inside the index sector can't be
+    // reallocated by the linear-chain optimizer. Their sectors are protected below.
+    if (data[entry.entryOff + 0x18] > 0 && data[entry.entryOff + 0x17] === 0x01) {
+      log.push('Skipped GEOS VLIR file: "' + petsciiToReadable(entry.name) + '"');
+      continue;
+    }
+
     var ft = data[entry.entryOff + 3];
     var fs = data[entry.entryOff + 4];
     if (ft === 0) continue; // empty file
@@ -505,37 +512,55 @@ function optimizeDisk(buffer, interleave, defragment) {
     }
   }
 
+  // Helper: protect all sectors in a chain
+  function protectChain(pt, ps) {
+    var pv = {};
+    while (pt !== 0 && pt <= currentTracks) {
+      if (ps >= fmt.sectorsPerTrack(pt)) break;
+      var pk = pt + ':' + ps;
+      if (pv[pk]) break;
+      pv[pk] = true;
+      protectedSectors[pk] = true;
+      var poff = sectorOffset(pt, ps);
+      if (poff < 0) break;
+      pt = data[poff]; ps = data[poff + 1];
+    }
+  }
+
   // Protect REL file sectors (skipped during optimization)
   for (fi = 0; fi < info.entries.length; fi++) {
     var re = info.entries[fi];
     if (re.deleted) continue;
     var rtb = data[re.entryOff + 2] & 0x07;
-    if (rtb !== 4) continue;
-    // Follow data chain
-    var rt = data[re.entryOff + 3], rs = data[re.entryOff + 4];
-    var rv = {};
-    while (rt !== 0 && rt <= currentTracks) {
-      if (rs >= fmt.sectorsPerTrack(rt)) break;
-      var rk = rt + ':' + rs;
-      if (rv[rk]) break;
-      rv[rk] = true;
-      protectedSectors[rk] = true;
-      var roff = sectorOffset(rt, rs);
-      if (roff < 0) break;
-      rt = data[roff]; rs = data[roff + 1];
+    if (rtb === FILE_TYPE.REL) {
+      protectChain(data[re.entryOff + 3], data[re.entryOff + 4]);
+      protectChain(data[re.entryOff + 0x15], data[re.entryOff + 0x16]);
     }
-    // Follow side-sector chain
-    var sst = data[re.entryOff + 0x15], sss = data[re.entryOff + 0x16];
-    var ssv = {};
-    while (sst !== 0 && sst <= currentTracks) {
-      if (sss >= fmt.sectorsPerTrack(sst)) break;
-      var ssk = sst + ':' + sss;
-      if (ssv[ssk]) break;
-      ssv[ssk] = true;
-      protectedSectors[ssk] = true;
-      var ssoff = sectorOffset(sst, sss);
-      if (ssoff < 0) break;
-      sst = data[ssoff]; sss = data[ssoff + 1];
+  }
+
+  // Protect GEOS VLIR file sectors (skipped during optimization)
+  for (fi = 0; fi < info.entries.length; fi++) {
+    var ge = info.entries[fi];
+    if (ge.deleted) continue;
+    var gtb = data[ge.entryOff + 2] & 0x07;
+    if (data[ge.entryOff + 0x18] > 0 && gtb !== FILE_TYPE.REL && data[ge.entryOff + 0x17] === 0x01) {
+      // Protect VLIR index sector
+      var vt = data[ge.entryOff + 3], vs = data[ge.entryOff + 4];
+      protectedSectors[vt + ':' + vs] = true;
+      // Protect info block
+      var git = data[ge.entryOff + 0x15], gis = data[ge.entryOff + 0x16];
+      if (git >= 1 && git <= currentTracks) protectedSectors[git + ':' + gis] = true;
+      // Protect each VLIR record chain
+      var gvOff = sectorOffset(vt, vs);
+      if (gvOff >= 0) {
+        for (var gri = 0; gri < 127; gri++) {
+          var grt = data[gvOff + 2 + gri * 2];
+          var grs = data[gvOff + 2 + gri * 2 + 1];
+          if (grt === 0 && grs === 0) break;
+          if (grt === 0) continue;
+          protectChain(grt, grs);
+        }
+      }
     }
   }
 

@@ -379,6 +379,8 @@ document.getElementById('opt-export-all').addEventListener('click', function(e) 
     var typeByte = data[en.entryOff + 2];
     var typeIdx = typeByte & 0x07;
     if (typeIdx < 1 || typeIdx > 4) continue;
+    // GEOS VLIR: dir T/S is the index sector, not file data — use Export CVT
+    if (data[en.entryOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL && data[en.entryOff + 0x17] === 0x01) continue;
     var result = readFileData(currentBuffer, en.entryOff);
     if (result.error || result.data.length === 0) continue;
     var name = petsciiToReadable(en.name || '').trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');

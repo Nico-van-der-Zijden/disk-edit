@@ -577,6 +577,11 @@ function getFileAddresses(buffer, entryOff) {
   const typeByte = data[entryOff + 2];
   const fileType = typeByte & 0x07;
 
+  // GEOS VLIR: dir T/S points to the index sector, not file data
+  if (data[entryOff + 0x18] > 0 && fileType !== FILE_TYPE.REL && data[entryOff + 0x17] === 0x01) {
+    return null;
+  }
+
   let t = data[entryOff + 3];
   let s = data[entryOff + 4];
   if (t === 0) return null;
