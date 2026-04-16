@@ -1280,22 +1280,131 @@ function showFileGfxViewer(entryOff) {
 
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.className = 'modal-footer modal-footer-split';
-  footer.innerHTML =
-    '<div class="modal-footer-actions"><button class="modal-btn-secondary" id="gfx-save-png">Save as PNG</button></div>' +
-    '<div class="modal-footer-nav"><button id="modal-close">OK</button></div>';
-  document.getElementById('gfx-save-png').addEventListener('click', function() {
-    var canvas = document.querySelector('#modal-body .gfx-canvas');
-    if (!canvas) return;
+
+  var safeName = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'image';
+
+  function getCanvas() {
+    return document.querySelector('#modal-body .gfx-canvas');
+  }
+
+  function savePng() {
+    var c = getCanvas();
+    if (!c) return;
     var a = document.createElement('a');
-    a.href = canvas.toDataURL('image/png');
-    var safeName = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'image';
+    a.href = c.toDataURL('image/png');
     a.download = safeName + '.png';
     a.click();
+  }
+
+  function canvasToSvg(c) {
+    var w = c.width, h = c.height;
+    var ctx = c.getContext('2d');
+    var img = ctx.getImageData(0, 0, w, h);
+    var px = img.data;
+    // Build color map: group pixels by color for efficient SVG output
+    var colorRuns = {};
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var off = (y * w + x) * 4;
+        if (px[off + 3] === 0) continue;
+        var hex = '#' +
+          ('0' + px[off].toString(16)).slice(-2) +
+          ('0' + px[off + 1].toString(16)).slice(-2) +
+          ('0' + px[off + 2].toString(16)).slice(-2);
+        if (!colorRuns[hex]) colorRuns[hex] = [];
+        colorRuns[hex].push(x + ',' + y);
+      }
+    }
+    var parts = ['<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + w + ' ' + h +
+      '" width="' + w + '" height="' + h + '" shape-rendering="crispEdges">'];
+    var colors = Object.keys(colorRuns);
+    for (var ci = 0; ci < colors.length; ci++) {
+      var col = colors[ci];
+      var coords = colorRuns[col];
+      parts.push('<g fill="' + col + '">');
+      for (var pi = 0; pi < coords.length; pi++) {
+        var xy = coords[pi].split(',');
+        parts.push('<rect x="' + xy[0] + '" y="' + xy[1] + '" width="1" height="1"/>');
+      }
+      parts.push('</g>');
+    }
+    parts.push('</svg>');
+    return parts.join('');
+  }
+
+  function saveSvg() {
+    var c = getCanvas();
+    if (!c) return;
+    var svg = canvasToSvg(c);
+    var blob = new Blob([svg], { type: 'image/svg+xml' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = safeName + '.svg';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // Split button: default action (PNG) + dropdown for format selection
+  var actionsDiv = document.createElement('div');
+  actionsDiv.className = 'modal-footer-actions';
+  actionsDiv.style.position = 'relative';
+
+  var splitBtn = document.createElement('div');
+  splitBtn.className = 'split-btn';
+
+  var mainBtn = document.createElement('button');
+  mainBtn.className = 'split-btn-main';
+  mainBtn.textContent = 'Save as PNG';
+  mainBtn.addEventListener('click', savePng);
+
+  var arrowBtn = document.createElement('button');
+  arrowBtn.className = 'split-btn-arrow';
+  arrowBtn.innerHTML = '&#9662;';
+
+  var menu = document.createElement('div');
+  menu.className = 'split-btn-menu';
+
+  var pngItem = document.createElement('button');
+  pngItem.className = 'split-btn-menu-item';
+  pngItem.textContent = 'Save as PNG';
+  pngItem.addEventListener('click', function() { menu.classList.remove('open'); savePng(); });
+
+  var svgItem = document.createElement('button');
+  svgItem.className = 'split-btn-menu-item';
+  svgItem.textContent = 'Save as SVG';
+  svgItem.addEventListener('click', function() { menu.classList.remove('open'); saveSvg(); });
+
+  menu.appendChild(pngItem);
+  menu.appendChild(svgItem);
+
+  splitBtn.appendChild(mainBtn);
+  splitBtn.appendChild(arrowBtn);
+  actionsDiv.appendChild(splitBtn);
+  actionsDiv.appendChild(menu);
+
+  arrowBtn.addEventListener('click', function(ev) {
+    ev.stopPropagation();
+    menu.classList.toggle('open');
   });
-  document.getElementById('modal-close').addEventListener('click', function() {
+  document.addEventListener('click', function() {
+    menu.classList.remove('open');
+  });
+
+  footer.innerHTML = '';
+  footer.appendChild(actionsDiv);
+
+  var navDiv = document.createElement('div');
+  navDiv.className = 'modal-footer-nav';
+  var okBtn = document.createElement('button');
+  okBtn.id = 'modal-close';
+  okBtn.textContent = 'OK';
+  okBtn.addEventListener('click', function() {
     footer.className = 'modal-footer';
     document.getElementById('modal-overlay').classList.remove('open');
   });
+  navDiv.appendChild(okBtn);
+  footer.appendChild(navDiv);
+
   document.getElementById('modal-overlay').classList.add('open');
 }
 
