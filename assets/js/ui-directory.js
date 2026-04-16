@@ -541,59 +541,13 @@ const MAX_BLOCKS = 65535;
 // Returns 'yes' (all free), 'partial' (some free), 'no' (none/invalid chain)
 function checkScratchedRecoverable(buffer, entryOff) {
   var data = new Uint8Array(buffer);
-  var ft = data[entryOff + 3], fs = data[entryOff + 4];
-  if (ft === 0) return 'no';
-
-  var fmt = currentFormat;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  if (data[entryOff + 3] === 0) return 'no';
+  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
   var totalSectors = 0, freeSectors = 0;
-
-  function checkChain(ct, cs) {
-    var v = {};
-    while (ct !== 0) {
-      if (ct < 1 || ct > currentTracks) break;
-      if (cs >= fmt.sectorsPerTrack(ct)) break;
-      var k = ct + ':' + cs;
-      if (v[k]) break;
-      v[k] = true;
-      totalSectors++;
-      if (checkSectorFree(data, bamOff, ct, cs)) freeSectors++;
-      var off = sectorOffset(ct, cs);
-      if (off < 0) break;
-      ct = data[off]; cs = data[off + 1];
-    }
-  }
-
-  checkChain(ft, fs);
-
-  var typeIdx = data[entryOff + 2] & 0x07;
-
-  // REL file: also check side-sector chain
-  if (typeIdx === FILE_TYPE.REL) {
-    checkChain(data[entryOff + 0x15], data[entryOff + 0x16]);
-  }
-
-  // GEOS file: check info block and (for VLIR) record chains
-  if (data[entryOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
-    var infoT = data[entryOff + 0x15], infoS = data[entryOff + 0x16];
-    if (infoT >= 1 && infoT <= currentTracks && infoS < fmt.sectorsPerTrack(infoT)) {
-      totalSectors++;
-      if (checkSectorFree(data, bamOff, infoT, infoS)) freeSectors++;
-    }
-    if (data[entryOff + 0x17] === 0x01) {
-      var vlirOff = sectorOffset(ft, fs);
-      if (vlirOff >= 0) {
-        for (var vri = 0; vri < 127; vri++) {
-          var recT = data[vlirOff + 2 + vri * 2];
-          var recS = data[vlirOff + 2 + vri * 2 + 1];
-          if (recT === 0 && recS === 0) break;
-          if (recT === 0) continue;
-          checkChain(recT, recS);
-        }
-      }
-    }
-  }
-
+  forEachFileSector(data, entryOff, function(t, s) {
+    totalSectors++;
+    if (checkSectorFree(data, bamOff, t, s)) freeSectors++;
+  });
   if (totalSectors === 0) return 'no';
   if (freeSectors === totalSectors) return 'yes';
   if (freeSectors > 0) return 'partial';
@@ -606,9 +560,7 @@ function getFileAddresses(buffer, entryOff) {
   const fileType = typeByte & 0x07;
 
   // GEOS VLIR: dir T/S points to the index sector, not file data
-  if (data[entryOff + 0x18] > 0 && fileType !== FILE_TYPE.REL && data[entryOff + 0x17] === 0x01) {
-    return null;
-  }
+  if (isVlirFile(data, entryOff)) return null;
 
   let t = data[entryOff + 3];
   let s = data[entryOff + 4];
@@ -663,59 +615,9 @@ function getFileAddresses(buffer, entryOff) {
 }
 
 function countActualBlocks(buffer, entryOff) {
-  const data = new Uint8Array(buffer);
-  const fmt = currentFormat;
-  let t = data[entryOff + 3];
-  let s = data[entryOff + 4];
-  if (t === 0) return 0;
-
-  function followChain(ft, fs) {
-    var count = 0;
-    var visited = {};
-    while (ft !== 0) {
-      if (ft < 1 || ft > currentTracks) break;
-      if (fs < 0 || fs >= sectorsPerTrack(ft)) break;
-      var key = ft + ':' + fs;
-      if (visited[key]) break;
-      visited[key] = true;
-      count++;
-      var off = sectorOffset(ft, fs);
-      ft = data[off]; fs = data[off + 1];
-    }
-    return count;
-  }
-
-  var blocks = followChain(t, s);
-  var typeIdx = data[entryOff + 2] & 0x07;
-
-  // REL file: also count side-sector chain
-  if (typeIdx === FILE_TYPE.REL) {
-    blocks += followChain(data[entryOff + 0x15], data[entryOff + 0x16]);
-  }
-
-  // GEOS file: count info block and (for VLIR) record chains
-  if (data[entryOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
-    var infoT = data[entryOff + 0x15];
-    var infoS = data[entryOff + 0x16];
-    if (infoT >= 1 && infoT <= currentTracks && infoS < fmt.sectorsPerTrack(infoT)) {
-      blocks++; // info block
-    }
-    // VLIR: follow each record's sector chain from the index
-    if (data[entryOff + 0x17] === 0x01) {
-      var vlirOff = sectorOffset(t, s);
-      if (vlirOff >= 0) {
-        for (var vri = 0; vri < 127; vri++) {
-          var recT = data[vlirOff + 2 + vri * 2];
-          var recS = data[vlirOff + 2 + vri * 2 + 1];
-          if (recT === 0 && recS === 0) break;
-          if (recT === 0) continue; // empty slot
-          blocks += followChain(recT, recS);
-        }
-      }
-    }
-  }
-
-  return blocks;
+  var data = new Uint8Array(buffer);
+  if (data[entryOff + 3] === 0) return 0;
+  return forEachFileSector(data, entryOff, function() {});
 }
 
 // ── Free blocks editing ───────────────────────────────────────────────

@@ -21,7 +21,7 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
       var typeIdx = typeByte & 0x07;
       if (typeIdx < 1 || typeIdx > 4) continue;
       // GEOS VLIR: dir T/S is the index sector, not file data — use Export CVT
-      if (data[entOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL && data[entOff + 0x17] === 0x01) continue;
+      if (isVlirFile(data, entOff)) continue;
       ext = extMap[typeIdx];
       name = petsciiToReadable(readPetsciiString(data, entOff + 5, 16)).trim();
     }
@@ -996,71 +996,10 @@ function buildTrueAllocationMap(buffer) {
           continue;
         }
 
-        // Follow file sector chain
-        var fileVisited = {};
-        while (ft !== 0) {
-          if (ft < 1 || ft > currentTracks) break;
-          if (fs >= fmt.sectorsPerTrack(ft)) break;
-          var fkey = ft + ':' + fs;
-          if (fileVisited[fkey]) break;
-          fileVisited[fkey] = true;
-          allocated[fkey] = true;
-          var foff = sectorOffset(ft, fs);
-          if (foff < 0) break;
-          ft = data[foff]; fs = data[foff + 1];
-        }
-
-        // REL file side-sector chain
-        if (typeIdx === FILE_TYPE.REL) {
-          var sst = data[entOff + 0x15], sss = data[entOff + 0x16];
-          var ssVisited = {};
-          while (sst !== 0) {
-            var sskey = sst + ':' + sss;
-            if (ssVisited[sskey]) break;
-            ssVisited[sskey] = true;
-            if (sst < 1 || sst > currentTracks) break;
-            if (sss >= fmt.sectorsPerTrack(sst)) break;
-            allocated[sskey] = true;
-            var ssoff = sectorOffset(sst, sss);
-            if (ssoff < 0) break;
-            sst = data[ssoff]; sss = data[ssoff + 1];
-          }
-        }
-
-        // GEOS file: mark info block and (for VLIR) follow record chains
-        // (skip REL files — byte 0x17 is record length, 0x18 could be non-zero)
-        if (data[entOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
-          var geosInfoT = data[entOff + 0x15];
-          var geosInfoS = data[entOff + 0x16];
-          if (geosInfoT >= 1 && geosInfoT <= currentTracks &&
-              geosInfoS < fmt.sectorsPerTrack(geosInfoT)) {
-            allocated[geosInfoT + ':' + geosInfoS] = true;
-          }
-          // VLIR: walk index sector and follow each record's chain
-          if (data[entOff + 0x17] === 0x01) {
-            var vlirT2 = data[entOff + 3], vlirS2 = data[entOff + 4];
-            var vlirOff2 = sectorOffset(vlirT2, vlirS2);
-            if (vlirOff2 >= 0) {
-              for (var vri2 = 0; vri2 < 127; vri2++) {
-                var recT2 = data[vlirOff2 + 2 + vri2 * 2];
-                var recS2 = data[vlirOff2 + 2 + vri2 * 2 + 1];
-                if (recT2 === 0 && recS2 === 0) break;
-                if (recT2 === 0) continue; // empty slot
-                var vft2 = recT2, vfs2 = recS2;
-                while (vft2 !== 0) {
-                  if (vft2 < 1 || vft2 > currentTracks) break;
-                  if (vfs2 >= fmt.sectorsPerTrack(vft2)) break;
-                  var vkey2 = vft2 + ':' + vfs2;
-                  if (allocated[vkey2]) break;
-                  allocated[vkey2] = true;
-                  var voff2 = sectorOffset(vft2, vfs2);
-                  if (voff2 < 0) break;
-                  vft2 = data[voff2]; vfs2 = data[voff2 + 1];
-                }
-              }
-            }
-          }
-        }
+        // Follow all file sector chains (main + REL + GEOS)
+        forEachFileSector(data, entOff, function(t, s) {
+          allocated[t + ':' + s] = true;
+        });
       }
 
       dirT = data[off]; dirS = data[off + 1];
@@ -1723,50 +1662,10 @@ document.getElementById('opt-scratch').addEventListener('click', (e) => {
   // Clear the closed bit (scratch the file)
   data[entryOff + 2] &= ~0x80;
 
-  // Free all sectors in the chain in BAM
-  function freeChain(ft, fs) {
-    var v = {};
-    while (ft !== 0) {
-      if (ft < 1 || ft > currentTracks || fs >= fmt.sectorsPerTrack(ft)) break;
-      var k = ft + ':' + fs;
-      if (v[k]) break;
-      v[k] = true;
-      bamMarkSectorFree(data, ft, fs, bamOff);
-      var off = sectorOffset(ft, fs);
-      if (off < 0) break;
-      ft = data[off]; fs = data[off + 1];
-    }
-  }
-
-  var t = data[entryOff + 3], s = data[entryOff + 4];
-  freeChain(t, s);
-
-  var typeIdx = data[entryOff + 2] & 0x07;
-
-  // REL file: also free side-sector chain
-  if (typeIdx === FILE_TYPE.REL) {
-    freeChain(data[entryOff + 0x15], data[entryOff + 0x16]);
-  }
-
-  // GEOS file: free info block and (for VLIR) record chains
-  if (data[entryOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
-    var infoT = data[entryOff + 0x15], infoS = data[entryOff + 0x16];
-    if (infoT >= 1 && infoT <= currentTracks && infoS < fmt.sectorsPerTrack(infoT)) {
-      bamMarkSectorFree(data, infoT, infoS, bamOff);
-    }
-    if (data[entryOff + 0x17] === 0x01) {
-      var vlirOff = sectorOffset(t, s);
-      if (vlirOff >= 0) {
-        for (var vri = 0; vri < 127; vri++) {
-          var recT = data[vlirOff + 2 + vri * 2];
-          var recS = data[vlirOff + 2 + vri * 2 + 1];
-          if (recT === 0 && recS === 0) break;
-          if (recT === 0) continue;
-          freeChain(recT, recS);
-        }
-      }
-    }
-  }
+  // Free all file sectors in BAM (main chain + REL + GEOS)
+  forEachFileSector(data, entryOff, function(t, s) {
+    bamMarkSectorFree(data, t, s, bamOff);
+  });
 
   var info = parseCurrentDir(currentBuffer);
   renderDisk(info);
@@ -1787,56 +1686,12 @@ document.getElementById('opt-unscratch').addEventListener('click', (e) => {
   if ((data[entryOff + 2] & 0x07) === 0) data[entryOff + 2] = 0x82;
   else data[entryOff + 2] |= 0x80;
 
-  // Mark all sectors in the chain as used in BAM
+  // Mark all file sectors as used in BAM (main chain + REL + GEOS)
   var fmt = currentFormat;
   var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
-
-  function markChain(ft, fs) {
-    var count = 0;
-    var v = {};
-    while (ft !== 0) {
-      if (ft < 1 || ft > currentTracks || fs >= fmt.sectorsPerTrack(ft)) break;
-      var k = ft + ':' + fs;
-      if (v[k]) break;
-      v[k] = true;
-      count++;
-      bamMarkSectorUsed(data, ft, fs, bamOff);
-      var off = sectorOffset(ft, fs);
-      if (off < 0) break;
-      ft = data[off]; fs = data[off + 1];
-    }
-    return count;
-  }
-
-  var t = data[entryOff + 3], s = data[entryOff + 4];
-  var sectorCount = markChain(t, s);
-  var typeIdx = data[entryOff + 2] & 0x07;
-
-  // REL file: also mark side-sector chain
-  if (typeIdx === FILE_TYPE.REL) {
-    sectorCount += markChain(data[entryOff + 0x15], data[entryOff + 0x16]);
-  }
-
-  // GEOS file: mark info block and (for VLIR) record chains
-  if (data[entryOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
-    var infoT = data[entryOff + 0x15], infoS = data[entryOff + 0x16];
-    if (infoT >= 1 && infoT <= currentTracks && infoS < fmt.sectorsPerTrack(infoT)) {
-      bamMarkSectorUsed(data, infoT, infoS, bamOff);
-      sectorCount++;
-    }
-    if (data[entryOff + 0x17] === 0x01) {
-      var vlirOff = sectorOffset(t, s);
-      if (vlirOff >= 0) {
-        for (var vri = 0; vri < 127; vri++) {
-          var recT = data[vlirOff + 2 + vri * 2];
-          var recS = data[vlirOff + 2 + vri * 2 + 1];
-          if (recT === 0 && recS === 0) break;
-          if (recT === 0) continue;
-          sectorCount += markChain(recT, recS);
-        }
-      }
-    }
-  }
+  var sectorCount = forEachFileSector(data, entryOff, function(t, s) {
+    bamMarkSectorUsed(data, t, s, bamOff);
+  });
 
   // Update block count in directory entry
   data[entryOff + 30] = sectorCount & 0xFF;

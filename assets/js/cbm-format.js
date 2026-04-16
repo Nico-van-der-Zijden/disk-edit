@@ -1872,6 +1872,76 @@ function readVLIRRecordsForCopy(buffer, entryOff) {
   return records;
 }
 
+// Check if a directory entry is a GEOS VLIR file.
+// VLIR files store a record index at dir T/S instead of a linear data chain,
+// so callers that follow the chain (readFileData, export, etc.) cannot handle them.
+function isVlirFile(data, entryOff) {
+  var typeIdx = data[entryOff + 2] & 0x07;
+  return data[entryOff + 0x18] > 0 &&
+         typeIdx !== FILE_TYPE.REL &&
+         data[entryOff + 0x17] === 0x01;
+}
+
+// Walk ALL sectors belonging to a file entry and call callback(track, sector) for each.
+// Handles: main chain, REL side-sector chain, GEOS info block, GEOS VLIR record chains.
+// Returns total number of sectors visited.
+function forEachFileSector(data, entryOff, callback) {
+  var fmt = currentFormat;
+  var typeIdx = data[entryOff + 2] & 0x07;
+  var count = 0;
+
+  function followChain(ft, fs) {
+    var visited = {};
+    while (ft !== 0) {
+      if (ft < 1 || ft > currentTracks) break;
+      if (fs >= fmt.sectorsPerTrack(ft)) break;
+      var key = ft + ':' + fs;
+      if (visited[key]) break;
+      visited[key] = true;
+      callback(ft, fs);
+      count++;
+      var off = sectorOffset(ft, fs);
+      if (off < 0) break;
+      ft = data[off]; fs = data[off + 1];
+    }
+  }
+
+  // Main file chain
+  var startT = data[entryOff + 3], startS = data[entryOff + 4];
+  followChain(startT, startS);
+
+  // REL file: side-sector chain
+  if (typeIdx === FILE_TYPE.REL) {
+    followChain(data[entryOff + 0x15], data[entryOff + 0x16]);
+  }
+
+  // GEOS file: info block + VLIR record chains
+  if (data[entryOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
+    var infoT = data[entryOff + 0x15];
+    var infoS = data[entryOff + 0x16];
+    if (infoT >= 1 && infoT <= currentTracks &&
+        infoS < fmt.sectorsPerTrack(infoT)) {
+      callback(infoT, infoS);
+      count++;
+    }
+    // VLIR: walk each record chain from the index sector
+    if (data[entryOff + 0x17] === 0x01) {
+      var idxOff = sectorOffset(startT, startS);
+      if (idxOff >= 0) {
+        for (var vri = 0; vri < 127; vri++) {
+          var recT = data[idxOff + 2 + vri * 2];
+          var recS = data[idxOff + 2 + vri * 2 + 1];
+          if (recT === 0 && recS === 0) break;
+          if (recT === 0) continue;
+          followChain(recT, recS);
+        }
+      }
+    }
+  }
+
+  return count;
+}
+
 // Decompress GEOS bitmap data (geoPaint compression).
 // code < 64: next 'code' bytes are literal data
 // code 64-127: fill (code-64) cards with next 8-byte pattern

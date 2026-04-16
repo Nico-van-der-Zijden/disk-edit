@@ -540,74 +540,13 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
     dirS = data[off + 1];
   }
 
-  // Follow each closed file's sector chain
+  // Follow each closed file's sector chains (main + REL + GEOS)
   const info = parseCurrentDir(currentBuffer);
   for (const entry of info.entries) {
     if (entry.deleted) continue;
-    let ft = data[entry.entryOff + 3];
-    let fs = data[entry.entryOff + 4];
-    const visited = new Set();
-    while (ft !== 0) {
-      if (ft < 1 || ft > currentTracks) break;
-      if (fs < 0 || fs >= sectorsPerTrack(ft)) break;
-      const key = `${ft}:${fs}`;
-      if (visited.has(key)) break;
-      visited.add(key);
-      used[ft][fs] = 1;
-      const off = sectorOffset(ft, fs);
-      ft = data[off];
-      fs = data[off + 1];
-    }
-    // REL file: also follow side-sector chain
-    const typeIdx = data[entry.entryOff + 2] & 0x07;
-    if (typeIdx === FILE_TYPE.REL) {
-      let sst = data[entry.entryOff + 0x15], sss = data[entry.entryOff + 0x16];
-      const ssVisited = new Set();
-      while (sst !== 0) {
-        if (sst < 1 || sst > currentTracks) break;
-        if (sss >= sectorsPerTrack(sst)) break;
-        const ssk = `${sst}:${sss}`;
-        if (ssVisited.has(ssk)) break;
-        ssVisited.add(ssk);
-        used[sst][sss] = 1;
-        const ssoff = sectorOffset(sst, sss);
-        if (ssoff < 0) break;
-        sst = data[ssoff]; sss = data[ssoff + 1];
-      }
-    }
-    // GEOS file: mark info block and (for VLIR) follow record chains
-    if (data[entry.entryOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
-      const geosInfoT = data[entry.entryOff + 0x15];
-      const geosInfoS = data[entry.entryOff + 0x16];
-      if (geosInfoT >= 1 && geosInfoT <= currentTracks &&
-          geosInfoS < sectorsPerTrack(geosInfoT)) {
-        used[geosInfoT][geosInfoS] = 1;
-      }
-      if (data[entry.entryOff + 0x17] === 0x01) {
-        const vlirOff = sectorOffset(data[entry.entryOff + 3], data[entry.entryOff + 4]);
-        if (vlirOff >= 0) {
-          for (let vri = 0; vri < 127; vri++) {
-            const recT = data[vlirOff + 2 + vri * 2];
-            const recS = data[vlirOff + 2 + vri * 2 + 1];
-            if (recT === 0 && recS === 0) break;
-            if (recT === 0) continue;
-            let vt = recT, vs = recS;
-            const vVisited = new Set();
-            while (vt !== 0) {
-              if (vt < 1 || vt > currentTracks) break;
-              if (vs >= sectorsPerTrack(vt)) break;
-              const vk = `${vt}:${vs}`;
-              if (vVisited.has(vk)) break;
-              vVisited.add(vk);
-              used[vt][vs] = 1;
-              const voff = sectorOffset(vt, vs);
-              if (voff < 0) break;
-              vt = data[voff]; vs = data[voff + 1];
-            }
-          }
-        }
-      }
-    }
+    forEachFileSector(data, entry.entryOff, function(t, s) {
+      used[t][s] = 1;
+    });
   }
 
   // Read old total
