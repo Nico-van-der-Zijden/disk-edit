@@ -789,15 +789,12 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
   // Show progress for multi-file copy
   var progressStatus = null, progressBar = null;
   if (total > 1) {
-    var body = document.getElementById('modal-body');
-    var footer = document.querySelector('#modal-overlay .modal-footer');
     document.getElementById('modal-title').textContent = 'Copying Files';
+    var body = document.getElementById('modal-body');
     body.innerHTML =
-      '<div id="copy-status" style="margin-bottom:8px;font-size:12px;color:var(--text-muted)"></div>' +
-      '<div style="background:var(--bg-main);border:1px solid var(--border);border-radius:3px;height:16px;overflow:hidden">' +
-        '<div id="copy-bar" style="height:100%;width:0%;background:var(--accent);transition:width 0.15s"></div>' +
-      '</div>';
-    footer.innerHTML = '';
+      '<div class="text-md text-muted mb-md" id="copy-status"></div>' +
+      '<div class="progress-track"><div class="progress-fill" id="copy-bar"></div></div>';
+    document.querySelector('#modal-overlay .modal-footer').innerHTML = '';
     progressStatus = document.getElementById('copy-status');
     progressBar = document.getElementById('copy-bar');
     document.getElementById('modal-overlay').classList.add('open');
@@ -884,13 +881,9 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
 
   // Show summary for multi-file copy
   if (total > 1) {
-    var lines = [];
-    lines.push(clipboard.length + ' file(s) copied to clipboard.');
-    if (skipped.length > 0) {
-      lines.push(skipped.length + ' file(s) skipped:');
-      for (var si = 0; si < skipped.length; si++) {
-        lines.push('  ' + skipped[si].name + ' \u2014 ' + skipped[si].reason);
-      }
+    var lines = [clipboard.length + ' file(s) copied to clipboard.'];
+    for (var si = 0; si < skipped.length; si++) {
+      lines.push(skipped[si].name + ' \u2014 ' + skipped[si].reason);
     }
     showModal('Copy Complete', lines);
   }
@@ -928,10 +921,8 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
   var footer = document.querySelector('#modal-overlay .modal-footer');
   document.getElementById('modal-title').textContent = 'Pasting Files';
   body.innerHTML =
-    '<div id="paste-status" style="margin-bottom:8px;font-size:12px;color:var(--text-muted)"></div>' +
-    '<div style="background:var(--bg-main);border:1px solid var(--border);border-radius:3px;height:16px;overflow:hidden">' +
-      '<div id="paste-bar" style="height:100%;width:0%;background:var(--accent);transition:width 0.15s"></div>' +
-    '</div>';
+    '<div class="text-md text-muted mb-md" id="paste-status"></div>' +
+    '<div class="progress-track"><div class="progress-fill" id="paste-bar"></div></div>';
   footer.innerHTML = '';
   var pasteStatus = document.getElementById('paste-status');
   var pasteBar = document.getElementById('paste-bar');
@@ -992,11 +983,8 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
 
   var lines = [];
   if (pasted > 0) lines.push(pasted + ' file(s) pasted successfully.');
-  if (skipped.length > 0) {
-    lines.push(skipped.length + ' file(s) not pasted:');
-    for (var si = 0; si < skipped.length; si++) {
-      lines.push('  ' + skipped[si].name + ' \u2014 ' + skipped[si].reason);
-    }
+  for (var si2 = 0; si2 < skipped.length; si2++) {
+    lines.push('Warning: ' + skipped[si2].name + ' \u2014 ' + skipped[si2].reason);
   }
   if (lines.length === 0) lines.push('No files pasted.');
   showModal(pasted === total ? 'Paste Complete' : 'Paste Incomplete', lines);
