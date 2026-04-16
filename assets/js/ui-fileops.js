@@ -1239,8 +1239,9 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData) {
     for (var ui = 21; ui < 30; ui++) data[entryOff + ui] = 0x00;
   }
 
-  data[entryOff + 30] = fileSectors.length & 0xFF;
-  data[entryOff + 31] = (fileSectors.length >> 8) & 0xFF;
+  // Block count: all sectors including GEOS info block
+  data[entryOff + 30] = sectorList.length & 0xFF;
+  data[entryOff + 31] = (sectorList.length >> 8) & 0xFF;
 
   // Update BAM for all sectors (file data + info block)
   var ctx = getDirContext();
