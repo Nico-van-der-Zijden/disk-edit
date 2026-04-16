@@ -65,7 +65,7 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 - **BASIC**: V2, V3.5, V7, Simons' BASIC, Final Cartridge III
 - **PETSCII**: C64 screen rendering with color codes
 - **Disassembly**: 6502/6510 with illegal opcodes
-- **Graphics**: 24+ formats (Koala, Art Studio, Advanced Art Studio, FLI, IFLI, sprites, charsets, Print Shop, and more) with PNG export
+- **Graphics**: 24+ formats (Koala, Art Studio, Advanced Art Studio, FLI, IFLI, sprites, charsets, Print Shop, and more) with PNG, JPG, GIF, SVG export
 - **SEQ**: Sequential file viewer with PETSCII color rendering
 - **REL**: Relative file record viewer
 
@@ -88,7 +88,7 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 - DNP, D1M, D2M, D4M with full read/write
 - Nested subdirectories (DIR type)
 - Shared BAM across subdirectories
-- System partition at track 26 (D1M/D2M/D4M)
+- System partition on the last track (D1M/D2M/D4M)
 
 ### Other
 - Multi-tab interface for working with multiple disks
@@ -187,6 +187,7 @@ ExampleDisks/           Example disk images for testing
 - [STA's C64 pages](https://sta.c64.org/) — Disk format details
 - [CSDb](https://csdb.dk/) — C64 Scene Database
 - [Zimmers.net](https://www.zimmers.net/anonftp/pub/cbm/) — CBM file archive and GEOS format documentation
+- [JiffyDOS V6 User's Manual](https://archive.org/details/JiffyDos_V6_Users_Manual) — Sector interleave and fast loader reference
 
 ## License
 
