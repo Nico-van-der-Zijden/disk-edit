@@ -546,24 +546,52 @@ function checkScratchedRecoverable(buffer, entryOff) {
 
   var fmt = currentFormat;
   var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
-  var visited = {};
   var totalSectors = 0, freeSectors = 0;
-  var t = ft, s = fs;
 
-  while (t !== 0) {
-    if (t < 1 || t > currentTracks) break;
-    if (s >= fmt.sectorsPerTrack(t)) break;
-    var key = t + ':' + s;
-    if (visited[key]) break;
-    visited[key] = true;
-    totalSectors++;
+  function checkChain(ct, cs) {
+    var v = {};
+    while (ct !== 0) {
+      if (ct < 1 || ct > currentTracks) break;
+      if (cs >= fmt.sectorsPerTrack(ct)) break;
+      var k = ct + ':' + cs;
+      if (v[k]) break;
+      v[k] = true;
+      totalSectors++;
+      if (checkSectorFree(data, bamOff, ct, cs)) freeSectors++;
+      var off = sectorOffset(ct, cs);
+      if (off < 0) break;
+      ct = data[off]; cs = data[off + 1];
+    }
+  }
 
-    // Check if this sector is free in BAM
-    if (checkSectorFree(data, bamOff, t, s)) freeSectors++;
+  checkChain(ft, fs);
 
-    var off = sectorOffset(t, s);
-    if (off < 0) break;
-    t = data[off]; s = data[off + 1];
+  var typeIdx = data[entryOff + 2] & 0x07;
+
+  // REL file: also check side-sector chain
+  if (typeIdx === FILE_TYPE.REL) {
+    checkChain(data[entryOff + 0x15], data[entryOff + 0x16]);
+  }
+
+  // GEOS file: check info block and (for VLIR) record chains
+  if (data[entryOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
+    var infoT = data[entryOff + 0x15], infoS = data[entryOff + 0x16];
+    if (infoT >= 1 && infoT <= currentTracks && infoS < fmt.sectorsPerTrack(infoT)) {
+      totalSectors++;
+      if (checkSectorFree(data, bamOff, infoT, infoS)) freeSectors++;
+    }
+    if (data[entryOff + 0x17] === 0x01) {
+      var vlirOff = sectorOffset(ft, fs);
+      if (vlirOff >= 0) {
+        for (var vri = 0; vri < 127; vri++) {
+          var recT = data[vlirOff + 2 + vri * 2];
+          var recS = data[vlirOff + 2 + vri * 2 + 1];
+          if (recT === 0 && recS === 0) break;
+          if (recT === 0) continue;
+          checkChain(recT, recS);
+        }
+      }
+    }
   }
 
   if (totalSectors === 0) return 'no';

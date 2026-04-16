@@ -114,6 +114,8 @@ document.addEventListener('dragstart', function(e) {
   var typeByte = data[entryOff + 2];
   var typeIdx = typeByte & 0x07;
   if (typeIdx < 1 || typeIdx > 4 || !(typeByte & 0x80)) return;
+  // GEOS VLIR: dir T/S is the index sector, not file data — use Export CVT
+  if (data[entryOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL && data[entryOff + 0x17] === 0x01) return;
 
   var result = readFileData(currentBuffer, entryOff);
   if (result.error || result.data.length === 0) return;
