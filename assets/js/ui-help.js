@@ -191,6 +191,17 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.37', title: 'UX improvements and interleave preset fixes', items: [
+      'Copy and paste operations now show a progress modal with file names and a progress bar',
+      'Summary after copy/paste lists skipped files with specific reasons',
+      'Optimize dialog: custom interleave input right-aligned, shows format default as value and placeholder',
+      'Optimize dialog: invalid interleave input highlighted with warning, Optimize button disabled',
+      'Set Interleave dialog: removed leading zero from hex values',
+      'Interleave presets: removed unverified fast loader claims (SpeedDOS, DolphinDOS)',
+      'Interleave presets: renamed to match verified JiffyDOS V6 User\u2019s Manual values (6 on 1541, 4 on 1571)',
+      'Added JiffyDOS V6 User\u2019s Manual to Credits & Thanks',
+      'Added no-cache meta tags to prevent stale browser caching',
+    ]},
     { ver: '1.3.36', title: 'GEOS overhaul: centralized sector walking, VLIR copy fix, BAM integrity', items: [
       'Fixed VLIR copy detection: was checking info block icon width (byte 0x02) instead of dir entry structure type (byte 0x17) \u2014 VLIR files were never detected during copy',
       'GEOS signature now written to header sector, not BAM sector \u2014 fixes D81 BAM corruption on GEOS disk conversion',
