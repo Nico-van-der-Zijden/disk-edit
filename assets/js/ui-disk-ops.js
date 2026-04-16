@@ -1049,7 +1049,7 @@ document.getElementById('opt-optimize').addEventListener('click', function(e) {
     '<input type="radio" name="opt-preset" value="custom">' +
     '<span class="opt-preset-content">' +
       '<span class="opt-preset-label">Custom</span>' +
-      '<span class="opt-preset-desc">Interleave: <input type="text" id="opt-il-custom" maxlength="2" value="" class="hex-input" placeholder="06"></span>' +
+      '<span class="opt-preset-desc">Interleave: <input type="text" id="opt-il-custom" maxlength="2" value="' + fmt.defaultInterleave.toString(16).toUpperCase() + '" class="hex-input"></span>' +
     '</span>' +
   '</label>';
   html += '</div>';
@@ -1280,11 +1280,11 @@ document.getElementById('opt-interleave').addEventListener('click', function(e) 
     '<div class="text-md text-muted mb-lg">Sector interleave for ' + currentFormat.name + '. Resets to format default when opening a new disk.</div>' +
     '<div class="form-row">' +
       '<label class="form-label">Directory:</label>' +
-      '<input type="text" id="il-dir" maxlength="2" value="' + dirInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input wide">' +
+      '<input type="text" id="il-dir" maxlength="2" value="' + dirInterleave.toString(16).toUpperCase() + '" class="hex-input wide">' +
     '</div>' +
     '<div class="form-row">' +
       '<label class="form-label">File data:</label>' +
-      '<input type="text" id="il-file" maxlength="2" value="' + fileInterleave.toString(16).toUpperCase().padStart(2, '0') + '" class="hex-input wide">' +
+      '<input type="text" id="il-file" maxlength="2" value="' + fileInterleave.toString(16).toUpperCase() + '" class="hex-input wide">' +
     '</div>';
 
   var footer = document.querySelector('#modal-overlay .modal-footer');
