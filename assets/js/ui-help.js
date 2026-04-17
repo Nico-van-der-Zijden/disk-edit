@@ -191,6 +191,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.41', title: 'Automated test suite (63 tests)', items: [
+      'Added test suite using Node.js built-in test runner (zero dependencies)',
+      '63 tests across 4 test files: PETSCII, format/geometry, BAM operations, GEOS',
+      'Tests verify: sector offsets, BAM integrity, forEachFileSector, VLIR records, GEOS signature',
+      'Run with: npm test (or: node --test tests/*.test.js)',
+      'Test helper bootstraps browser globals for Node.js compatibility',
+    ]},
     { ver: '1.3.40', title: 'Per-file fragmentation scores in BAM Summary', items: [
       'BAM viewer Summary tab now shows a per-file fragmentation table',
       'Each file shows block count, fragmentation percentage, and a color-coded bar',
