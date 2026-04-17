@@ -114,26 +114,37 @@
     color: var(--text) !important;
   }
 
-  /* --- Dropdown button (button with integrated arrow + popup menu) --- */
+  /* --- Split dropdown button: main action + arrow that opens popup menu --- */
   .dropdown-btn-wrap {
     position: relative;
-    display: inline-block;
+    display: inline-flex;
   }
 
-  .dropdown-btn {
+  .dropdown-btn-wrap .dropdown-btn-main,
+  .dropdown-btn-wrap .dropdown-btn-arrow {
     font-family: inherit;
     font-size: 13px;
-    padding: 6px 20px;
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    background: transparent;
-    color: var(--text-muted);
+    padding: 6px 16px;
+    border: 1px solid var(--accent);
+    background: var(--selected-bg);
+    color: var(--selected-text);
     cursor: pointer;
   }
 
-  .dropdown-btn:hover {
-    background: var(--hover);
-    color: var(--text);
+  .dropdown-btn-wrap .dropdown-btn-main {
+    border-radius: 3px 0 0 3px;
+    border-right: none;
+  }
+
+  .dropdown-btn-wrap .dropdown-btn-arrow {
+    border-radius: 0 3px 3px 0;
+    padding: 6px 8px;
+  }
+
+  .dropdown-btn-wrap .dropdown-btn-main:hover,
+  .dropdown-btn-wrap .dropdown-btn-arrow:hover {
+    background: var(--accent);
+    color: var(--bg);
   }
 
   .dropdown-btn-menu {
@@ -142,13 +153,13 @@
     bottom: 100%;
     left: 0;
     background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: 4px;
+    border: 1px solid var(--accent);
+    border-radius: 3px;
     padding: 4px 0;
     margin-bottom: 4px;
     z-index: 210;
     min-width: 100%;
-    box-shadow: 0 -2px 8px rgba(0,0,0,0.3);
+    box-shadow: 0 -4px 16px rgba(0,0,0,.4);
   }
 
   .dropdown-btn-menu.open {
@@ -156,14 +167,8 @@
   }
 
   .dropdown-btn-menu-item {
-    display: block;
-    width: 100%;
-    padding: 5px 12px;
-    font-family: inherit;
-    font-size: 12px;
-    text-align: left;
-    background: none;
-    border: none;
+    padding: 6px 12px;
+    font-size: 13px;
     color: var(--text);
     cursor: pointer;
     white-space: nowrap;

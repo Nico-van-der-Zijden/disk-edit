@@ -249,29 +249,29 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     trackStats[t] = { free: tFree, used: tUsed, spt: spt };
   }
 
-  // ── Build Summary view (compact bars) ──
-  var summaryLegend = '<div class="bam-legend">' +
+  // ── Build Track Usage view (compact bars per track) ──
+  var trackUsageLegend = '<div class="bam-legend">' +
     '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#6c9bd2"></span> 0-50%</span>' +
     '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#4a7ab5"></span> 50-70%</span>' +
     '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#2d5a8e"></span> 70-90%</span>' +
     '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#1a3a5c"></span> 90-100%</span>' +
     '</div>';
-  var summaryHtml = summaryLegend + '<div class="bam-viewer">';
+  var trackUsageHtml = trackUsageLegend + '<div class="bam-viewer">';
   for (t = 1; t <= bamTracks; t++) {
     var ts = trackStats[t];
     var pct = ts.spt > 0 ? Math.round(ts.used / ts.spt * 100) : 0;
     var barColor = pct > 90 ? '#1a3a5c' : pct > 70 ? '#2d5a8e' : pct > 50 ? '#4a7ab5' : '#6c9bd2';
-    summaryHtml += '<div class="bam-track">';
-    summaryHtml += '<span class="bam-track-num' + (bamCheck.errorTracks[t] ? ' error' : '') + '">$' + t.toString(16).toUpperCase().padStart(2, '0') + '</span>';
-    summaryHtml += '<span class="bam-compact-bar" title="T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
+    trackUsageHtml += '<div class="bam-track">';
+    trackUsageHtml += '<span class="bam-track-num' + (bamCheck.errorTracks[t] ? ' error' : '') + '">$' + t.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+    trackUsageHtml += '<span class="bam-compact-bar" title="T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
       ' \u2014 ' + ts.free + ' free, ' + ts.used + ' used (' + pct + '%)">' +
       '<span class="bam-compact-fill" style="width:' + pct + '%;background:' + barColor + '"></span></span>';
-    summaryHtml += '<span class="bam-compact-info">' + ts.free + '/' + ts.spt + '</span>';
-    summaryHtml += '</div>';
+    trackUsageHtml += '<span class="bam-compact-info">' + ts.free + '/' + ts.spt + '</span>';
+    trackUsageHtml += '</div>';
   }
-  summaryHtml += '</div>';
+  trackUsageHtml += '</div>';
 
-  // ── Per-file fragmentation table ──
+  // ── Build File Usage view (per-file fragmentation) ──
   var dirInfo = parseCurrentDir(currentBuffer);
   var fragFiles = [];
   for (var fi = 0; fi < dirInfo.entries.length; fi++) {
@@ -307,25 +307,29 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     }
     diskFragPct = totalTrans > 0 ? Math.round(totalJumps / totalTrans * 100) : 0;
   }
-  summaryHtml += '<div style="margin-top:12px;font-size:12px;font-weight:bold;color:var(--text-muted)">Fragmentation: ' + diskFragPct + '%</div>';
-  summaryHtml += '<table style="width:100%;border-collapse:collapse;margin-top:4px;font-size:11px">';
-  summaryHtml += '<tr style="color:var(--text-muted);border-bottom:1px solid var(--border)">' +
-    '<td style="padding:2px 8px 2px 0">File</td>' +
-    '<td style="padding:2px 8px;text-align:right">Blocks</td>' +
-    '<td style="padding:2px 8px;text-align:right">Frag</td>' +
-    '<td style="padding:2px 0;width:80px"></td></tr>';
-  for (var ffi = 0; ffi < fragFiles.length; ffi++) {
-    var f = fragFiles[ffi];
-    var barCol = f.pct === 0 ? 'var(--accent)' : f.pct <= 30 ? '#6c9bd2' : f.pct <= 60 ? '#fab387' : '#f38ba8';
-    summaryHtml += '<tr>' +
-      '<td style="padding:2px 8px 2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</td>' +
-      '<td style="padding:2px 8px;text-align:right">' + f.blocks + '</td>' +
-      '<td style="padding:2px 8px;text-align:right">' + f.pct + '%</td>' +
-      '<td style="padding:2px 0"><div style="background:var(--hover);border-radius:2px;height:8px;overflow:hidden">' +
-        '<div style="width:' + Math.max(f.pct > 0 ? 3 : 0, f.pct) + '%;height:100%;background:' + barCol + '"></div>' +
-      '</div></td></tr>';
+  var fileUsageHtml = '<div style="font-size:12px;font-weight:bold;color:var(--text-muted)">Fragmentation: ' + diskFragPct + '%</div>';
+  if (fragFiles.length === 0) {
+    fileUsageHtml += '<div style="margin-top:8px;color:var(--text-muted)">No multi-block files on this disk.</div>';
+  } else {
+    fileUsageHtml += '<table style="width:100%;border-collapse:collapse;margin-top:4px;font-size:11px">';
+    fileUsageHtml += '<tr style="color:var(--text-muted);border-bottom:1px solid var(--border)">' +
+      '<td style="padding:2px 8px 2px 0">File</td>' +
+      '<td style="padding:2px 8px;text-align:right">Blocks</td>' +
+      '<td style="padding:2px 8px;text-align:right">Frag</td>' +
+      '<td style="padding:2px 0;width:80px"></td></tr>';
+    for (var ffi = 0; ffi < fragFiles.length; ffi++) {
+      var f = fragFiles[ffi];
+      var barCol = f.pct === 0 ? 'var(--accent)' : f.pct <= 30 ? '#6c9bd2' : f.pct <= 60 ? 'var(--color-warn)' : 'var(--color-error)';
+      fileUsageHtml += '<tr>' +
+        '<td style="padding:2px 8px 2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</td>' +
+        '<td style="padding:2px 8px;text-align:right">' + f.blocks + '</td>' +
+        '<td style="padding:2px 8px;text-align:right">' + f.pct + '%</td>' +
+        '<td style="padding:2px 0"><div style="background:var(--hover);border-radius:2px;height:8px;overflow:hidden">' +
+          '<div style="width:' + Math.max(f.pct > 0 ? 3 : 0, f.pct) + '%;height:100%;background:' + barCol + '"></div>' +
+        '</div></td></tr>';
+    }
+    fileUsageHtml += '</table>';
   }
-  summaryHtml += '</table>';
 
   // ── Build Sectors view (individual blocks) — skip if forced compact ──
   var sectorsHtml = '';
@@ -442,10 +446,11 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     '</div>';
 
   if (forceCompact) {
-    // High-SPT: Map + Summary + Disk Map (+ Partitions for CMD FD) tabs
+    // High-SPT: BAM + Track Usage + File Usage + Disk Map (+ Partitions for CMD FD) tabs
     html += '<div class="bam-tabs">' +
-      '<span class="bam-tab active" data-bam-view="map">Map</span>' +
-      '<span class="bam-tab" data-bam-view="summary">Summary</span>' +
+      '<span class="bam-tab active" data-bam-view="map">BAM</span>' +
+      '<span class="bam-tab" data-bam-view="trackusage">Track Usage</span>' +
+      '<span class="bam-tab" data-bam-view="fileusage">File Fragmentation</span>' +
       '<span class="bam-tab" data-bam-view="diskmap">Disk Map</span>' +
       partsTabHtml +
       '</div>';
@@ -466,19 +471,22 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       '</div>';
     html += '<div class="bam-view-content" data-bam-view="map">' + mapLegend +
       '<div class="bam-map-scroll"><canvas id="bam-map-canvas" width="' + canvasW + '" height="' + canvasH + '" style="cursor:crosshair;display:block"></canvas></div></div>';
-    html += '<div class="bam-view-content" data-bam-view="summary" style="display:none">' + summaryHtml + '</div>';
+    html += '<div class="bam-view-content" data-bam-view="trackusage" style="display:none">' + trackUsageHtml + '</div>';
+    html += '<div class="bam-view-content" data-bam-view="fileusage" style="display:none">' + fileUsageHtml + '</div>';
     html += '<div class="bam-view-content" data-bam-view="diskmap" style="display:none">' + diskMapHtml + '</div>';
     html += partsPanelHtml;
   } else {
-    // Tab switcher — Sectors + Summary + Disk Map (+ Partitions for D1M)
+    // Tab switcher — BAM + Track Usage + File Usage + Disk Map (+ Partitions for D1M)
     html += '<div class="bam-tabs">' +
-      '<span class="bam-tab active" data-bam-view="sectors">Sectors</span>' +
-      '<span class="bam-tab" data-bam-view="summary">Summary</span>' +
+      '<span class="bam-tab active" data-bam-view="sectors">BAM</span>' +
+      '<span class="bam-tab" data-bam-view="trackusage">Track Usage</span>' +
+      '<span class="bam-tab" data-bam-view="fileusage">File Fragmentation</span>' +
       '<span class="bam-tab" data-bam-view="diskmap">Disk Map</span>' +
       partsTabHtml +
       '</div>';
     html += '<div class="bam-view-content" data-bam-view="sectors">' + sectorsHtml + '</div>';
-    html += '<div class="bam-view-content" data-bam-view="summary" style="display:none">' + summaryHtml + '</div>';
+    html += '<div class="bam-view-content" data-bam-view="trackusage" style="display:none">' + trackUsageHtml + '</div>';
+    html += '<div class="bam-view-content" data-bam-view="fileusage" style="display:none">' + fileUsageHtml + '</div>';
     html += '<div class="bam-view-content" data-bam-view="diskmap" style="display:none">' + diskMapHtml + '</div>';
     html += partsPanelHtml;
   }

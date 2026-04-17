@@ -1451,38 +1451,52 @@ function showFileGfxViewer(entryOff) {
     { label: 'GIF', save: saveGif },
     { label: 'SVG', save: saveSvg }
   ];
+  var currentFormat = formats[0];
 
-  // Dropdown button: "Save as PNG ▾" with format menu
+  // Split button: main click saves in current format; arrow opens dropdown of other formats
   var wrap = document.createElement('div');
   wrap.className = 'dropdown-btn-wrap';
 
-  var btn = document.createElement('button');
-  btn.className = 'dropdown-btn';
-  btn.textContent = 'Save as PNG \u25be';
-  var currentSave = savePng;
+  var mainBtn = document.createElement('button');
+  mainBtn.className = 'dropdown-btn-main';
+  mainBtn.textContent = 'Save as ' + currentFormat.label;
+  mainBtn.addEventListener('click', function() {
+    currentFormat.save();
+  });
+
+  var arrowBtn = document.createElement('button');
+  arrowBtn.className = 'dropdown-btn-arrow';
+  arrowBtn.innerHTML = '\u25be';
 
   var menu = document.createElement('div');
   menu.className = 'dropdown-btn-menu';
 
-  for (var fi = 0; fi < formats.length; fi++) {
-    (function(fmt) {
-      var item = document.createElement('button');
-      item.className = 'dropdown-btn-menu-item';
-      item.textContent = 'Save as ' + fmt.label;
-      item.addEventListener('click', function() {
-        menu.classList.remove('open');
-        btn.textContent = 'Save as ' + fmt.label + ' \u25be';
-        currentSave = fmt.save;
-        fmt.save();
-      });
-      menu.appendChild(item);
-    })(formats[fi]);
+  function rebuildMenu() {
+    menu.innerHTML = '';
+    for (var fi = 0; fi < formats.length; fi++) {
+      (function(fmt) {
+        if (fmt === currentFormat) return;
+        var item = document.createElement('div');
+        item.className = 'dropdown-btn-menu-item';
+        item.textContent = 'Save as ' + fmt.label;
+        item.addEventListener('click', function() {
+          menu.classList.remove('open');
+          currentFormat = fmt;
+          mainBtn.textContent = 'Save as ' + fmt.label;
+          rebuildMenu();
+          fmt.save();
+        });
+        menu.appendChild(item);
+      })(formats[fi]);
+    }
   }
+  rebuildMenu();
 
-  wrap.appendChild(btn);
+  wrap.appendChild(mainBtn);
+  wrap.appendChild(arrowBtn);
   wrap.appendChild(menu);
 
-  btn.addEventListener('click', function(ev) {
+  arrowBtn.addEventListener('click', function(ev) {
     ev.stopPropagation();
     menu.classList.toggle('open');
   });

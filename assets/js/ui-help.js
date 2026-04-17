@@ -191,6 +191,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.44', title: 'Graphics save split button and BAM tab split', items: [
+      'Graphics viewer \u201CSave as\u201D is now a split button: main click saves in current format, arrow opens the dropdown of other formats',
+      'Dropdown excludes the currently-selected format (main button already covers it)',
+      'Fixed dropdown menu items appearing as stacked buttons \u2014 the <button> elements inherited .modal-footer button styling; items are now <div>',
+      'BAM viewer tabs renamed: Sectors/Map \u2192 BAM, and old Summary split into Track Usage and File Fragmentation',
+      'File Fragmentation tab shows a hint when the disk has no multi-block files instead of a bare 0% header',
+      'Per-file fragmentation bar colors now use --color-warn and --color-error vars',
+    ]},
     { ver: '1.3.43', title: 'GUI consistency pass', items: [
       'Centralized status colors into CSS variables: --color-error, --color-warn, --color-dir, --color-recover*',
       'Extracted C64 palette tokens: --c64-screen-bg, --c64-text, --c64-string, --c64-control, --c64-highlight, --c64-sys',
