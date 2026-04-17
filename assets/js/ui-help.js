@@ -191,6 +191,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.42', title: 'JSDoc type annotations and TypeScript checking', items: [
+      'Added tsconfig.json with allowJs + checkJs for gradual TypeScript type checking',
+      'JSDoc type definitions for core types: DiskFormat, FileReadResult, DiskInfo, DirEntry, BAMIntegrityResult',
+      'Annotated ~20 critical functions in cbm-format.js: sector ops, BAM helpers, PETSCII, file reading, GEOS',
+      'Annotated checkBAMIntegrity in cbm-editor.js',
+      'VS Code now provides autocomplete, hover docs, and type error highlighting',
+      'Zero build changes \u2014 JSDoc is comments only, no compilation step',
+    ]},
     { ver: '1.3.41', title: 'Automated test suite (63 tests)', items: [
       'Added test suite using Node.js built-in test runner (zero dependencies)',
       '63 tests across 4 test files: PETSCII, format/geometry, BAM operations, GEOS',

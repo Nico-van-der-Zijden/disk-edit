@@ -1,3 +1,71 @@
+// ── Type Definitions (JSDoc) ──────────────────────────────────────────
+
+/**
+ * @typedef {Object} DiskFormat
+ * @property {string} name - Display name (e.g., 'D64')
+ * @property {string} ext - File extension (e.g., '.d64')
+ * @property {number} dirTrack - Root directory track
+ * @property {number} dirSector - Root directory sector
+ * @property {number} headerTrack - Disk header track (name/ID)
+ * @property {number} headerSector - Disk header sector
+ * @property {number} bamTrack - BAM track
+ * @property {number} bamSector - BAM sector
+ * @property {number[][]} bamSectors - All BAM sector locations [[t,s], ...]
+ * @property {number} dosVersion - DOS version byte
+ * @property {string} dosType - 2-char DOS type string
+ * @property {number} nameOffset - Offset within header sector for disk name
+ * @property {number} nameLength - Disk name length
+ * @property {number} idOffset - Offset within header sector for disk ID
+ * @property {number} idLength - ID + DOS type length
+ * @property {number} maxDirSectors - Max directory sectors
+ * @property {number} entriesPerSector - Directory entries per sector (8)
+ * @property {number} entrySize - Bytes per directory entry (32)
+ * @property {number} defaultInterleave - Default file data interleave
+ * @property {boolean} hasBamFreeCounts - Whether BAM has per-track free counts
+ * @property {(t: number) => number} sectorsPerTrack - Sectors on a given track
+ * @property {(numTracks: number) => number} bamTracksRange - Max track in BAM
+ * @property {(data: Uint8Array, bamOff: number, track: number) => number} readTrackFree
+ * @property {(data: Uint8Array, bamOff: number, track: number, free: number) => void} writeTrackFree
+ * @property {(data: Uint8Array, bamOff: number, numTracks: number) => void} initBAM
+ * @property {(sector: number) => number} bamBitMask - Bit mask for a sector in BAM byte
+ * @property {(track: number) => number[]} getProtectedSectors - System sectors on a track
+ * @property {(track: number) => Object<number, boolean>} [getSkipTracks] - Tracks to skip during allocation
+ */
+
+/**
+ * @typedef {Object} FileReadResult
+ * @property {Uint8Array} data - File contents (including 2-byte load address for PRG)
+ * @property {?string} error - Error message or null on success
+ */
+
+/**
+ * @typedef {Object} DiskInfo
+ * @property {string} diskName - Disk name (PETSCII/PUA)
+ * @property {string} diskId - Disk ID string
+ * @property {number} freeBlocks - Free blocks from BAM
+ * @property {DirEntry[]} entries - Directory entries
+ */
+
+/**
+ * @typedef {Object} DirEntry
+ * @property {string} name - File name (PETSCII/PUA)
+ * @property {string} type - Formatted type string (" PRG ", "*SEQ<", etc.)
+ * @property {number} blocks - Block count from directory
+ * @property {boolean} deleted - Whether entry is scratched
+ * @property {number} entryOff - Byte offset in buffer
+ */
+
+/**
+ * @typedef {Object} BAMIntegrityResult
+ * @property {Object<string, string>} sectorOwner - "track:sector" → owner name
+ * @property {string[]} bamErrors - Free count mismatches per track
+ * @property {number} allocMismatch - Sectors owned by files but marked free
+ * @property {number} orphanCount - Sectors marked used but not owned
+ * @property {Object<number, boolean>} errorTracks - Tracks with BAM errors
+ * @property {Object<string, boolean>} errorSectors - Sectors free but used by file
+ * @property {Object<string, boolean>} orphanSectors - Sectors used but not owned
+ */
+
 // ── Disk Format Descriptors ───────────────────────────────────────────
 // Each format defines its geometry, BAM layout, and directory structure.
 // Adding D71/D81 support = adding a new descriptor + format-specific BAM functions.
@@ -1338,6 +1406,7 @@ function getTrackOffsets(format, maxTracks) {
   return offsets;
 }
 
+/** @param {number} track @param {number} sector @returns {number} Byte offset or -1 */
 function sectorOffset(track, sector) {
   const maxTrack = currentTracks || 40;
   if (track < 1 || track > maxTrack) return -1;
@@ -1373,28 +1442,28 @@ function getBamBitmapBase(track, bamOff) {
   return bamOff + 4 * track + 1;
 }
 
-// Universal sector free check — works for all formats including DNP (256 sectors/track)
+/** @param {Uint8Array} data @param {number} bamOff @param {number} track @param {number} sector @returns {boolean} */
 function checkSectorFree(data, bamOff, track, sector) {
   if (currentFormat.isSectorFree) return currentFormat.isSectorFree(data, bamOff, track, sector);
   var base = getBamBitmapBase(track, bamOff);
   return (data[base + Math.floor(sector / 8)] & (1 << (sector % 8))) !== 0;
 }
 
-// Clear a sector's bit in the BAM (mark as used) and recalculate the track's free count.
+/** @param {Uint8Array} data @param {number} track @param {number} sector @param {number} bamOff */
 function bamMarkSectorUsed(data, track, sector, bamOff) {
   var base = getBamBitmapBase(track, bamOff);
   data[base + (sector >> 3)] &= ~currentFormat.bamBitMask(sector);
   bamRecalcFree(data, track, bamOff);
 }
 
-// Set a sector's bit in the BAM (mark as free) and recalculate the track's free count.
+/** @param {Uint8Array} data @param {number} track @param {number} sector @param {number} bamOff */
 function bamMarkSectorFree(data, track, sector, bamOff) {
   var base = getBamBitmapBase(track, bamOff);
   data[base + (sector >> 3)] |= currentFormat.bamBitMask(sector);
   bamRecalcFree(data, track, bamOff);
 }
 
-// Recalculate and write the free count for a track by counting bitmap bits.
+/** @param {Uint8Array} data @param {number} track @param {number} bamOff */
 function bamRecalcFree(data, track, bamOff) {
   var spt = currentFormat.sectorsPerTrack(track);
   var numBytes = Math.ceil(spt / 8);
@@ -1455,10 +1524,12 @@ function setCharsetMode(mode) {
   PETSCII_MAP = buildPetsciiMap(mode);
 }
 
+/** @param {number} byte @returns {string} PUA character */
 function petsciiToAscii(byte) {
   return PETSCII_MAP[byte & 0xFF];
 }
 
+/** @param {Uint8Array} data @param {number} offset @param {number} len @param {boolean} [stopAtPadding] @returns {string} */
 function readPetsciiString(data, offset, len, stopAtPadding) {
   let contentLen = len;
   if (stopAtPadding !== false) {
@@ -1502,8 +1573,7 @@ const UNICODE_TO_PETSCII = (() => {
   return rev;
 })();
 
-// Read all data bytes from a file's sector chain (or tape container)
-// Returns { data: Uint8Array, error: string|null }
+/** @param {ArrayBuffer} buffer @param {number} entryOff @returns {FileReadResult} */
 function readFileData(buffer, entryOff) {
   var disk = new Uint8Array(buffer);
 
@@ -1563,6 +1633,7 @@ function readFileData(buffer, entryOff) {
   return { data: new Uint8Array(bytes), error: null };
 }
 
+/** @returns {number} Byte offset of the header sector */
 function getHeaderOffset() {
   var fmt = currentFormat;
   return sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector);
@@ -1667,7 +1738,7 @@ var GEOS_STRUCTURE_TYPES = {
 var GEOS_SIGNATURE = 'GEOS format V1.0';
 var GEOS_SIG_OFFSET = 0xAD; // offset within header sector
 
-// Check if the GEOS signature is present in the header sector
+/** @param {ArrayBuffer} buffer @returns {boolean} */
 function hasGeosSignature(buffer) {
   if (!buffer) return false;
   var data = new Uint8Array(buffer);
@@ -1679,7 +1750,7 @@ function hasGeosSignature(buffer) {
   return true;
 }
 
-// Write the GEOS signature to the header sector
+/** @param {ArrayBuffer} buffer */
 function writeGeosSignature(buffer) {
   var data = new Uint8Array(buffer);
   var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector);
@@ -1871,9 +1942,7 @@ function readVLIRRecordsForCopy(buffer, entryOff) {
   return records;
 }
 
-// Check if a directory entry is a GEOS VLIR file.
-// VLIR files store a record index at dir T/S instead of a linear data chain,
-// so callers that follow the chain (readFileData, export, etc.) cannot handle them.
+/** @param {Uint8Array} data @param {number} entryOff @returns {boolean} */
 function isVlirFile(data, entryOff) {
   var typeIdx = data[entryOff + 2] & 0x07;
   return data[entryOff + 0x18] > 0 &&
@@ -1881,9 +1950,7 @@ function isVlirFile(data, entryOff) {
          data[entryOff + 0x17] === 0x01;
 }
 
-// Walk ALL sectors belonging to a file entry and call callback(track, sector) for each.
-// Handles: main chain, REL side-sector chain, GEOS info block, GEOS VLIR record chains.
-// Returns total number of sectors visited.
+/** @param {Uint8Array} data @param {number} entryOff @param {(track: number, sector: number) => void} callback @returns {number} Total sectors visited */
 function forEachFileSector(data, entryOff, callback) {
   var fmt = currentFormat;
   var typeIdx = data[entryOff + 2] & 0x07;
@@ -2063,10 +2130,10 @@ function writePetsciiString(buffer, offset, str, maxLen, overrides) {
 }
 
 // ── Utility ──────────────────────────────────────────────────────────
-function hex8(n) { return n.toString(16).toUpperCase().padStart(2, '0'); }
-function hex16(n) { return n.toString(16).toUpperCase().padStart(4, '0'); }
+/** @param {number} n @returns {string} */ function hex8(n) { return n.toString(16).toUpperCase().padStart(2, '0'); }
+/** @param {number} n @returns {string} */ function hex16(n) { return n.toString(16).toUpperCase().padStart(4, '0'); }
 
-function escHtml(s) {
+/** @param {string} s @returns {string} */ function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
@@ -2075,6 +2142,7 @@ const FILE_TYPES = ['DEL', 'SEQ', 'PRG', 'USR', 'REL', 'CBM', 'DIR'];
 var FILE_TYPE = {};
 FILE_TYPES.forEach(function(name, idx) { FILE_TYPE[name] = idx; });
 
+/** @param {number} typeByte @returns {string} Formatted type string like " PRG " */
 function fileTypeName(typeByte) {
   const closed = (typeByte & 0x80) !== 0;
   const locked = (typeByte & 0x40) !== 0;
@@ -2352,6 +2420,7 @@ function isTapeFormat() {
   return currentFormat === DISK_FORMATS.t64 || currentFormat === DISK_FORMATS.tap;
 }
 
+/** @param {ArrayBuffer} buffer @returns {DiskInfo} */
 function parseDisk(buffer) {
   var data = new Uint8Array(buffer);
 

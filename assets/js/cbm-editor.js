@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 41 };
+var APP_VERSION = { major: 1, minor: 3, build: 42 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -202,7 +202,7 @@ function updateTabName() {
 }
 
 // ── BAM integrity check (read-only, doesn't modify disk) ─────────────
-// Returns { sectorOwner: {}, bamErrors: [], allocMismatch: number }
+/** @param {ArrayBuffer} buffer @returns {BAMIntegrityResult} */
 function checkBAMIntegrity(buffer) {
   var data = new Uint8Array(buffer);
   var fmt = currentFormat;

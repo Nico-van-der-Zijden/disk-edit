@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "none",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false,
+    "strictNullChecks": false,
+    "baseUrl": ".",
+    "outDir": null
+  },
+  "include": [
+    "assets/js/**/*.js"
+  ],
+  "exclude": [
+    "assets/js/restore64-scanners.js",
+    "dist/**",
+    "tests/**"
+  ]
+}
