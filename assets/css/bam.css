@@ -68,76 +68,43 @@
   }
 
   .bam-sector.dir-free {
-    background: #f9e2af;
+    background: var(--color-dir);
     opacity: 0.3;
   }
 
   .bam-sector.dir-used {
-    background: #f9e2af;
-  }
-
-  [data-theme="light"] .bam-sector.dir-free {
-    background: #df8e1d;
-    opacity: 0.3;
-  }
-
-  [data-theme="light"] .bam-sector.dir-used {
-    background: #df8e1d;
+    background: var(--color-dir);
   }
 
   .bam-sector.error {
     background: var(--accent);
-    outline: 2px solid #f38ba8;
+    outline: 2px solid var(--color-error);
     opacity: 1;
   }
 
-  [data-theme="light"] .bam-sector.error {
-    background: var(--accent);
-    outline: 2px solid #d20f39;
-  }
-
   .bam-sector.orphan {
-    background: #fab387;
-    opacity: 0.6;
-  }
-
-  [data-theme="light"] .bam-sector.orphan {
-    background: #fe640b;
+    background: var(--color-warn);
     opacity: 0.6;
   }
 
   .bam-legend-error {
     background: var(--accent) !important;
-    outline: 2px solid #f38ba8;
-  }
-
-  [data-theme="light"] .bam-legend-error {
-    background: var(--accent) !important;
-    outline: 2px solid #d20f39;
+    outline: 2px solid var(--color-error);
   }
 
   .bam-legend-orphan {
-    background: #fab387 !important;
-    opacity: 0.6;
-  }
-
-  [data-theme="light"] .bam-legend-orphan {
-    background: #fe640b !important;
+    background: var(--color-warn) !important;
     opacity: 0.6;
   }
 
   .bam-track-num.error {
-    color: #f38ba8;
-  }
-
-  [data-theme="light"] .bam-track-num.error {
-    color: #d20f39;
+    color: var(--color-error);
   }
 
   .bam-compact-bar {
     flex: 1;
     height: 12px;
-    background: var(--bg-input);
+    background: var(--hover);
     border-radius: 2px;
     overflow: hidden;
     cursor: pointer;
@@ -208,27 +175,19 @@
   .bam-legend-box {
     width: 10px;
     height: 10px;
-    border-radius: 1px;
+    border-radius: 2px;
   }
 
   .bam-warnings {
-    color: #f38ba8;
+    color: var(--color-error);
     margin: 0 0 8px;
     padding-left: 20px;
     font-size: 12px;
     list-style: none;
   }
 
-  [data-theme="light"] .bam-warnings {
-    color: #d20f39;
-  }
-
   .bam-warnings .fa-circle-question {
-    color: #fab387;
-  }
-
-  [data-theme="light"] .bam-warnings .fa-circle-question {
-    color: #fe640b;
+    color: var(--color-warn);
   }
 
   /* --- Disk Map (radial/spiral) --- */

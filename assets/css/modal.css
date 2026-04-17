@@ -59,19 +59,11 @@
   }
 
   .modal-body .log-error {
-    color: #f38ba8;
-  }
-
-  [data-theme="light"] .modal-body .log-error {
-    color: #d20f39;
+    color: var(--color-error);
   }
 
   .modal-body .log-warning {
-    color: #fab387;
-  }
-
-  [data-theme="light"] .modal-body .log-warning {
-    color: #df8e1d;
+    color: var(--color-warn);
   }
 
   .modal-footer {
@@ -152,7 +144,7 @@
     background: var(--bg-panel);
     border: 1px solid var(--border);
     border-radius: 4px;
-    padding: 2px 0;
+    padding: 4px 0;
     margin-bottom: 4px;
     z-index: 210;
     min-width: 100%;

@@ -177,25 +177,27 @@ function renderDisk(info) {
     var integrity = checkBAMIntegrity(currentBuffer);
     var bamIssues = integrity.bamErrors.length > 0 || integrity.allocMismatch > 0;
     var diskErrors = hasErrorBytes(currentBuffer);
+    healthEl.classList.remove('health-ok', 'health-warn', 'health-error');
     if (bamIssues) {
       healthEl.textContent = '\u25CF';
-      healthEl.style.color = '#9A6759'; // red — BAM problems
+      healthEl.classList.add('health-error');
       healthEl.title = 'BAM issues detected — click to view BAM';
       healthEl.onclick = function() { document.getElementById('opt-view-bam').click(); };
     } else if (diskErrors) {
       healthEl.textContent = '\u25CF';
-      healthEl.style.color = '#B8C76F'; // yellow — has error bytes
+      healthEl.classList.add('health-warn');
       healthEl.title = 'Disk has error bytes — click to view';
       healthEl.onclick = function() { document.getElementById('opt-view-errors').click(); };
     } else {
       healthEl.textContent = '\u25CF';
-      healthEl.style.color = '#588D43'; // green — all OK
+      healthEl.classList.add('health-ok');
       var extBam = detectExtendedBAM(currentBuffer);
       healthEl.title = 'Disk OK' + (extBam ? ' (' + extBam + ' extended BAM)' : '') + ' — click to view BAM';
       healthEl.onclick = function() { document.getElementById('opt-view-bam').click(); };
     }
   } else if (healthEl) {
     healthEl.textContent = '';
+    healthEl.classList.remove('health-ok', 'health-warn', 'health-error');
     healthEl.onclick = null;
   }
 }

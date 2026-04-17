@@ -4,7 +4,7 @@
     position: fixed;
     background: var(--bg-menu);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 4px;
     padding: 10px;
     z-index: 250;
     box-shadow: 0 8px 32px rgba(0,0,0,.4);
@@ -96,19 +96,14 @@
   }
 
   .petscii-key.unsafe {
-    border-color: #f38ba8;
-    color: #f38ba8;
-  }
-
-  [data-theme="light"] .petscii-key.unsafe {
-    border-color: #d20f39;
-    color: #d20f39;
+    border-color: var(--color-error);
+    color: var(--color-error);
   }
 
   .petscii-key.unsafe:hover {
-    background: #f38ba8;
+    background: var(--color-error);
     color: var(--bg);
-    border-color: #f38ba8;
+    border-color: var(--color-error);
   }
 
   .petscii-key.disabled {

@@ -191,6 +191,18 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.43', title: 'GUI consistency pass', items: [
+      'Centralized status colors into CSS variables: --color-error, --color-warn, --color-dir, --color-recover*',
+      'Extracted C64 palette tokens: --c64-screen-bg, --c64-text, --c64-string, --c64-control, --c64-highlight, --c64-sys',
+      'Removed ~12 redundant [data-theme="light"] override blocks \u2014 vars handle theme switching',
+      'Replaced inline health-indicator colors in ui-render.js with .health-ok/warn/error classes',
+      'Unified input font-size to 14px (search input and wide hex input were 13px)',
+      'Unified small-button font-size to 12px (separator editor button was 11px)',
+      'Normalized border-radius: 2px for tiny elements, 3px for inputs/buttons, 4px for containers (removed 1/6/8/12 outliers)',
+      'Unified dropdown popup padding to 4px 0 (color-dropdown-popup and dropdown-btn-menu were 2px 0)',
+      'Fixed missing --bg-input CSS variable reference (used --hover for progress track, --bg for search input)',
+      'Unified orange warning light-theme color to #df8e1d (was split between #fe640b and #df8e1d)',
+    ]},
     { ver: '1.3.42', title: 'JSDoc type annotations and TypeScript checking', items: [
       'Added tsconfig.json with allowJs + checkJs for gradual TypeScript type checking',
       'JSDoc type definitions for core types: DiskFormat, FileReadResult, DiskInfo, DirEntry, BAMIntegrityResult',

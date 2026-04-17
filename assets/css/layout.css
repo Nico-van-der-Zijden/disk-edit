@@ -25,7 +25,7 @@
 
   .empty-drop-zone {
     border: 2px dashed var(--border);
-    border-radius: 12px;
+    border-radius: 8px;
     padding: 40px 32px;
     margin: 0 auto;
     max-width: 420px;
@@ -79,7 +79,7 @@
   }
 
   .tape-warning {
-    color: #c0a050;
+    color: var(--color-warn-gold);
     font-size: 12px;
   }
 
@@ -111,6 +111,6 @@
 
   .tab-close:hover {
     opacity: 1;
-    color: #9A6759;
+    color: var(--c64-control);
   }
 

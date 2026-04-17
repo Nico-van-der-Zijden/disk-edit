@@ -171,9 +171,9 @@
     color: var(--text-muted);
     opacity: 0.7;
   }
-  .dir-icon-recover { color: #55a049; opacity: 0.8; }
-  .dir-icon-recover-partial { color: #bfce72; opacity: 0.8; }
-  .dir-icon-recover-no { color: #883932; opacity: 0.8; }
+  .dir-icon-recover { color: var(--color-recover); opacity: 0.8; }
+  .dir-icon-recover-partial { color: var(--color-recover-partial); opacity: 0.8; }
+  .dir-icon-recover-no { color: var(--color-recover-no); opacity: 0.8; }
 
   .dir-icon-info:hover, .dir-icon-geos:hover {
     color: var(--accent);
@@ -228,13 +228,8 @@
   }
 
   .hex-input.invalid {
-    border-color: #f38ba8;
-    color: #f38ba8;
-  }
-
-  [data-theme="light"] .hex-input.invalid {
-    border-color: #d20f39;
-    color: #d20f39;
+    border-color: var(--color-error);
+    color: var(--color-error);
   }
 
   .hex-input-group {
@@ -348,7 +343,7 @@
     position: fixed;
     background: var(--bg-menu);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 4px;
     padding: 4px 0;
     min-width: 80px;
     z-index: 200;
@@ -421,6 +416,10 @@
     cursor: pointer;
   }
 
+  .dir-footer-health.health-ok { color: var(--c64-string); }
+  .dir-footer-health.health-warn { color: var(--c64-highlight); }
+  .dir-footer-health.health-error { color: var(--c64-control); }
+
   .dir-entry.deleted {
     opacity: 0.5;
   }
@@ -428,6 +427,6 @@
   .petscii-rev {
     background: var(--text);
     color: var(--bg);
-    border-radius: 1px;
+    border-radius: 2px;
   }
 

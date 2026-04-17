@@ -20,6 +20,24 @@
     --hover-edit: #444868;
     --selected-bg: #3d3578;
     --selected-text: #a0a8e8;
+
+    --color-error: #f38ba8;
+    --color-warn: #fab387;
+    --color-dir: #f9e2af;
+    --color-recover: #55a049;
+    --color-recover-partial: #bfce72;
+    --color-recover-no: #883932;
+    --color-warn-gold: #c0a050;
+    --color-unsafe: #c05050;
+
+    --c64-screen-bg: #352879;
+    --c64-text: #6C5EB5;
+    --c64-text-muted: #6C6C6C;
+    --c64-string: #588D43;
+    --c64-control: #9A6759;
+    --c64-highlight: #B8C76F;
+    --c64-sys: #70A4B2;
+    --c64-geowrite-text: #d0d0d0;
   }
 
   [data-theme="light"] {
@@ -36,6 +54,10 @@
     --hover-edit: #9ca0b8;
     --selected-bg: #352879;
     --selected-text: #588d43;
+
+    --color-error: #d20f39;
+    --color-warn: #df8e1d;
+    --color-dir: #df8e1d;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-user-modify: unset; }

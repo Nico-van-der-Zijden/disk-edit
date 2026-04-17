@@ -17,13 +17,8 @@
   }
 
   .error-sector.err {
-    background: #f38ba8;
+    background: var(--color-error);
     color: var(--bg);
-  }
-
-  [data-theme="light"] .error-sector.err {
-    background: #d20f39;
-    color: #fff;
   }
 
   .error-sector.no-data {
@@ -62,7 +57,7 @@
 
   .sep-editor-btn {
     padding: 2px 8px;
-    font-size: 11px;
+    font-size: 12px;
     font-family: inherit;
     border: 1px solid var(--border);
     border-radius: 3px;
@@ -76,9 +71,9 @@
   }
 
   .sep-editor-btn.danger:hover {
-    background: #f38ba8;
+    background: var(--color-error);
     color: var(--bg);
-    border-color: #f38ba8;
+    border-color: var(--color-error);
   }
 
   .sep-editor-input {
@@ -155,17 +150,13 @@
   }
 
   .hex-byte.modified {
-    color: #f9e2af;
-  }
-
-  [data-theme="light"] .hex-byte.modified {
-    color: #df8e1d;
+    color: var(--color-dir);
   }
 
   .hex-highlight {
     background: rgba(184,199,111,0.3);
     border-radius: 2px;
-    outline: 1px solid #B8C76F;
+    outline: 1px solid var(--c64-highlight);
   }
 
   .hex-ascii {
