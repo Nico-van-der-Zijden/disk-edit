@@ -191,6 +191,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.45', title: 'Modal sizing classes and stable positioning', items: [
+      'Added modal size classes: modal-sm (460px), modal-md (560px), modal-lg (720px), modal-xl (900px + 80vh), modal-xxl (1100px + 80vh)',
+      'New setModalSize(size) helper in ui-modals.js; showModal / showChoiceModal / showProgressModal auto-reset the size so it doesn\u2019t leak into follow-up dialogs',
+      'Modal overlay now anchors the modal at top (10vh) instead of center-aligning \u2014 no visual \u201Cshift\u201D when modal content resizes',
+      'Modal max-height reduced from 90vh to 85vh (5vh breathing room at the bottom)',
+      'BAM viewer locked to modal-md so tab switching no longer jumps the modal width',
+      'Removed the redundant filename tooltip in the File Fragmentation tab',
+    ]},
     { ver: '1.3.44', title: 'Graphics save split button and BAM tab split', items: [
       'Graphics viewer \u201CSave as\u201D is now a split button: main click saves in current format, arrow opens the dropdown of other formats',
       'Dropdown excludes the currently-selected format (main button already covers it)',

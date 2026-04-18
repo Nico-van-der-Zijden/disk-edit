@@ -321,7 +321,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       var f = fragFiles[ffi];
       var barCol = f.pct === 0 ? 'var(--accent)' : f.pct <= 30 ? '#6c9bd2' : f.pct <= 60 ? 'var(--color-warn)' : 'var(--color-error)';
       fileUsageHtml += '<tr>' +
-        '<td style="padding:2px 8px 2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px" title="' + escHtml(f.name) + '">' + escHtml(f.name) + '</td>' +
+        '<td style="padding:2px 8px 2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px">' + escHtml(f.name) + '</td>' +
         '<td style="padding:2px 8px;text-align:right">' + f.blocks + '</td>' +
         '<td style="padding:2px 8px;text-align:right">' + f.pct + '%</td>' +
         '<td style="padding:2px 0"><div style="background:var(--hover);border-radius:2px;height:8px;overflow:hidden">' +
@@ -492,6 +492,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   }
 
   showModal(title, []);
+  setModalSize('md');
   var bamBody = document.getElementById('modal-body');
   bamBody.innerHTML = html;
 

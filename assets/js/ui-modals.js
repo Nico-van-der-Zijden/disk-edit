@@ -19,8 +19,20 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 });
 
+// ── Modal sizing ──────────────────────────────────────────────────────
+// Apply a fixed-size class to the shared modal so tab switches inside the body
+// don't cause the modal to grow/shrink with content.
+// Size: null (reset to default/auto) or 'sm'|'md'|'lg'|'xl'|'xxl'.
+function setModalSize(size) {
+  var modalEl = document.querySelector('#modal-overlay .modal');
+  if (!modalEl) return;
+  modalEl.classList.remove('modal-sm', 'modal-md', 'modal-lg', 'modal-xl', 'modal-xxl');
+  if (size) modalEl.classList.add('modal-' + size);
+}
+
 // ── Modal ─────────────────────────────────────────────────────────────
 function showModal(title, lines) {
+  setModalSize(null);
   document.getElementById('modal-title').textContent = title;
   // Always restore the standard OK footer
   var footer = document.querySelector('#modal-overlay .modal-footer');
@@ -62,6 +74,7 @@ document.getElementById('modal-close').addEventListener('click', () => {
 // Show a progress modal with a title, status text, and progress bar.
 // Returns { status, bar, update(idx, total, label) }.
 function showProgressModal(title) {
+  setModalSize(null);
   document.getElementById('modal-title').textContent = title;
   var body = document.getElementById('modal-body');
   body.innerHTML =
@@ -86,6 +99,7 @@ function showProgressModal(title) {
 // Optional items array shows a list below the message
 function showChoiceModal(title, message, buttons, items) {
   return new Promise(function(resolve) {
+    setModalSize(null);
     document.getElementById('modal-title').textContent = title;
     var body = document.getElementById('modal-body');
     body.innerHTML = '';
