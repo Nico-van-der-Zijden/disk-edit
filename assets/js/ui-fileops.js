@@ -862,13 +862,18 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
     });
   }
 
-  // Show summary for multi-file copy
+  // Close the progress modal on the happy path; only surface a summary
+  // dialog when some files couldn't be copied.
   if (total > 1) {
-    var lines = [clipboard.length + ' file(s) copied to clipboard.'];
-    for (var si = 0; si < skipped.length; si++) {
-      lines.push(skipped[si].name + ' \u2014 ' + skipped[si].reason);
+    if (skipped.length > 0) {
+      var lines = [clipboard.length + ' file(s) copied to clipboard.'];
+      for (var si = 0; si < skipped.length; si++) {
+        lines.push(skipped[si].name + ' \u2014 ' + skipped[si].reason);
+      }
+      showModal('Copy Complete', lines);
+    } else {
+      document.getElementById('modal-overlay').classList.remove('open');
     }
-    showModal('Copy Complete', lines);
   }
 
   updateEntryMenuState();

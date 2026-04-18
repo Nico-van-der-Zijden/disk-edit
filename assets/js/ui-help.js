@@ -191,6 +191,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.47', title: 'Copy Files auto-closes on success', items: [
+      'Multi-file copy: progress modal now auto-closes when all files copied OK \u2014 no more "Copy Complete" OK prompt on the happy path',
+      'If some files were skipped (unsupported type, empty VLIR, etc.) the summary dialog still appears so nothing fails silently',
+      'Paste unchanged \u2014 still shows Paste Complete / Paste Incomplete with OK',
+    ]},
     { ver: '1.3.46', title: 'Sector editor menu, PETSCII full-file view, modal scroll reset', items: [
       'Sector editor: Fill / Copy / Paste consolidated into a hamburger (\u22EE) dropdown in the footer so action buttons no longer overflow',
       'Added .dropdown-btn-menu-item.disabled style; Paste stays greyed out in the menu until the clipboard has data',
