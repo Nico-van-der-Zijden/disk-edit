@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 48 };
+var APP_VERSION = { major: 1, minor: 3, build: 49 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -195,8 +195,9 @@ function getActiveTab() {
 function updateTabName() {
   var tab = getActiveTab();
   if (!tab) return;
-  if (tab.fileName) {
-    tab.name = tab.fileName;
+  tab.fileName = currentFileName;
+  if (currentFileName) {
+    tab.name = currentFileName;
   }
   renderTabs();
 }

@@ -191,6 +191,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.49', title: 'Save As uses tab name and syncs tab back', items: [
+      'Save As default filename now falls back to the active tab\u2019s name (e.g. "New Disk 1.d64") instead of a generic "disk.d64" when the disk hasn\u2019t been saved yet',
+      'When you change the filename in Save As, the tab title updates to match so Save and subsequent Save As defaults stay in sync',
+    ]},
     { ver: '1.3.48', title: 'BAM viewer keeps tabs pinned while content scrolls', items: [
       'BAM modal wraps the body in a flex-column layout so only the active tab\u2019s content scrolls',
       'Tab bar (and any BAM warnings above it) stays visible when scrolling long Sectors / Track Usage / File Fragmentation content',

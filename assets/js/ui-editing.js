@@ -548,7 +548,9 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
   if (!currentBuffer) return;
   closeMenus();
   var ext = currentFormat.ext || '.d64';
-  var defaultName = currentFileName || ('disk' + ext);
+  var tab = getActiveTab();
+  var baseName = currentFileName || (tab && tab.name) || 'disk';
+  var defaultName = baseName.endsWith(ext) ? baseName : baseName + ext;
   const fileName = await showInputModal('Save As', defaultName);
   if (!fileName) return;
   {
