@@ -438,7 +438,9 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   // ── Compose final HTML with tabs ──
   var title = 'BAM \u2014 ' + totalFree + ' free, ' + totalUsed + ' used of ' +
     (totalFree + totalUsed) + ' sectors';
-  var html = bamWarnings;
+  // Wrap in .bam-layout so the tab bar stays pinned and only the active
+  // tab's content scrolls vertically (see .modal-body:has(.bam-layout)).
+  var html = '<div class="bam-layout">' + bamWarnings;
 
   // Disk Map tab content (radial visualization)
   var diskMapHtml = '<div class="disk-map-wrap">' +
@@ -469,12 +471,14 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       (hasErrors ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-error"></span> BAM Error</span>' : '') +
       (hasOrphans ? '<span class="bam-legend-item"><span class="bam-legend-box bam-sector bam-legend-orphan"></span> Orphan</span>' : '') +
       '</div>';
+    html += '<div class="bam-tab-scroll">';
     html += '<div class="bam-view-content" data-bam-view="map">' + mapLegend +
       '<div class="bam-map-scroll"><canvas id="bam-map-canvas" width="' + canvasW + '" height="' + canvasH + '" style="cursor:crosshair;display:block"></canvas></div></div>';
     html += '<div class="bam-view-content" data-bam-view="trackusage" style="display:none">' + trackUsageHtml + '</div>';
     html += '<div class="bam-view-content" data-bam-view="fileusage" style="display:none">' + fileUsageHtml + '</div>';
     html += '<div class="bam-view-content" data-bam-view="diskmap" style="display:none">' + diskMapHtml + '</div>';
     html += partsPanelHtml;
+    html += '</div>';
   } else {
     // Tab switcher — BAM + Track Usage + File Usage + Disk Map (+ Partitions for D1M)
     html += '<div class="bam-tabs">' +
@@ -484,12 +488,15 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       '<span class="bam-tab" data-bam-view="diskmap">Disk Map</span>' +
       partsTabHtml +
       '</div>';
+    html += '<div class="bam-tab-scroll">';
     html += '<div class="bam-view-content" data-bam-view="sectors">' + sectorsHtml + '</div>';
     html += '<div class="bam-view-content" data-bam-view="trackusage" style="display:none">' + trackUsageHtml + '</div>';
     html += '<div class="bam-view-content" data-bam-view="fileusage" style="display:none">' + fileUsageHtml + '</div>';
     html += '<div class="bam-view-content" data-bam-view="diskmap" style="display:none">' + diskMapHtml + '</div>';
     html += partsPanelHtml;
+    html += '</div>';
   }
+  html += '</div>';
 
   showModal(title, []);
   setModalSize('md');
@@ -505,6 +512,8 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       bamBody.querySelectorAll('.bam-view-content').forEach(function(c) {
         c.style.display = c.getAttribute('data-bam-view') === view ? '' : 'none';
       });
+      var scroller = bamBody.querySelector('.bam-tab-scroll');
+      if (scroller) scroller.scrollTop = 0;
     });
   });
 

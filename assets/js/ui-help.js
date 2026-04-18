@@ -191,6 +191,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.48', title: 'BAM viewer keeps tabs pinned while content scrolls', items: [
+      'BAM modal wraps the body in a flex-column layout so only the active tab\u2019s content scrolls',
+      'Tab bar (and any BAM warnings above it) stays visible when scrolling long Sectors / Track Usage / File Fragmentation content',
+      'Tab switch now resets the inner scroll position to the top so each tab starts at 0',
+    ]},
     { ver: '1.3.47', title: 'Copy Files auto-closes on success', items: [
       'Multi-file copy: progress modal now auto-closes when all files copied OK \u2014 no more "Copy Complete" OK prompt on the happy path',
       'If some files were skipped (unsupported type, empty VLIR, etc.) the summary dialog still appears so nothing fails silently',

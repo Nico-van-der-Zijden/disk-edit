@@ -149,6 +149,29 @@
     min-width: 0;
   }
 
+  /* BAM viewer layout: warnings + tabs stay pinned while only the active
+     tab's content scrolls, so the tab bar is always visible. */
+  .bam-layout {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .bam-layout > .bam-tabs {
+    flex-shrink: 0;
+  }
+  .bam-tab-scroll {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+  }
+  .modal-body:has(.bam-layout) {
+    overflow-y: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
 
   .bam-sector:hover {
     outline: 1px solid var(--text);
