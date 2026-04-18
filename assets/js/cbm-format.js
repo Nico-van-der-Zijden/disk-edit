@@ -2538,6 +2538,15 @@ function parseDisk(buffer) {
   return { diskName, diskId, freeBlocks, entries, format: fmt.name, tracks: currentTracks };
 }
 
+// Byte offset of a track's BAM slot inside a D81 partition. Each slot is
+// 6 bytes (1 free-count byte + 5 bitmap bytes). Tracks 1-40 live in the
+// first BAM sector after a 16-byte header; tracks 41-80 live in the second
+// BAM sector with the same layout.
+function d81PartitionBamBase(partBamOff, track) {
+  if (track <= 40) return partBamOff + 0x10 + (track - 1) * 6;
+  return partBamOff + 256 + 0x10 + (track - 41) * 6;
+}
+
 // ── Parse a D81 partition/subdirectory ────────────────────────────────
 // startTrack = first track of the partition (header at sector 0, BAM at 1-2, dir at 3+)
 // partSize = size in sectors from directory entry bytes 30-31
@@ -2560,13 +2569,7 @@ function parsePartition(buffer, startTrack, partSize) {
   for (let t = 1; t <= numPartTracks; t++) {
     // Skip the partition's own system track (track 1 = first track of partition)
     if (t === 1) continue;
-    var base;
-    if (t <= 40) {
-      base = partBamOff + 0x10 + (t - 1) * 6;
-    } else {
-      base = partBamOff + 256 + 0x10 + (t - 41) * 6;
-    }
-    freeBlocks += data[base];
+    freeBlocks += data[d81PartitionBamBase(partBamOff, t)];
   }
 
   // Directory chain starts at (startTrack, 3)

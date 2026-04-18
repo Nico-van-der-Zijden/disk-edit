@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 53 };
+var APP_VERSION = { major: 1, minor: 3, build: 54 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -991,7 +991,7 @@ function validatePartition(buffer, startTrack, partSize) {
   // Rebuild partition BAM
   let bamErrors = 0;
   for (let t = 1; t <= numPartTracks; t++) {
-    const spt = 40;
+    const spt = fmt.partitionSpt;
     const numBytes = Math.ceil(spt / 8);
     let free = 0;
     const newBytes = new Uint8Array(numBytes);
@@ -1002,13 +1002,7 @@ function validatePartition(buffer, startTrack, partSize) {
       }
     }
 
-    let bamBase;
-    if (t <= 40) {
-      bamBase = partBamOff + 0x10 + (t - 1) * 6;
-    } else {
-      bamBase = partBamOff + 256 + 0x10 + (t - 41) * 6;
-    }
-
+    const bamBase = d81PartitionBamBase(partBamOff, t);
     const oldFree = data[bamBase];
     let bitmapChanged = oldFree !== free;
     for (let bi = 0; bi < numBytes && !bitmapChanged; bi++) {
