@@ -66,6 +66,41 @@
  * @property {Object<string, boolean>} orphanSectors - Sectors used but not owned
  */
 
+// ── CMD native-partition BAM helpers (DNP / D1M / D2M / D4M) ─────────
+// All four formats share the same on-disk BAM layout:
+//   - Header at track 1 sector 2 (32 bytes), then 32-byte slots for tracks 1-7.
+//   - Sectors 3, 4, ... hold 8 tracks each (32 bytes per track, no header).
+//   - Bitmap is MSB-first (opposite of D64/D71/D81).
+// The only difference between formats is sectorsPerTrack, so read/write BAM
+// helpers can be shared.
+function _cmdBamBase(track) {
+  var bamSec = 2 + (track >> 3);
+  var bamByteOff = (track & 7) * 32;
+  return sectorOffset(1, bamSec) + bamByteOff;
+}
+function _cmdIsSectorFree(data, bamOff, track, sector) {
+  var base = this._bamBase(track);
+  if (base < 0 || base + 32 > data.length) return false;
+  return (data[base + (sector >> 3)] & (0x80 >> (sector & 7))) !== 0;
+}
+function _cmdReadTrackFree(data, bamOff, track) {
+  var base = this._bamBase(track);
+  if (base < 0 || base + 32 > data.length) return 0;
+  var numBytes = Math.ceil(this.sectorsPerTrack(track) / 8);
+  var free = 0;
+  for (var i = 0; i < numBytes; i++) {
+    var b = data[base + i];
+    while (b) { free += b & 1; b >>= 1; }
+  }
+  return free;
+}
+function _cmdReadTrackBitmap(data, bamOff, track) {
+  var base = this._bamBase(track);
+  if (base < 0 || base + 32 > data.length) return 0;
+  return data[base] | (data[base+1] << 8) | (data[base+2] << 16) | ((data[base+3] << 24) >>> 0);
+}
+function _cmdNoop() {}
+
 // ── Disk Format Descriptors ───────────────────────────────────────────
 // Each format defines its geometry, BAM layout, and directory structure.
 // Adding D71/D81 support = adding a new descriptor + format-specific BAM functions.
@@ -719,41 +754,13 @@ const DISK_FORMATS = {
     sizes: [], // variable size — detected by file size being multiple of 65536
     sectorsPerTrack(t) { return 256; },
     bamTracksRange(numTracks) { return numTracks; },
-    _bamBase(track) {
-      // Sector 2: 32-byte header + tracks 1-7 (slot 0=header, slots 1-7=tracks)
-      // Sectors 3+: 8 tracks each, no header (bitmap at offset 0)
-      // SD2IEC: bamSec = 2 + (track >> 3), offset = (track & 7) * 32
-      // But track is 1-based: track 1 → sector 2 offset 32 (slot 1), track 8 → sector 3 offset 0
-      var bamSec = 2 + (track >> 3);
-      var bamByteOff = (track & 7) * 32;
-      return sectorOffset(1, bamSec) + bamByteOff;
-    },
-    isSectorFree(data, bamOff, track, sector) {
-      var base = this._bamBase(track);
-      if (base < 0 || base + 32 > data.length) return false;
-      // DNP uses MSB-first bit order (opposite of D64/D71/D81)
-      return (data[base + (sector >> 3)] & (0x80 >> (sector & 7))) !== 0;
-    },
-    readTrackFree(data, bamOff, track) {
-      var base = this._bamBase(track);
-      if (base < 0 || base + 32 > data.length) return 0;
-      var free = 0;
-      // Track 1: skip first 35 sectors (0-34 reserved)
-      for (var i = 0; i < 32; i++) {
-        var b = data[base + i];
-        while (b) { free += b & 1; b >>= 1; }
-      }
-      // Track 1: subtract reserved sectors that show as used
-      return free;
-    },
-    writeTrackFree() {},
-    readTrackBitmap(data, bamOff, track) {
-      var base = this._bamBase(track);
-      if (base < 0 || base + 32 > data.length) return 0;
-      return data[base] | (data[base+1] << 8) | (data[base+2] << 16) | ((data[base+3] << 24) >>> 0);
-    },
-    writeTrackBitmap() {},
-    initBAM() {},
+    _bamBase: _cmdBamBase,
+    isSectorFree: _cmdIsSectorFree,
+    readTrackFree: _cmdReadTrackFree,
+    writeTrackFree: _cmdNoop,
+    readTrackBitmap: _cmdReadTrackBitmap,
+    writeTrackBitmap: _cmdNoop,
+    initBAM: _cmdNoop,
   },
 
   // D1M — CMD FD-2000 Double Density (81 tracks, 40 sectors/track)
@@ -796,36 +803,13 @@ const DISK_FORMATS = {
     ],
     sectorsPerTrack(t) { return 40; },
     bamTracksRange(numTracks) { return numTracks; },
-    _bamBase(track) {
-      var bamSec = 2 + (track >> 3);
-      var bamByteOff = (track & 7) * 32;
-      return sectorOffset(1, bamSec) + bamByteOff;
-    },
-    isSectorFree(data, bamOff, track, sector) {
-      var base = this._bamBase(track);
-      if (base < 0 || base + 32 > data.length) return false;
-      return (data[base + (sector >> 3)] & (0x80 >> (sector & 7))) !== 0;
-    },
-    readTrackFree(data, bamOff, track) {
-      var base = this._bamBase(track);
-      if (base < 0 || base + 32 > data.length) return 0;
-      var spt = this.sectorsPerTrack(track);
-      var numBytes = Math.ceil(spt / 8);
-      var free = 0;
-      for (var i = 0; i < numBytes; i++) {
-        var b = data[base + i];
-        while (b) { free += b & 1; b >>= 1; }
-      }
-      return free;
-    },
-    writeTrackFree() {},
-    readTrackBitmap(data, bamOff, track) {
-      var base = this._bamBase(track);
-      if (base < 0 || base + 32 > data.length) return 0;
-      return data[base] | (data[base+1] << 8) | (data[base+2] << 16) | ((data[base+3] << 24) >>> 0);
-    },
-    writeTrackBitmap() {},
-    initBAM() {},
+    _bamBase: _cmdBamBase,
+    isSectorFree: _cmdIsSectorFree,
+    readTrackFree: _cmdReadTrackFree,
+    writeTrackFree: _cmdNoop,
+    readTrackBitmap: _cmdReadTrackBitmap,
+    writeTrackBitmap: _cmdNoop,
+    initBAM: _cmdNoop,
   },
 
   // D2M — CMD FD-2000 High Density (81 tracks, 80 sectors/track)
@@ -868,36 +852,13 @@ const DISK_FORMATS = {
     ],
     sectorsPerTrack(t) { return 80; },
     bamTracksRange(numTracks) { return numTracks; },
-    _bamBase(track) {
-      var bamSec = 2 + (track >> 3);
-      var bamByteOff = (track & 7) * 32;
-      return sectorOffset(1, bamSec) + bamByteOff;
-    },
-    isSectorFree(data, bamOff, track, sector) {
-      var base = this._bamBase(track);
-      if (base < 0 || base + 32 > data.length) return false;
-      return (data[base + (sector >> 3)] & (0x80 >> (sector & 7))) !== 0;
-    },
-    readTrackFree(data, bamOff, track) {
-      var base = this._bamBase(track);
-      if (base < 0 || base + 32 > data.length) return 0;
-      var spt = this.sectorsPerTrack(track);
-      var numBytes = Math.ceil(spt / 8);
-      var free = 0;
-      for (var i = 0; i < numBytes; i++) {
-        var b = data[base + i];
-        while (b) { free += b & 1; b >>= 1; }
-      }
-      return free;
-    },
-    writeTrackFree() {},
-    readTrackBitmap(data, bamOff, track) {
-      var base = this._bamBase(track);
-      if (base < 0 || base + 32 > data.length) return 0;
-      return data[base] | (data[base+1] << 8) | (data[base+2] << 16) | ((data[base+3] << 24) >>> 0);
-    },
-    writeTrackBitmap() {},
-    initBAM() {},
+    _bamBase: _cmdBamBase,
+    isSectorFree: _cmdIsSectorFree,
+    readTrackFree: _cmdReadTrackFree,
+    writeTrackFree: _cmdNoop,
+    readTrackBitmap: _cmdReadTrackBitmap,
+    writeTrackBitmap: _cmdNoop,
+    initBAM: _cmdNoop,
   },
 
   // D4M — CMD FD-4000 Extra Density (81 tracks, 160 sectors/track)
@@ -940,36 +901,13 @@ const DISK_FORMATS = {
     ],
     sectorsPerTrack(t) { return 160; },
     bamTracksRange(numTracks) { return numTracks; },
-    _bamBase(track) {
-      var bamSec = 2 + (track >> 3);
-      var bamByteOff = (track & 7) * 32;
-      return sectorOffset(1, bamSec) + bamByteOff;
-    },
-    isSectorFree(data, bamOff, track, sector) {
-      var base = this._bamBase(track);
-      if (base < 0 || base + 32 > data.length) return false;
-      return (data[base + (sector >> 3)] & (0x80 >> (sector & 7))) !== 0;
-    },
-    readTrackFree(data, bamOff, track) {
-      var base = this._bamBase(track);
-      if (base < 0 || base + 32 > data.length) return 0;
-      var spt = this.sectorsPerTrack(track);
-      var numBytes = Math.ceil(spt / 8);
-      var free = 0;
-      for (var i = 0; i < numBytes; i++) {
-        var b = data[base + i];
-        while (b) { free += b & 1; b >>= 1; }
-      }
-      return free;
-    },
-    writeTrackFree() {},
-    readTrackBitmap(data, bamOff, track) {
-      var base = this._bamBase(track);
-      if (base < 0 || base + 32 > data.length) return 0;
-      return data[base] | (data[base+1] << 8) | (data[base+2] << 16) | ((data[base+3] << 24) >>> 0);
-    },
-    writeTrackBitmap() {},
-    initBAM() {},
+    _bamBase: _cmdBamBase,
+    isSectorFree: _cmdIsSectorFree,
+    readTrackFree: _cmdReadTrackFree,
+    writeTrackFree: _cmdNoop,
+    readTrackBitmap: _cmdReadTrackBitmap,
+    writeTrackBitmap: _cmdNoop,
+    initBAM: _cmdNoop,
   },
 
   // TAP tape image (read-only, raw pulse data)
@@ -2006,6 +1944,81 @@ function forEachFileSector(data, entryOff, callback) {
   }
 
   return count;
+}
+
+// Allocate up to `numSectors` sectors by scanning `trackOrder` with the given
+// drive `interleave`. Mirrors CBM drive behaviour: on each track, scan forward
+// from (lastSector + interleave) wrapping at sectorsPerTrack, fill the track
+// as far as possible, then advance to the next track. Mutates `allocated`
+// (keys "t:s") to mark chosen sectors, and returns the new [{ track, sector }]
+// list. Callers build their own trackOrder + allocated map.
+function allocateSectorsFromTrackOrder(allocated, numSectors, trackOrder, interleave) {
+  var fmt = currentFormat;
+  var sectorList = [];
+  var lastSector = 0;
+
+  for (var ti = 0; ti < trackOrder.length && sectorList.length < numSectors; ti++) {
+    var track = trackOrder[ti];
+    var spt = fmt.sectorsPerTrack(track);
+
+    var s = (lastSector + interleave) % spt;
+    var foundFirst = false;
+    for (var attempt = 0; attempt < spt; attempt++) {
+      if (!allocated[track + ':' + s]) {
+        sectorList.push({ track: track, sector: s });
+        allocated[track + ':' + s] = true;
+        lastSector = s;
+        foundFirst = true;
+        break;
+      }
+      s = (s + 1) % spt;
+    }
+
+    if (!foundFirst) continue;
+
+    while (sectorList.length < numSectors) {
+      var nextS = (lastSector + interleave) % spt;
+      var foundMore = false;
+      for (var a2 = 0; a2 < spt; a2++) {
+        if (!allocated[track + ':' + nextS]) {
+          sectorList.push({ track: track, sector: nextS });
+          allocated[track + ':' + nextS] = true;
+          lastSector = nextS;
+          foundMore = true;
+          break;
+        }
+        nextS = (nextS + 1) % spt;
+      }
+      if (!foundMore) break;
+    }
+  }
+
+  return sectorList;
+}
+
+// Enumerate the GEOS "auxiliary" sectors of a file entry: info block and
+// VLIR record chain starts. Unlike forEachFileSector, this does NOT walk the
+// record chains themselves — callers that need per-sector cross-link /
+// error-reporting context (validateDisk, validatePartition) plug in their own
+// walker for each record start.
+//
+// onInfoBlock(track, sector) — called once if the entry has a GEOS info block.
+// onRecordStart(track, sector, recordIdx) — called per VLIR record chain head.
+function forEachGeosAuxSector(data, entryOff, onInfoBlock, onRecordStart) {
+  var typeIdx = data[entryOff + 2] & 0x07;
+  if (data[entryOff + 0x18] === 0 || typeIdx === FILE_TYPE.REL) return;
+  if (onInfoBlock) onInfoBlock(data[entryOff + 0x15], data[entryOff + 0x16]);
+  if (data[entryOff + 0x17] !== 0x01) return;
+  var startT = data[entryOff + 3], startS = data[entryOff + 4];
+  var idxOff = sectorOffset(startT, startS);
+  if (idxOff < 0) return;
+  for (var i = 0; i < 127; i++) {
+    var recT = data[idxOff + 2 + i * 2];
+    var recS = data[idxOff + 2 + i * 2 + 1];
+    if (recT === 0 && recS === 0) break;
+    if (recT === 0) continue;
+    if (onRecordStart) onRecordStart(recT, recS, i);
+  }
 }
 
 // Decompress GEOS bitmap data (geoPaint compression).

@@ -451,6 +451,8 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
     var tabName = fname || 'New Disk ' + newDiskCount;
     var tab = createTab(tabName, buf, fname);
     activeTabId = tab.id;
+    tabDirty = false;
+    clearUndo();
     const info = parseDisk(buf);
     renderDisk(info);
     renderTabs();
@@ -556,6 +558,7 @@ document.getElementById('opt-close-all').addEventListener('click', async (e) => 
   selectedEntryIndex = -1;
   currentPartition = null;
   tabDirty = false;
+  clearUndo();
   showEmptyState();
   renderTabs();
   updateMenuState();
@@ -583,7 +586,7 @@ document.getElementById('opt-save').addEventListener('click', (e) => {
   if (!currentBuffer || !currentFileName) return;
   closeMenus();
   downloadD64(getSaveBuffer(), getSaveFileName());
-  tabDirty = false;
+  markClean();
   renderTabs();
 });
 
@@ -601,7 +604,7 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
     currentFileName = fileName.endsWith(ext) ? fileName : fileName + ext;
     downloadD64(currentBuffer, currentFileName);
   }
-  tabDirty = false;
+  markClean();
   updateTabName();
   updateMenuState();
 });

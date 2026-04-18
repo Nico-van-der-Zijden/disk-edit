@@ -1089,51 +1089,7 @@ function allocateSectors(allocated, numSectors) {
     for (var t2 = dirTrack + 1; t2 <= maxBamTrack; t2++) { if (!skipTracks[t2]) trackOrder.push(t2); }
     interleave = fileInterleave;
   }
-  var sectorList = [];
-  var lastSector = 0;
-
-  for (var ti = 0; ti < trackOrder.length && sectorList.length < numSectors; ti++) {
-    var track = trackOrder[ti];
-    var spt = fmt.sectorsPerTrack(track);
-
-    // On a new track, apply interleave from the last allocated sector
-    var startS = (lastSector + interleave) % spt;
-
-    // Find first free sector starting from startS, scanning forward
-    var s = startS;
-    var foundFirst = false;
-    for (var attempt = 0; attempt < spt; attempt++) {
-      if (!allocated[track + ':' + s]) {
-        sectorList.push({ track: track, sector: s });
-        allocated[track + ':' + s] = true;
-        lastSector = s;
-        foundFirst = true;
-        break;
-      }
-      s = (s + 1) % spt;
-    }
-
-    // Continue allocating more sectors on this same track
-    if (foundFirst) {
-      while (sectorList.length < numSectors) {
-        var nextS = (lastSector + interleave) % spt;
-        var foundMore = false;
-        for (var a2 = 0; a2 < spt; a2++) {
-          if (!allocated[track + ':' + nextS]) {
-            sectorList.push({ track: track, sector: nextS });
-            allocated[track + ':' + nextS] = true;
-            lastSector = nextS;
-            foundMore = true;
-            break;
-          }
-          nextS = (nextS + 1) % spt;
-        }
-        if (!foundMore) break; // track full
-      }
-    }
-  }
-
-  return sectorList;
+  return allocateSectorsFromTrackOrder(allocated, numSectors, trackOrder, interleave);
 }
 
 // Core write: writes file data to disk with sector chain, directory entry, BAM update, and verification.

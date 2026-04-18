@@ -191,6 +191,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.51', title: 'Fresh tabs open clean; undo clears dirty; internal deduplication', items: [
+      'Fix: opening or creating a disk while another tab had unsaved changes used to inherit that dirty state onto the new tab, triggering the unsaved-changes warning on an untouched disk. Both Open paths (drag-and-drop, file picker) and New Disk now reset the dirty flag and undo stack for the freshly-opened tab',
+      'Fix: undoing past every edit since the last save now correctly clears the tab\u2019s dirty marker. The tab tracks the undo-stack length at each clean point (load / save) and compares against it on each undo, so \u201Cdirty\u201D accurately reflects whether the buffer differs from the saved version',
+      'Internal: validateDisk and validatePartition now share a GEOS aux-sector helper (info block + VLIR record enumeration) instead of keeping two drifting copies',
+      'Internal: DNP / D1M / D2M / D4M now share _cmdBamBase, _cmdIsSectorFree, _cmdReadTrackFree, _cmdReadTrackBitmap \u2014 one source of truth for CMD native BAM reads',
+      'Internal: sector allocation centralised into allocateSectorsFromTrackOrder, used by both the Optimize dialog and runtime file writes',
+      'Net \u2248190 lines of duplicated code removed; 63 tests still pass',
+    ]},
     { ver: '1.3.50', title: 'Warn before discarding unsaved changes', items: [
       'Closing a tab with unsaved changes (menu, X button, or Ctrl+Alt+W) now prompts before discarding',
       'Close All also prompts when any open tab is dirty, listing the affected tab names',

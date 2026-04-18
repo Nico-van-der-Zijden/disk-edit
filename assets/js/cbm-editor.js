@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 50 };
+var APP_VERSION = { major: 1, minor: 3, build: 51 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -61,17 +61,26 @@ function detectExtendedBAM(buffer) {
 }
 
 // ── Undo system ──────────────────────────────────────────────────────
+// The tab is "clean" (tabDirty=false) when undoStack.length === cleanStackLength.
+// Set by markClean() on load / save; read by popUndo() to restore clean state
+// when the user undoes back past all edits made since the last save.
+// cleanStackLength = -1 means "clean state no longer reachable" (an older entry
+// fell off the end when we hit MAX_UNDO).
 var undoStack = [];
 var MAX_UNDO = 20;
 var tabDirty = false;
+var cleanStackLength = 0;
 
 function pushUndo() {
   if (!currentBuffer) return;
   undoStack.push(currentBuffer.slice(0));
-  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  if (undoStack.length > MAX_UNDO) {
+    undoStack.shift();
+    if (cleanStackLength > 0) cleanStackLength--;
+    else if (cleanStackLength === 0) cleanStackLength = -1;
+  }
   if (!tabDirty) {
     tabDirty = true;
-    // Update tab bar to show dirty indicator (renderTabs is defined in ui.js)
     if (typeof renderTabs === 'function') renderTabs();
   }
 }
@@ -79,13 +88,22 @@ function pushUndo() {
 function popUndo() {
   if (undoStack.length === 0 || !currentBuffer) return false;
   currentBuffer = undoStack.pop();
-  // Update active tab
   var tab = getActiveTab();
   if (tab) tab.buffer = currentBuffer;
+  var shouldBeDirty = (undoStack.length !== cleanStackLength);
+  if (tabDirty !== shouldBeDirty) {
+    tabDirty = shouldBeDirty;
+    if (typeof renderTabs === 'function') renderTabs();
+  }
   return true;
 }
 
-function clearUndo() { undoStack = []; }
+function clearUndo() { undoStack = []; cleanStackLength = 0; }
+
+function markClean() {
+  cleanStackLength = undoStack.length;
+  tabDirty = false;
+}
 
 // ── Tab management ────────────────────────────────────────────────────
 var tabs = [];        // array of { id, name, buffer, fileName, format, tracks, partition, selectedEntry }
@@ -104,6 +122,7 @@ function createTab(name, buffer, fileName) {
     partition: null,
     selectedEntry: -1,
     undoStack: [],
+    cleanStackLength: 0,
     dirty: false,
     cmdFdBuffer: null,
     cmdFdFileName: null,
@@ -125,6 +144,7 @@ function saveActiveTab() {
   tab.partition = currentPartition;
   tab.selectedEntry = selectedEntryIndex;
   tab.undoStack = undoStack;
+  tab.cleanStackLength = cleanStackLength;
   tab.dirty = tabDirty;
   tab.tapeEntries = parsedT64Entries;
   tab.tapEntries = parsedTAPEntries;
@@ -139,6 +159,7 @@ function loadTab(tab) {
   currentPartition = tab.partition;
   selectedEntryIndex = tab.selectedEntry;
   undoStack = tab.undoStack || [];
+  cleanStackLength = tab.cleanStackLength || 0;
   tabDirty = tab.dirty || false;
   parsedT64Entries = tab.tapeEntries || null;
   parsedTAPEntries = tab.tapEntries || null;
@@ -536,47 +557,7 @@ function optimizeDisk(buffer, interleave, defragment) {
     var totalNeed = numSectors + needExtra;
 
     // Allocate sectors with chosen interleave
-    var sectorList = [];
-    var lastSector = 0;
-
-    for (var ti = 0; ti < trackOrder.length && sectorList.length < totalNeed; ti++) {
-      var track = trackOrder[ti];
-      var tspt = fmt.sectorsPerTrack(track);
-
-      // Check if any sectors are free on this track
-      var startS = (lastSector + interleave) % tspt;
-      var ss = startS;
-      var foundFirst = false;
-      for (var att = 0; att < tspt; att++) {
-        if (!allocated[track + ':' + ss]) {
-          sectorList.push({ track: track, sector: ss });
-          allocated[track + ':' + ss] = true;
-          lastSector = ss;
-          foundFirst = true;
-          break;
-        }
-        ss = (ss + 1) % tspt;
-      }
-
-      // Continue filling this track
-      if (foundFirst) {
-        while (sectorList.length < totalNeed) {
-          var nextS = (lastSector + interleave) % tspt;
-          var foundMore = false;
-          for (var a2 = 0; a2 < tspt; a2++) {
-            if (!allocated[track + ':' + nextS]) {
-              sectorList.push({ track: track, sector: nextS });
-              allocated[track + ':' + nextS] = true;
-              lastSector = nextS;
-              foundMore = true;
-              break;
-            }
-            nextS = (nextS + 1) % tspt;
-          }
-          if (!foundMore) break;
-        }
-      }
-    }
+    var sectorList = allocateSectorsFromTrackOrder(allocated, totalNeed, trackOrder, interleave);
 
     if (sectorList.length < totalNeed) {
       log.push('ERROR: Not enough free sectors for "' + petsciiToReadable(file.name) + '"');
@@ -813,36 +794,19 @@ function validateDisk(buffer) {
         const result = followChain(fileTrack, fileSector, label);
         var totalBlocks = result.blocks;
 
-        // GEOS file: track info block and VLIR record chains
-        // NOTE: duplicates forEachFileSector logic — kept separate for cross-link detection + error reporting
-        // (skip REL files — byte 0x17 is record length, 0x18 could be non-zero)
-        var geosFileType = data[entryOff + 0x18];
-        if (geosFileType > 0 && fileType !== FILE_TYPE.REL) {
-          var infoT = data[entryOff + 0x15];
-          var infoS = data[entryOff + 0x16];
-          if (infoT >= 1 && infoT <= numTracks && infoS < fmt.sectorsPerTrack(infoT)) {
+        forEachGeosAuxSector(data, entryOff,
+          function(infoT, infoS) {
+            if (infoT < 1 || infoT > numTracks || infoS >= fmt.sectorsPerTrack(infoT)) return;
             if (allocated[infoT][infoS]) {
               log.push(`  ERROR: ${label}: cross-linked info block at track ${infoT} sector ${infoS}`);
             } else {
               allocated[infoT][infoS] = 1;
               totalBlocks++;
             }
-          }
-          // VLIR: follow each record's sector chain from the index
-          if (data[entryOff + 0x17] === 0x01) {
-            var vlirOff = sectorOffset(fileTrack, fileSector);
-            if (vlirOff >= 0) {
-              for (var vri = 0; vri < 127; vri++) {
-                var recT = data[vlirOff + 2 + vri * 2];
-                var recS = data[vlirOff + 2 + vri * 2 + 1];
-                if (recT === 0 && recS === 0) break;
-                if (recT === 0) continue; // empty slot
-                var recResult = followChain(recT, recS, label + ' record ' + vri);
-                totalBlocks += recResult.blocks;
-              }
-            }
-          }
-        }
+          },
+          function(recT, recS, recIdx) {
+            totalBlocks += followChain(recT, recS, label + ' record ' + recIdx).blocks;
+          });
 
         const expectedBlocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
         if (totalBlocks !== expectedBlocks && !result.error) {
@@ -1002,36 +966,20 @@ function validatePartition(buffer, startTrack, partSize) {
       const result = followChain(fileTrack, fileSector, label);
       var totalBlocks = result.blocks;
 
-      // GEOS file: track info block and VLIR record chains
-      // (skip REL files — byte 0x17 is record length, 0x18 could be non-zero)
-      var geosFileType = data[entryOff + 0x18];
-      if (geosFileType > 0 && fileType !== FILE_TYPE.REL) {
-        var infoT = data[entryOff + 0x15];
-        var infoS = data[entryOff + 0x16];
-        var infoRelT = infoT - startTrack + 1;
-        if (infoRelT >= 1 && infoRelT <= numPartTracks && infoS < fmt.sectorsPerTrack(infoT)) {
+      forEachGeosAuxSector(data, entryOff,
+        function(infoT, infoS) {
+          var infoRelT = infoT - startTrack + 1;
+          if (infoRelT < 1 || infoRelT > numPartTracks || infoS >= fmt.sectorsPerTrack(infoT)) return;
           if (allocated[infoRelT][infoS]) {
             log.push(`  ERROR: ${label}: cross-linked info block at track ${infoT} sector ${infoS}`);
           } else {
             allocated[infoRelT][infoS] = 1;
             totalBlocks++;
           }
-        }
-        // VLIR: follow each record's sector chain from the index
-        if (data[entryOff + 0x17] === 0x01) {
-          var vlirOff = sectorOffset(fileTrack, fileSector);
-          if (vlirOff >= 0) {
-            for (var vri = 0; vri < 127; vri++) {
-              var recT = data[vlirOff + 2 + vri * 2];
-              var recS = data[vlirOff + 2 + vri * 2 + 1];
-              if (recT === 0 && recS === 0) break;
-              if (recT === 0) continue; // empty slot
-              var recResult = followChain(recT, recS, label + ' record ' + vri);
-              totalBlocks += recResult.blocks;
-            }
-          }
-        }
-      }
+        },
+        function(recT, recS, recIdx) {
+          totalBlocks += followChain(recT, recS, label + ' record ' + recIdx).blocks;
+        });
 
       const expectedBlocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
       if (totalBlocks !== expectedBlocks && !result.error) {

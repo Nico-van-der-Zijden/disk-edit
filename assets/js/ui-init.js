@@ -58,6 +58,8 @@ document.addEventListener('drop', function(e) {
           parseDisk(currentBuffer);
           var tab = createTab(fname, currentBuffer, fname);
           activeTabId = tab.id;
+          tabDirty = false;
+          clearUndo();
         } catch (err) {
           showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
         }
