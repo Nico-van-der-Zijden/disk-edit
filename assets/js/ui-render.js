@@ -13,6 +13,25 @@ if (navigator.userAgent.includes('Edg')) {
 }
 
 // ── Render ────────────────────────────────────────────────────────────
+function buildEntryIconsHtml(e, data, dirTrack) {
+  if (!data) return '';
+  if (e.deleted) {
+    const dt = data[e.entryOff + 3];
+    // Skip separators: T/S points to directory track or is 0
+    if (dt === 0 || dt === dirTrack) return '';
+    const recov = checkScratchedRecoverable(currentBuffer, e.entryOff);
+    if (recov === 'yes') return '<span class="dir-icon-recover" title="Recoverable \u2014 sector chain intact"><i class="fa-solid fa-heart-pulse"></i></span>';
+    if (recov === 'partial') return '<span class="dir-icon-recover-partial" title="Partially recoverable \u2014 some sectors reused"><i class="fa-solid fa-heart-crack"></i></span>';
+    return '<span class="dir-icon-recover-no" title="Not recoverable \u2014 sectors reused"><i class="fa-solid fa-skull"></i></span>';
+  }
+  let icons = '';
+  const ft = data[e.entryOff + 2] & 0x07;
+  if (ft === 5 || ft === 6) icons += '<span class="dir-icon-partition" data-offset="' + e.entryOff + '" title="Directory \u2014 double-click to open"><i class="fa-solid fa-folder"></i></span>';
+  if (ft >= 1 && ft <= 4 && data[e.entryOff + 3] > 0) icons += '<span class="dir-icon-info" data-offset="' + e.entryOff + '" title="File info"><i class="fa-solid fa-circle-info"></i></span>';
+  if (data[e.entryOff + 0x18] > 0) icons += '<span class="dir-icon-geos" data-offset="' + e.entryOff + '" title="GEOS file \u2014 click for info"><i class="fa-solid fa-globe"></i></span>';
+  return icons;
+}
+
 function renderDisk(info) {
   const prevSelected = selectedEntryIndex;
   selectedEntryIndex = -1;
@@ -21,6 +40,13 @@ function renderDisk(info) {
   // Save scroll position
   const dirListing = content.querySelector('.dir-listing');
   const prevScroll = dirListing ? dirListing.scrollTop : 0;
+
+  // Wrap the buffer once; the entry loop below reads bytes per row and used
+  // to rewrap 4x per entry (nameHtml, tsHtml, icons-deleted, icons-regular).
+  const isTape = isTapeFormat();
+  const data = (currentBuffer && !isTape) ? new Uint8Array(currentBuffer) : null;
+  const bufByteLen = data ? data.byteLength : 0;
+  const dirTrack = currentFormat.dirTrack;
 
   let html = `
     <div class="disk-panel${showAddresses ? ' show-addresses' : ''}${showTrackSector ? ' show-tracksector' : ''}">
@@ -58,7 +84,7 @@ function renderDisk(info) {
 
   for (const e of entries) {
     // Render filename with reversed character support (skip for tape — no raw dir entries)
-    const richName = (currentBuffer && !isTapeFormat()) ? readPetsciiRich(new Uint8Array(currentBuffer), e.entryOff + 5, 16) : null;
+    const richName = data ? readPetsciiRich(data, e.entryOff + 5, 16) : null;
     let nameHtml;
     if (richName) {
       const nameStr = richName.map(c =>
@@ -74,12 +100,16 @@ function renderDisk(info) {
 
     // Get file addresses if showing
     let addrHtml = '';
-    if (showAddresses && currentBuffer && !isTapeFormat()) {
+    if (showAddresses && data) {
       const addr = getFileAddresses(currentBuffer, e.entryOff);
       if (addr) {
         addrHtml = '$' + hex16(addr.start) + '-$' + hex16(addr.end);
       }
     }
+
+    const tsHtml = (data && e.entryOff + 4 < bufByteLen)
+      ? '$' + hex8(data[e.entryOff + 3]) + ' $' + hex8(data[e.entryOff + 4])
+      : '';
 
     html += `
         <div class="dir-entry${e.deleted ? ' deleted' : ''}" data-offset="${e.entryOff}" draggable="true">
@@ -87,33 +117,9 @@ function renderDisk(info) {
           <span class="dir-blocks">${e.blocks}</span>
           <span class="dir-name">${nameHtml}</span>
           <span class="dir-type">${escHtml(e.type)}</span>
-          <span class="dir-ts">${(currentBuffer && !isTapeFormat() && e.entryOff + 4 < currentBuffer.byteLength) ? ('$' + hex8(new Uint8Array(currentBuffer)[e.entryOff + 3]) + ' $' + hex8(new Uint8Array(currentBuffer)[e.entryOff + 4])) : ''}</span>
+          <span class="dir-ts">${tsHtml}</span>
           <span class="dir-addr">${addrHtml}</span>
-          <span class="dir-icons">${(function() {
-            var icons = '';
-            if (!currentBuffer || isTapeFormat()) return icons;
-            if (e.deleted) {
-              var dd = new Uint8Array(currentBuffer);
-              var dt = dd[e.entryOff + 3];
-              // Skip separators: T/S points to directory track or is 0
-              if (dt !== 0 && dt !== currentFormat.dirTrack) {
-                var recov = checkScratchedRecoverable(currentBuffer, e.entryOff);
-                if (recov === 'yes') icons += '<span class="dir-icon-recover" title="Recoverable \u2014 sector chain intact"><i class="fa-solid fa-heart-pulse"></i></span>';
-                else if (recov === 'partial') icons += '<span class="dir-icon-recover-partial" title="Partially recoverable \u2014 some sectors reused"><i class="fa-solid fa-heart-crack"></i></span>';
-                else icons += '<span class="dir-icon-recover-no" title="Not recoverable \u2014 sectors reused"><i class="fa-solid fa-skull"></i></span>';
-              }
-              return icons;
-            }
-            var d = new Uint8Array(currentBuffer);
-            var ft = d[e.entryOff + 2] & 0x07;
-            // CBM partition/directory icon
-            if (ft === 5 || ft === 6) icons += '<span class="dir-icon-partition" data-offset="' + e.entryOff + '" title="Directory — double-click to open"><i class="fa-solid fa-folder"></i></span>';
-            // Info icon for files with data
-            if (ft >= 1 && ft <= 4 && d[e.entryOff + 3] > 0) icons += '<span class="dir-icon-info" data-offset="' + e.entryOff + '" title="File info"><i class="fa-solid fa-circle-info"></i></span>';
-            // GEOS icon
-            if (d[e.entryOff + 0x18] > 0) icons += '<span class="dir-icon-geos" data-offset="' + e.entryOff + '" title="GEOS file — click for info"><i class="fa-solid fa-globe"></i></span>';
-            return icons;
-          })()}</span>
+          <span class="dir-icons">${buildEntryIconsHtml(e, data, dirTrack)}</span>
         </div>`;
   }
 
@@ -150,17 +156,22 @@ function renderDisk(info) {
   const newDirListing = content.querySelector('.dir-listing');
   if (newDirListing) newDirListing.scrollTop = prevScroll;
 
-  // Restore selection after re-render
+  // Restore selection after re-render. Build an offset -> element map once
+  // instead of doing one querySelector per selected entry (O(n) on multi-select
+  // of n rows used to do n full document scans).
   if (prevSelected >= 0) {
-    var selEl = document.querySelector('.dir-entry[data-offset="' + prevSelected + '"]');
+    const entryByOffset = {};
+    content.querySelectorAll('.dir-entry[data-offset]').forEach(function(el) {
+      entryByOffset[el.dataset.offset] = el;
+    });
+    const selEl = entryByOffset[prevSelected];
     if (selEl) {
       selEl.classList.add('selected');
       selectedEntryIndex = prevSelected;
       if (selectedEntries.indexOf(prevSelected) < 0) selectedEntries = [prevSelected];
-      // Also restore other multi-selected entries
-      for (var sei = 0; sei < selectedEntries.length; sei++) {
+      for (let sei = 0; sei < selectedEntries.length; sei++) {
         if (selectedEntries[sei] === prevSelected) continue;
-        var multiEl = document.querySelector('.dir-entry[data-offset="' + selectedEntries[sei] + '"]');
+        const multiEl = entryByOffset[selectedEntries[sei]];
         if (multiEl) multiEl.classList.add('selected');
       }
     } else {

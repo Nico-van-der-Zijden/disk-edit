@@ -191,6 +191,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.52', title: 'Directory render pass: cache buffer wrap, one-pass selection restore', items: [
+      'Directory render used to wrap currentBuffer into a Uint8Array four times per entry (filename, T/S column, deleted-icon branch, regular-icon branch). It now wraps once before the loop and reuses it \u2014 on a 100-entry disk that removes \u2248400 redundant typed-array wraps per render',
+      'isTapeFormat() was called three times per entry; now cached once outside the loop',
+      'Icon markup extracted into buildEntryIconsHtml (ui-render.js) \u2014 same output, but the per-row template no longer inlines an IIFE that re-wrapped the buffer',
+      'Selection restore used to run one document.querySelector per selected row; for a multi-select of N rows that was N full document scans. It now builds a single offset-to-element map after innerHTML and does O(1) lookups from it',
+      'No user-visible behaviour change; 63 tests still pass',
+    ]},
     { ver: '1.3.51', title: 'Fresh tabs open clean; undo clears dirty; internal deduplication', items: [
       'Fix: opening or creating a disk while another tab had unsaved changes used to inherit that dirty state onto the new tab, triggering the unsaved-changes warning on an untouched disk. Both Open paths (drag-and-drop, file picker) and New Disk now reset the dirty flag and undo stack for the freshly-opened tab',
       'Fix: undoing past every edit since the last save now correctly clears the tab\u2019s dirty marker. The tab tracks the undo-stack length at each clean point (load / save) and compares against it on each undo, so \u201Cdirty\u201D accurately reflects whether the buffer differs from the saved version',
