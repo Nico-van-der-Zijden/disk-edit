@@ -38,7 +38,12 @@ function showFilePetsciiViewer(entryOff) {
   var lowercase = false;
 
   function putChar(petscii) {
-    if (curY >= H) return; // off screen
+    while (curY >= H) {
+      for (var cg = 0; cg < W; cg++) {
+        screen.push({ ch: 0x20, color: curColor, reverse: false });
+      }
+      H++;
+    }
     var idx = curY * W + curX;
     screen[idx] = { ch: petscii, color: curColor, reverse: reverseOn };
     curX++;
@@ -91,9 +96,11 @@ function showFilePetsciiViewer(entryOff) {
       case 0x92: // reverse off
         reverseOn = false;
         break;
-      case 0x93: // clear screen
+      case 0x93: // clear screen — reset back to 25 rows
+        screen.length = 0;
+        H = 25;
         for (var ci = 0; ci < W * H; ci++) {
-          screen[ci] = { ch: 0x20, color: curColor, reverse: false };
+          screen.push({ ch: 0x20, color: curColor, reverse: false });
         }
         curX = 0;
         curY = 0;
@@ -115,16 +122,14 @@ function showFilePetsciiViewer(entryOff) {
         break;
     }
 
-    // Scroll if cursor past bottom
-    if (curY >= H) {
-      // Scroll screen up
-      for (var si = 0; si < W * (H - 1); si++) {
-        screen[si] = screen[si + W];
+    // Grow the virtual screen as needed — a real C64 would scroll old lines
+    // off the top, but the viewer keeps history so the whole file is visible
+    // (the modal body scrolls vertically).
+    while (curY >= H) {
+      for (var cg = 0; cg < W; cg++) {
+        screen.push({ ch: 0x20, color: curColor, reverse: false });
       }
-      for (var si2 = W * (H - 1); si2 < W * H; si2++) {
-        screen[si2] = { ch: 0x20, color: curColor, reverse: false };
-      }
-      curY = H - 1;
+      H++;
     }
   }
 
@@ -426,9 +431,16 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     '<button id="hex-back" class="modal-btn-secondary" title="Find sector pointing here">\u2190 Back</button>' +
     '<button id="hex-follow" class="modal-btn-secondary"' + (hasChain ? '' : ' disabled') +
     ' title="Follow sector chain (Ctrl+J)">Follow \u2192</button>' +
-    '<button id="hex-fill-sec" class="modal-btn-secondary" title="Fill sector with byte">Fill</button>' +
-    '<button id="hex-copy-sec" class="modal-btn-secondary" title="Copy sector to clipboard">Copy</button>' +
-    '<button id="hex-paste-sec" class="modal-btn-secondary" title="Paste from clipboard"' + (sectorClipboard ? '' : ' disabled') + '>Paste</button>' +
+    '<div class="dropdown-btn-wrap">' +
+      '<button id="hex-more" class="modal-btn-secondary" title="More actions">' +
+        '<i class="fa-solid fa-ellipsis-vertical"></i>' +
+      '</button>' +
+      '<div class="dropdown-btn-menu" id="hex-more-menu">' +
+        '<div class="dropdown-btn-menu-item" id="hex-fill-sec">Fill sector\u2026</div>' +
+        '<div class="dropdown-btn-menu-item" id="hex-copy-sec">Copy sector</div>' +
+        '<div class="dropdown-btn-menu-item' + (sectorClipboard ? '' : ' disabled') + '" id="hex-paste-sec">Paste sector</div>' +
+      '</div>' +
+    '</div>' +
     '</div>' +
     '<div class="modal-footer-nav"><button id="hex-cancel" class="modal-btn-secondary">Cancel</button><button id="hex-save">Save</button></div>';
   document.getElementById('modal-overlay').classList.add('open');
@@ -446,6 +458,8 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
       renderTabs();
     }
     document.removeEventListener('keydown', onKeyDown);
+    var prevMore = document.getElementById('hex-more-menu');
+    if (prevMore && prevMore._cleanup) prevMore._cleanup();
     document.getElementById('modal-overlay').classList.remove('open');
     footer.className = origFooterClass;
     footer.innerHTML = origFooter;
@@ -671,6 +685,8 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
   // Close handlers
   function closeEditor(save) {
     document.removeEventListener('keydown', onKeyDown);
+    var moreEl = document.getElementById('hex-more-menu');
+    if (moreEl && moreEl._cleanup) moreEl._cleanup();
     if (save) {
       pushUndo();
       // Write working copy back to disk buffer
@@ -718,8 +734,23 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
 
   document.getElementById('hex-follow').addEventListener('click', followChain);
 
+  // More-actions hamburger menu (Fill / Copy / Paste)
+  var hexMoreBtn = document.getElementById('hex-more');
+  var hexMoreMenu = document.getElementById('hex-more-menu');
+  hexMoreBtn.addEventListener('click', function(ev) {
+    ev.stopPropagation();
+    hexMoreMenu.classList.toggle('open');
+  });
+  function closeHexMoreMenu() { hexMoreMenu.classList.remove('open'); }
+  document.addEventListener('click', closeHexMoreMenu);
+  // Clean up the document listener when the editor closes
+  hexMoreMenu._cleanup = function() {
+    document.removeEventListener('click', closeHexMoreMenu);
+  };
+
   // Fill sector with a byte value
   document.getElementById('hex-fill-sec').addEventListener('click', async function() {
+    closeHexMoreMenu();
     var val = await showInputModal('Fill sector with hex byte (00-FF)', '00');
     if (val === null) return;
     var byte = parseInt(val.replace(/[\s\$]/g, ''), 16);
@@ -729,12 +760,14 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
 
   // Copy sector bytes to internal clipboard
   document.getElementById('hex-copy-sec').addEventListener('click', function() {
+    closeHexMoreMenu();
     sectorClipboard = new Uint8Array(working);
-    document.getElementById('hex-paste-sec').disabled = false;
+    document.getElementById('hex-paste-sec').classList.remove('disabled');
   });
 
   // Paste sector from clipboard
   document.getElementById('hex-paste-sec').addEventListener('click', function() {
+    closeHexMoreMenu();
     if (!sectorClipboard) return;
     for (var pi = 0; pi < 256; pi++) { updateByte(pi, sectorClipboard[pi]); }
   });

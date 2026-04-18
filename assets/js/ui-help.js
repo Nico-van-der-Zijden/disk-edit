@@ -191,6 +191,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.46', title: 'Sector editor menu, PETSCII full-file view, modal scroll reset', items: [
+      'Sector editor: Fill / Copy / Paste consolidated into a hamburger (\u22EE) dropdown in the footer so action buttons no longer overflow',
+      'Added .dropdown-btn-menu-item.disabled style; Paste stays greyed out in the menu until the clipboard has data',
+      'PETSCII viewer (View As \u2192 PETSCII): now shows the full file \u2014 the virtual screen grows past 25 rows instead of scrolling old content off the top',
+      'CHROUT CLR ($93) still resets to a fresh 25-row screen',
+      'Modals always open at scrollTop 0 \u2014 scroll position no longer carries over between open/close cycles',
+    ]},
     { ver: '1.3.45', title: 'Modal sizing classes and stable positioning', items: [
       'Added modal size classes: modal-sm (460px), modal-md (560px), modal-lg (720px), modal-xl (900px + 80vh), modal-xxl (1100px + 80vh)',
       'New setModalSize(size) helper in ui-modals.js; showModal / showChoiceModal / showProgressModal auto-reset the size so it doesn\u2019t leak into follow-up dialogs',

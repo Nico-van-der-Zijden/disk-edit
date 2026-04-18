@@ -190,6 +190,11 @@
     background: var(--hover);
   }
 
+  .dropdown-btn-menu-item.disabled {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
   /* --- Progress bar --- */
   .progress-track {
     background: var(--hover);

@@ -11,6 +11,11 @@ document.addEventListener('DOMContentLoaded', function() {
       if (el.classList.contains('open')) {
         modalZCounter += 10;
         el.style.zIndex = modalZCounter;
+        // Always open modals at the top — scroll position should not persist
+        // between open/close cycles.
+        el.querySelectorAll('.modal-body').forEach(function(body) {
+          body.scrollTop = 0;
+        });
       }
     });
   });
