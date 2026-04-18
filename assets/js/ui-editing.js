@@ -407,7 +407,7 @@ function renderTabs() {
   bar.querySelectorAll('.tab-close').forEach(function(el) {
     el.addEventListener('click', function(e) {
       e.stopPropagation();
-      closeTab(parseInt(el.dataset.tabClose, 10));
+      closeTabSafe(parseInt(el.dataset.tabClose, 10));
     });
   });
 
@@ -499,19 +499,54 @@ function showEmptyState() {
 
 showEmptyState();
 
+async function closeTabSafe(tabId) {
+  var tab = tabs.find(function(t) { return t.id === tabId; });
+  if (isTabDirty(tab)) {
+    var choice = await showChoiceModal(
+      'Unsaved changes',
+      'The tab "' + tab.name + '" has unsaved changes. Close without saving?',
+      [
+        { label: 'Cancel', value: false, secondary: true },
+        { label: 'Close', value: true }
+      ]
+    );
+    if (!choice) return;
+  }
+  closeTab(tabId);
+}
+
 document.getElementById('opt-close').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
   if (activeTabId !== null) {
-    closeTab(activeTabId);
+    closeTabSafe(activeTabId);
   }
 });
 
-document.getElementById('opt-close-all').addEventListener('click', (e) => {
+document.getElementById('opt-close-all').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (tabs.length === 0) return;
   closeMenus();
+  // Sync active tab's dirty state before checking
+  var active = getActiveTab();
+  if (active) active.dirty = tabDirty;
+  var dirty = tabs.filter(function(t) { return t.dirty; });
+  if (dirty.length > 0) {
+    var msg = dirty.length === 1
+      ? 'One tab has unsaved changes. Close all without saving?'
+      : dirty.length + ' tabs have unsaved changes. Close all without saving?';
+    var choice = await showChoiceModal(
+      'Unsaved changes',
+      msg,
+      [
+        { label: 'Cancel', value: false, secondary: true },
+        { label: 'Close All', value: true }
+      ],
+      dirty.map(function(t) { return t.name; })
+    );
+    if (!choice) return;
+  }
   while (tabs.length > 0) {
     tabs.pop();
   }
@@ -520,10 +555,19 @@ document.getElementById('opt-close-all').addEventListener('click', (e) => {
   currentFileName = null;
   selectedEntryIndex = -1;
   currentPartition = null;
+  tabDirty = false;
   showEmptyState();
   renderTabs();
   updateMenuState();
   updateEntryMenuState();
+});
+
+window.addEventListener('beforeunload', function(e) {
+  if (anyDirtyTab()) {
+    e.preventDefault();
+    e.returnValue = '';
+    return '';
+  }
 });
 
 document.getElementById('opt-change-partition').addEventListener('click', async (e) => {

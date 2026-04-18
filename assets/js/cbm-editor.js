@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 49 };
+var APP_VERSION = { major: 1, minor: 3, build: 50 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -190,6 +190,16 @@ function closeTab(tabId) {
 function getActiveTab() {
   if (activeTabId === null) return null;
   return tabs.find(function(t) { return t.id === activeTabId; });
+}
+
+function isTabDirty(tab) {
+  if (!tab) return false;
+  if (tab.id === activeTabId) return tabDirty;
+  return !!tab.dirty;
+}
+
+function anyDirtyTab() {
+  return tabs.some(isTabDirty);
 }
 
 function updateTabName() {

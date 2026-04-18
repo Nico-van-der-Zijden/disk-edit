@@ -1064,6 +1064,7 @@ document.getElementById('opt-rename').addEventListener('click', (e) => {
 // Insert a new entry and position it after the selected entry (or at end)
 function insertAndPosition() {
   if (!currentBuffer || !canInsertFile()) return -1;
+  pushUndo();
   var newOff = insertFileEntry();
   if (newOff < 0) return -1;
 

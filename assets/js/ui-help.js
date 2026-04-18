@@ -191,6 +191,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.50', title: 'Warn before discarding unsaved changes', items: [
+      'Closing a tab with unsaved changes (menu, X button, or Ctrl+Alt+W) now prompts before discarding',
+      'Close All also prompts when any open tab is dirty, listing the affected tab names',
+      'Browser close/reload triggers the native beforeunload warning whenever a tab has unsaved changes',
+      'Insert File and Insert Separator now mark the tab dirty so they show up in the unsaved-changes warning',
+    ]},
     { ver: '1.3.49', title: 'Save As uses tab name and syncs tab back', items: [
       'Save As default filename now falls back to the active tab\u2019s name (e.g. "New Disk 1.d64") instead of a generic "disk.d64" when the disk hasn\u2019t been saved yet',
       'When you change the filename in Save As, the tab title updates to match so Save and subsequent Save As defaults stay in sync',
