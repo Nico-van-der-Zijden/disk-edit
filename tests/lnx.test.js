@@ -12,8 +12,9 @@ function buildLnx(entries) {
   // The header-blocks value itself is part of the header, so we compute size first.
   function makeHeader(headerBlocks) {
     var h = '';
-    h += cr(' USE LYNX XVII TO DISSOLVE THIS FILE');
-    h += cr(' ' + headerBlocks + ' ');
+    // Real LNX format: leading integer on the LYNX line = headerBlocks; next
+    // line = fileCount. No separate "USE LYNX..." line before the magic.
+    h += cr(' ' + headerBlocks + '  *LYNX XVII TEST ARCHIVE');
     h += cr(' ' + entries.length + ' ');
     for (var i = 0; i < entries.length; i++) {
       var e = entries[i];
@@ -24,7 +25,9 @@ function buildLnx(entries) {
       for (var k = 0; k < 16; k++) nameStr += String.fromCharCode(nb[k]);
       h += nameStr + '\r';
       var blocks = Math.ceil(e.data.length / 254);
-      var lastBytes = e.data.length === 0 ? 1 : (e.data.length % 254) || 254;
+      // CBM disk convention: lastBytes = bytes_in_last_sector + 1
+      var lastInSector = e.data.length === 0 ? 0 : ((e.data.length % 254) || 254);
+      var lastBytes = lastInSector + 1;
       h += cr(' ' + blocks + ' ');
       h += cr(' ' + e.type + ' ');
       h += cr(' ' + lastBytes + ' ');
@@ -103,24 +106,45 @@ describe('parseLnxArchive', () => {
     assert.ok(/LYNX/.test(result.error), 'error mentions LYNX: ' + result.error);
   });
 
-  it('rejects archives whose declared data runs past the buffer', () => {
-    var buf = buildLnx([{ name: 'A', type: 'P', data: new Uint8Array(500) }]);
-    // Keep only the header + half of the first file's data.
-    var headerBlocks = Math.ceil(buf.byteLength / 254) - Math.ceil(500 / 254);
-    var keep = headerBlocks * 254 + 100;
-    var truncated = new Uint8Array(buf, 0, keep).slice().buffer;
+  it('truncates the final file when the archive is cut short', () => {
+    // Build a two-file archive, then chop bytes off the tail. The parser
+    // should still return both entries; the last file is just shorter than
+    // declared so the user gets whatever data is left.
+    var buf = buildLnx([
+      { name: 'A', type: 'P', data: new Uint8Array([0x11, 0x22, 0x33]) },
+      { name: 'B', type: 'P', data: new Uint8Array(500) },
+    ]);
+    var truncated = new Uint8Array(buf, 0, buf.byteLength - 400).slice().buffer;
     var result = parseLnxArchive(truncated);
-    assert.ok(result.error, 'should reject truncated buffer: got ' + JSON.stringify(result).slice(0, 120));
+    assert.ok(!result.error, 'should succeed with truncation: ' + result.error);
+    assert.strictEqual(result.files.length, 2);
+    assert.strictEqual(result.files[0].data.length, 3);
+    assert.ok(result.files[1].data.length < 500, 'last file should be shorter than declared');
   });
 
-  it('skips an optional PRG load-address prefix', () => {
-    var inner = buildLnx([{ name: 'X', type: 'P', data: new Uint8Array([0xAA]) }]);
-    var innerArr = new Uint8Array(inner);
-    var wrapped = new Uint8Array(innerArr.length + 2);
-    wrapped[0] = 0x01; wrapped[1] = 0x08;
-    wrapped.set(innerArr, 2);
-    var result = parseLnxArchive(wrapped.buffer);
-    assert.ok(!result.error, 'should parse PRG-wrapped archive: ' + result.error);
+  it('skips a fake LYNX mention in a BASIC stub and finds the real one', () => {
+    // Build a 1-block (254-byte) header that starts with a fake BASIC-stub
+    // line mentioning "LYNX", then the real LYNX header line. The parser
+    // must skip the decoy (no leading integer in front of its "LYNX") and
+    // latch onto the real line.
+    var stub = ' FAKE STUB WITH LYNX INSIDE\r';
+    var name = 'X'; // 1-char filename
+    // Real LYNX header: <headerBlocks=1> *LYNX <comment><CR><fileCount=1><CR>
+    // Per-file dir: name + CR + blocks + CR + type + CR + lastBytes + CR.
+    var realHeader =
+      ' 1  *LYNX TEST COMMENT\r' +
+      ' 1 \r' +
+      name + '\r' +
+      ' 1 \r' +
+      'P\r' +
+      ' 2 \r'; // lastBytes = 2 → 1 real byte of data per CBM convention
+    var headerText = stub + realHeader;
+    var buf = new Uint8Array(254 + 1);
+    for (var i = 0; i < headerText.length; i++) buf[i] = headerText.charCodeAt(i) & 0xFF;
+    // bytes 254+ are file data
+    buf[254] = 0xAA;
+    var result = parseLnxArchive(buf.buffer);
+    assert.ok(!result.error, 'should parse despite stub "LYNX": ' + result.error);
     assert.strictEqual(result.files.length, 1);
     assert.strictEqual(result.files[0].typeIdx, FILE_TYPE.PRG);
     assert.deepStrictEqual(Array.from(result.files[0].data), [0xAA]);

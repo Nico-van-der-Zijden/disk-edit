@@ -191,6 +191,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.62', title: 'LYNX parser: real-world archives', items: [
+      'Self-extracting LNX archives (ones that ship with a BASIC stub saying "USE LYNX TO DISSOLVE THIS FILE") now open correctly \u2014 the parser skips past the stub\u2019s embedded "LYNX" mention and finds the real header',
+      'Filenames with internal spaces (e.g. "TOP      [STEEL]") and PETSCII graphic characters are preserved exactly when extracted',
+      'Variable-length filenames and both padded and compact file-data layouts are handled; truncated archives still extract what\u2019s present',
+    ]},
     { ver: '1.3.61', title: 'Open LYNX (.lnx) archives', items: [
       'Drop a .lnx archive onto the app (or pick it via File \u2192 Open) and the contents are extracted onto a fresh D64 tab',
       'Any files that wouldn\u2019t fit (disk or directory full, unsupported type) are listed in the summary so you can spot them',
