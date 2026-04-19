@@ -580,16 +580,10 @@ function renderGeoWrite(ctx, entryOff) {
   return true;
 }
 
-// Render GEOS font: show all glyphs from each available point size.
-// Font VLIR records are NOT compressed. Record N = N-point font.
-// Header (8 bytes): ascent, rowLength(16), height, xTabOffset(16), bmOffset(16)
-// X-table: 97 entries × 2 bytes (character boundaries for $20-$7F + total width)
-// Bitmap: height rows × rowLength bytes (all glyphs concatenated horizontally)
-function renderGeosFont(ctx, entryOff) {
-  var records = readVLIRRecords(currentBuffer, entryOff);
-  if (records.length === 0) return false;
-
-  // Parse valid font sizes
+// Parse a GEOS font's VLIR records into a list of { pt, rec, ascent, rowLen,
+// height, bmOff, xTab } objects, one per valid size. See renderGeosFont for
+// the format documentation.
+function parseGeosFontRecords(records) {
   var fonts = [];
   for (var ri = 0; ri < records.length; ri++) {
     if (!records[ri] || records[ri].length < 8) continue;
@@ -599,54 +593,346 @@ function renderGeosFont(ctx, entryOff) {
     var height = rec[3];
     var xTabOff = rec[4] | (rec[5] << 8);
     var bmOff = rec[6] | (rec[7] << 8);
-    // Sanity checks
     if (height < 1 || height > 63) continue;
     if (rowLen < 1 || rowLen > 500) continue;
     if (bmOff + height * rowLen > rec.length) continue;
     if (xTabOff + 194 > rec.length) continue;
-    fonts.push({ pt: ri, rec: rec, ascent: ascent, rowLen: rowLen, height: height, xTabOff: xTabOff, bmOff: bmOff });
-  }
 
+    var xTab = new Array(97);
+    for (var xi = 0; xi < 97; xi++) {
+      xTab[xi] = rec[xTabOff + xi * 2] | (rec[xTabOff + xi * 2 + 1] << 8);
+    }
+    fonts.push({ pt: ri, rec: rec, ascent: ascent, rowLen: rowLen, height: height, bmOff: bmOff, xTab: xTab });
+  }
+  return fonts;
+}
+
+// Is bit (x,y) set inside char #charIdx of GEOS font f?
+function geosFontGlyphBit(f, charIdx, x, y) {
+  var bitX = f.xTab[charIdx] + x;
+  return (f.rec[f.bmOff + y * f.rowLen + (bitX >> 3)] & (0x80 >> (bitX & 7))) ? 1 : 0;
+}
+
+// Find the smallest C64 character tile grid that fits every printable glyph
+// of f. Each C64 tile is 8x8. Returns { cols, rows, maxW, maxH } or null if
+// the font doesn't fit even a 2x2 tile (16x16).
+function geosFontC64TileFit(f) {
+  var maxW = 0, maxH = f.height;
+  for (var ci = 0; ci < 96; ci++) {
+    var w = f.xTab[ci + 1] - f.xTab[ci];
+    if (w > maxW) maxW = w;
+  }
+  var cols = maxW <= 8 ? 1 : (maxW <= 16 ? 2 : 0);
+  var rows = maxH <= 8 ? 1 : (maxH <= 16 ? 2 : 0);
+  if (!cols || !rows) return null;
+  return { cols: cols, rows: rows, maxW: maxW, maxH: maxH };
+}
+
+// Modal dialog that lists every size of a GEOS font with its C64 charset
+// tile fit and offers a download for each. Uses the existing modal-overlay.
+function showGeosFontCharsetExport(entryOff) {
+  var records = readVLIRRecords(currentBuffer, entryOff);
+  var fonts = parseGeosFontRecords(records || []);
+  if (fonts.length === 0) { showModal('Export C64 Charset', ['No usable font records found.']); return; }
+
+  var data = new Uint8Array(currentBuffer);
+  var fileName = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim() || 'font';
+  var className = '';
+  var infoT = data[entryOff + 0x15], infoS = data[entryOff + 0x16];
+  if (infoT > 0) {
+    var info = readGeosInfoBlock(currentBuffer, infoT, infoS);
+    if (info && info.className) className = info.className.trim();
+  }
+  var safeName = (className || fileName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/\s+/g, '_') || 'font';
+
+  var title = 'Export ' + (className || fileName) + ' as C64 Charset';
+  document.getElementById('modal-title').textContent = title;
+  var body = document.getElementById('modal-body');
+  body.innerHTML = '';
+
+  var intro = document.createElement('div');
+  intro.style.cssText = 'margin-bottom:12px;color:var(--text-muted);font-size:12px';
+  intro.textContent = 'C64 PRG with load address $3000. Each glyph is emitted as cols\u00D7rows tiles of 8\u00D78 pixels, top-left to bottom-right. 96 glyphs total ($20\u2013$7F). You can drop the .prg back onto a disk to import it.';
+  body.appendChild(intro);
+
+  var list = document.createElement('div');
+  list.style.cssText = 'display:flex;flex-direction:column;gap:6px';
+
+  for (var i = 0; i < fonts.length; i++) {
+    (function(f) {
+      var row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:8px;border:1px solid var(--border);border-radius:3px';
+      var fit = geosFontC64TileFit(f);
+      var info = document.createElement('div');
+      info.style.cssText = 'flex:1';
+      if (fit) {
+        var bytes = 96 * fit.cols * fit.rows * 8 + 2; // + 2 bytes load address
+        info.innerHTML = '<b>' + f.pt + 'pt</b> \u2014 widest ' + fit.maxW + 'px, tallest ' + fit.maxH + 'px \u2014 fits <b>' + fit.cols + '\u00D7' + fit.rows + '</b> (' + bytes + ' bytes)';
+      } else {
+        var mw = 0;
+        for (var ci = 0; ci < 96; ci++) { var w = f.xTab[ci+1]-f.xTab[ci]; if (w > mw) mw = w; }
+        info.innerHTML = '<b>' + f.pt + 'pt</b> \u2014 widest ' + mw + 'px, tallest ' + f.height + 'px \u2014 <span style="color:var(--color-warn)">too large (max 16\u00D716)</span>';
+      }
+      row.appendChild(info);
+      if (fit) {
+        var dl = document.createElement('button');
+        dl.className = 'btn-small';
+        dl.textContent = 'Download';
+        dl.addEventListener('click', function() {
+          var bin = geosFontToC64Charset(f, fit.cols, fit.rows);
+          // PRG: 2-byte little-endian load address ($3000) + charset bytes.
+          // $3000 is a conventional custom-charset location (free zone, safe
+          // from BASIC + ROM).
+          var prg = new Uint8Array(bin.length + 2);
+          prg[0] = 0x00; prg[1] = 0x30;
+          prg.set(bin, 2);
+          var fname = safeName + '_' + f.pt + 'pt_' + fit.cols + 'x' + fit.rows + '.prg';
+          var blob = new Blob([prg], { type: 'application/octet-stream' });
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = fname;
+          a.click();
+          URL.revokeObjectURL(a.href);
+        });
+        row.appendChild(dl);
+      }
+      list.appendChild(row);
+    })(fonts[i]);
+  }
+  body.appendChild(list);
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '';
+  var closeBtn = document.createElement('button');
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  footer.appendChild(closeBtn);
+
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+// Render a GEOS font as a C64-native charset. For each of the 96 printable
+// glyphs, emit cols*rows tiles of 8 bytes each (one byte per row, MSB-left),
+// laid out in reading order (top-left, top-right, bottom-left, bottom-right
+// for 2x2). Returns a Uint8Array of 96 * cols * rows * 8 bytes.
+function geosFontToC64Charset(f, cols, rows) {
+  var tileBytes = 8;
+  var tilesPerChar = cols * rows;
+  var out = new Uint8Array(96 * tilesPerChar * tileBytes);
+  var o = 0;
+  for (var ci = 0; ci < 96; ci++) {
+    var glyphW = f.xTab[ci + 1] - f.xTab[ci];
+    for (var tr = 0; tr < rows; tr++) {
+      for (var tc = 0; tc < cols; tc++) {
+        for (var py = 0; py < 8; py++) {
+          var byte = 0;
+          var srcY = tr * 8 + py;
+          if (srcY < f.height) {
+            for (var px = 0; px < 8; px++) {
+              var srcX = tc * 8 + px;
+              if (srcX < glyphW && geosFontGlyphBit(f, ci, srcX, srcY)) {
+                byte |= 0x80 >> px;
+              }
+            }
+          }
+          out[o++] = byte;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// Render GEOS font: for each size, show a pangram sample followed by a grid
+// of all 96 printable glyphs with their hex codes underneath.
+// Font VLIR records are NOT compressed. Record N = N-point font.
+// Header (8 bytes): ascent, rowLength(16), height, xTabOffset(16), bmOffset(16)
+// X-table: 97 entries x 2 bytes (character boundaries for $20-$7F + total width).
+//   xTable[i] = left-edge column of char ($20 + i) in the bitmap;
+//   xTable[96] = bitmap width in pixels (one past the last glyph).
+// Bitmap: height rows x rowLength bytes (all glyphs concatenated horizontally).
+function renderGeosFont(ctx, entryOff) {
+  var records = readVLIRRecords(currentBuffer, entryOff);
+  if (records.length === 0) return false;
+
+  var fonts = parseGeosFontRecords(records);
   if (fonts.length === 0) return false;
 
-  // Render each point size as a labeled strip
-  var gap = 8;
-  var totalH = 0;
-  var maxW = 0;
-  for (var fi2 = 0; fi2 < fonts.length; fi2++) {
-    var bmW = fonts[fi2].rowLen * 8;
-    if (bmW > maxW) maxW = bmW;
-    totalH += fonts[fi2].height + gap;
+  // Pixel-set test for a given font/char/x/y (returns 1 if the bit is on).
+  function glyphBit(f, charIdx, x, y) {
+    return geosFontGlyphBit(f, charIdx, x, y);
   }
-  totalH -= gap;
-  if (maxW > 4096) maxW = 4096;
 
-  ctx.canvas.width = maxW;
+  // Rasterise a piece of text in the font. Returns total width in pixels;
+  // if `px` is given, also writes the glyph pixels into that ImageData buffer.
+  function drawSampleText(f, text, px, canvasW, canvasH, startX, startY, color) {
+    var x = startX;
+    for (var si = 0; si < text.length; si++) {
+      var code = text.charCodeAt(si);
+      if (code < 0x20 || code > 0x7F) code = 0x20;
+      var idx = code - 0x20;
+      var w = f.xTab[idx + 1] - f.xTab[idx];
+      if (w > 0 && px) {
+        for (var gy = 0; gy < f.height; gy++) {
+          for (var gx = 0; gx < w; gx++) {
+            if (glyphBit(f, idx, gx, gy)) {
+              var dx = x + gx, dy = startY + gy;
+              if (dx >= 0 && dx < canvasW && dy >= 0 && dy < canvasH) {
+                var off = (dy * canvasW + dx) * 4;
+                px[off] = color[0]; px[off + 1] = color[1]; px[off + 2] = color[2]; px[off + 3] = 255;
+              }
+            }
+          }
+        }
+      }
+      x += (w > 0) ? w : f.height >> 2;
+    }
+    return x - startX;
+  }
+
+  var sampleText = 'The quick brown fox jumps over the lazy dog. 1234567890';
+  var cols = 16;
+  var rows = 6;
+  var labelH = 10;          // px for hex-code label below each glyph
+  var cellPadX = 4;
+  var cellPadY = 4;         // space between glyph and label
+  var sizeHeaderH = 14;     // px for the "N pt" header above each size
+  var sampleGap = 6;        // gap between sample text and grid
+  var sizeGap = 20;         // gap between sizes
+  var sideMargin = 10;
+
+  // Precompute per-size layout (cell dims, block dims, sample width)
+  var blocks = [];
+  var maxBlockW = 200;       // ensures header fits on narrow fonts
+  var totalH = sideMargin;
+  for (var fi = 0; fi < fonts.length; fi++) {
+    var f = fonts[fi];
+    var maxGlyphW = 1;
+    for (var ci = 0; ci < 96; ci++) {
+      var gw = f.xTab[ci + 1] - f.xTab[ci];
+      if (gw > maxGlyphW) maxGlyphW = gw;
+    }
+    var cellW = maxGlyphW + cellPadX * 2;
+    var cellH = f.height + cellPadY + labelH;
+    var gridW = cellW * cols;
+    var gridH = cellH * rows;
+    var sampleW = drawSampleText(f, sampleText, null, 0, 0, 0, 0, null);
+    var blockW = Math.max(gridW, sampleW);
+    var blockH = sizeHeaderH + f.height + sampleGap + gridH;
+    if (blockW > maxBlockW) maxBlockW = blockW;
+    blocks.push({ f: f, cellW: cellW, cellH: cellH, maxGlyphW: maxGlyphW, gridW: gridW, gridH: gridH, blockH: blockH, sampleW: sampleW });
+    totalH += blockH + sizeGap;
+  }
+  totalH -= sizeGap;
+  totalH += sideMargin;
+
+  var canvasW = maxBlockW + sideMargin * 2;
+  ctx.canvas.width = canvasW;
   ctx.canvas.height = totalH;
-  var img = ctx.createImageData(maxW, totalH);
-  var px = img.data;
-  for (var fi3 = 0; fi3 < px.length; fi3++) px[fi3] = 255;
-  for (var fi4 = 3; fi4 < px.length; fi4 += 4) px[fi4] = 255;
 
-  var yPos = 0;
-  for (var fi5 = 0; fi5 < fonts.length; fi5++) {
-    var f = fonts[fi5];
-    for (var row = 0; row < f.height; row++) {
-      for (var bx = 0; bx < f.rowLen; bx++) {
-        var byt = f.rec[f.bmOff + row * f.rowLen + bx];
-        for (var bit = 7; bit >= 0; bit--) {
-          var x = bx * 8 + (7 - bit);
-          var y = yPos + row;
-          if (x < maxW && y < totalH && (byt & (1 << bit))) {
-            var off = (y * maxW + x) * 4;
-            px[off] = 0; px[off + 1] = 0; px[off + 2] = 0;
+  // Dark background so the white glyphs read clearly.
+  ctx.fillStyle = '#1e1e1e';
+  ctx.fillRect(0, 0, canvasW, totalH);
+
+  // Draw glyphs into an ImageData in one pass, then blit.
+  var img = ctx.createImageData(canvasW, totalH);
+  var data = img.data;
+  for (var ti = 3; ti < data.length; ti += 4) data[ti] = 0; // start transparent
+
+  var glyphWhite = [255, 255, 255];
+
+  var yPos = sideMargin;
+  for (var bi = 0; bi < blocks.length; bi++) {
+    var blk = blocks[bi];
+    var f2 = blk.f;
+
+    // Sample text (one line, left-aligned under the size header)
+    var sampleY = yPos + sizeHeaderH;
+    drawSampleText(f2, sampleText, data, canvasW, totalH, sideMargin, sampleY, glyphWhite);
+
+    // Grid of all 96 chars
+    var gridTop = sampleY + f2.height + sampleGap;
+    for (var gi = 0; gi < 96; gi++) {
+      var col = gi % cols;
+      var rw = Math.floor(gi / cols);
+      var cellX = sideMargin + col * blk.cellW;
+      var cellY = gridTop + rw * blk.cellH;
+
+      var glyphL = f2.xTab[gi];
+      var glyphR = f2.xTab[gi + 1];
+      var glyphW = glyphR - glyphL;
+      if (glyphW > 0) {
+        var glyphX = cellX + cellPadX + Math.floor((blk.maxGlyphW - glyphW) / 2);
+        for (var yy = 0; yy < f2.height; yy++) {
+          for (var gx = 0; gx < glyphW; gx++) {
+            if (glyphBit(f2, gi, gx, yy)) {
+              var dx = glyphX + gx;
+              var dy = cellY + yy;
+              if (dx >= 0 && dx < canvasW && dy >= 0 && dy < totalH) {
+                var off = (dy * canvasW + dx) * 4;
+                data[off] = 255; data[off + 1] = 255; data[off + 2] = 255; data[off + 3] = 255;
+              }
+            }
           }
         }
       }
     }
-    yPos += f.height + gap;
+    yPos += blk.blockH + sizeGap;
   }
   ctx.putImageData(img, 0, 0);
+
+  // Labels and size headers. Drawn with ctx.fillText after the glyph blit so
+  // they stay crisp (not affected by ImageData transparency quirks). Pick up
+  // the body font from the DOM so the size header and hex labels use whatever
+  // the app's UI font resolves to.
+  var uiFont = 'sans-serif';
+  try { uiFont = getComputedStyle(document.body).fontFamily || uiFont; } catch (e) {}
+
+  // Prefer the GEOS class name (includes the version, e.g. "BSW 2.1") when
+  // available; fall back to the dir-entry filename otherwise. Render as
+  // "<class> (<filename>) - Npt".
+  var fileName = '';
+  var className = '';
+  try {
+    var data = new Uint8Array(currentBuffer);
+    fileName = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+    var infoT = data[entryOff + 0x15], infoS = data[entryOff + 0x16];
+    if (infoT > 0) {
+      var info = readGeosInfoBlock(currentBuffer, infoT, infoS);
+      if (info && info.className) className = info.className.trim();
+    }
+  } catch (e) {}
+
+  ctx.textBaseline = 'top';
+  yPos = sideMargin;
+  for (var bi2 = 0; bi2 < blocks.length; bi2++) {
+    var blk2 = blocks[bi2];
+    var f3 = blk2.f;
+
+    // Size header above the sample line, e.g. "BSW 2.1 (BSW) - 10pt"
+    ctx.fillStyle = '#bbb';
+    ctx.font = '12px ' + uiFont;
+    var label = className || fileName || '';
+    if (className && fileName && className !== fileName) label = className + ' (' + fileName + ')';
+    var headerText = (label ? label + ' \u2014 ' : '') + f3.pt + 'pt';
+    ctx.fillText(headerText, sideMargin, yPos);
+
+    // Hex labels under each grid cell, prefixed with $ so the hex is unambiguous
+    ctx.fillStyle = '#666';
+    ctx.font = '6px ' + uiFont;
+    var gridTop2 = yPos + sizeHeaderH + f3.height + sampleGap;
+    for (var gi2 = 0; gi2 < 96; gi2++) {
+      var col2 = gi2 % cols;
+      var rw2 = Math.floor(gi2 / cols);
+      var cellX2 = sideMargin + col2 * blk2.cellW;
+      var cellY2 = gridTop2 + rw2 * blk2.cellH;
+      var hex = '$' + (0x20 + gi2).toString(16).toUpperCase().padStart(2, '0');
+      ctx.fillText(hex, cellX2 + cellPadX, cellY2 + f3.height + 1);
+    }
+    yPos += blk2.blockH + sizeGap;
+  }
   return true;
 }
 
@@ -867,6 +1153,17 @@ function renderC64Sprites(ctx, gfx, multicolor, colors) {
 }
 
 // colors = { bg, fg, mc1, mc2 }, multicolor flag
+// Map an ASCII uppercase letter / digit / punctuation to a C64 screen code.
+// Assumes the default uppercase+graphics charset. Unknown codes return space.
+function asciiToC64ScreenCode(code) {
+  if (code >= 0x41 && code <= 0x5A) return code - 0x40;        // A-Z -> $01-$1A
+  if (code >= 0x61 && code <= 0x7A) return code - 0x60;        // a-z fallback -> $01-$1A
+  if (code >= 0x30 && code <= 0x39) return code;                // 0-9 -> $30-$39
+  if (code === 0x20 || code === 0x2E || code === 0x2C || code === 0x21 ||
+      code === 0x3F || code === 0x27 || code === 0x22) return code; // common punctuation
+  return 0x20;                                                  // space
+}
+
 function renderC64Charset(ctx, gfx, tileW, tileH, colors, multicolor) {
   tileW = tileW || 1;
   tileH = tileH || 1;
@@ -882,66 +1179,115 @@ function renderC64Charset(ctx, gfx, tileW, tileH, colors, multicolor) {
   } else {
     numTiles = Math.floor(numChars / (banksPerTile * 64)) * 64;
   }
-  var tilePxW = tileW * 8; // always 8 pixels wide per char — MC uses double-wide pixels
+  var tilePxW = tileW * 8;
   var tilePxH = tileH * 8;
-  var gap = 1;
-  var gridCols = Math.min(numTiles, Math.max(1, Math.floor(320 / (tilePxW + gap))));
+  var cellGap = 2;
+  var cellW = tilePxW + cellGap;
+  var cellH = tilePxH + cellGap;
+  var gridTargetW = 320;
+  var gridCols = Math.max(1, Math.floor(gridTargetW / cellW));
+  if (gridCols > numTiles) gridCols = numTiles;
   var gridRows = Math.ceil(numTiles / gridCols);
-  var w = gridCols * (tilePxW + gap) - gap;
-  var h = gridRows * (tilePxH + gap) - gap;
-  if (w < 1 || h < 1) return;
-  ctx.canvas.width = w;
-  ctx.canvas.height = h;
-  var img = ctx.createImageData(w, h);
-  var px = img.data;
-  for (var fi = 3; fi < px.length; fi += 4) px[fi] = 255;
+  var gridW = gridCols * cellW - cellGap;
+  var gridH = gridRows * cellH - cellGap;
+
+  var sampleText = 'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 1234567890';
+  var sampleCodes = [];
+  for (var si = 0; si < sampleText.length; si++) {
+    sampleCodes.push(asciiToC64ScreenCode(sampleText.charCodeAt(si)));
+  }
+  // In multi-tile modes (1x2 / 2x1 / 2x2) each letter is a composite of
+  // tileW*tileH chars, so the sample text is drawn at the full tile size
+  // (same as the grid) to stay readable.
+  var sampleW = sampleCodes.length * tilePxW;
+  var sampleH = tilePxH;
+
+  var sideMargin = 6;
+  var sampleGap = 10;
+  var canvasW = Math.max(sampleW, gridW) + sideMargin * 2;
+  var canvasH = sideMargin + sampleH + sampleGap + gridH + sideMargin;
+  if (canvasW < 1 || canvasH < 1) return;
+  ctx.canvas.width = canvasW;
+  ctx.canvas.height = canvasH;
+
+  var img = ctx.createImageData(canvasW, canvasH);
+  var pxBuf = img.data;
   var bgRgb = C64_RGB[colors.bg];
   var fgRgb = C64_RGB[colors.fg];
   var mc1Rgb = C64_RGB[colors.mc1];
   var mc2Rgb = C64_RGB[colors.mc2];
+  // Fill with the background colour so unmapped areas (e.g. sample text
+  // characters that aren't present in short charsets) stay consistent.
+  for (var fi = 0; fi < pxBuf.length; fi += 4) {
+    pxBuf[fi] = bgRgb[0]; pxBuf[fi+1] = bgRgb[1]; pxBuf[fi+2] = bgRgb[2]; pxBuf[fi+3] = 255;
+  }
 
-  for (var ti = 0; ti < numTiles; ti++) {
-    var gridCol = ti % gridCols;
-    var gridRow = Math.floor(ti / gridCols);
-    var tileXOff = gridCol * (tilePxW + gap);
-    var tileYOff = gridRow * (tilePxH + gap);
+  // Draw a single 8x8 char at (ox, oy) in the ImageData buffer.
+  function drawChar(charIdx, ox, oy) {
+    if (charIdx < 0 || charIdx >= numChars) return;
+    var base = charIdx * 8;
+    for (var line = 0; line < 8; line++) {
+      var byt = gfx.bm[base + line];
+      if (multicolor) {
+        for (var p2 = 0; p2 < 4; p2++) {
+          var bits = (byt >> (6 - p2 * 2)) & 3;
+          var rgb = bits === 0 ? bgRgb : bits === 1 ? mc1Rgb : bits === 2 ? fgRgb : mc2Rgb;
+          var y = oy + line;
+          for (var dx = 0; dx < 2; dx++) {
+            var x = ox + p2 * 2 + dx;
+            if (x >= 0 && x < canvasW && y >= 0 && y < canvasH) {
+              var off = (y * canvasW + x) * 4;
+              pxBuf[off] = rgb[0]; pxBuf[off+1] = rgb[1]; pxBuf[off+2] = rgb[2];
+            }
+          }
+        }
+      } else {
+        for (var bit = 7; bit >= 0; bit--) {
+          var rgb2 = (byt & (1 << bit)) ? fgRgb : bgRgb;
+          var x2 = ox + (7 - bit);
+          var y2 = oy + line;
+          if (x2 >= 0 && x2 < canvasW && y2 >= 0 && y2 < canvasH) {
+            var off2 = (y2 * canvasW + x2) * 4;
+            pxBuf[off2] = rgb2[0]; pxBuf[off2+1] = rgb2[1]; pxBuf[off2+2] = rgb2[2];
+          }
+        }
+      }
+    }
+  }
 
+  // Draw a full tile (tileW * tileH chars) for the given screen code at
+  // (ox, oy). Matches the grid's char-index mapping so the sample text
+  // reads correctly in 1x2 / 2x1 / 2x2 modes.
+  function drawTileAtCode(screenCode, ox, oy) {
     for (var cy = 0; cy < tileH; cy++) {
       for (var cx = 0; cx < tileW; cx++) {
-        // C64 convention: 64 tiles per bank set, larger charsets use additional sets
+        var charIdx = screenCode + (cy * tileW + cx) * 64;
+        if (charIdx >= numChars) continue;
+        drawChar(charIdx, ox + cx * 8, oy + cy * 8);
+      }
+    }
+  }
+
+  // Sample text at the top, using the current tile size so multi-tile letters
+  // (1x2 / 2x1 / 2x2) are assembled correctly.
+  for (var ti0 = 0; ti0 < sampleCodes.length; ti0++) {
+    drawTileAtCode(sampleCodes[ti0], sideMargin + ti0 * tilePxW, sideMargin);
+  }
+
+  // Grid of all tiles.
+  var gridTop = sideMargin + sampleH + sampleGap;
+  for (var ti = 0; ti < numTiles; ti++) {
+    var gc = ti % gridCols;
+    var gr = Math.floor(ti / gridCols);
+    var tileXOff = sideMargin + gc * cellW;
+    var tileYOff = gridTop + gr * cellH;
+    for (var cy = 0; cy < tileH; cy++) {
+      for (var cx = 0; cx < tileW; cx++) {
         var setIdx = Math.floor(ti / 64);
         var localTi = ti % 64;
         var charIdx = localTi + setIdx * banksPerTile * 64 + (cy * tileW + cx) * 64;
         if (charIdx >= numChars) continue;
-        var base = charIdx * 8;
-
-        for (var line = 0; line < 8; line++) {
-          var byt = gfx.bm[base + line];
-          if (multicolor) {
-            for (var px2 = 0; px2 < 4; px2++) {
-              var bits = (byt >> (6 - px2 * 2)) & 3;
-              var rgb = bits === 0 ? bgRgb : bits === 1 ? mc1Rgb : bits === 2 ? fgRgb : mc2Rgb;
-              var y = tileYOff + cy * 8 + line;
-              for (var dx = 0; dx < 2; dx++) {
-                var x = tileXOff + cx * 8 + px2 * 2 + dx;
-                if (x < w && y < h) {
-                  var off = (y * w + x) * 4;
-                  px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2];
-                }
-              }
-            }
-          } else {
-            for (var bit = 7; bit >= 0; bit--) {
-              var rgb2 = (byt & (1 << bit)) ? fgRgb : bgRgb;
-              var x2 = tileXOff + cx * 8 + (7 - bit);
-              var y2 = tileYOff + cy * 8 + line;
-              if (x2 < w && y2 < h) {
-                var off2 = (y2 * w + x2) * 4;
-                px[off2] = rgb2[0]; px[off2+1] = rgb2[1]; px[off2+2] = rgb2[2];
-              }
-            }
-          }
-        }
+        drawChar(charIdx, tileXOff + cx * 8, tileYOff + cy * 8);
       }
     }
   }
@@ -1508,6 +1854,17 @@ function showFileGfxViewer(entryOff) {
   var actionsDiv = document.createElement('div');
   actionsDiv.className = 'modal-footer-actions';
   actionsDiv.appendChild(wrap);
+  // GEOS fonts: offer export to a raw C64 charset binary, with per-size tile
+  // detection (1x1 / 2x1 / 1x2 / 2x2 of 8x8 C64 character cells).
+  if (activeFmt.mode === 'geosfont') {
+    var charsetBtn = document.createElement('button');
+    charsetBtn.className = 'modal-btn-secondary';
+    charsetBtn.textContent = 'Export C64 Charset\u2026';
+    charsetBtn.addEventListener('click', function() {
+      showGeosFontCharsetExport(activeFmt.geosEntry);
+    });
+    actionsDiv.appendChild(charsetBtn);
+  }
   footer.appendChild(actionsDiv);
 
   var navDiv = document.createElement('div');
@@ -1522,6 +1879,7 @@ function showFileGfxViewer(entryOff) {
   navDiv.appendChild(okBtn);
   footer.appendChild(navDiv);
 
+  setModalSize('xl');
   document.getElementById('modal-overlay').classList.add('open');
 }
 

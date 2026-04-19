@@ -191,6 +191,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.60', title: 'Font and charset viewer upgrades', items: [
+      'GEOS fonts now open with a pangram preview (\u201CThe quick brown fox \u2026\u201D) per size, plus a 16-column grid of every glyph with its hex code',
+      'The header above each size shows the GEOS class name (and filename if different) \u2014 e.g. \u201CBSW 2.1 (BSW) \u2014 10pt\u201D',
+      'New: Export C64 Charset\u2026 in the graphics viewer for GEOS fonts \u2014 auto-detects if each size fits 1\u00D71, 2\u00D71, 1\u00D72 or 2\u00D72 C64 character tiles and exports as a .prg ($3000 load) you can drop back onto a disk',
+      'C64 charset viewer now leads with a \u201CTHE QUICK BROWN FOX\u2026\u201D sample line in the chosen tile size (reads correctly in 1\u00D72 / 2\u00D71 / 2\u00D72 modes)',
+      'Graphics viewer opens as a 900 px modal so the format buttons and color pickers fit without wrapping',
+    ]},
     { ver: '1.3.59', title: 'Inline edits only mark the tab dirty when something actually changes', items: [
       'Editing the disk name, ID, filename, T/S, block count, or blocks-free and leaving the field without changing the value no longer flags the tab as unsaved',
     ]},
