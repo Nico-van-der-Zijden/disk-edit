@@ -3197,9 +3197,11 @@ function createCmdNativeImage(formatKey, numTracks) {
         var mask = 0xFF << (8 - validBits);
         if (bt !== 1) data[bamSlotOff + lastByte] &= mask; // track 1 already handled above
       }
-      // Zero out padding bytes beyond the last used byte
+      // Fill padding bytes beyond the last used byte with $FF to match VICE.
+      // (The bytes are ignored by readers; this just keeps a freshly-created
+      // D1M/D2M/D4M byte-identical to VICE's fsimage-create output.)
       for (var pb = usedBytes; pb < 32; pb++) {
-        data[bamSlotOff + pb] = 0x00;
+        data[bamSlotOff + pb] = 0xFF;
       }
     }
   }
