@@ -191,6 +191,9 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.57', title: 'Fix sticky PETSCII keyboard scroll loop', items: [
+      'Hotfix for 1.3.56: the sticky picker\u2019s auto-scroll-into-view now runs only when the picker first opens, not on every scroll event. The previous version could pin the page at the bottom and prevented manual scrolling',
+    ]},
     { ver: '1.3.56', title: 'Sticky PETSCII keyboard follows inputs inside modals', items: [
       'With \u201CStick Keyboard to Edit Field\u201D on, the picker now tracks the input when scrolling the Separator Editor (or any other scrollable modal); previously it only followed scrolls on the main window',
     ]},

@@ -211,7 +211,11 @@ function trackCursorPos(input) {
 // ── Show/hide picker ─────────────────────────────────────────────────
 var pickerScrollHandler = null;
 
-function positionPicker() {
+// isInitial=true only on the first call from showPetsciiPicker. When called
+// from the scroll handler, scrollIntoView() would itself trigger a scroll
+// event, re-entering positionPicker and re-scrolling — infinite smooth-scroll
+// loop that also pins the page at the picker's bottom.
+function positionPicker(isInitial) {
   if (!pickerTarget) return;
   var el = document.getElementById('petscii-picker');
   var rect = pickerTarget.getBoundingClientRect();
@@ -232,10 +236,11 @@ function positionPicker() {
         var adjusted = window.innerWidth - elRect.width - 8 + window.scrollX;
         el.style.left = Math.max(0, adjusted) + 'px';
       }
-      // Scroll the picker into view if it's below the viewport
-      elRect = el.getBoundingClientRect();
-      if (elRect.bottom > window.innerHeight) {
-        el.scrollIntoView({ block: 'end', behavior: 'smooth' });
+      if (isInitial) {
+        elRect = el.getBoundingClientRect();
+        if (elRect.bottom > window.innerHeight) {
+          el.scrollIntoView({ block: 'end', behavior: 'smooth' });
+        }
       }
     });
   } else if (pickerStick && inModal) {
@@ -250,9 +255,11 @@ function positionPicker() {
       if (elRect.right > window.innerWidth) {
         el.style.left = Math.max(0, window.innerWidth - elRect.width - 8 + window.scrollX) + 'px';
       }
-      elRect = el.getBoundingClientRect();
-      if (elRect.bottom > window.innerHeight) {
-        el.scrollIntoView({ block: 'end', behavior: 'smooth' });
+      if (isInitial) {
+        elRect = el.getBoundingClientRect();
+        if (elRect.bottom > window.innerHeight) {
+          el.scrollIntoView({ block: 'end', behavior: 'smooth' });
+        }
       }
     });
   } else {
@@ -291,7 +298,7 @@ function showPetsciiPicker(targetEl, maxLen) {
   el.classList.add('open');
   // Always appear above any open modal
   if (typeof modalZCounter !== 'undefined') el.style.zIndex = modalZCounter + 5;
-  positionPicker();
+  positionPicker(true);
 
   // In sticky mode, follow the input when any scrollable ancestor scrolls.
   // Scroll events don't bubble, so register in the capture phase on document —
