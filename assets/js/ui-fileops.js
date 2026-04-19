@@ -1312,6 +1312,22 @@ function showConfirmModal(title, message) {
   });
 }
 
+// Quick content-based test: is `bytes` (Uint8Array) a CVT (GEOS ConVerT) file?
+// Looks for the "formatted GEOS file" or "V1.0" signature anywhere in the
+// first ~80 bytes. qwiktop20-style archives put a leading NUL before the
+// signature so a NUL-stopped scan misses it; extract all printable chars
+// instead and substring-match.
+function isCvtFile(bytes) {
+  if (!bytes || bytes.length < 762) return false;
+  var s = '';
+  var upto = Math.min(80, bytes.length);
+  for (var i = 0; i < upto; i++) {
+    var b = bytes[i];
+    if (b >= 0x20 && b <= 0x7E) s += String.fromCharCode(b);
+  }
+  return s.indexOf('formatted GEOS file') >= 0 || s.indexOf('V1.0') >= 0;
+}
+
 async function importCvtFile(fileName, cvt) {
   if (cvt.length < 762) {
     showModal('Import Error', ['CVT file too small.']);
@@ -1325,20 +1341,36 @@ async function importCvtFile(fileName, cvt) {
     if (!ok) return;
   }
 
-  // Block 1 ($000-$0FD): directory entry
-  var dirEntry = cvt.subarray(0, 254);
-
-  // Detect variant from signature at offset 30
-  var sigBytes = dirEntry.subarray(30, 60);
-  var sig = '';
-  for (var si = 0; si < 30 && sigBytes[si] !== 0; si++) sig += String.fromCharCode(sigBytes[si]);
-
-  var isV10 = sig.indexOf('V1.0') >= 0;
-  var isBroken = !isV10 && sig.indexOf('formatted GEOS file') >= 0;
-  if (!isV10 && !isBroken) {
-    showModal('Import Error', ['Not a valid CVT file (unknown signature).']);
+  var result = importCvtFileCore(cvt, /*silent*/ false);
+  if (result.error) {
+    showModal('Import Error', [result.error]);
     return;
   }
+  var info = parseCurrentDir(currentBuffer);
+  renderDisk(info);
+  showModal('CVT Import Successful', ['"' + result.name + '" imported successfully.']);
+}
+
+// Core CVT import: parse the CVT structure and write the file to the current
+// disk. Silent (no modals); returns { name } on success or { error } on
+// failure. Shared by importCvtFile (public) and extractLnxToNewD64 (bulk
+// GEOS extraction).
+function importCvtFileCore(cvt, silent) {
+  if (cvt.length < 762) return { error: 'CVT file too small.' };
+
+  // Block 1 ($000-$0FD): directory entry + CVT signature area
+  var dirEntry = cvt.subarray(0, 254);
+
+  // Detect signature anywhere in bytes 30-79 (some archives have a leading
+  // NUL at offset 30, so a NUL-stopped scan misses the real text).
+  var sig = '';
+  for (var si = 30; si < Math.min(80, dirEntry.length); si++) {
+    var b = dirEntry[si];
+    if (b >= 0x20 && b <= 0x7E) sig += String.fromCharCode(b);
+  }
+  var isV10 = sig.indexOf('V1.0') >= 0;
+  var isBroken = !isV10 && sig.indexOf('formatted GEOS file') >= 0;
+  if (!isV10 && !isBroken) return { error: 'Not a valid CVT file (unknown signature).' };
 
   // Extract name (bytes 3-18 of dir entry, $A0 padded)
   var nameBytes = new Uint8Array(16);
@@ -1363,68 +1395,52 @@ async function importCvtFile(fileName, cvt) {
 
   var isVlir = geosStructure === 1;
 
+  var displayName = petsciiToReadable(readPetsciiString(nameBytes, 0, 16)).trim();
+
   if (!isVlir) {
     // Sequential GEOS file: data starts at offset 508
     var seqData = cvt.subarray(508);
-    // Trim trailing zeros from last block
     var geosData = { geosBytes: geosBytes, geosInfoBlock: infoBlock };
-    // Set info T/S in geosBytes (will be updated by writeFileToDisk)
     geosBytes[0] = 0; // info track placeholder
     geosBytes[1] = 0; // info sector placeholder
-
-    if (writeFileToDisk(typeIdx | 0x80, nameBytes, seqData, geosData)) {
-      var info = parseCurrentDir(currentBuffer);
-      renderDisk(info);
-      var baseName = petsciiToReadable(readPetsciiString(nameBytes, 0, 16)).trim();
-      showModal('CVT Import Successful', ['"' + baseName + '" imported successfully.']);
+    if (writeFileToDisk(typeIdx | 0x80, nameBytes, seqData, geosData, silent)) {
+      return { name: displayName };
     }
-  } else {
-    // VLIR file: block 3 ($1FC-$2F9) = record index, then record data
-    var recordIndex = cvt.subarray(508, 762);
-
-    // Parse record sizes and extract record data
-    var records = [];
-    var dataPos = 762;
-    for (var ri = 0; ri < 127; ri++) {
-      var b0 = recordIndex[ri * 2];
-      var b1 = recordIndex[ri * 2 + 1];
-      if (b0 === 0 && b1 === 0) {
-        records.push(null); // end marker
-        break;
-      }
-      if (b0 === 0 && b1 === 0xFF) {
-        records.push({ data: null }); // empty record
-        continue;
-      }
-      // Populated record
-      var grossSize, dataSize;
-      if (isV10) {
-        grossSize = b0 * 254;
-        dataSize = (b0 - 1) * 254 + b1 - 1;
-      } else {
-        grossSize = b0 * 254 + b1;
-        dataSize = grossSize;
-      }
-      if (dataPos + grossSize > cvt.length) {
-        dataSize = Math.min(dataSize, cvt.length - dataPos);
-        grossSize = Math.min(grossSize, cvt.length - dataPos);
-      }
-      records.push({ data: cvt.subarray(dataPos, dataPos + dataSize) });
-      dataPos += grossSize;
-    }
-
-    // Write VLIR file to disk
-    if (writeVlirFileToDisk(typeIdx | 0x80, nameBytes, records, geosBytes, infoBlock)) {
-      var info2 = parseCurrentDir(currentBuffer);
-      renderDisk(info2);
-      var baseName2 = petsciiToReadable(readPetsciiString(nameBytes, 0, 16)).trim();
-      showModal('CVT Import Successful', ['"' + baseName2 + '" imported successfully.']);
-    }
+    return { error: 'Failed to write "' + displayName + '" (disk or directory full).' };
   }
+
+  // VLIR file: block 3 ($1FC-$2F9) = record index, then record data
+  var recordIndex = cvt.subarray(508, 762);
+  var records = [];
+  var dataPos = 762;
+  for (var ri = 0; ri < 127; ri++) {
+    var b0 = recordIndex[ri * 2];
+    var b1 = recordIndex[ri * 2 + 1];
+    if (b0 === 0 && b1 === 0) { records.push(null); break; }
+    if (b0 === 0 && b1 === 0xFF) { records.push({ data: null }); continue; }
+    var grossSize, dataSize;
+    if (isV10) {
+      grossSize = b0 * 254;
+      dataSize = (b0 - 1) * 254 + b1 - 1;
+    } else {
+      grossSize = b0 * 254 + b1;
+      dataSize = grossSize;
+    }
+    if (dataPos + grossSize > cvt.length) {
+      dataSize = Math.min(dataSize, cvt.length - dataPos);
+      grossSize = Math.min(grossSize, cvt.length - dataPos);
+    }
+    records.push({ data: cvt.subarray(dataPos, dataPos + dataSize) });
+    dataPos += grossSize;
+  }
+  if (writeVlirFileToDisk(typeIdx | 0x80, nameBytes, records, geosBytes, infoBlock, silent)) {
+    return { name: displayName };
+  }
+  return { error: 'Failed to write "' + displayName + '" (disk or directory full).' };
 }
 
-function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock) {
-  pushUndo();
+function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock, silent) {
+  if (!silent) pushUndo();
   var snapshot = currentBuffer.slice(0);
   var data = new Uint8Array(currentBuffer);
   var allocated = buildTrueAllocationMap(currentBuffer);
@@ -1446,14 +1462,14 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock)
   var sectorList = allocateSectors(allocated, totalSectors);
   if (sectorList.length < totalSectors) {
     currentBuffer = snapshot;
-    showModal('Write Error', ['Not enough free sectors. Need ' + totalSectors + ', have ' + sectorList.length + '.']);
+    if (!silent) showModal('Write Error', ['Not enough free sectors. Need ' + totalSectors + ', have ' + sectorList.length + '.']);
     return false;
   }
 
   var entryOff = findFreeDirEntry(currentBuffer, allocated);
   if (entryOff < 0) {
     currentBuffer = snapshot;
-    showModal('Write Error', ['No free directory entry available.']);
+    if (!silent) showModal('Write Error', ['No free directory entry available.']);
     return false;
   }
 

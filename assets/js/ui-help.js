@@ -191,6 +191,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.63', title: 'LYNX archives of GEOS files auto-import as GEOS', items: [
+      'When a .lnx archive contains GEOS ConVerT (CVT) files, the new D64 gets a GEOS signature and each CVT file is unpacked to a proper GEOS VLIR / Sequential file \u2014 same path as dragging individual .cvt files onto a disk',
+      'Non-GEOS archives (plain PRG bundles) still extract to a regular D64 as before',
+    ]},
     { ver: '1.3.62', title: 'LYNX parser: real-world archives', items: [
       'Self-extracting LNX archives (ones that ship with a BASIC stub saying "USE LYNX TO DISSOLVE THIS FILE") now open correctly \u2014 the parser skips past the stub\u2019s embedded "LYNX" mention and finds the real header',
       'Filenames with internal spaces (e.g. "TOP      [STEEL]") and PETSCII graphic characters are preserved exactly when extracted',

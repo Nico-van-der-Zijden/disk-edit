@@ -299,6 +299,16 @@ function extractLnxToNewD64(buffer) {
     return s.trim();
   }
 
+  // Detect GEOS ConVerT files. If any are present, apply the GEOS signature
+  // to the fresh D64 so subsequent writes land on a proper GEOS-formatted
+  // disk, and route CVT files through the CVT import path so their VLIR
+  // record structure is reconstructed on the target disk.
+  var hasCvt = false;
+  for (var ci = 0; ci < parsed.files.length; ci++) {
+    if (isCvtFile(parsed.files[ci].data)) { hasCvt = true; break; }
+  }
+  if (hasCvt) writeGeosSignature(currentBuffer);
+
   var imported = 0;
   var skipped = [];
   for (var i = 0; i < parsed.files.length; i++) {
@@ -308,16 +318,29 @@ function extractLnxToNewD64(buffer) {
       skipped.push({ name: display, reason: 'unsupported type' });
       continue;
     }
-    // Ensure the filename buffer is exactly 16 bytes with $A0 padding. LNX
-    // writers occasionally use spaces for padding; normalise trailing ones.
+
+    // CVT: rebuild the GEOS file properly (VLIR structure, info block).
+    if (isCvtFile(f.data)) {
+      var cvtResult = importCvtFileCore(f.data, /*silent*/ true);
+      if (cvtResult.error) {
+        skipped.push({ name: display, reason: cvtResult.error });
+      } else {
+        imported++;
+      }
+      continue;
+    }
+
+    // Plain file: write as-is. The parser returns a 16-byte filename;
+    // preserve internal spaces (valid PETSCII), only trailing NUL/$A0 are
+    // padding.
     var nameBytes = new Uint8Array(16);
-    var realLen = 16;
-    for (var ni = 0; ni < 16; ni++) {
+    var trailStart = 16;
+    for (var ni = 15; ni >= 0; ni--) {
       var b = ni < f.name.length ? f.name[ni] : 0xA0;
-      if ((b === 0x20 || b === 0x00 || b === 0xA0) && realLen === 16) realLen = ni;
+      if (ni === trailStart - 1 && (b === 0x00 || b === 0xA0)) trailStart = ni;
       nameBytes[ni] = b;
     }
-    for (var pi = realLen; pi < 16; pi++) nameBytes[pi] = 0xA0;
+    for (var pi = trailStart; pi < 16; pi++) nameBytes[pi] = 0xA0;
 
     if (writeFileToDisk(f.typeIdx, nameBytes, f.data, null, true)) {
       imported++;
