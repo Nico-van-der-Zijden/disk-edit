@@ -738,11 +738,13 @@ function startEditFreeBlocks(blocksSpan) {
 
   function commitEdit() {
     if (reverted) return;
-    pushUndo();
     let value = parseInt(input.value, 10);
     if (isNaN(value) || value < 0) value = 0;
     if (value > getMaxFreeBlocks()) value = getMaxFreeBlocks();
-    writeFreeBlocks(currentBuffer, value);
+    if (String(value) !== currentValue) {
+      pushUndo();
+      writeFreeBlocks(currentBuffer, value);
+    }
     cleanup();
     blocksSpan.textContent = value;
   }
@@ -877,11 +879,13 @@ function startEditTrackSector(entryEl) {
       revert();
       return;
     }
-    pushUndo();
     const newTrack = trackInput.getValue();
     const newSector = sectorInput.getValue();
-    data[entryOff + 3] = newTrack;
-    data[entryOff + 4] = newSector;
+    if (newTrack !== curTrack || newSector !== curSector) {
+      pushUndo();
+      data[entryOff + 3] = newTrack;
+      data[entryOff + 4] = newSector;
+    }
     cleanup();
     // Re-render to update address column
     const info = parseCurrentDir(currentBuffer);
@@ -961,11 +965,13 @@ function startEditBlockSize(entryEl) {
 
   function commitEdit() {
     if (reverted) return;
-    pushUndo();
     let value = parseInt(input.value, 10);
     if (isNaN(value) || value < 0) value = 0;
     if (value > MAX_BLOCKS) value = MAX_BLOCKS;
-    writeBlockSize(currentBuffer, entryOff, value);
+    if (String(value) !== currentValue) {
+      pushUndo();
+      writeBlockSize(currentBuffer, entryOff, value);
+    }
     cleanup();
     blocksSpan.textContent = value;
   }
@@ -1025,7 +1031,9 @@ function startRenameEntry(entryEl) {
   function commitRename() {
     if (reverted) return;
     let value = filterC64Input(input.value, 16);
-    if (currentBuffer) {
+    var overrideCount = input._petsciiOverrides ? Object.keys(input._petsciiOverrides).length : 0;
+    var changed = value !== currentValue || overrideCount > 0;
+    if (currentBuffer && changed) {
       pushUndo();
       writeFileName(currentBuffer, entryOff, value, input._petsciiOverrides);
     }

@@ -60,7 +60,9 @@ function startEditing(el) {
   async function commitEdit() {
     if (reverted) return;
     let value = filterC64Input(input.value, maxLen);
-    if (currentBuffer) {
+    var overrideCount = input._petsciiOverrides ? Object.keys(input._petsciiOverrides).length : 0;
+    var changed = value !== currentValue || overrideCount > 0;
+    if (currentBuffer && changed) {
       pushUndo();
       if (field === 'name') writeDiskName(currentBuffer, value, input._petsciiOverrides);
       else if (field === 'id') writeDiskId(currentBuffer, value, input._petsciiOverrides);

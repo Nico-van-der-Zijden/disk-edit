@@ -191,6 +191,9 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.59', title: 'Inline edits only mark the tab dirty when something actually changes', items: [
+      'Editing the disk name, ID, filename, T/S, block count, or blocks-free and leaving the field without changing the value no longer flags the tab as unsaved',
+    ]},
     { ver: '1.3.58', title: 'Sticky PETSCII keyboard works inside modals', items: [
       'With \u201CStick Keyboard to Edit Field\u201D on, focusing an input in the Separator Editor (or any modal) now opens the keyboard right below the input',
       'If the keyboard would extend past the viewport, the modal scrolls along with the page so both stay together and the full keyboard is reachable',
