@@ -1096,8 +1096,8 @@ function allocateSectors(allocated, numSectors) {
 // nameBytes = 16-byte Uint8Array of PETSCII filename (already padded with $A0)
 // Returns true on success, false on failure (with rollback).
 // geosData is optional: { geosBytes: Uint8Array(9), geosInfoBlock: Uint8Array(256)|null }
-function writeFileToDisk(typeIdx, nameBytes, fileData, geosData) {
-  pushUndo();
+function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent) {
+  if (!silent) pushUndo();
   var snapshot = currentBuffer.slice(0);
   var data = new Uint8Array(currentBuffer);
 
@@ -1116,7 +1116,7 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData) {
   // Allocate sectors using real drive algorithm
   var sectorList = allocateSectors(allocated, numSectors);
   if (sectorList.length < numSectors) {
-    showModal('Write Error', ['Not enough free sectors. Need ' + numSectors + ', have ' + sectorList.length + '.']);
+    if (!silent) showModal('Write Error', ['Not enough free sectors. Need ' + numSectors + ', have ' + sectorList.length + '.']);
     return false;
   }
 
@@ -1124,7 +1124,7 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData) {
   // Pass allocated map so linked subdir expansion doesn't reuse file sectors
   var entryOff = findFreeDirEntry(currentBuffer, allocated);
   if (entryOff < 0) {
-    showModal('Write Error', ['No free directory entry available.']);
+    if (!silent) showModal('Write Error', ['No free directory entry available.']);
     return false;
   }
 
@@ -1199,13 +1199,13 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData) {
   var verify = readFileData(currentBuffer, entryOff);
   if (verify.error || verify.data.length !== fileData.length) {
     currentBuffer = snapshot;
-    showModal('Write Error', ['Verification failed: ' + (verify.error || 'size mismatch')]);
+    if (!silent) showModal('Write Error', ['Verification failed: ' + (verify.error || 'size mismatch')]);
     return false;
   }
   for (var vi = 0; vi < fileData.length; vi++) {
     if (verify.data[vi] !== fileData[vi]) {
       currentBuffer = snapshot;
-      showModal('Write Error', ['Verification failed: data mismatch at byte ' + vi + '.']);
+      if (!silent) showModal('Write Error', ['Verification failed: data mismatch at byte ' + vi + '.']);
       return false;
     }
   }

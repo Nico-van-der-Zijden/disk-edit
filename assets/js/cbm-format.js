@@ -2557,6 +2557,145 @@ function isTapeFormat() {
   return currentFormat === DISK_FORMATS.t64 || currentFormat === DISK_FORMATS.tap;
 }
 
+// ── LNX (Lynx) archive parser ─────────────────────────────────────────
+// LNX wraps multiple individual C64 files (PRG/SEQ/USR/REL) in a single
+// uncompressed container: ASCII header + CR-delimited directory + sector-
+// aligned concatenated file bytes. No disk geometry.
+//
+// Header layout (Ultra Lynx / UNLYNX compatible, the variant we target):
+//   [optional 2-byte $01 $08 PRG load address]
+//   <leading text> "LYNX" <space + comment> <CR>
+//   <header-blocks decimal>                  <CR>   // directory size in 254-byte blocks
+//   <file-count decimal>                     <CR>
+//   repeat for each file:
+//     <16-byte filename, $A0/space-padded>   <CR>
+//     <block-count decimal>                  <CR>
+//     <type letter / word: P|S|U|R|DEL|...>  <CR>
+//     <last-sector-bytes decimal, 1..254>    <CR>
+//   <padding to next 254-byte block>
+//   <file 1 data, block-aligned>
+//   <file 2 data, block-aligned>
+//   ...
+//
+// Returns { files: [{ name, typeIdx, data }], comment } on success or
+// { error } on failure. `name` is a Uint8Array of up to 16 PETSCII bytes.
+function parseLnxArchive(buffer) {
+  var data = new Uint8Array(buffer);
+  if (data.length < 32) return { error: 'File is too small to be a LYNX archive.' };
+
+  // Skip optional PRG load-address header (common on self-extracting LNX files).
+  var scanStart = 0;
+  if (data[0] === 0x01 && data[1] === 0x08) scanStart = 2;
+
+  // Find "LYNX" magic within the first ~512 bytes.
+  var magicOff = -1;
+  var searchEnd = Math.min(scanStart + 512, data.length - 4);
+  for (var i = scanStart; i < searchEnd; i++) {
+    if (data[i] === 0x4C && data[i+1] === 0x59 && data[i+2] === 0x4E && data[i+3] === 0x58) {
+      magicOff = i;
+      break;
+    }
+  }
+  if (magicOff < 0) return { error: 'Not a LYNX archive (no LYNX signature found).' };
+
+  // After the "LYNX" marker, read up to the first CR to capture the comment.
+  var p = magicOff + 4;
+  var commentStart = p;
+  while (p < data.length && data[p] !== 0x0D && (p - commentStart) < 64) p++;
+  if (p >= data.length) return { error: 'Malformed LYNX header.' };
+  var comment = '';
+  for (var ci = commentStart; ci < p; ci++) {
+    if (data[ci] >= 0x20 && data[ci] <= 0x7E) comment += String.fromCharCode(data[ci]);
+  }
+  comment = comment.trim();
+  p++; // skip CR
+
+  // Helper: read the next CR-terminated ASCII token.
+  function readToken() {
+    var start = p;
+    while (p < data.length && data[p] !== 0x0D) p++;
+    if (p >= data.length) return null;
+    var s = '';
+    for (var k = start; k < p; k++) {
+      if (data[k] >= 0x20 && data[k] <= 0x7E) s += String.fromCharCode(data[k]);
+    }
+    p++; // skip CR
+    return s.trim();
+  }
+
+  // Helper: read exactly 16 bytes as the filename, then scan past whitespace/CRs
+  // (some LNX writers put the name on its own line terminated by CR; others
+  // pack 16 raw bytes followed by CR or even a shifted-space fill).
+  function readFilenameBytes() {
+    if (p + 16 > data.length) return null;
+    var name = data.subarray(p, p + 16);
+    p += 16;
+    // Skip CR(s) that follow the name field.
+    while (p < data.length && (data[p] === 0x0D || data[p] === 0x0A)) p++;
+    return name;
+  }
+
+  var headerBlocksStr = readToken();
+  if (headerBlocksStr === null) return { error: 'Malformed LYNX header (blocks).' };
+  var headerBlocks = parseInt(headerBlocksStr, 10);
+  if (!isFinite(headerBlocks) || headerBlocks < 1) return { error: 'Malformed LYNX header (bad block count).' };
+
+  var fileCountStr = readToken();
+  if (fileCountStr === null) return { error: 'Malformed LYNX header (file count).' };
+  var fileCount = parseInt(fileCountStr, 10);
+  if (!isFinite(fileCount) || fileCount < 0 || fileCount > 4096) {
+    return { error: 'Malformed LYNX header (bad file count).' };
+  }
+
+  // Header sits inside the buffer starting after the optional PRG load-address
+  // prefix (scanStart = 0 for raw LNX, 2 for PRG-wrapped). The header is
+  // `headerBlocks` of 254 bytes, and the file data follows immediately.
+  var dataStart = scanStart + headerBlocks * 254;
+  if (dataStart > data.length) return { error: 'LYNX header claims more blocks than the file contains.' };
+
+  var files = [];
+  var dataOff = dataStart;
+  for (var fi = 0; fi < fileCount; fi++) {
+    var nameBytes = readFilenameBytes();
+    if (!nameBytes) return { error: 'Malformed LYNX directory at entry ' + (fi + 1) + '.' };
+    var blocksTok = readToken();
+    var typeTok = readToken();
+    var lastBytesTok = readToken();
+    if (blocksTok === null || typeTok === null || lastBytesTok === null) {
+      return { error: 'Malformed LYNX directory at entry ' + (fi + 1) + '.' };
+    }
+    var blocks = parseInt(blocksTok, 10);
+    var lastBytes = parseInt(lastBytesTok, 10);
+    if (!isFinite(blocks) || blocks < 1 || !isFinite(lastBytes) || lastBytes < 1 || lastBytes > 254) {
+      return { error: 'Malformed LYNX entry "' + String.fromCharCode.apply(null, Array.from(nameBytes).filter(function(b){return b>=0x20&&b<=0x7E;})) + '".' };
+    }
+
+    // Type letter: first non-space ASCII alpha. Accepts P, S, U, R, D.
+    var typeIdx = -1;
+    for (var ti = 0; ti < typeTok.length; ti++) {
+      var ch = typeTok.charCodeAt(ti);
+      if (ch === 0x20) continue;
+      if (ch === 0x50 || ch === 0x70) { typeIdx = FILE_TYPE.PRG; break; }
+      if (ch === 0x53 || ch === 0x73) { typeIdx = FILE_TYPE.SEQ; break; }
+      if (ch === 0x55 || ch === 0x75) { typeIdx = FILE_TYPE.USR; break; }
+      if (ch === 0x52 || ch === 0x72) { typeIdx = FILE_TYPE.REL; break; }
+      if (ch === 0x44 || ch === 0x64) { typeIdx = FILE_TYPE.DEL; break; }
+      break;
+    }
+
+    var size = (blocks - 1) * 254 + lastBytes;
+    if (dataOff + size > data.length) {
+      return { error: 'LYNX entry ' + (fi + 1) + ' runs past end of file.' };
+    }
+    var fileData = data.subarray(dataOff, dataOff + size);
+    dataOff += blocks * 254;
+
+    files.push({ name: nameBytes, typeIdx: typeIdx, blocks: blocks, data: fileData });
+  }
+
+  return { files: files, comment: comment };
+}
+
 /** @param {ArrayBuffer} buffer @returns {DiskInfo} */
 function parseDisk(buffer) {
   var data = new Uint8Array(buffer);

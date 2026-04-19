@@ -263,6 +263,110 @@ function decompressZipCode(files) {
   return d64.buffer;
 }
 
+// ── LNX (Lynx) archive extraction ────────────────────────────────────
+// Parse the archive and write every file onto a fresh D64. Globals
+// (currentBuffer, currentFormat, currentTracks) are pointed at the new
+// D64 for the duration so writeFileToDisk can operate normally; the
+// caller is responsible for wiring the result into a new tab.
+//
+// Returns { buffer, imported, skipped: [{ name, reason }], error? }.
+function extractLnxToNewD64(buffer) {
+  var parsed = parseLnxArchive(buffer);
+  if (parsed.error) return { error: parsed.error };
+
+  saveActiveTab();
+
+  var d64 = createEmptyDisk('d64', 35);
+  currentBuffer = d64;
+  currentFormat = DISK_FORMATS.d64;
+  currentTracks = 35;
+  currentPartition = null;
+  selectedEntryIndex = -1;
+  parseDisk(currentBuffer);
+  undoStack = [];
+  cleanStackLength = 0;
+  tabDirty = false;
+
+  function nameToDisplay(nameBytes) {
+    var s = '';
+    for (var i = 0; i < nameBytes.length; i++) {
+      var b = nameBytes[i];
+      if (b === 0xA0 || b === 0x00) break;
+      if (b >= 0x20 && b <= 0x7E) s += String.fromCharCode(b);
+      else if (b >= 0xC1 && b <= 0xDA) s += String.fromCharCode(b - 0x80);
+      else s += '.';
+    }
+    return s.trim();
+  }
+
+  var imported = 0;
+  var skipped = [];
+  for (var i = 0; i < parsed.files.length; i++) {
+    var f = parsed.files[i];
+    var display = nameToDisplay(f.name) || '<file ' + (i + 1) + '>';
+    if (f.typeIdx < 0 || f.typeIdx === FILE_TYPE.DEL) {
+      skipped.push({ name: display, reason: 'unsupported type' });
+      continue;
+    }
+    // Ensure the filename buffer is exactly 16 bytes with $A0 padding. LNX
+    // writers occasionally use spaces for padding; normalise trailing ones.
+    var nameBytes = new Uint8Array(16);
+    var realLen = 16;
+    for (var ni = 0; ni < 16; ni++) {
+      var b = ni < f.name.length ? f.name[ni] : 0xA0;
+      if ((b === 0x20 || b === 0x00 || b === 0xA0) && realLen === 16) realLen = ni;
+      nameBytes[ni] = b;
+    }
+    for (var pi = realLen; pi < 16; pi++) nameBytes[pi] = 0xA0;
+
+    if (writeFileToDisk(f.typeIdx, nameBytes, f.data, null, true)) {
+      imported++;
+    } else {
+      skipped.push({ name: display, reason: 'disk or directory full' });
+    }
+  }
+
+  // Fresh-tab state: clear undo and dirty flag so the new D64 opens clean
+  // (user can Save As to keep it).
+  undoStack = [];
+  cleanStackLength = 0;
+  tabDirty = false;
+
+  return { buffer: currentBuffer, imported: imported, skipped: skipped, comment: parsed.comment };
+}
+
+// Open an LNX archive as a new D64 tab. Called from drag-drop and file-picker.
+function openLnxArchiveAsTab(buffer, archiveName) {
+  var result = extractLnxToNewD64(buffer);
+  if (result.error) {
+    showModal('LYNX Error', [archiveName + ': ' + result.error]);
+    return null;
+  }
+  var base = archiveName.replace(/\.lnx$/i, '');
+  var tabName = base + '.d64';
+  var tab = createTab(tabName, currentBuffer, null);
+  activeTabId = tab.id;
+
+  var info = parseCurrentDir(currentBuffer);
+  renderDisk(info);
+  renderTabs();
+  updateMenuState();
+
+  var lines = ['"' + archiveName + '": extracted ' + result.imported + ' file(s) to a new D64.'];
+  if (result.comment) lines.push('Comment: ' + result.comment);
+  if (result.skipped.length > 0) {
+    lines.push('');
+    lines.push(result.skipped.length + ' file(s) skipped:');
+    var cap = Math.min(20, result.skipped.length);
+    for (var si = 0; si < cap; si++) {
+      lines.push('  ' + result.skipped[si].name + ' \u2014 ' + result.skipped[si].reason);
+    }
+    if (result.skipped.length > cap) lines.push('  \u2026 and ' + (result.skipped.length - cap) + ' more');
+  }
+  showModal('Decompress LYNX', lines);
+  return tab;
+}
+
 // ── File Chains ──────────────────────────────────────────────────────
 document.getElementById('opt-file-chains').addEventListener('click', function(e) {
   e.stopPropagation();
@@ -552,6 +656,12 @@ fileInput.addEventListener('change', () => {
       try {
         var buf = results[i].buffer;
         var fname = results[i].name;
+
+        // LNX archives: extract into a new D64 tab instead of opening as-is.
+        if (/\.lnx$/i.test(fname)) {
+          openLnxArchiveAsTab(buf, fname);
+          continue;
+        }
 
         currentBuffer = buf;
         currentFileName = fname;

@@ -191,6 +191,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.61', title: 'Open LYNX (.lnx) archives', items: [
+      'Drop a .lnx archive onto the app (or pick it via File \u2192 Open) and the contents are extracted onto a fresh D64 tab',
+      'Any files that wouldn\u2019t fit (disk or directory full, unsupported type) are listed in the summary so you can spot them',
+    ]},
     { ver: '1.3.60', title: 'Font and charset viewer upgrades', items: [
       'GEOS fonts now open with a pangram preview (\u201CThe quick brown fox \u2026\u201D) per size, plus a 16-column grid of every glyph with its hex code',
       'The header above each size shows the GEOS class name (and filename if different) \u2014 e.g. \u201CBSW 2.1 (BSW) \u2014 10pt\u201D',

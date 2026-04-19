@@ -24,13 +24,16 @@ document.addEventListener('drop', function(e) {
 
   var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp'];
   var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
+  var archiveExts = ['.lnx'];
   var diskFiles = [];
   var importFiles = [];
+  var archiveFiles = [];
 
   for (var i = 0; i < files.length; i++) {
     var name = files[i].name.toLowerCase();
     var ext = name.substring(name.lastIndexOf('.'));
     if (diskExts.indexOf(ext) >= 0) diskFiles.push(files[i]);
+    else if (archiveExts.indexOf(ext) >= 0) archiveFiles.push(files[i]);
     else if (fileExts.indexOf(ext) >= 0) importFiles.push(files[i]);
   }
 
@@ -68,6 +71,26 @@ document.addEventListener('drop', function(e) {
       renderDisk(info);
       renderTabs();
       updateMenuState();
+    });
+  }
+
+  // Archives (LNX): extract each one to a new D64 tab
+  if (archiveFiles.length > 0) {
+    function readArchive(file) {
+      return new Promise(function(resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function() { resolve({ name: file.name, buffer: reader.result }); };
+        reader.onerror = function() { reject(file.name); };
+        reader.readAsArrayBuffer(file);
+      });
+    }
+    Promise.all(archiveFiles.map(readArchive)).then(function(results) {
+      saveActiveTab();
+      for (var ai = 0; ai < results.length; ai++) {
+        openLnxArchiveAsTab(results[ai].buffer, results[ai].name);
+      }
+    }).catch(function(n) {
+      showModal('Error', ['Failed to read archive: ' + n]);
     });
   }
 
