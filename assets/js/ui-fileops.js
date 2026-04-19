@@ -1312,20 +1312,22 @@ function showConfirmModal(title, message) {
   });
 }
 
-// Quick content-based test: is `bytes` (Uint8Array) a CVT (GEOS ConVerT) file?
-// Looks for the "formatted GEOS file" or "V1.0" signature anywhere in the
-// first ~80 bytes. qwiktop20-style archives put a leading NUL before the
-// signature so a NUL-stopped scan misses it; extract all printable chars
-// instead and substring-match.
+// Is `bytes` (Uint8Array) a CVT (GEOS ConVerT) file?
+// CVT layout per Schepers' format docs: bytes 0-29 are a mock dir entry,
+// and bytes 30-58 hold a NUL-terminated signature such as
+// "PRG formatted GEOS file V1.0" (older CVTs omit " V1.0"). Some writers
+// put a leading $00 at byte 30 before the "PRG"/"SEQ" prefix; tolerate
+// that. We scan the printable chars in bytes 30-58 and require the
+// signature text to be present.
 function isCvtFile(bytes) {
   if (!bytes || bytes.length < 762) return false;
   var s = '';
-  var upto = Math.min(80, bytes.length);
-  for (var i = 0; i < upto; i++) {
+  var end = Math.min(58, bytes.length);
+  for (var i = 30; i < end; i++) {
     var b = bytes[i];
     if (b >= 0x20 && b <= 0x7E) s += String.fromCharCode(b);
   }
-  return s.indexOf('formatted GEOS file') >= 0 || s.indexOf('V1.0') >= 0;
+  return s.indexOf('formatted GEOS file') >= 0;
 }
 
 async function importCvtFile(fileName, cvt) {
