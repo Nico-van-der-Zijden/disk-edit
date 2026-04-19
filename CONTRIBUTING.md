@@ -155,7 +155,30 @@ The output runs from the filesystem without a web server.
 
 ## Testing
 
-There is no automated test suite. Test manually:
+There's a Node-based automated suite and a manual checklist.
+
+### Automated (`npm test`)
+
+Uses the `node:test` runner that's built into Node — no dependencies. The files live in `tests/`:
+
+| File | Focus |
+|------|-------|
+| `bam.test.js` | BAM integrity, sector helpers, `forEachFileSector`, VLIR detection, allocation map |
+| `format.test.js` | Sector geometry per format, `parseDisk`, `readFileData`, DISK_FORMATS structure |
+| `geos.test.js` | GEOS signature, VLIR record reading, file-type detection |
+| `petscii.test.js` | PETSCII → PUA / ASCII, `readPetsciiString`, hex helpers |
+| `dnp.test.js` | DNP create/resize, `findDnpHighTrackOwners`, CMD BAM helpers |
+| `lnx.test.js` | LYNX archive parser variants |
+
+Run with:
+
+```bash
+npm test
+```
+
+Add a test whenever you add a format-level helper or a bulk operation that has a clear input/output contract.
+
+### Manual
 
 1. **Open test disks** in D64, D71, D81, D80, D82, DNP, D1M, D2M, D4M formats
 2. **GEOS files**: copy/paste GEOS VLIR and Sequential files between disks, verify BAM is clean (no errors in BAM viewer), block counts match
@@ -170,11 +193,12 @@ A GEOS test disk is available at `disks/org_geos.D64`.
 1. Fork the repository
 2. Create a feature branch (`git checkout -b my-feature`)
 3. Make your changes
-4. Update `APP_VERSION` in `cbm-editor.js` (bump the build number)
-5. Add a changelog entry in `ui-help.js` (the `changes` array at the top of the changelog handler)
-6. Update Credits & Thanks in `ui-help.js` if you used new external references
-7. Update `README.md` if features or supported formats changed
-8. Commit and open a pull request
+4. Run `npm test` and confirm the suite stays green; add tests for new helpers
+5. Update `APP_VERSION` in `cbm-editor.js` (bump the build number)
+6. Add a user-facing changelog entry in `ui-help.js` (the `changes` array near the top of the changelog handler) — keep it short and plain English; technical detail goes in the commit message
+7. Update Credits & Thanks in `ui-help.js` if you used new external references
+8. Update `README.md` if features or supported formats changed
+9. Commit and open a pull request
 
 ## License
 

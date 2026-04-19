@@ -20,6 +20,7 @@ A browser-based disk image editor for Commodore 8-bit computers. No installation
 | T64 | Tape | Tape archive container (read-only) |
 | TAP | Tape | Raw tape pulse data (read-only) |
 | CVT | GEOS | GEOS Convert file format |
+| LNX | Lynx | Archive container of C64 files (extracts to a new D64) |
 
 ### Format Detection
 
@@ -59,6 +60,7 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 - Export all files as ZIP
 - ASCII to PETSCII conversion on import
 - Drag and drop: open disk images or import files
+- LYNX (.lnx) archive extraction: drop an archive and every file lands on a fresh D64 tab; CVT-containing archives unpack to a GEOS-formatted disk with proper VLIR structure
 
 ### Viewers
 - **Hex**: Full sector editor with track/sector navigation
@@ -66,37 +68,45 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 - **PETSCII**: C64 screen rendering with color codes
 - **Disassembly**: 6502/6510 with illegal opcodes
 - **Graphics**: 24+ formats (Koala, Art Studio, Advanced Art Studio, FLI, IFLI, sprites, charsets, Print Shop, and more) with PNG, JPG, GIF, SVG export
+- **C64 Charset**: live preview of "THE QUICK BROWN FOX…" in the selected tile size (1×1, 2×1, 1×2, 2×2), plus the full character grid
 - **SEQ**: Sequential file viewer with PETSCII color rendering
 - **REL**: Relative file record viewer
 
 ### GEOS Support
 - geoPaint, Photo Scrap, Photo Album viewers
 - geoWrite document viewer with styled text and inline images
-- GEOS font viewer
+- GEOS font viewer: pangram sample per size + labeled 16×6 glyph grid
+- Export GEOS fonts as native C64 charsets (.prg, auto-detects 1×1/2×1/1×2/2×2 tile fit, $3000 load)
 - Export to RTF and PDF
+- Convert plain D64 to GEOS format on the fly when importing CVT files
 
 ### Disk Tools
-- BAM viewer with integrity checking and file ownership display
-- Disk optimizer with configurable interleave presets per drive type
-- Validate disk and recalculate BAM
+- BAM viewer with four tabs: BAM (grid + integrity), Track Usage, File Fragmentation (per-file score), and a radial Disk Map mirroring physical geometry
+- Disk optimizer with configurable interleave presets per drive type and optional defragment
+- Validate disk and recalculate BAM (GEOS / REL aware)
 - Lost file recovery (orphaned sector chain scanning)
 - Cross-link detection
+- Compact Directory (remove deleted slots)
+- File Chains view (sector chain for every file)
 - Fill free sectors
-- ZipCode decompression (1!-4! file sets)
+- ZipCode decompression (1!–4! file sets)
+- Resize Image (DNP only — grow/shrink the track count, auto-compacts files on shrink)
+- Convert to GEOS Format (adds the GEOS signature to a regular disk)
 
 ### CMD Native Support
 - DNP, D1M, D2M, D4M with full read/write
 - Nested subdirectories (DIR type)
 - Shared BAM across subdirectories
 - System partition on the last track (D1M/D2M/D4M)
+- DNP track resize with auto-compaction (Disk → Disk Tools → Resize Image…)
 
 ### Other
-- Multi-tab interface for working with multiple disks
+- Multi-tab interface for working with multiple disks, with unsaved-changes warnings on close / reload / Close All
 - 40+ keyboard shortcuts
 - Search across current disk or all open tabs
 - Packer detection with 370+ signatures
-- CSV export with optional MD5 checksums
-- Directory export as PNG or HTML
+- CSV, PNG, HTML, plain-text directory export
+- Disk hashing (CRC32, SHA-256) and sector-by-sector disk comparison
 - Dark and light themes
 - D81 subdirectories (CBM partitions)
 
@@ -163,9 +173,27 @@ assets/
   fontawesome/           FontAwesome icons (bundled)
   webfonts/              C64 Pro Mono font + FontAwesome webfonts
 build.ps1               Build script (PowerShell)
+build.sh                Build script (macOS/Linux)
+tests/                  Automated test suite (Node.js built-in runner)
+  bam.test.js           BAM integrity, sector ops, forEachFileSector
+  format.test.js        Sector geometry, disk parsing, readFileData
+  geos.test.js          GEOS signature + VLIR record parsing
+  petscii.test.js       PETSCII / PUA conversion
+  dnp.test.js           DNP format, resize, high-track owners
+  lnx.test.js           LNX archive parser
 dist/                   Build output (ignored)
 ExampleDisks/           Example disk images for testing
 ```
+
+## Testing
+
+The repo ships with a small Node-based test suite (zero runtime dependencies — uses the `node:test` runner that's built into modern Node):
+
+```bash
+npm test
+```
+
+Covers sector geometry, BAM operations, PETSCII conversion, GEOS VLIR helpers, DNP format + resize, and LNX archive parsing.
 
 ## Credits
 
