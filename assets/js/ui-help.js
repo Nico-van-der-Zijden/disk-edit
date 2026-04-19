@@ -191,6 +191,9 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.56', title: 'Sticky PETSCII keyboard follows inputs inside modals', items: [
+      'With \u201CStick Keyboard to Edit Field\u201D on, the picker now tracks the input when scrolling the Separator Editor (or any other scrollable modal); previously it only followed scrolls on the main window',
+    ]},
     { ver: '1.3.55', title: 'Resize DNP images', items: [
       'New: Disk \u2192 Disk Tools \u2192 Resize Image\u2026 for DNP (CMD Native) images \u2014 grow or shrink the track count (2\u2013255)',
       'Shrinking auto-compacts files onto lower tracks first; if something still won\u2019t fit, the dialog lists the offending files so you can move or delete them',

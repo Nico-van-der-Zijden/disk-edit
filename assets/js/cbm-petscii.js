@@ -293,13 +293,16 @@ function showPetsciiPicker(targetEl, maxLen) {
   if (typeof modalZCounter !== 'undefined') el.style.zIndex = modalZCounter + 5;
   positionPicker();
 
-  // In sticky mode, follow the input when content scrolls
+  // In sticky mode, follow the input when any scrollable ancestor scrolls.
+  // Scroll events don't bubble, so register in the capture phase on document —
+  // that fires for scrolls on #content, .modal-body, or any future scroll
+  // container without having to locate the right ancestor.
   if (pickerStick) {
     if (pickerScrollHandler) {
-      document.getElementById('content').removeEventListener('scroll', pickerScrollHandler);
+      document.removeEventListener('scroll', pickerScrollHandler, true);
     }
     pickerScrollHandler = positionPicker;
-    document.getElementById('content').addEventListener('scroll', pickerScrollHandler);
+    document.addEventListener('scroll', pickerScrollHandler, true);
   }
 }
 
@@ -307,7 +310,7 @@ function hidePetsciiPicker() {
   document.getElementById('petscii-picker').classList.remove('open');
   pickerTarget = null;
   if (pickerScrollHandler) {
-    document.getElementById('content').removeEventListener('scroll', pickerScrollHandler);
+    document.removeEventListener('scroll', pickerScrollHandler, true);
     pickerScrollHandler = null;
   }
 }
