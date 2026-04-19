@@ -1376,6 +1376,80 @@ document.getElementById('opt-optimize').addEventListener('click', function(e) {
   document.getElementById('modal-overlay').classList.add('open');
 });
 
+// ── Disk menu: Resize DNP Image ──────────────────────────────────────
+document.getElementById('opt-resize-dnp').addEventListener('click', async function(e) {
+  e.stopPropagation();
+  var optEl = document.getElementById('opt-resize-dnp');
+  if (optEl.classList.contains('disabled')) return;
+  closeMenus();
+
+  var oldTracks = currentTracks;
+  var oldKB = Math.round(oldTracks * 65536 / 1024);
+  var input = await showInputModal(
+    'Resize DNP (current: ' + oldTracks + ' tracks, ' + oldKB + ' KB)',
+    String(oldTracks)
+  );
+  if (input === null) return;
+  var newTracks = parseInt(input, 10);
+  if (isNaN(newTracks) || newTracks < 2 || newTracks > 255) {
+    showModal('Resize', ['Track count must be between 2 and 255.']);
+    return;
+  }
+  if (newTracks === oldTracks) return;
+
+  // Work on a scratch buffer so a failure leaves the real image untouched.
+  var scratch = currentBuffer.slice(0);
+  var attempt = resizeDnpImage(scratch, newTracks);
+
+  // Shrink blocked? Auto-compact and retry. optimizeDisk reads currentBuffer/
+  // currentTracks indirectly via parseDisk, so point it at the scratch copy
+  // for the compaction pass.
+  if (attempt.error === 'blocked' && newTracks < oldTracks) {
+    var savedBuf = currentBuffer;
+    currentBuffer = scratch;
+    try {
+      optimizeDisk(scratch, currentFormat.defaultInterleave, true);
+    } finally {
+      currentBuffer = savedBuf;
+      currentTracks = oldTracks;
+    }
+    attempt = resizeDnpImage(scratch, newTracks);
+  }
+
+  if (attempt.error === 'blocked') {
+    var list = attempt.owners.slice(0, 20).map(function(o) {
+      return o.owner + ' @ ' + o.track + ':' + o.sector;
+    });
+    if (attempt.owners.length > 20) list.push('\u2026 and ' + (attempt.owners.length - 20) + ' more');
+    showModal('Cannot Shrink', [
+      'After auto-compact, ' + attempt.owners.length + ' sector(s) still live on tracks ' + (newTracks + 1) + '\u2013' + oldTracks + ':',
+      ''
+    ].concat(list).concat([
+      '',
+      'Remove the offending files or choose a larger track count.'
+    ]));
+    return;
+  }
+  if (attempt.error) {
+    showModal('Resize Error', [attempt.error]);
+    return;
+  }
+
+  pushUndo();
+  currentBuffer = attempt.buffer;
+  var tab = getActiveTab();
+  if (tab) tab.buffer = currentBuffer;
+  var info = parseCurrentDir(currentBuffer);
+  // parseDisk (inside parseCurrentDir) updates currentTracks from the new buffer size.
+  if (tab) tab.tracks = currentTracks;
+  renderDisk(info);
+  updateMenuState();
+  var newKB = Math.round(newTracks * 65536 / 1024);
+  showModal('Resize', [
+    'DNP image resized from ' + oldTracks + ' tracks (' + oldKB + ' KB) to ' + newTracks + ' tracks (' + newKB + ' KB).'
+  ]);
+});
+
 // ── Disk menu: Export as Text ────────────────────────────────────────
 document.getElementById('opt-export-txt').addEventListener('click', function(e) {
   e.stopPropagation();

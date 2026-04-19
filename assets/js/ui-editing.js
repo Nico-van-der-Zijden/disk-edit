@@ -147,6 +147,7 @@ function updateMenuState() {
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
   document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-resize-dnp').classList.toggle('disabled', !hasDisk || currentFormat !== DISK_FORMATS.dnp || !!currentPartition);
   document.getElementById('opt-export-all').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-export-csv').classList.toggle('disabled', !hasDisk);

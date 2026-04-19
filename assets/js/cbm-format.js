@@ -1996,6 +1996,130 @@ function allocateSectorsFromTrackOrder(allocated, numSectors, trackOrder, interl
   return sectorList;
 }
 
+// Walk a DNP image (root dir + linked subdirs) and return a list of
+// { owner, track, sector } entries describing each allocated sector whose
+// track is >= minTrack. Used by the DNP resize operation to explain to the
+// user what's preventing a shrink from fitting.
+function findDnpHighTrackOwners(buffer, minTrack) {
+  var data = new Uint8Array(buffer);
+  var totalTracks = buffer.byteLength / 65536;
+  var fmt = DISK_FORMATS.dnp;
+  var owners = [];
+
+  function dnpOff(t, s) { return (t - 1) * 65536 + s * 256; }
+  function record(ownerLabel, t, s) {
+    if (t >= minTrack && t <= totalTracks) owners.push({ owner: ownerLabel, track: t, sector: s });
+  }
+
+  function walkChain(startT, startS, label) {
+    var visited = {};
+    var t = startT, s = startS;
+    while (t !== 0 && t <= totalTracks) {
+      if (s < 0 || s >= 256) break;
+      var key = t + ':' + s;
+      if (visited[key]) break;
+      visited[key] = true;
+      record(label, t, s);
+      var off = dnpOff(t, s);
+      t = data[off];
+      s = data[off + 1];
+    }
+  }
+
+  function walkDir(dirT, dirS, path) {
+    var dirVisited = {};
+    while (dirT !== 0 && dirT <= totalTracks) {
+      var key = dirT + ':' + dirS;
+      if (dirVisited[key]) break;
+      dirVisited[key] = true;
+      record((path || '<root>') + ' (directory)', dirT, dirS);
+      var off = dnpOff(dirT, dirS);
+      for (var i = 0; i < 8; i++) {
+        var eo = off + i * 32;
+        var tb = data[eo + 2];
+        if ((tb & 0x80) === 0) continue;
+        var typeIdx = tb & 0x07;
+        var rawName = readPetsciiString(data, eo + 5, 16);
+        var readable = petsciiToReadable(rawName).trim() || '<unnamed>';
+        var label = path ? path + '/' + readable : readable;
+
+        if (typeIdx === fmt.subdirType) {
+          var hdrT = data[eo + 3], hdrS = data[eo + 4];
+          record(label + ' (subdir header)', hdrT, hdrS);
+          var hdrOff = dnpOff(hdrT, hdrS);
+          walkDir(data[hdrOff], data[hdrOff + 1], label);
+          continue;
+        }
+
+        walkChain(data[eo + 3], data[eo + 4], label);
+
+        if (typeIdx === FILE_TYPE.REL) {
+          walkChain(data[eo + 0x15], data[eo + 0x16], label + ' (REL side-sectors)');
+        } else if (data[eo + 0x18] > 0) {
+          var giT = data[eo + 0x15], giS = data[eo + 0x16];
+          if (giT > 0) record(label + ' (GEOS info)', giT, giS);
+          if (data[eo + 0x17] === 0x01) {
+            var viT = data[eo + 3], viS = data[eo + 4];
+            if (viT > 0 && viT <= totalTracks) {
+              var viOff = dnpOff(viT, viS);
+              for (var r = 0; r < 127; r++) {
+                var rT = data[viOff + 2 + r * 2];
+                var rS = data[viOff + 2 + r * 2 + 1];
+                if (rT === 0 && rS === 0) break;
+                if (rT === 0) continue;
+                walkChain(rT, rS, label + ' (VLIR record ' + r + ')');
+              }
+            }
+          }
+        }
+      }
+      var chainOff = dnpOff(dirT, dirS);
+      dirT = data[chainOff];
+      dirS = data[chainOff + 1];
+    }
+  }
+
+  walkDir(fmt.dirTrack, fmt.dirSector, '');
+  return owners;
+}
+
+// Resize a DNP image to `newTracks` (2..255). Returns one of:
+//   { buffer: ArrayBuffer }                   — success
+//   { error: string }                         — rejected (bad input / wrong format)
+//   { error: 'blocked', owners: [...] }       — shrink blocked; list from findDnpHighTrackOwners
+// Grow: always succeeds. Appends empty tracks and sets their BAM bitmap to all-free.
+// Shrink: only succeeds if every sector above newTracks is already free. The UI
+// handler is expected to compact first (via optimizeDisk) and retry.
+function resizeDnpImage(buffer, newTracks) {
+  if (currentFormat !== DISK_FORMATS.dnp) return { error: 'Resize is only supported for DNP images.' };
+  if (typeof newTracks !== 'number' || !isFinite(newTracks) || newTracks < 2 || newTracks > 255) {
+    return { error: 'Track count must be between 2 and 255.' };
+  }
+  var oldTracks = buffer.byteLength / 65536;
+  if (newTracks === oldTracks) return { buffer: buffer };
+  var oldData = new Uint8Array(buffer);
+
+  if (newTracks < oldTracks) {
+    var owners = findDnpHighTrackOwners(buffer, newTracks + 1);
+    if (owners.length > 0) return { error: 'blocked', owners: owners };
+    var shrunk = new Uint8Array(newTracks * 65536);
+    shrunk.set(oldData.subarray(0, newTracks * 65536));
+    shrunk[2 * 256 + 0x08] = newTracks;
+    return { buffer: shrunk.buffer };
+  }
+
+  var grown = new Uint8Array(newTracks * 65536);
+  grown.set(oldData);
+  // Each BAM slot (32 bytes) = 256 bits = 256 sectors; 0xFF = free.
+  for (var t = oldTracks + 1; t <= newTracks; t++) {
+    var bamSec = 2 + (t >> 3);
+    var slotOff = bamSec * 256 + (t & 7) * 32;
+    for (var b = 0; b < 32; b++) grown[slotOff + b] = 0xFF;
+  }
+  grown[2 * 256 + 0x08] = newTracks;
+  return { buffer: grown.buffer };
+}
+
 // Enumerate the GEOS "auxiliary" sectors of a file entry: info block and
 // VLIR record chain starts. Unlike forEachFileSector, this does NOT walk the
 // record chains themselves — callers that need per-sector cross-link /
