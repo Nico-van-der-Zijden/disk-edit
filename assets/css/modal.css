@@ -20,6 +20,16 @@
     display: flex;
   }
 
+  /* When a sticky PETSCII picker is open inside a modal, the modal overlay
+     becomes position:absolute so it scrolls with the page. That lets the
+     picker (placed below the input in document coords) be scrolled into
+     view if it extends past the viewport; the modal moves up in tandem.
+     JS scrolls the page to 0 on flip so the modal stays in viewport. */
+  body.sticky-picker-in-modal > .modal-overlay {
+    position: absolute;
+    min-height: 100vh;
+  }
+
   .modal {
     background: var(--bg-panel);
     border: 2px solid var(--accent);
@@ -54,6 +64,7 @@
   .modal-body {
     padding: 16px;
     overflow-y: auto;
+    overscroll-behavior: contain;
     flex: 1;
     min-height: 0;
     font-size: 13px;

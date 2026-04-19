@@ -210,6 +210,7 @@ function trackCursorPos(input) {
 
 // ── Show/hide picker ─────────────────────────────────────────────────
 var pickerScrollHandler = null;
+var pickerSavedScrollY = 0;
 
 // isInitial=true only on the first call from showPetsciiPicker. When called
 // from the scroll handler, scrollIntoView() would itself trigger a scroll
@@ -223,13 +224,17 @@ function positionPicker(isInitial) {
   var inModal = !!pickerTarget.closest('.modal-overlay');
 
   if (pickerStick && !inModal) {
-    // Sticky: use absolute positioning so the picker extends the page
+    // Sticky on the main page: input scrolls with the page, so place the
+    // picker at a document-Y = rect.bottom + scrollY. When the page scrolls,
+    // both rect.bottom and scrollY shift by the same amount in opposite
+    // directions, so the picker visually tracks the input with no handler
+    // intervention required (the scroll handler just re-asserts the same
+    // value — harmless).
     el.style.position = 'absolute';
     var top = rect.bottom + window.scrollY + 4;
     var left = rect.left + window.scrollX;
     el.style.top = top + 'px';
     el.style.left = left + 'px';
-    // Clamp horizontally: if overflowing right, shift left
     requestAnimationFrame(function() {
       var elRect = el.getBoundingClientRect();
       if (elRect.right > window.innerWidth) {
@@ -244,12 +249,15 @@ function positionPicker(isInitial) {
       }
     });
   } else if (pickerStick && inModal) {
-    // Sticky inside modal: absolute position below input, body scrolls to fit
+    // Sticky inside a modal: same absolute+scrollY math as the main-page
+    // case. We also flip the modal overlay to position:absolute (via a body
+    // class toggled by showPetsciiPicker) so the modal scrolls with the
+    // document. With that, rect.bottom tracks scrollY (input is in doc
+    // flow-ish), the scrollIntoView reveal on initial scrolls both modal and
+    // picker together, and later positionPicker calls compute the same top.
     el.style.position = 'absolute';
-    var mTop = rect.bottom + window.scrollY + 4;
-    var mLeft = rect.left + window.scrollX;
-    el.style.top = mTop + 'px';
-    el.style.left = mLeft + 'px';
+    el.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+    el.style.left = (rect.left + window.scrollX) + 'px';
     requestAnimationFrame(function() {
       var elRect = el.getBoundingClientRect();
       if (elRect.right > window.innerWidth) {
@@ -263,19 +271,17 @@ function positionPicker(isInitial) {
       }
     });
   } else {
-    // Non-sticky: fixed within viewport
+    // Non-sticky: fit within the viewport, flip above if there's no room below.
     el.style.position = 'fixed';
     var ftop = rect.bottom + 4;
     var fleft = rect.left;
     requestAnimationFrame(function() {
       var pickerRect = el.getBoundingClientRect();
       if (ftop + pickerRect.height > window.innerHeight) {
-        // Doesn't fit below — try above the input
         var above = rect.top - pickerRect.height - 4;
         if (above >= 0) {
           el.style.top = above + 'px';
         } else {
-          // Doesn't fit above either — position at bottom of viewport
           el.style.top = Math.max(0, window.innerHeight - pickerRect.height - 4) + 'px';
         }
       }
@@ -298,7 +304,28 @@ function showPetsciiPicker(targetEl, maxLen) {
   el.classList.add('open');
   // Always appear above any open modal
   if (typeof modalZCounter !== 'undefined') el.style.zIndex = modalZCounter + 5;
+  // Sticky-in-modal: flip the modal overlay to position:absolute so the
+  // page can be scrolled to reveal the picker (modal scrolls with it). Save
+  // and reset page scroll first so the modal doesn't jump off-screen when
+  // the overlay leaves viewport-relative positioning.
+  var hostModalOverlay = (pickerStick && targetEl.closest) ? targetEl.closest('.modal-overlay') : null;
+  if (hostModalOverlay) {
+    pickerSavedScrollY = window.scrollY;
+    document.body.classList.add('sticky-picker-in-modal');
+    if (window.scrollY !== 0) window.scrollTo(0, 0);
+  }
   positionPicker(true);
+  // After positioning, stretch the modal overlay to cover the picker so the
+  // backdrop continues past the modal even when the picker extends the doc.
+  // Absolutely-positioned children don't grow their parent; this sets the
+  // overlay's height explicitly.
+  if (hostModalOverlay) {
+    requestAnimationFrame(function() {
+      var pickerRect = el.getBoundingClientRect();
+      var bottomDocY = window.scrollY + pickerRect.bottom + 16;
+      hostModalOverlay.style.height = bottomDocY + 'px';
+    });
+  }
 
   // In sticky mode, follow the input when any scrollable ancestor scrolls.
   // Scroll events don't bubble, so register in the capture phase on document —
@@ -308,7 +335,17 @@ function showPetsciiPicker(targetEl, maxLen) {
     if (pickerScrollHandler) {
       document.removeEventListener('scroll', pickerScrollHandler, true);
     }
-    pickerScrollHandler = positionPicker;
+    // Skip window/document scrolls — those can't move an input that lives in
+    // a position:fixed modal, and re-positioning the picker on them would
+    // chase its own scrollIntoView target (doc-Y grows with scrollY, which
+    // grows the document, which lets scrollY grow further, ...).
+    // Inner scroll containers (modal bodies, scrollable lists) still fire
+    // this handler so the picker follows an input that actually moves.
+    pickerScrollHandler = function(e) {
+      var t = e.target;
+      if (t === document || t === document.documentElement || t === document.body) return;
+      positionPicker();
+    };
     document.addEventListener('scroll', pickerScrollHandler, true);
   }
 }
@@ -316,6 +353,14 @@ function showPetsciiPicker(targetEl, maxLen) {
 function hidePetsciiPicker() {
   document.getElementById('petscii-picker').classList.remove('open');
   pickerTarget = null;
+  if (document.body.classList.contains('sticky-picker-in-modal')) {
+    document.body.classList.remove('sticky-picker-in-modal');
+    // Clear the overlay height we set on open.
+    var openOverlay = document.querySelector('.modal-overlay.open');
+    if (openOverlay) openOverlay.style.height = '';
+    if (pickerSavedScrollY) window.scrollTo(0, pickerSavedScrollY);
+    pickerSavedScrollY = 0;
+  }
   if (pickerScrollHandler) {
     document.removeEventListener('scroll', pickerScrollHandler, true);
     pickerScrollHandler = null;
