@@ -63,6 +63,7 @@ document.addEventListener('drop', function(e) {
           activeTabId = tab.id;
           tabDirty = false;
           clearUndo();
+          addRecentDisk(fname, buf);
         } catch (err) {
           showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
         }
@@ -88,6 +89,7 @@ document.addEventListener('drop', function(e) {
       saveActiveTab();
       for (var ai = 0; ai < results.length; ai++) {
         openLnxArchiveAsTab(results[ai].buffer, results[ai].name);
+        addRecentDisk(results[ai].name, results[ai].buffer);
       }
     }).catch(function(n) {
       showModal('Error', ['Failed to read archive: ' + n]);

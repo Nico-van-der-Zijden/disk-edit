@@ -683,6 +683,7 @@ fileInput.addEventListener('change', () => {
         // LNX archives: extract into a new D64 tab instead of opening as-is.
         if (/\.lnx$/i.test(fname)) {
           openLnxArchiveAsTab(buf, fname);
+          addRecentDisk(fname, buf);
           continue;
         }
 
@@ -695,6 +696,7 @@ fileInput.addEventListener('change', () => {
         activeTabId = tab.id;
         tabDirty = false;
         clearUndo();
+        addRecentDisk(fname, buf);
       } catch (err) {
         showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
       }

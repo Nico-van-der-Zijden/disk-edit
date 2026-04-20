@@ -191,6 +191,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.66', title: 'Recent disks menu', items: [
+      'Disk \u2192 Recent lists the last 10 disks (or archives) you opened; click one to reopen it instantly as a new tab',
+      'Disk bytes are cached in your browser so reopen is instant \u2014 no file picker round-trip',
+    ]},
     { ver: '1.3.63', title: 'LYNX archives of GEOS files auto-import as GEOS', items: [
       'When a .lnx archive contains GEOS ConVerT (CVT) files, the new D64 gets a GEOS signature and each CVT file is unpacked to a proper GEOS VLIR / Sequential file \u2014 same path as dragging individual .cvt files onto a disk',
       'Non-GEOS archives (plain PRG bundles) still extract to a regular D64 as before',
