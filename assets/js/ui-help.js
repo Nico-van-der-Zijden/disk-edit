@@ -191,6 +191,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.67', title: 'VLIR Layout inspector for GEOS files', items: [
+      'New View As \u2192 VLIR Layout opens a structural view of any GEOS VLIR file: summary, icon, and the full 127-slot record index',
+      'Each populated record shows its start T/S, block count, and byte count; click a row to reveal the full sector chain',
+      'Empty slots and everything past the end-marker are collapsed into single rows so the useful records stay front and centre',
+      'Chain issues (bad start T/S, loops, out-of-range jumps) are flagged inline so you can spot a corrupt record at a glance',
+    ]},
     { ver: '1.3.66', title: 'Recent disks menu', items: [
       'Disk \u2192 Recent lists the last 10 disks (or archives) you opened; click one to reopen it instantly as a new tab',
       'Disk bytes are cached in your browser so reopen is instant \u2014 no file picker round-trip',

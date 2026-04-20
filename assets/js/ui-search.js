@@ -482,6 +482,13 @@ document.getElementById('opt-view-geowrite').addEventListener('click', function(
   showGeoWriteViewer(selectedEntryIndex);
 });
 
+document.getElementById('opt-view-vlir').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  showVlirInspector(selectedEntryIndex);
+});
+
 document.getElementById('opt-view-rel').addEventListener('click', function(e) {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;

@@ -479,6 +479,8 @@ function updateEntryMenuState() {
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
   document.getElementById('opt-view-gfx').classList.toggle('disabled', !gfxEnabled);
   document.getElementById('opt-view-geowrite').classList.toggle('disabled', !geoWriteEnabled);
+  var isVlir = hasSelection && !tape && edata && isVlirFile(edata, selectedEntryIndex);
+  document.getElementById('opt-view-vlir').classList.toggle('disabled', !isVlir);
   var isRel = hasSelection && !tape && edata && (edata[selectedEntryIndex + 2] & 0x07) === 4;
   document.getElementById('opt-view-rel').classList.toggle('disabled', !isRel);
   document.getElementById('opt-view-tass').classList.add('disabled');

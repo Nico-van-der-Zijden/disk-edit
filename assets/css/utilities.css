@@ -214,6 +214,72 @@
     border-radius: 2px;
   }
 
+  .vlir-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .vlir-summary {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+
+  .vlir-hint {
+    margin-top: 4px;
+  }
+
+  .vlir-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+
+  .vlir-table th,
+  .vlir-table td {
+    text-align: left;
+    padding: 3px 10px 3px 0;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  .vlir-table th {
+    color: var(--text-muted);
+    font-weight: normal;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+  }
+
+  .vlir-row { cursor: pointer; }
+  .vlir-row:hover { background: var(--hover); }
+  .vlir-row-open { background: var(--hover); }
+  .vlir-row-muted td { color: var(--text-muted); }
+  .vlir-row-warn td { color: #d26a6a; }
+
+  .vlir-chain td {
+    color: var(--text-muted);
+    padding-left: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  .vlir-chain-label {
+    color: var(--text-muted);
+    margin-right: 4px;
+  }
+
+  .vlir-st-used { color: #9ad284; }
+  .vlir-st-empty { color: var(--text-muted); }
+  .vlir-st-end { color: #e0c060; }
+  .vlir-st-past { color: var(--text-muted); font-style: italic; }
+  .vlir-st-bad { color: #d26a6a; }
+
+  .vlir-issue {
+    color: #d26a6a;
+    font-style: italic;
+  }
+
   .gfx-zoom-row {
     display: flex;
     align-items: center;
