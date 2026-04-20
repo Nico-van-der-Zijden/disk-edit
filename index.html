@@ -8,6 +8,43 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>CBM Disk Editor - Slash Design</title>
+<!-- SEO:BEGIN — stripped from the standalone dist build by build.ps1/build.sh -->
+<meta name="description" content="Free browser-based Commodore disk image editor. Read and write D64, D71, D81, D80, D82, DNP, D1M/D2M/D4M, G64, T64, TAP, X64, LNX and GEOS CVT files — no install, no upload, everything runs locally in your browser.">
+<meta name="author" content="Slash Design">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="/">
+<meta property="og:title" content="CBM Disk Editor — online D64/D71/D81/DNP editor for Commodore disk images">
+<meta property="og:description" content="Edit Commodore 64/128, 1541/1571/1581, CMD FD and CMD Native disk images directly in your browser. Rename files, fix BAM, import/export PRG/SEQ/CVT, view graphics, GEOS geoWrite and geoPaint — nothing leaves your machine.">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="CBM Disk Editor — online D64/D81/DNP editor">
+<meta name="twitter:description" content="Browser-based Commodore disk image editor. D64, D71, D81, D80, D82, DNP, D1M/D2M/D4M, G64, T64, TAP, X64, LNX and GEOS CVT — no install, no upload.">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "CBM Disk Editor",
+  "applicationCategory": "DeveloperApplication",
+  "applicationSubCategory": "Retro Computing, Commodore 64, Commodore 128",
+  "operatingSystem": "Web Browser (Chrome, Edge, Firefox, Safari)",
+  "description": "Free browser-based editor for Commodore disk images: D64, D71, D81, D80, D82, DNP, D1M, D2M, D4M, G64, X64, T64, TAP, LNX archives and GEOS CVT files. Runs entirely client-side with zero installation, zero uploads, and zero dependencies.",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "featureList": [
+    "Read and write D64, D71, D81, D80, D82, DNP, D1M, D2M, D4M disk images",
+    "View and edit BAM with integrity checking and per-file fragmentation",
+    "Hex, BASIC, PETSCII, 6502 disassembly, REL and SEQ viewers",
+    "Graphics viewer for 24+ C64 formats with PNG/JPG/GIF/SVG export",
+    "GEOS support: geoPaint, geoWrite, fonts, Photo Scrap and Album",
+    "CVT (ConVerT) import and export for GEOS VLIR and Sequential files",
+    "LYNX (.lnx) archive extraction",
+    "CMD Native (DNP) track resize",
+    "ZipCode decompression",
+    "Export GEOS fonts as native C64 charsets"
+  ]
+}
+</script>
+<!-- SEO:END -->
 <link rel="stylesheet" href="assets/fontawesome/all.min.css">
 <link rel="stylesheet" href="assets/css/base.css">
 <link rel="stylesheet" href="assets/css/menus.css">
@@ -22,6 +59,24 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='2' width='56' height='60' rx='4' fill='%231a1a2e' stroke='%23666' stroke-width='2'/%3E%3Crect x='20' y='2' width='24' height='16' rx='2' fill='%23999'/%3E%3Crect x='26' y='4' width='12' height='12' rx='1' fill='%231a1a2e'/%3E%3Ccircle cx='32' cy='35' r='13' fill='none' stroke='%23555' stroke-width='1.5'/%3E%3Ccircle cx='32' cy='35' r='5' fill='%23666'/%3E%3Crect x='8' y='50' width='48' height='10' rx='2' fill='%23e8e8e8'/%3E%3Cline x1='12' y1='53' x2='40' y2='53' stroke='%234a6fa5' stroke-width='1.5'/%3E%3Cline x1='12' y1='56' x2='32' y2='56' stroke='%234a6fa5' stroke-width='1.5'/%3E%3C/svg%3E">
 </head>
 <body>
+<!-- SEO:BEGIN — stripped from the standalone dist build by build.ps1/build.sh -->
+<noscript>
+  <div style="max-width:720px;margin:24px auto;padding:16px;font-family:sans-serif;line-height:1.6">
+    <h1>CBM Disk Editor</h1>
+    <p>A free, browser-based editor for Commodore 8-bit disk images. Open, edit, and save D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), G64, X64, DNP (CMD Native), D1M/D2M/D4M (CMD FD-2000/FD-4000), T64 and TAP tape images, and CVT GEOS files. Runs entirely in your browser — nothing is uploaded, no account, no install.</p>
+    <h2>Features</h2>
+    <ul>
+      <li>Full BAM viewer with integrity checking, per-file fragmentation, track usage and a radial Disk Map</li>
+      <li>Viewers for hex, BASIC (V2 / V3.5 / V7 / Simons' / Final Cartridge III), PETSCII, 6502 / 6510 disassembly, graphics (24+ formats including Koala, Art Studio, FLI, IFLI, sprites and charsets), REL records, SEQ files</li>
+      <li>GEOS tooling: geoPaint, Photo Scrap / Album, geoWrite (with RTF / PDF export), font viewer, C64 charset export (.prg), CVT import / export</li>
+      <li>Archive extraction: LYNX (.lnx) and ZipCode (1!–4!)</li>
+      <li>CMD Native: nested subdirectories, DNP track resize with auto-compaction, byte-exact VICE compatibility</li>
+      <li>Drag-and-drop open, multi-tab interface, recent-files list, disk comparison and hashing (CRC32, SHA-256)</li>
+    </ul>
+    <p>This page requires JavaScript. Enable JavaScript to use the editor.</p>
+  </div>
+</noscript>
+<!-- SEO:END -->
 
 <div class="menubar">
   <div class="menu-item" id="menu-file">

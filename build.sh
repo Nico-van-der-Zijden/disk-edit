@@ -52,6 +52,11 @@ echo -e "\033[36mBuilding CBM Disk Editor v$FULLVERSION...\033[0m"
 
 html=$(cat "$SRCFILE")
 
+# 0. Strip SEO-only blocks (meta tags, JSON-LD, noscript content) — those
+#    are for search engines on the hosted site, not for the standalone.
+html=$(echo "$html" | perl -0777 -pe 's/<!-- SEO:BEGIN[^>]*-->.*?<!-- SEO:END -->\s*//gs')
+echo -e "  \033[90mStripped SEO blocks\033[0m"
+
 # 1. Inline FontAwesome CSS with embedded font files
 FA_CSS="$SRCDIR/assets/fontawesome/all.min.css"
 if [ -f "$FA_CSS" ]; then

@@ -28,6 +28,11 @@ Write-Host "Building CBM Disk Editor v$version..." -ForegroundColor Cyan
 
 $html = Get-Content $srcFile -Raw -Encoding UTF8
 
+# 0. Strip SEO-only blocks (meta tags, JSON-LD, noscript content) — those
+#    are for search engines on the hosted site, not for the standalone.
+$html = [regex]::Replace($html, '(?s)<!-- SEO:BEGIN[^>]*-->.*?<!-- SEO:END -->\s*', '')
+Write-Host "  Stripped SEO blocks" -ForegroundColor DarkGray
+
 # 1. Inline FontAwesome CSS with embedded font files
 $faCssPath = Join-Path $srcDir "assets/fontawesome/all.min.css"
 if (Test-Path $faCssPath) {
