@@ -1,5 +1,4 @@
 User-agent: *
 Allow: /
 
-# If you add a sitemap, uncomment and replace <your-domain>:
-# Sitemap: https://<your-domain>/sitemap.xml
+Sitemap: https://d64.sannic.nl/sitemap.xml

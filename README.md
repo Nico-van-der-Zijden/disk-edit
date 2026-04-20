@@ -2,6 +2,10 @@
 
 A browser-based disk image editor for Commodore 8-bit computers. No installation required - runs entirely in the browser as a single HTML file with zero dependencies.
 
+**Hosted at:** <https://d64.sannic.nl>
+
+An online, cross-platform alternative to desktop tools like DirMaster, CBMXfer and c64tools — works the same on Windows, macOS, Linux and ChromeOS, nothing uploaded, nothing installed.
+
 ## Supported Formats
 
 | Format | Drive | Description |
