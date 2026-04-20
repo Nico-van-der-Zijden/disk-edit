@@ -49,6 +49,7 @@ loadScript('assets/js/cbm-format.js');
 loadScript('assets/js/cbm-editor.js');
 loadScript('assets/js/ui-directory.js');
 loadScript('assets/js/ui-fileops.js');
+loadScript('assets/js/ui-viewers.js');
 
 // Helper: load a disk image and set globals
 function loadDisk(filename) {

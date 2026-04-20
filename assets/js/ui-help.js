@@ -191,6 +191,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.68', title: 'Test coverage', items: [
+      'Added DNP resize corner-case tests: files on the shrink boundary, chains that cross into doomed tracks, full grow-then-shrink round-trips, and 2- / 255-track extremes',
+      'Added graphics-parser round-trip tests covering all 12 bitmap layouts (Koala, AAS, Saracen, hires bm+scr / scr+bm, FLI, AFLI, ECI, DRP, Vidcom, Drazlace)',
+      '111 tests total, all green',
+    ]},
     { ver: '1.3.67', title: 'VLIR Layout inspector for GEOS files', items: [
       'New View As \u2192 VLIR Layout opens a structural view of any GEOS VLIR file: summary, icon, and the full 127-slot record index',
       'Each populated record shows its start T/S, block count, and byte count; click a row to reveal the full sector chain',

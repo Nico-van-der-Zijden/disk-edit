@@ -217,3 +217,107 @@ describe('resizeDnpImage — shrink', () => {
     assert.ok(resizeDnpImage(currentBuffer, 0).error);
   });
 });
+
+// Helper: place a two-sector file chain spanning two tracks. Returns entryOff.
+// Sector A (startT/startS) links to sector B (nextT/nextS); B terminates.
+function placeTwoSectorChain(buffer, startT, startS, nextT, nextS, nameStr) {
+  var data = new Uint8Array(buffer);
+  function setBamUsed(track, sector) {
+    var bamSec = 2 + (track >> 3);
+    var slotOff = bamSec * 256 + (track & 7) * 32;
+    data[slotOff + (sector >> 3)] &= ~(0x80 >> (sector & 7));
+  }
+  setBamUsed(startT, startS);
+  setBamUsed(nextT, nextS);
+
+  var offA = (startT - 1) * 65536 + startS * 256;
+  data[offA] = nextT;
+  data[offA + 1] = nextS;
+  data[offA + 2] = 0x42;
+
+  var offB = (nextT - 1) * 65536 + nextS * 256;
+  data[offB] = 0x00;
+  data[offB + 1] = 0x01;
+  data[offB + 2] = 0x99;
+
+  var dirOff = 34 * 256;
+  var slot = -1;
+  for (var i = 0; i < 8; i++) {
+    if (data[dirOff + i * 32 + 2] === 0) { slot = i; break; }
+  }
+  if (slot < 0) throw new Error('no free dir slot');
+  var entryOff = dirOff + slot * 32;
+  data[entryOff + 2] = 0x82;
+  data[entryOff + 3] = startT;
+  data[entryOff + 4] = startS;
+  for (var j = 0; j < 16; j++) {
+    data[entryOff + 5 + j] = j < nameStr.length ? nameStr.charCodeAt(j) : 0xA0;
+  }
+  data[entryOff + 30] = 2;
+  data[entryOff + 31] = 0;
+  return entryOff;
+}
+
+describe('resizeDnpImage — boundary & chain cases', () => {
+  beforeEach(() => { resetGlobals(); });
+
+  it('allows shrink when file sits on the highest kept track', () => {
+    loadFreshDnp(10);
+    placeSyntheticFile(currentBuffer, 5, 3, 'LASTKEEP');
+    var result = resizeDnpImage(currentBuffer, 5);
+    assert.ok(result.buffer, 'should succeed when file is on the new boundary track');
+    assert.strictEqual(result.buffer.byteLength, 5 * 65536);
+  });
+
+  it('blocks shrink when file sits on the first doomed track', () => {
+    loadFreshDnp(10);
+    placeSyntheticFile(currentBuffer, 6, 0, 'FIRSTCUT');
+    var result = resizeDnpImage(currentBuffer, 5);
+    assert.strictEqual(result.error, 'blocked');
+    assert.ok(result.owners.some(function(o) { return o.track === 6; }));
+  });
+
+  it('blocks shrink when a file chain crosses into a doomed track', () => {
+    loadFreshDnp(10);
+    // Start on kept track 5, continuation on doomed track 7
+    placeTwoSectorChain(currentBuffer, 5, 10, 7, 4, 'CROSSING');
+    var result = resizeDnpImage(currentBuffer, 6);
+    assert.strictEqual(result.error, 'blocked');
+    assert.ok(result.owners.some(function(o) { return o.track === 7 && o.sector === 4; }),
+      'high-track sector 7:4 should be flagged even though the chain starts on track 5');
+  });
+
+  it('grow then shrink back is byte-identical to the original', () => {
+    loadFreshDnp(5);
+    placeSyntheticFile(currentBuffer, 3, 12, 'ROUNDTRIP');
+    var original = new Uint8Array(currentBuffer).slice();
+    var grown = resizeDnpImage(currentBuffer, 10);
+    assert.ok(grown.buffer);
+    // Point format context at the resized disk so findDnpHighTrackOwners walks correctly
+    global.currentBuffer = grown.buffer;
+    global.currentTracks = 10;
+    var shrunk = resizeDnpImage(grown.buffer, 5);
+    assert.ok(shrunk.buffer, 'shrink back should succeed (no files above track 5)');
+    var after = new Uint8Array(shrunk.buffer);
+    assert.strictEqual(after.length, original.length);
+    for (var i = 0; i < original.length; i++) {
+      assert.strictEqual(after[i], original[i], 'byte ' + i + ' differs after grow+shrink round-trip');
+    }
+  });
+
+  it('shrinks a clean 10-track disk to the 2-track minimum', () => {
+    loadFreshDnp(10);
+    var result = resizeDnpImage(currentBuffer, 2);
+    assert.ok(result.buffer);
+    assert.strictEqual(result.buffer.byteLength, 2 * 65536);
+    assert.strictEqual(new Uint8Array(result.buffer)[2 * 256 + 0x08], 2);
+  });
+
+  it('grows a 5-track disk to the 255-track maximum without overflow', () => {
+    loadFreshDnp(5);
+    var result = resizeDnpImage(currentBuffer, 255);
+    assert.ok(result.buffer);
+    assert.strictEqual(result.buffer.byteLength, 255 * 65536);
+    assert.strictEqual(new Uint8Array(result.buffer)[2 * 256 + 0x08], 255);
+  });
+});
