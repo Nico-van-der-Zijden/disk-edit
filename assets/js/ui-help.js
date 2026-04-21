@@ -191,6 +191,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.72', title: 'GEOS font \u2192 C64 charset export: correct layout', items: [
+      'Glyphs are placed at their C64 screen-code positions (shifted charset: lowercase $01\u2013$1A, uppercase $41\u2013$5A)',
+      'Output size rounds to a $200 boundary and caps at one char bank ($800): $400 for 1\u00D71, $800 for 2\u00D71 / 1\u00D72 / 2\u00D72',
+      'Multi-tile configs use the standard $200-byte quadrant layout: 2\u00D72 @ sits at chars $00/$40/$80/$C0, 1\u00D72 $800 stores "A" at $81 top / $C1 bottom, etc.',
+      '2\u00D72 only fits 64 glyphs \u2014 lowercase + punctuation + @; uppercase is dropped',
+    ]},
     { ver: '1.3.71', title: 'Menubar submenus no longer stay open after a click', items: [
       'Selecting a Recent disk (or any submenu item) and reopening the Disk menu no longer shows the submenu pre-expanded',
       'Switched menubar submenus from CSS :hover to the same JS-driven pattern the context menu already uses',

@@ -666,7 +666,7 @@ function showGeosFontCharsetExport(entryOff) {
       var info = document.createElement('div');
       info.style.cssText = 'flex:1';
       if (fit) {
-        var bytes = 96 * fit.cols * fit.rows * 8 + 2; // + 2 bytes load address
+        var bytes = geosFontCharsetOutputBytes(fit.cols, fit.rows) + 2; // + 2 bytes load address
         info.innerHTML = '<b>' + f.pt + 'pt</b> \u2014 widest ' + fit.maxW + 'px, tallest ' + fit.maxH + 'px \u2014 fits <b>' + fit.cols + '\u00D7' + fit.rows + '</b> (' + bytes + ' bytes)';
       } else {
         var mw = 0;
@@ -713,19 +713,71 @@ function showGeosFontCharsetExport(entryOff) {
   document.getElementById('modal-overlay').classList.add('open');
 }
 
-// Render a GEOS font as a C64-native charset. For each of the 96 printable
-// glyphs, emit cols*rows tiles of 8 bytes each (one byte per row, MSB-left),
-// laid out in reading order (top-left, top-right, bottom-left, bottom-right
-// for 2x2). Returns a Uint8Array of 96 * cols * rows * 8 bytes.
+// Map a GEOS font's ASCII code ($20-$7F) to its C64 screen-code position
+// in the lowercase/shifted ROM charset (lowercase at $01-$1A, uppercase
+// at $41-$5A, @ at $00, punctuation at $20-$3F, etc.).
+function geosAsciiToScreenCode(c) {
+  if (c >= 0x20 && c <= 0x3F) return c;           // space, punctuation, digits
+  if (c === 0x40) return 0x00;                     // @
+  if (c >= 0x41 && c <= 0x5A) return c;            // A-Z at $41-$5A
+  if (c >= 0x5B && c <= 0x5F) return c - 0x40;     // [\]^_ at $1B-$1F
+  if (c === 0x60) return 0x40;                     // ` at $40
+  if (c >= 0x61 && c <= 0x7A) return c - 0x60;     // a-z at $01-$1A
+  if (c >= 0x7B && c <= 0x7F) return c - 0x20;     // {|}~DEL at $5B-$5F
+  return -1;
+}
+
+// Compute the output size (in bytes) of a C64 charset for the given tile
+// config. Layout uses fixed $200-byte ($40-char) quadrants. Each group of
+// `cols*rows` consecutive quadrants holds 64 logical glyphs — one group
+// for 1×1 holds up to 64 glyphs, one group for 2×2 also holds 64 glyphs
+// (but uses 4 quadrants = $800). Extra groups are stacked until either the
+// glyph range is covered or the $800 bank limit is hit.
+//   1×1 → $400 (2 groups × 1 quadrant × $200)
+//   2×1 / 1×2 → $800 (2 groups × 2 quadrants × $200)
+//   2×2 → $800 (1 group × 4 quadrants × $200; uppercase glyphs dropped)
+function geosFontCharsetOutputBytes(cols, rows) {
+  var tilesPerChar = cols * rows;
+  var CPQ = 64;                                      // chars per quadrant
+  var neededGroups = Math.ceil(96 / CPQ);            // screen codes 0..$5F → 2
+  var maxGroups = Math.floor(256 / (tilesPerChar * CPQ));
+  var groups = Math.min(neededGroups, maxGroups);
+  return groups * tilesPerChar * 0x200;
+}
+
+// Render a GEOS font as a C64-native charset. The charset is organised as
+// `groups` blocks, each block containing `tilesPerChar` adjacent $40-char
+// quadrants. A logical glyph at screen-code S sits at:
+//   groupIdx = S >> 6          // which block it lives in
+//   slot     = S & $3F         // slot within that block (0-$3F)
+//   groupBase = groupIdx * tilesPerChar * 64  (chars)
+// Each tile (tr, tc) of the glyph goes to char groupBase + tileIdx * 64 + slot,
+// where tileIdx = tr*cols + tc (TL, TR, BL, BR order for 2×2).
+// For 2×2 this places @ (screen $00) at chars $00/$40/$80/$C0. For 1×2 $800,
+// 'A' (screen $41) lands at chars $81 (top) and $C1 (bottom).
+// Screen codes beyond the supported group range are dropped.
 function geosFontToC64Charset(f, cols, rows) {
   var tileBytes = 8;
   var tilesPerChar = cols * rows;
-  var out = new Uint8Array(96 * tilesPerChar * tileBytes);
-  var o = 0;
+  var CPQ = 64;
+  var outBytes = geosFontCharsetOutputBytes(cols, rows);
+  var groups = outBytes / (tilesPerChar * 0x200);
+  var maxScreenCode = groups * CPQ - 1;
+  var out = new Uint8Array(outBytes);
+
   for (var ci = 0; ci < 96; ci++) {
+    var screenCode = geosAsciiToScreenCode(0x20 + ci);
+    if (screenCode < 0 || screenCode > maxScreenCode) continue;
     var glyphW = f.xTab[ci + 1] - f.xTab[ci];
+    var groupIdx = Math.floor(screenCode / CPQ);
+    var slotInGroup = screenCode % CPQ;
+    var groupBase = groupIdx * tilesPerChar * CPQ;
+
     for (var tr = 0; tr < rows; tr++) {
       for (var tc = 0; tc < cols; tc++) {
+        var tileIdx = tr * cols + tc;
+        var charPos = groupBase + tileIdx * CPQ + slotInGroup;
+        var o = charPos * tileBytes;
         for (var py = 0; py < 8; py++) {
           var byte = 0;
           var srcY = tr * 8 + py;
@@ -737,7 +789,7 @@ function geosFontToC64Charset(f, cols, rows) {
               }
             }
           }
-          out[o++] = byte;
+          out[o + py] = byte;
         }
       }
     }
