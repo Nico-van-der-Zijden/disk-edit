@@ -269,6 +269,10 @@
     margin-right: 4px;
   }
 
+  .vlir-ts {
+    font-family: "Cascadia Code", "Consolas", monospace;
+  }
+
   .vlir-st-used { color: #9ad284; }
   .vlir-st-empty { color: var(--text-muted); }
   .vlir-st-end { color: #e0c060; }

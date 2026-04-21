@@ -191,6 +191,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.69', title: 'VLIR Layout inspector: clearer formatting', items: [
+      'All track/sector values now shown as hex \u2014 no more mixing $05/$03 with 5/3 in the same row',
+      'Slot column is a plain decimal index; removed redundant parenthetical hex ("0 ($00)")',
+      'Added a one-line explainer at the top so it\u2019s clear what you\u2019re looking at',
+      'Shortened "empty slot" / "past end" labels and collapsed the empty-run rows to a single cell',
+    ]},
     { ver: '1.3.68', title: 'Test coverage', items: [
       'Added DNP resize corner-case tests: files on the shrink boundary, chains that cross into doomed tracks, full grow-then-shrink round-trips, and 2- / 255-track extremes',
       'Added graphics-parser round-trip tests covering all 12 bitmap layouts (Koala, AAS, Saracen, hires bm+scr / scr+bm, FLI, AFLI, ECI, DRP, Vidcom, Drazlace)',

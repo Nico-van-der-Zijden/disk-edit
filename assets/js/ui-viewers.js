@@ -1953,13 +1953,13 @@ function showVlirInspector(entryOff) {
     var safety = 0;
     while (walkT !== 0) {
       if (walkT < 1 || walkT > currentTracks || walkS >= fmt.sectorsPerTrack(walkT)) {
-        entry.issue = 'Chain leaves valid range at T' + walkT + '/S' + walkS;
+        entry.issue = 'Chain leaves valid range at $' + hex8(walkT) + '/$' + hex8(walkS);
         chainIssues++;
         break;
       }
       var key = walkT + ':' + walkS;
       if (visited[key]) {
-        entry.issue = 'Chain loops back to T' + walkT + '/S' + walkS;
+        entry.issue = 'Chain loops back to $' + hex8(walkT) + '/$' + hex8(walkS);
         chainIssues++;
         break;
       }
@@ -1967,7 +1967,7 @@ function showVlirInspector(entryOff) {
       entry.chain.push({ t: walkT, s: walkS });
       var off = sectorOffset(walkT, walkS);
       if (off < 0) {
-        entry.issue = 'Sector T' + walkT + '/S' + walkS + ' is unmapped';
+        entry.issue = 'Sector $' + hex8(walkT) + '/$' + hex8(walkS) + ' is unmapped';
         chainIssues++;
         break;
       }
@@ -2004,13 +2004,13 @@ function showVlirInspector(entryOff) {
       '$' + hex16(infoBlock.loadAddr) + ' / $' + hex16(infoBlock.endAddr) + ' / $' + hex16(infoBlock.initAddr)]);
     if (infoBlock.description) summary.push(['Description', infoBlock.description]);
   }
-  summary.push(['Info Block', 'T:' + geos.infoTrack + ' S:' + geos.infoSector]);
-  summary.push(['Index Sector', 'T:' + indexT + ' S:' + indexS]);
+  summary.push(['Info Block', '$' + hex8(geos.infoTrack) + '/$' + hex8(geos.infoSector)]);
+  summary.push(['Index Sector', '$' + hex8(indexT) + '/$' + hex8(indexS)]);
   var populated = slots.filter(function(e) { return e.status === 'used'; }).length;
   var emptySlots = slots.filter(function(e) { return e.status === 'empty'; }).length;
-  var endSlot = (endMarkerSlot >= 0) ? ('slot ' + endMarkerSlot) : 'none (implicit)';
-  summary.push(['Records', populated + ' populated, ' + emptySlots + ' empty slots, end marker: ' + endSlot]);
-  summary.push(['Total', totalRecordBlocks + ' blocks (' + totalRecordBytes + ' bytes)']);
+  var endLabel = (endMarkerSlot >= 0) ? ('slot ' + endMarkerSlot) : 'none';
+  summary.push(['Records', populated + ' used, ' + emptySlots + ' empty, end marker ' + endLabel]);
+  summary.push(['Total size', totalRecordBlocks + ' blocks (' + totalRecordBytes.toLocaleString() + ' bytes)']);
   if (chainIssues > 0) summary.push(['Integrity', chainIssues + ' chain issue(s) — see flagged rows below']);
 
   // Icon canvas (same rendering as GEOS File Info)
@@ -2044,11 +2044,15 @@ function showVlirInspector(entryOff) {
   // Build the record table, compressing runs of empty/past-end slots.
   function statusCell(e) {
     if (e.status === 'used') return '<span class="vlir-st-used">used</span>';
-    if (e.status === 'empty') return '<span class="vlir-st-empty">empty slot</span>';
+    if (e.status === 'empty') return '<span class="vlir-st-empty">empty</span>';
     if (e.status === 'end') return '<span class="vlir-st-end">end marker</span>';
-    if (e.status === 'past-end') return '<span class="vlir-st-past">past end</span>';
+    if (e.status === 'past-end') return '<span class="vlir-st-past">unused</span>';
     if (e.status === 'bad-start') return '<span class="vlir-st-bad">bad start</span>';
     return e.status;
+  }
+
+  function tsCell(t, s) {
+    return '<span class="vlir-ts">$' + hex8(t) + '/$' + hex8(s) + '</span>';
   }
 
   var rowsHtml = '';
@@ -2060,30 +2064,24 @@ function showVlirInspector(entryOff) {
       var kind = e.status;
       while (i < slots.length && slots[i].status === kind) i++;
       var runEnd = i - 1;
-      if (runStart === runEnd) {
-        rowsHtml += '<tr class="vlir-row-muted">' +
-          '<td>' + runStart + ' ($' + hex8(runStart) + ')</td>' +
-          '<td>' + statusCell(slots[runStart]) + '</td>' +
-          '<td>\u2014</td><td>\u2014</td><td>\u2014</td></tr>';
-      } else {
-        rowsHtml += '<tr class="vlir-row-muted">' +
-          '<td>' + runStart + '\u2013' + runEnd + '</td>' +
-          '<td>' + statusCell(slots[runStart]) + ' \u00d7 ' + (runEnd - runStart + 1) + '</td>' +
-          '<td colspan="3">\u2014</td></tr>';
-      }
+      var slotLabel = (runStart === runEnd) ? String(runStart) : (runStart + '\u2013' + runEnd);
+      var statusLabel = (runStart === runEnd)
+        ? statusCell(slots[runStart])
+        : statusCell(slots[runStart]) + ' \u00d7 ' + (runEnd - runStart + 1);
+      rowsHtml += '<tr class="vlir-row-muted">' +
+        '<td>' + slotLabel + '</td>' +
+        '<td colspan="4">' + statusLabel + '</td></tr>';
       continue;
     }
 
     var rowClass = (e.status === 'used') ? 'vlir-row' : 'vlir-row vlir-row-warn';
     if (e.issue) rowClass += ' vlir-row-warn';
-    var startTs = (e.status === 'end')
-      ? '\u2014'
-      : (e.t + '/' + e.s + ' ($' + hex8(e.t) + '/$' + hex8(e.s) + ')');
+    var startTs = (e.status === 'end') ? '\u2014' : tsCell(e.t, e.s);
     var blocksCell = (e.status === 'used') ? String(e.blocks) : '\u2014';
-    var sizeCell = (e.status === 'used') ? (e.bytes + ' B') : '\u2014';
+    var sizeCell = (e.status === 'used') ? e.bytes.toLocaleString() : '\u2014';
 
     rowsHtml += '<tr class="' + rowClass + '" data-slot="' + e.slot + '">' +
-      '<td>' + e.slot + ' ($' + hex8(e.slot) + ')</td>' +
+      '<td>' + e.slot + '</td>' +
       '<td>' + statusCell(e) + (e.issue ? ' <span class="vlir-issue">(' + escHtml(e.issue) + ')</span>' : '') + '</td>' +
       '<td>' + startTs + '</td>' +
       '<td>' + blocksCell + '</td>' +
@@ -2091,10 +2089,10 @@ function showVlirInspector(entryOff) {
 
     if (e.status === 'used' && e.chain.length > 0) {
       var chainList = e.chain.map(function(c) {
-        return c.t + '/' + c.s;
+        return '$' + hex8(c.t) + '/$' + hex8(c.s);
       }).join(', ');
       rowsHtml += '<tr class="vlir-chain" data-parent="' + e.slot + '" style="display:none">' +
-        '<td></td><td colspan="4"><span class="vlir-chain-label">chain:</span> ' + escHtml(chainList) + '</td></tr>';
+        '<td></td><td colspan="4"><span class="vlir-chain-label">chain:</span> <span class="vlir-ts">' + chainList + '</span></td></tr>';
     }
 
     i++;
@@ -2117,9 +2115,9 @@ function showVlirInspector(entryOff) {
   }
   html += '</table></div>';
 
-  html += '<div class="vlir-hint text-md text-muted">Click a populated row to reveal its sector chain.</div>';
+  html += '<div class="vlir-hint text-md text-muted">A VLIR file has up to 127 record slots, each pointing to its own sector chain. Click a row to expand its chain. T/S values are shown in hex.</div>';
   html += '<table class="vlir-table">';
-  html += '<thead><tr><th>Slot</th><th>Status</th><th>Start T/S</th><th>Blocks</th><th>Size</th></tr></thead>';
+  html += '<thead><tr><th>#</th><th>Status</th><th>T/S</th><th>Blocks</th><th>Bytes</th></tr></thead>';
   html += '<tbody>' + rowsHtml + '</tbody></table>';
   html += '</div>';
 
