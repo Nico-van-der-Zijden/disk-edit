@@ -94,12 +94,12 @@
     bottom: -4px;
   }
 
-  .menubar .has-submenu:not(.disabled):hover > .submenu,
+  .menubar .has-submenu.submenu-open > .submenu,
   .has-submenu.menu-focused > .submenu {
     display: block;
   }
 
-  .menu-keynav .has-submenu:not(.disabled):hover > .submenu {
+  .menu-keynav .has-submenu.submenu-open > .submenu {
     display: none;
   }
 

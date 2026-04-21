@@ -191,6 +191,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.71', title: 'Menubar submenus no longer stay open after a click', items: [
+      'Selecting a Recent disk (or any submenu item) and reopening the Disk menu no longer shows the submenu pre-expanded',
+      'Switched menubar submenus from CSS :hover to the same JS-driven pattern the context menu already uses',
+    ]},
     { ver: '1.3.70', title: 'Graphics viewer: zoom always starts at 1\u00d7', items: [
       'All graphics formats now open at 1\u00d7 zoom by default \u2014 previously sprites, charsets, Print Shop and most bitmap formats opened at different zoom levels',
       'Change the zoom dropdown to match your preference; the view no longer guesses',

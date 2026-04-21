@@ -219,6 +219,11 @@ function closeMenus() {
   closeSubmenu();
   menuItems.forEach(m => m.classList.remove('open'));
   menubarEl.classList.remove('menu-active', 'menu-keynav');
+  // Defensive: nuke any stale inline submenu display styles and any
+  // lingering classes that would keep a submenu visible.
+  menubarEl.querySelectorAll('.submenu').forEach(function(s) { s.style.display = ''; });
+  menubarEl.querySelectorAll('.menu-focused').forEach(function(el) { el.classList.remove('menu-focused'); });
+  menubarEl.querySelectorAll('.submenu-open').forEach(function(el) { el.classList.remove('submenu-open'); });
   openMenu = null;
   menuKeyNav = false;
 }
@@ -258,11 +263,27 @@ function adjustSubmenu(sub) {
   });
 }
 
-// Adjust submenus in menubar and context menu (use delegation for cloned context menu)
-document.querySelectorAll('.has-submenu').forEach(function(item) {
+// Drive menubar submenus via JS mouseenter/mouseleave + .submenu-open class
+// rather than CSS :hover. Browser :hover state persists across rapid DOM
+// mutations (e.g. when closing the menu after a click fires inside a submenu),
+// which can leave a submenu looking "stuck open" the next time its parent
+// menu is reopened. The context menu already uses this pattern.
+document.querySelectorAll('.menubar .has-submenu').forEach(function(item) {
   item.addEventListener('mouseenter', function() {
+    if (item.classList.contains('disabled')) return;
+    // Close siblings so only one submenu is open per dropdown level
+    var parent = item.parentElement;
+    if (parent) {
+      parent.querySelectorAll(':scope > .has-submenu.submenu-open').forEach(function(el) {
+        if (el !== item) el.classList.remove('submenu-open');
+      });
+    }
+    item.classList.add('submenu-open');
     var sub = item.querySelector('.submenu');
     if (sub) adjustSubmenu(sub);
+  });
+  item.addEventListener('mouseleave', function() {
+    item.classList.remove('submenu-open');
   });
 });
 
