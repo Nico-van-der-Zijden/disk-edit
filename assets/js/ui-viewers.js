@@ -1558,18 +1558,7 @@ function showFileGfxViewer(entryOff) {
     canvas.className = 'gfx-canvas';
     renderGfxToCanvas(canvas.getContext('2d'), eff, fileData, gfxColors);
 
-    // Auto scale based on format
-    if (!currentZoom) {
-      if (eff.mode === 'geopaint') {
-        currentZoom = 1;
-      } else if (eff.mode === 'printshop') {
-        currentZoom = 4;
-      } else if (eff.mode.indexOf('sprite') >= 0 || eff.mode.indexOf('charset') >= 0) {
-        currentZoom = Math.max(2, Math.min(5, Math.floor(600 / (canvas.width || 1))));
-      } else {
-        currentZoom = 2;
-      }
-    }
+    if (!currentZoom) currentZoom = 1;
     canvas.style.width = (canvas.width * currentZoom) + 'px';
     canvas.style.height = (canvas.height * currentZoom) + 'px';
     body.appendChild(canvas);
