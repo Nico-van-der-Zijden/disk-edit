@@ -191,6 +191,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.73', title: 'Turbo Assembler source viewer', items: [
+      'Decodes TASS V5.x source files into readable listing: labels, comments, .byte/.word/.text, *= origin, label+offset, #&lt;label / #&gt;label, jmp *',
+      'Auto-detected via the $09 $FF magic \u2014 the View \u2192 TASS option is available on any closed PRG that carries the signature',
+      'Best-effort: unknown bytes fall back to compact .byte runs; some unusual constructs may still misparse',
+    ]},
     { ver: '1.3.72', title: 'GEOS font \u2192 C64 charset export: correct layout', items: [
       'Glyphs are placed at their C64 screen-code positions (shifted charset: lowercase $01\u2013$1A, uppercase $41\u2013$5A)',
       'Output size rounds to a $200 boundary and caps at one char bank ($800): $400 for 1\u00D71, $800 for 2\u00D71 / 1\u00D72 / 2\u00D72',

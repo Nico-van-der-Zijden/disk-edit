@@ -483,7 +483,11 @@ function updateEntryMenuState() {
   document.getElementById('opt-view-vlir').classList.toggle('disabled', !isVlir);
   var isRel = hasSelection && !tape && edata && (edata[selectedEntryIndex + 2] & 0x07) === 4;
   document.getElementById('opt-view-rel').classList.toggle('disabled', !isRel);
-  document.getElementById('opt-view-tass').classList.add('disabled');
+  // TASS: offer for any closed PRG — the viewer detects the $09 $FF magic itself
+  // and shows a friendly message if the file isn't actually a TASS source.
+  var isTassCandidate = hasSelection && !tape && edata &&
+    (edata[selectedEntryIndex + 2] & 0x87) === 0x82;
+  document.getElementById('opt-view-tass').classList.toggle('disabled', !isTassCandidate);
   document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
   document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect || tape);
   document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection || tape);

@@ -2252,36 +2252,524 @@ function showRelViewer(entryOff) {
 }
 
 // ── Turbo Assembler viewer ────────────────────────────────────────────
-// 6502 mnemonics in alphabetical order (TASS token $30-$67)
-var TASS_MNEMONICS = [
-  'ADC','AND','ASL','BCC','BCS','BEQ','BIT','BMI','BNE','BPL', // $30-$39
-  'BRK','BVC','BVS','CLC','CLD','CLI','CLV','CMP','CPX','CPY', // $3A-$43
-  'DEC','DEX','DEY','EOR','INC','INX','INY','JMP','JSR','LDA', // $44-$4D
-  'LDX','LDY','LSR','NOP','ORA','PHA','PHP','PLA','PLP','ROL', // $4E-$57
-  'ROR','RTI','RTS','SBC','SEC','SED','SEI','STA','STX','STY', // $58-$61
-  'TAX','TAY','TSX','TXA','TXS','TYA'                          // $62-$67
-];
+// TASS V5.x source format (reverse-engineered):
+//   Header (16 bytes) with $09 $FF magic at offset $0E-$0F.
+//   Source body stored in REVERSE display order; lines delimited by $80 with
+//   $C0 padding between. Labels stored in ASCII table at end (last char has
+//   bit 7 set). Instructions use actual 6502 opcodes as mnemonic tokens plus
+//   operand-type prefixes ($28 hex byte, $29 hex word, $2A decimal byte,
+//   $38 label ref). Label definitions are $30 NN.
+// Complete 6502 official opcode table (151 opcodes). The mode string drives
+// tassDecodeOperand. Note: opcodes like $28/$30/$38 double as TASS operand-
+// prefix markers (hex byte / label def / label ref). We handle those specially
+// in the tokenizer BEFORE consulting this table, so these entries only apply
+// when those bytes appear as real opcodes at the start of an instruction.
+var TASS_OPCODES = {
+  // ORA
+  0x01:['ora','izx'], 0x05:['ora','zp'], 0x09:['ora','imm'], 0x0D:['ora','abs'],
+  0x11:['ora','iny'], 0x15:['ora','zpx'], 0x19:['ora','abs-y'], 0x1D:['ora','abs-x'],
+  // AND
+  0x21:['and','izx'], 0x25:['and','zp'], 0x29:['and','imm'], 0x2D:['and','abs'],
+  0x31:['and','iny'], 0x35:['and','zpx'], 0x39:['and','abs-y'], 0x3D:['and','abs-x'],
+  // EOR
+  0x41:['eor','izx'], 0x45:['eor','zp'], 0x49:['eor','imm'], 0x4D:['eor','abs'],
+  0x51:['eor','iny'], 0x55:['eor','zpx'], 0x59:['eor','abs-y'], 0x5D:['eor','abs-x'],
+  // ADC
+  0x61:['adc','izx'], 0x65:['adc','zp'], 0x69:['adc','imm'], 0x6D:['adc','abs'],
+  0x71:['adc','iny'], 0x75:['adc','zpx'], 0x79:['adc','abs-y'], 0x7D:['adc','abs-x'],
+  // STA
+  0x81:['sta','izx'], 0x85:['sta','zp'], 0x8D:['sta','abs'],
+  0x91:['sta','iny'], 0x95:['sta','zpx'], 0x99:['sta','abs-y'], 0x9D:['sta','abs-x'],
+  // LDA
+  0xA1:['lda','izx'], 0xA5:['lda','zp'], 0xA9:['lda','imm'], 0xAD:['lda','abs'],
+  0xB1:['lda','iny'], 0xB5:['lda','zpx'], 0xB9:['lda','abs-y'], 0xBD:['lda','abs-x'],
+  // CMP
+  0xC1:['cmp','izx'], 0xC5:['cmp','zp'], 0xC9:['cmp','imm'], 0xCD:['cmp','abs'],
+  0xD1:['cmp','iny'], 0xD5:['cmp','zpx'], 0xD9:['cmp','abs-y'], 0xDD:['cmp','abs-x'],
+  // SBC
+  0xE1:['sbc','izx'], 0xE5:['sbc','zp'], 0xE9:['sbc','imm'], 0xED:['sbc','abs'],
+  0xF1:['sbc','iny'], 0xF5:['sbc','zpx'], 0xF9:['sbc','abs-y'], 0xFD:['sbc','abs-x'],
+  // ASL
+  0x06:['asl','zp'], 0x0A:['asl','acc'], 0x0E:['asl','abs'],
+  0x16:['asl','zpx'], 0x1E:['asl','abs-x'],
+  // ROL
+  0x26:['rol','zp'], 0x2A:['rol','acc'], 0x2E:['rol','abs'],
+  0x36:['rol','zpx'], 0x3E:['rol','abs-x'],
+  // LSR
+  0x46:['lsr','zp'], 0x4A:['lsr','acc'], 0x4E:['lsr','abs'],
+  0x56:['lsr','zpx'], 0x5E:['lsr','abs-x'],
+  // ROR
+  0x66:['ror','zp'], 0x6A:['ror','acc'], 0x6E:['ror','abs'],
+  0x76:['ror','zpx'], 0x7E:['ror','abs-x'],
+  // STX / LDX / STY / LDY / DEC / INC / CPX / CPY / BIT
+  0x84:['sty','zp'], 0x8C:['sty','abs'], 0x94:['sty','zpx'],
+  0xA4:['ldy','zp'], 0xAC:['ldy','abs'], 0xB4:['ldy','zpx'], 0xBC:['ldy','abs-x'],
+  0xC4:['cpy','zp'], 0xCC:['cpy','abs'], 0xC0:['cpy','imm'],
+  0x86:['stx','zp'], 0x8E:['stx','abs'], 0x96:['stx','zpy'],
+  0xA6:['ldx','zp'], 0xAE:['ldx','abs'], 0xB6:['ldx','zpy'], 0xBE:['ldx','abs-y'],
+  0xE4:['cpx','zp'], 0xEC:['cpx','abs'], 0xE0:['cpx','imm'],
+  0xA2:['ldx','imm'], 0xA0:['ldy','imm'],
+  0xC6:['dec','zp'], 0xCE:['dec','abs'], 0xD6:['dec','zpx'], 0xDE:['dec','abs-x'],
+  0xE6:['inc','zp'], 0xEE:['inc','abs'], 0xF6:['inc','zpx'], 0xFE:['inc','abs-x'],
+  0x24:['bit','zp'], 0x2C:['bit','abs'],
+  // Jumps
+  0x4C:['jmp','abs'], 0x6C:['jmp','ind'], 0x20:['jsr','abs'],
+  // Branches (all rel)
+  0x10:['bpl','rel'], 0x30:['bmi','rel'], 0x50:['bvc','rel'], 0x70:['bvs','rel'],
+  0x90:['bcc','rel'], 0xB0:['bcs','rel'], 0xD0:['bne','rel'], 0xF0:['beq','rel'],
+  // Implied / register
+  0x00:['brk','none'], 0x40:['rti','none'], 0x60:['rts','none'],
+  0x08:['php','none'], 0x28:['plp','none'], 0x48:['pha','none'], 0x68:['pla','none'],
+  0x18:['clc','none'], 0x38:['sec','none'], 0x58:['cli','none'], 0x78:['sei','none'],
+  0xB8:['clv','none'], 0xD8:['cld','none'], 0xF8:['sed','none'],
+  0x88:['dey','none'], 0xC8:['iny','none'], 0xCA:['dex','none'], 0xE8:['inx','none'],
+  0xAA:['tax','none'], 0xA8:['tay','none'], 0xBA:['tsx','none'],
+  0x8A:['txa','none'], 0x9A:['txs','none'], 0x98:['tya','none'],
+  0xEA:['nop','none']
+};
 
-// Detect TASS source file: not BASIC, has TASS-like header with line padding pattern
 function isTassSource(fileData) {
-  if (!fileData || fileData.length < 100) return false;
-  var addr = fileData[0] | (fileData[1] << 8);
-  // TASS files don't load at standard BASIC addresses
-  if (addr === 0x0801) return false;
-  // Look for the .TEXT/.BYTE signatures that TASS embeds
-  for (var i = 0x50; i < Math.min(fileData.length, 0x80); i++) {
-    if (fileData[i] === 0x2E && i + 4 < fileData.length) {
-      var str = String.fromCharCode(fileData[i+1], fileData[i+2], fileData[i+3], fileData[i+4]);
-      if (str === 'TEXT' || str === 'BYTE') return true;
+  if (!fileData || fileData.length < 0x20) return false;
+  // Magic $09 $FF at file offset $0E-$0F (fileData includes the 2-byte load
+  // address prefix, so this is payload offset $0C-$0D).
+  return fileData[0x0E] === 0x09 && fileData[0x0F] === 0xFF;
+}
+
+function tassParseLabels(data) {
+  var labels = [];
+  // Find the longest run of pure label-bytes (ASCII letter/digit/_./. plus
+  // high-bit terminator bytes). Label tables are dense runs of such bytes;
+  // non-label regions have many "other" values. We accept the table only if
+  // the run is at least 8 bytes AND contains at least one high-bit terminator.
+  function isLabelByte(b) {
+    return (b >= 0x41 && b <= 0x5A) || (b >= 0x30 && b <= 0x39) ||
+           b === 0x2E || b === 0x5F || (b >= 0xB0 && b <= 0xFA);
+  }
+  var bestStart = -1, bestEnd = -1, bestLen = 0;
+  var runStart = -1, runLen = 0, runHasTerm = false;
+  for (var i = 0; i < data.length; i++) {
+    if (isLabelByte(data[i])) {
+      if (runLen === 0) { runStart = i; runHasTerm = false; }
+      runLen++;
+      if (data[i] >= 0xB0) runHasTerm = true;
+    } else {
+      if (runLen >= 8 && runHasTerm && runLen > bestLen) {
+        bestLen = runLen; bestStart = runStart; bestEnd = runStart + runLen;
+      }
+      runLen = 0;
     }
   }
-  // Check for $C0 padding pattern (line fill bytes)
-  var c0Count = 0;
-  for (var j = 0x100; j < Math.min(fileData.length, 0x300); j++) {
-    if (fileData[j] === 0xC0) c0Count++;
+  if (runLen >= 8 && runHasTerm && runLen > bestLen) {
+    bestLen = runLen; bestStart = runStart; bestEnd = runStart + runLen;
   }
-  if (c0Count > 50) return true;
-  return false;
+  if (bestStart < 0) return { labels: labels, start: data.length };
+
+  var p = bestStart;
+  while (p < bestEnd) {
+    var name = '';
+    var closed = false;
+    while (p < bestEnd) {
+      var x = data[p];
+      if ((x >= 0x41 && x <= 0x5A) || (x >= 0x30 && x <= 0x39) || x === 0x2E || x === 0x5F) {
+        name += String.fromCharCode(x); p++;
+      } else if (x >= 0xB0 && x <= 0xFA) {
+        name += String.fromCharCode(x - 0x80); p++; closed = true; break;
+      } else { p++; break; }
+    }
+    if (name.length > 0 && closed) labels.push(name.toLowerCase());
+  }
+  return { labels: labels, start: bestStart };
+}
+
+function tassDecodeOperand(data, pos, opInfo, labels) {
+  var mode = opInfo[1];
+  if (mode === 'none' || mode === 'acc') return { text: '', n: 0 };
+  if (pos >= data.length) return { text: '', n: 0 };
+  var pfx = data[pos];
+  var lo, hi, v, idx;
+  if (mode === 'imm') {
+    if (pfx === 0x28) { v = data[pos + 1] || 0; return { text: '#$' + v.toString(16).padStart(2,'0'), n: 2 }; }
+    if (pfx === 0x2A) { v = data[pos + 1] || 0; return { text: '#' + v.toString(), n: 2 }; }
+    if (pfx === 0x2E) {
+      // Character-literal immediate: `#"X"`. Render the value as a quoted char
+      // if printable, otherwise as hex.
+      v = data[pos + 1] || 0;
+      if (v >= 0x20 && v <= 0x7E) return { text: '#"' + String.fromCharCode(v) + '"', n: 2 };
+      return { text: '#$' + v.toString(16).padStart(2,'0'), n: 2 };
+    }
+    if (pfx === 0x38 || pfx === 0x39) {
+      idx = (pfx - 0x38) * 256 + data[pos + 1];
+      return { text: '#' + (labels[idx] || '?lbl' + idx), n: 2 };
+    }
+    // $44 = '>' (high byte of expression), $45 = '<' (low byte). Both take a
+    // label-ref ($38 NN or $39 NN) as the argument.
+    if ((pfx === 0x44 || pfx === 0x45) && (data[pos + 1] === 0x38 || data[pos + 1] === 0x39)) {
+      var lblPg = data[pos + 1] - 0x38;
+      idx = lblPg * 256 + data[pos + 2];
+      var lblName = labels[idx] || ('?lbl' + idx);
+      return { text: '#' + (pfx === 0x44 ? '>' : '<') + lblName, n: 3 };
+    }
+    return { text: '#?$' + pfx.toString(16), n: 1 };
+  }
+  if (mode === 'abs' || mode === 'abs-x' || mode === 'abs-y' || mode === 'iny' ||
+      mode === 'ind' || mode === 'zp' || mode === 'zpx' || mode === 'zpy' || mode === 'izx') {
+    var val = '', n = 1;
+    // $2D alone (not followed by an operand) = "*" (current PC). Seen after
+    // jmp/jsr/branches as `jmp *` (infinite loop at current address).
+    if (pfx === 0x2D) { return { text: '*', n: 1 }; }
+    if (pfx === 0x28) { val = '$' + (data[pos + 1] || 0).toString(16).padStart(2,'0'); n = 2; }
+    else if (pfx === 0x29) { lo = data[pos + 1] || 0; hi = data[pos + 2] || 0; val = '$' + ((hi << 8) | lo).toString(16).padStart(4,'0'); n = 3; }
+    else if (pfx === 0x38 || pfx === 0x39) { idx = (pfx - 0x38) * 256 + data[pos + 1]; val = labels[idx] || ('?lbl' + idx); n = 2; }
+    else if (pfx === 0x2A) { val = (data[pos + 1] || 0).toString(); n = 2; }
+    else if (pfx === 0x30) {
+      // label-with-expression: $30 LBL [$40 $2A/$28/$29 VALUE]  →  "label+N"
+      idx = data[pos + 1];
+      val = labels[idx] || ('?lbl' + idx);
+      n = 2;
+      var op3 = data[pos + 2];
+      if (op3 === 0x40) {
+        var vpfx = data[pos + 3];
+        if (vpfx === 0x2A) { val += '+' + (data[pos + 4] || 0).toString(); n = 5; }
+        else if (vpfx === 0x28) { val += '+$' + (data[pos + 4] || 0).toString(16).padStart(2,'0'); n = 5; }
+        else if (vpfx === 0x29) { val += '+$' + (((data[pos + 5] || 0) << 8) | (data[pos + 4] || 0)).toString(16).padStart(4,'0'); n = 6; }
+        else { val += '+?'; n = 3; }
+      }
+    }
+    else { val = '?$' + pfx.toString(16); n = 1; }
+    if (mode === 'abs-x' || mode === 'zpx') val += ',x';
+    else if (mode === 'abs-y' || mode === 'zpy') val += ',y';
+    else if (mode === 'iny') val = '(' + val + '),y';
+    else if (mode === 'izx') val = '(' + val + ',x)';
+    else if (mode === 'ind') val = '(' + val + ')';
+    return { text: val, n: n };
+  }
+  if (mode === 'rel') {
+    if (pfx === 0x38 || pfx === 0x39) { idx = (pfx - 0x38) * 256 + data[pos + 1]; return { text: labels[idx] || ('?lbl' + idx), n: 2 }; }
+    if (pfx === 0x28) { return { text: '$' + (data[pos + 1] || 0).toString(16).padStart(2,'0'), n: 2 }; }
+    return { text: '?', n: 1 };
+  }
+  return { text: '?', n: 0 };
+}
+
+function tassTokenizeBlock(data, start, end, labels) {
+  var lines = [];
+  var cur = { label: null, instr: null, operand: null, comment: null, isData: false };
+  var unknownRun = [];
+  function flushData() {
+    if (unknownRun.length === 0) return;
+    var parts = [];
+    for (var k = 0; k < unknownRun.length; k++) parts.push('$' + unknownRun[k].toString(16).padStart(2, '0'));
+    lines.push({ label: null, instr: '.byte', operand: parts.join(','), comment: null, isData: true });
+    unknownRun = [];
+  }
+  function flush() {
+    flushData();
+    if (cur.label || cur.instr || cur.comment) lines.push(cur);
+    cur = { label: null, instr: null, operand: null, comment: null, isData: false };
+  }
+  var i = start;
+  while (i < end) {
+    var b = data[i];
+    // Comment markers: $93-$97 are all `;` variants (different column
+    // alignment in TASS's editor). $94/$95/$96/$97 also happen to be valid
+    // 6502 opcodes (STY/STA/STX zpx/zpy etc.), so only treat as a comment if
+    // the next byte is NOT a TASS operand prefix.
+    if (b >= 0x93 && b <= 0x97 && !(
+      (b === 0x94 || b === 0x95 || b === 0x96) && i + 1 < end &&
+      (data[i + 1] === 0x28 || data[i + 1] === 0x29 || data[i + 1] === 0x2A ||
+       data[i + 1] === 0x38 || data[i + 1] === 0x39)
+    )) {
+      flushData();
+      i++;
+      var text = '';
+      // Read comment text until we hit a byte that clearly starts a new
+      // instruction/directive/label-def. Printable-ASCII bytes (including
+      // digits like '0'=$30 and '8'=$38) are treated as comment text unless
+      // they specifically form a new-instruction pattern. PETSCII shifted
+      // letters ($C1-$DA) are also treated as text (rendered as A-Z).
+      // $2D (hyphen) is normally padding; inside a comment it's literal '-'.
+      function petsciiToLetter(b) {
+        if (b >= 0x20 && b <= 0x7E) return String.fromCharCode(b).toLowerCase();
+        if (b === 0xA0) return ' ';
+        if (b >= 0xC1 && b <= 0xDA) return String.fromCharCode(b - 0x80).toLowerCase();
+        return null;
+      }
+      while (i < end) {
+        var c = data[i];
+        if (c === 0x80) break;
+        // $2D is literal '-' in comments (before opcode check: $2D=AND abs
+        // is a valid 6502 opcode, but inside a comment '-' is overwhelmingly
+        // more likely).
+        if (c === 0x2D) { text += '-'; i++; continue; }
+        // An opcode that takes an operand followed by a valid TASS operand
+        // prefix unambiguously starts the next instruction.
+        var op = TASS_OPCODES[c];
+        if (op && op[1] !== 'none' && op[1] !== 'acc' && i + 1 < end) {
+          var nx = data[i + 1];
+          if (nx === 0x28 || nx === 0x29 || nx === 0x2A || nx === 0x38 || nx === 0x39) break;
+        }
+        // Directive markers at the start of a line.
+        if (c === 0x02 && i + 1 < end) {
+          var tl = data[i + 1];
+          if (tl > 0 && tl <= 64 && i + 2 + tl <= end) {
+            var ok = true;
+            for (var tz = 0; tz < tl; tz++) {
+              var cc2 = data[i + 2 + tz];
+              if (cc2 < 0x20 || cc2 > 0x7E) { ok = false; break; }
+            }
+            if (ok) break;
+          }
+        }
+        if ((c === 0x03 || c === 0x04) && i + 1 < end) {
+          var dnx = data[i + 1];
+          if (dnx === 0x28 || dnx === 0x29 || dnx === 0x2A || dnx === 0x38 || dnx === 0x39) break;
+        }
+        if (c === 0x06 && i + 1 < end) {
+          var onx = data[i + 1];
+          if (onx === 0x28 || onx === 0x29) break;
+        }
+        // Label-def marker `$30 NN` or `$31 NN` — treat as line-start only if
+        // the byte AFTER the label index is a directive marker or $80. Avoid
+        // matching on opcodes here because ASCII digits like "dc01$8D" could
+        // collide (and $8D won't appear inside a comment, so a non-printable
+        // byte breaks the comment naturally on its own).
+        if ((c === 0x30 || c === 0x31) && i + 2 < end) {
+          var lbNN = data[i + 1];
+          var lbIdx = (c - 0x30) * 256 + lbNN;
+          if (lbIdx < labels.length) {
+            var after = data[i + 2];
+            if (after === 0x02 || after === 0x03 || after === 0x04 ||
+                after === 0x05 || after === 0x06 || after === 0x80) break;
+          }
+        }
+        var letter = petsciiToLetter(c);
+        if (letter !== null) { text += letter; i++; continue; }
+        break;
+      }
+      cur.comment = text.replace(/\s+$/, '');
+      flush();
+      continue;
+    }
+    // $30 NN = label def (idx NN). $31 NN = high-page label def (idx 256+NN).
+    // Generalized as $(30+page) NN for label indexes in [page*256, page*256+256).
+    if ((b === 0x30 || b === 0x31) && i + 1 < end) {
+      var page = b - 0x30;
+      var lidx = page * 256 + data[i + 1];
+      if (lidx < labels.length) {
+        flushData();
+        if (cur.instr || cur.comment) flush();
+        cur.label = labels[lidx];
+        i += 2;
+        // If the label-def is immediately followed by `$05`, it's a label
+        // ASSIGNMENT: `label = value`. The value uses the usual prefix bytes.
+        if (i < end && data[i] === 0x05) {
+          i++;
+          var apfx = i < end ? data[i] : 0;
+          cur.instr = '=';
+          if (apfx === 0x28) { cur.operand = '$' + ((data[i + 1] || 0)).toString(16).padStart(2,'0'); i += 2; }
+          else if (apfx === 0x29) { cur.operand = '$' + ((((data[i + 2] || 0) << 8) | (data[i + 1] || 0)).toString(16).padStart(4,'0')); i += 3; }
+          else if (apfx === 0x2A) { cur.operand = (data[i + 1] || 0).toString(); i += 2; }
+          else if (apfx === 0x38) { var li2 = data[i + 1]; cur.operand = labels[li2] || ('?lbl' + li2); i += 2; }
+          else { cur.operand = '?$' + apfx.toString(16); i += 1; }
+          flush();
+        }
+        continue;
+      }
+    }
+    // `.byte` / `.word` directive: `$03 PFX VALUE[...]`. $28 hex-byte, $29
+    // hex-word, $2A decimal-byte. Multiple values are emitted as one .byte
+    // line if consecutive $03-prefixed values appear with no other content
+    // between them.
+    // `.text "string"` directive: `$02 LEN ASCII_CHARS*LEN`. LEN is the
+    // character count (1 byte), ASCII chars follow verbatim.
+    if (b === 0x02 && i + 1 < end) {
+      var tlen = data[i + 1];
+      if (tlen > 0 && tlen <= 64 && i + 2 + tlen <= end) {
+        // Accept the .text directive as long as the payload doesn't contain
+        // $80 (block end). TASS strings often include control bytes ($12,
+        // $93, colour codes, etc.) so a strict printable-only check wrongly
+        // rejects valid strings.
+        var hasBlockEnd = false;
+        for (var tk = 0; tk < tlen; tk++) {
+          if (data[i + 2 + tk] === 0x80) { hasBlockEnd = true; break; }
+        }
+        if (!hasBlockEnd) {
+          flushData();
+          if (cur.instr) flush();
+          cur.instr = '.text';
+          var tstr = '';
+          for (var tk2 = 0; tk2 < tlen; tk2++) {
+            var ch = data[i + 2 + tk2];
+            if (ch >= 0x20 && ch <= 0x7E) tstr += String.fromCharCode(ch).toLowerCase();
+            else tstr += '{$' + ch.toString(16).padStart(2, '0') + '}';
+          }
+          cur.operand = '"' + tstr + '"';
+          i += 2 + tlen;
+          continue;
+        }
+      }
+    }
+    // `.byte` (`$03`) and `.word` (`$04`) directives. Subsequent values in the
+    // same directive are stored as bare PFX VALUE pairs without repeating the
+    // directive marker. Value prefixes: $28 hex byte, $29 hex word, $2A dec byte,
+    // $38 label ref (treated as word when emitted under .word).
+    if ((b === 0x03 || b === 0x04) && i + 1 < end) {
+      var bpfx = data[i + 1];
+      var pfxOk = bpfx === 0x28 || bpfx === 0x29 || bpfx === 0x2A || bpfx === 0x38;
+      if (pfxOk) {
+        flushData();
+        if (cur.instr) flush();
+        cur.instr = b === 0x04 ? '.word' : '.byte';
+        var bvals = [];
+        i++;
+        while (i < end) {
+          var bp = data[i];
+          if (bp === 0x28) { bvals.push('$' + (data[i + 1] || 0).toString(16).padStart(2,'0')); i += 2; }
+          else if (bp === 0x29) { bvals.push('$' + (((data[i + 2] || 0) << 8) | (data[i + 1] || 0)).toString(16).padStart(4,'0')); i += 3; }
+          else if (bp === 0x2A) { bvals.push((data[i + 1] || 0).toString()); i += 2; }
+          else if (bp === 0x38 || bp === 0x39) { var lix = (bp - 0x38) * 256 + data[i + 1]; bvals.push(labels[lix] || ('?lbl' + lix)); i += 2; }
+          else break;
+        }
+        cur.operand = bvals.join(',');
+        // Intentionally do NOT flush here: a trailing comment ($93/$94) or a
+        // following label-def/opcode will flush the line. This lets `player
+        // .byte $00 ;comment` render as one line instead of splitting the
+        // comment onto its own row.
+        continue;
+      }
+    }
+    // Origin directive `*= address`: byte $06 followed by value-prefix.
+    if (b === 0x06 && i + 1 < end) {
+      var opfx = data[i + 1];
+      if (opfx === 0x29 || opfx === 0x28) {
+        flushData();
+        if (cur.instr || cur.comment) flush();
+        cur.instr = '*=';
+        if (opfx === 0x29) { cur.operand = '$' + ((((data[i + 3] || 0) << 8) | (data[i + 2] || 0)).toString(16).padStart(4,'0')); i += 4; }
+        else { cur.operand = '$' + (data[i + 2] || 0).toString(16).padStart(2,'0'); i += 3; }
+        flush();
+        continue;
+      }
+    }
+    if (b === 0x80) {
+      // Separator at instruction boundary: flush any in-progress line, then
+      // mark the following content as a new block.
+      flushData();
+      if (cur.label || cur.instr || cur.comment) flush();
+      lines.push({ label: null, instr: null, operand: null, comment: null, separator: true });
+      i++;
+      // Look ahead to the next $80 — if the block content is mostly
+      // printable text (including PETSCII shifted letters), render it as a
+      // single `;text` line instead of tokenizing. Skips false opcode decodes
+      // like `$20 $28 $37` = `jsr $37` on the `" (7"` part of a comment.
+      var look = i;
+      while (look < end && data[look] !== 0x80) look++;
+      var textish = 0, controlish = 0;
+      for (var ti2 = i; ti2 < look; ti2++) {
+        var bb = data[ti2];
+        if (bb === 0xC0 || bb === 0x00) continue;
+        if ((bb >= 0x20 && bb <= 0x7E) || bb === 0xA0 || (bb >= 0xC1 && bb <= 0xDA) || bb === 0x2D) textish++;
+        else controlish++;
+      }
+      if (textish >= 3 && controlish === 0) {
+        // Pure text block — emit as a comment, skip past it.
+        var tstr2 = '';
+        for (var ti3 = i; ti3 < look; ti3++) {
+          var bb2 = data[ti3];
+          if (bb2 === 0xC0 || bb2 === 0x00) continue;
+          if (bb2 >= 0x20 && bb2 <= 0x7E) tstr2 += String.fromCharCode(bb2).toLowerCase();
+          else if (bb2 === 0xA0) tstr2 += ' ';
+          else if (bb2 >= 0xC1 && bb2 <= 0xDA) tstr2 += String.fromCharCode(bb2 - 0x80).toLowerCase();
+          else if (bb2 === 0x2D) tstr2 += '-';
+        }
+        if (tstr2.length >= 1) {
+          lines.push({ label: null, instr: null, operand: null, comment: tstr2, isTextBlock: true });
+          i = look;
+        }
+      }
+      continue;
+    }
+    // $C0, $00, $2D = padding / horizontal-rule filler — skip. ($2D is
+    // ambiguous: it's also ASCII '-', but treating it as padding loses '-' in
+    // text comments — a small readability trade-off to avoid false `and *`
+    // decodes on `$2D $2D` rule-fill bytes.)
+    if (b === 0xC0 || b === 0x00 || b === 0x2D) { i++; continue; }
+    if (TASS_OPCODES[b]) {
+      var op = TASS_OPCODES[b];
+      var mode = op[1];
+      // For opcodes that take an operand, verify the following byte is a real
+      // TASS operand prefix ($28/$29/$2A/$30/$38). If not, this byte is almost
+      // certainly a data byte that happens to land on a valid opcode value.
+      if (mode !== 'none' && mode !== 'acc') {
+        var nextB = i + 1 < end ? data[i + 1] : 0;
+        var validPfx = false;
+        if (nextB === 0x28 || nextB === 0x29 || nextB === 0x2A || nextB === 0x38 || nextB === 0x39) validPfx = true;
+        else if (nextB === 0x2E && mode === 'imm') validPfx = true;
+        // $30 = label-ref with expression ($30 LBL $40 PFX VAL). Only valid in
+        // abs-like modes. Also requires the following byte to be a label index.
+        else if (nextB === 0x30 && (mode === 'abs' || mode === 'abs-x' || mode === 'abs-y' ||
+                                    mode === 'zp' || mode === 'zpx' || mode === 'zpy')) {
+          // Label index must be valid
+          if (i + 2 < end && data[i + 2] < labels.length) validPfx = true;
+        }
+        // $2D = '*' (current PC), only in abs-like modes (jmp/jsr/branches).
+        else if (nextB === 0x2D && (mode === 'abs' || mode === 'rel' || mode === 'ind')) validPfx = true;
+        // $44/$45 = '>'/'<' operators, only in imm mode, followed by $38 LBL.
+        else if ((nextB === 0x44 || nextB === 0x45) && mode === 'imm' &&
+                 i + 2 < end && data[i + 2] === 0x38) validPfx = true;
+        if (!validPfx) {
+          if (cur.instr || cur.comment) flush();
+          unknownRun.push(b);
+          i++;
+          if (unknownRun.length >= 8) flushData();
+          continue;
+        }
+      }
+      flushData();
+      if (cur.instr) flush();
+      cur.instr = op[0];
+      var od = tassDecodeOperand(data, i + 1, op, labels);
+      cur.operand = od.text;
+      i += 1 + od.n;
+      continue;
+    }
+    // Unknown byte — accumulate into a .byte run instead of one ?-line per byte
+    if (cur.instr || cur.comment) flush();
+    unknownRun.push(b);
+    i++;
+    if (unknownRun.length >= 8) flushData();
+  }
+  flush();
+  return lines;
+}
+
+function tassRenderLineHtml(line) {
+  // Column layout matches TASS's on-screen format:
+  //   col  0-8: label name (padded with spaces)
+  //   col   9+: mnemonic
+  //   col  14+: operand
+  //   col  25+: trailing comment (`;comment`)
+  var html = '';
+  if (line.label) {
+    var pad = Math.max(1, 9 - line.label.length);
+    html += '<span class="basic-keyword">' + escHtml(line.label) + '</span>' + ' '.repeat(pad);
+  } else {
+    html += '         ';
+  }
+  var instrLen = 0;
+  if (line.instr) {
+    html += '<span class="basic-keyword">' + escHtml(line.instr) + '</span>';
+    instrLen += line.instr.length;
+    if (line.operand) {
+      html += ' ' + escHtml(line.operand);
+      instrLen += 1 + line.operand.length;
+    }
+  }
+  if (line.comment) {
+    var gap = Math.max(1, 16 - instrLen);
+    html += ' '.repeat(gap) + '<span class="text-muted">;' + escHtml(line.comment) + '</span>';
+  }
+  return html;
 }
 
 function showFileTassViewer(entryOff) {
@@ -2291,109 +2779,166 @@ function showFileTassViewer(entryOff) {
   var fileData = result.data;
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
 
-  // TASS source: lines separated by $80, padded with $C0
-  // Scan for line boundaries
-  var lines = [];
-  var lineStart = -1;
+  var loadAddr = fileData[0] | (fileData[1] << 8);
+  var payload = fileData.subarray(2);
 
-  // Find where source data begins (skip header, ~$100 area)
+  // Bail with a clear message if the file doesn't carry the TASS magic.
+  if (!isTassSource(fileData)) {
+    document.getElementById('modal-title').textContent = 'Turbo Assembler \u2014 "' + name + '"';
+    document.getElementById('modal-body').innerHTML =
+      '<div class="basic-listing"><div class="basic-line">Not recognized as a TASS V5.x source file (missing $09 $FF magic at offset $0E).</div></div>';
+    var f0 = document.querySelector('#modal-overlay .modal-footer');
+    f0.innerHTML = '<button id="modal-close">OK</button>';
+    document.getElementById('modal-close').addEventListener('click', function() {
+      document.getElementById('modal-overlay').classList.remove('open');
+    });
+    document.getElementById('modal-overlay').classList.add('open');
+    return;
+  }
+
+  var labelRes = tassParseLabels(payload);
+  var labels = labelRes.labels;
+  var labelsStart = labelRes.start;
+
+  // Source body starts at $0100 in the PRG payload (after 16-byte header +
+  // editor-state bytes $10-$FF). Find the first $80 at or after that offset —
+  // that's the top-of-source marker.
   var srcStart = 0x100;
-  // Scan back from srcStart to find actual beginning
-  for (var si = 0x5A; si < Math.min(fileData.length, 0x200); si++) {
-    if (fileData[si] === 0x80 || (fileData[si] >= 0x30 && fileData[si] <= 0x67)) {
-      srcStart = si;
+  while (srcStart < payload.length && payload[srcStart] !== 0x80) srcStart++;
+
+  // TASS marks the end of the source body with a sentinel:
+  //   $06 $29 <addr-lo> <addr-hi> <any> $54 $55 $52 $42 $4F $04
+  // The `$06 $29 XX YY` encodes the leading `*= $YYXX` origin directive, and
+  // `$54..$4F $04` = "TURBO" + $04 marks the handoff from user source to
+  // TASS-appended metadata (assembled output, sprite data, etc.). Find the
+  // first occurrence at or after srcStart and treat that as the true source end.
+  var tassSentinelEnd = -1;
+  var tassOrigin = -1;
+  for (var ss = srcStart; ss < payload.length - 10; ss++) {
+    if (payload[ss] === 0x06 && payload[ss + 1] === 0x29 &&
+        payload[ss + 5] === 0x54 && payload[ss + 6] === 0x55 &&
+        payload[ss + 7] === 0x52 && payload[ss + 8] === 0x42 &&
+        payload[ss + 9] === 0x4F && payload[ss + 10] === 0x04) {
+      tassOrigin = payload[ss + 2] | (payload[ss + 3] << 8);
+      tassSentinelEnd = ss + 11;
       break;
     }
   }
 
-  var currentLine = [];
-  for (var pos = srcStart; pos < fileData.length; pos++) {
-    var b = fileData[pos];
+  // Source body end: if we found the TURBO sentinel, stop at the $06 byte
+  // (so the sentinel itself is excluded from block parsing). Otherwise fall
+  // back to the start of the label table.
+  var srcEnd = tassSentinelEnd > 0 ? (tassSentinelEnd - 11) : labelsStart;
+  while (srcEnd > srcStart && payload[srcEnd - 1] === 0) srcEnd--;
 
-    if (b === 0x80) {
-      // Line separator — flush current line
-      if (currentLine.length > 0) lines.push(currentLine);
-      currentLine = [];
-      // Skip $C0 padding
-      while (pos + 1 < fileData.length && fileData[pos + 1] === 0xC0) pos++;
-      continue;
-    }
+  // NOTE: $80 is a block separator BUT can also appear as the low byte of an
+  // absolute address (e.g. `sta $0580` = $8D $29 $80 $05). Pre-splitting on
+  // raw $80 would cut through real instructions. Instead, tokenize the whole
+  // source as one stream — $80 is only a separator when encountered at an
+  // instruction boundary (not mid-operand).
 
-    if (b === 0xC0) continue; // padding within line
-
-    if (b === 0x00) {
-      // End of meaningful data in this region
-      if (currentLine.length > 0) lines.push(currentLine);
-      currentLine = [];
-      // Skip zero block
-      while (pos + 1 < fileData.length && fileData[pos + 1] === 0x00) pos++;
-      continue;
-    }
-
-    currentLine.push(b);
-  }
-  if (currentLine.length > 0) lines.push(currentLine);
-
-  // Render lines
   var html = '<div class="basic-listing">';
-
-  if (lines.length === 0) {
-    html += '<div class="basic-line">No source lines found.</div>';
+  if (srcStart >= payload.length) {
+    html += '<div class="basic-line">Could not locate source body (no $80 separator found).</div>';
   }
 
-  for (var li = 0; li < lines.length; li++) {
-    var line = lines[li];
-    html += '<div class="basic-line">';
+  // Emit `*= $origin` as the first source line when the TURBO sentinel told us
+  // the origin address — this is always the top-of-source directive in TASS.
+  if (tassOrigin >= 0) {
+    html += '<div class="basic-line">         <span class="basic-keyword">*=</span> $' + tassOrigin.toString(16).padStart(4, '0') + '</div>';
+  }
 
-    var lineText = '';
-    for (var bi = 0; bi < line.length; bi++) {
-      var byte = line[bi];
+  // Tokenize the entire source body as one stream (skipping the initial $80
+  // marker). Separator tokens are emitted inside the tokenizer only at true
+  // instruction boundaries, so $80 bytes embedded in operands don't cause
+  // false block splits.
+  var allLines = tassTokenizeBlock(payload, srcStart + 1, srcEnd, labels);
 
-      // TASS mnemonic token ($30-$67)
-      if (byte >= 0x30 && byte <= 0x67) {
-        var mnem = TASS_MNEMONICS[byte - 0x30];
-        if (mnem) {
-          lineText += '<span class="basic-keyword">' + mnem + '</span>';
+  // Pure-ASCII run collapsing: a sequence of .byte lines whose bytes are all
+  // printable ASCII and which is bookended by separators represents a user
+  // comment line that TASS stored as literal ASCII text. Collapse those into
+  // a single ;text line.
+  function byteLineToText(line) {
+    if (!line || line.instr !== '.byte' || !line.operand) return null;
+    var txt = '';
+    var parts = line.operand.split(',');
+    for (var p = 0; p < parts.length; p++) {
+      var s = parts[p].trim();
+      if (s[0] !== '$') return null;
+      var v = parseInt(s.slice(1), 16);
+      if (isNaN(v)) return null;
+      if (v >= 0x20 && v <= 0x7E) txt += String.fromCharCode(v);
+      else if (v === 0xA0) txt += ' ';
+      else if (v >= 0xC1 && v <= 0xDA) txt += String.fromCharCode(v - 0x80);
+      else return null;
+    }
+    return txt;
+  }
+  var collapsed = [];
+  for (var ai = 0; ai < allLines.length; ai++) {
+    var cur2 = allLines[ai];
+    if (cur2.separator) { collapsed.push(cur2); continue; }
+    // Try to accumulate run of consecutive label-less, no-comment .byte lines
+    // that decode to printable ASCII between separators.
+    if (!cur2.label && !cur2.comment && cur2.instr === '.byte') {
+      var txt = byteLineToText(cur2);
+      if (txt !== null) {
+        var accTxt = txt;
+        var aj = ai + 1;
+        while (aj < allLines.length) {
+          var nx = allLines[aj];
+          if (nx.separator) break;
+          if (nx.label || nx.comment) break;
+          if (nx.instr !== '.byte') break;
+          var nxTxt = byteLineToText(nx);
+          if (nxTxt === null) break;
+          accTxt += nxTxt;
+          aj++;
+        }
+        // Only collapse if there's at least one surrounding separator and
+        // the next real token after the run is also a separator.
+        var bookendedByEnd = aj >= allLines.length || allLines[aj].separator;
+        if (bookendedByEnd && accTxt.length >= 2) {
+          collapsed.push({ label: null, instr: null, operand: null, comment: accTxt.toLowerCase(), isTextBlock: true });
+          ai = aj - 1;
           continue;
         }
       }
-
-      // $28 = operand byte follows
-      if (byte === 0x28 && bi + 1 < line.length) {
-        var operand = line[bi + 1];
-        lineText += '<span class="text-muted">$' + operand.toString(16).toUpperCase().padStart(2, '0') + '</span>';
-        bi++; // skip the operand byte
-        continue;
-      }
-
-      // Directives as ASCII (.TEXT, .BYTE etc.)
-      if (byte === 0x2E && bi + 1 < line.length) {
-        var dir = '.';
-        bi++;
-        while (bi < line.length && line[bi] >= 0x41 && line[bi] <= 0x5A) {
-          dir += String.fromCharCode(line[bi]);
-          bi++;
-        }
-        bi--; // back up one since the loop will advance
-        lineText += '<span class="basic-keyword">' + escHtml(dir) + '</span>';
-        continue;
-      }
-
-      // Printable ASCII
-      if (byte >= 0x20 && byte <= 0x7E) {
-        lineText += escHtml(String.fromCharCode(byte));
-        continue;
-      }
-
-      // Other bytes as hex
-      lineText += '<span class="text-muted">[' + byte.toString(16).toUpperCase().padStart(2, '0') + ']</span>';
     }
+    collapsed.push(cur2);
+  }
 
-    html += lineText + '</div>';
+  // Reverse the collapsed token list for display (TASS stores source bottom-up
+  // within each block AND blocks bottom-up too).
+  collapsed.reverse();
+
+  // Deduplicate consecutive separators, and strip leading/trailing separators.
+  var cleaned = [];
+  for (var ci = 0; ci < collapsed.length; ci++) {
+    var ln = collapsed[ci];
+    if (ln.separator && cleaned.length > 0 && cleaned[cleaned.length - 1].separator) continue;
+    cleaned.push(ln);
+  }
+  while (cleaned.length && cleaned[0].separator) cleaned.shift();
+  while (cleaned.length && cleaned[cleaned.length - 1].separator) cleaned.pop();
+
+  var totalLines = 0;
+  for (var rj = 0; rj < cleaned.length; rj++) {
+    var ln2 = cleaned[rj];
+    if (ln2.separator) {
+      html += '<div class="basic-line"><span class="text-muted">;' + '\u2500'.repeat(39) + '</span></div>';
+      continue;
+    }
+    if (ln2.isTextBlock) {
+      html += '<div class="basic-line"><span class="text-muted">;' + escHtml(ln2.comment) + '</span></div>';
+      continue;
+    }
+    html += '<div class="basic-line">' + tassRenderLineHtml(ln2) + '</div>';
+    totalLines++;
   }
   html += '</div>';
 
-  var titleText = 'Turbo Assembler \u2014 "' + name + '" (' + lines.length + ' lines)';
+  var titleText = 'Turbo Assembler \u2014 "' + name + '" (load $' + loadAddr.toString(16).toUpperCase() + ', ' + labels.length + ' labels, ' + totalLines + ' lines \u2014 best-effort decode)';
   if (result.error) titleText += ' \u2014 ' + result.error;
   document.getElementById('modal-title').textContent = titleText;
   document.getElementById('modal-body').innerHTML = html;
