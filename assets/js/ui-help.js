@@ -191,6 +191,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.76', title: 'TASS viewer: cleaner separator lines', items: [
+      'Synthetic separator rows render as `;---` (matching the TASS style) instead of the Unicode box-drawing rule',
+      'No more duplicate separators: a `;-----` user line next to the synthetic one is detected and only one is emitted',
+      'Mid-block rule runs (30+ padding bytes inside a mixed code/fill block) now emit a `;---` too, catching cases that fell through before',
+      'Char 11 decoded line count now matches TASS within 4 lines',
+    ]},
     { ver: '1.3.75', title: 'TASS viewer: resolves label refs past embedded credits', items: [
       'Preserves index alignment for dummy/empty label slots (the high-bit filler bytes TASS leaves around embedded credits text in the label table), so branches and jsrs past the credits block now resolve to the right name',
       'Example: `t.a. char 11` now decodes `bne nk36 / jmp buff1` instead of `bne buff1 / jmp tada`',

@@ -2685,27 +2685,25 @@ function tassTokenizeBlock(data, start, end, labels) {
       }
     }
     if (b === 0x80) {
-      // Separator at instruction boundary: flush any in-progress line, then
-      // mark the following content as a new block.
+      // Block boundary: flush any in-progress line and skip past the $80.
+      // We emit synthetic separator tokens lazily based on block content
+      // (see "pure-padding" check below), not automatically per boundary.
       flushData();
       if (cur.label || cur.instr || cur.comment) flush();
-      lines.push({ label: null, instr: null, operand: null, comment: null, separator: true });
       i++;
-      // Look ahead to the next $80 — if the block content is mostly
-      // printable text (including PETSCII shifted letters), render it as a
-      // single `;text` line instead of tokenizing. Skips false opcode decodes
-      // like `$20 $28 $37` = `jsr $37` on the `" (7"` part of a comment.
+      // Look ahead to the next $80 and classify the block.
       var look = i;
       while (look < end && data[look] !== 0x80) look++;
-      var textish = 0, controlish = 0;
+      var textish = 0, controlish = 0, paddingCount = 0, totalBytes = 0;
       for (var ti2 = i; ti2 < look; ti2++) {
         var bb = data[ti2];
-        if (bb === 0xC0 || bb === 0x00) continue;
-        if ((bb >= 0x20 && bb <= 0x7E) || bb === 0xA0 || (bb >= 0xC1 && bb <= 0xDA) || bb === 0x2D) textish++;
+        totalBytes++;
+        if (bb === 0xC0 || bb === 0x00 || bb === 0x2D) { paddingCount++; continue; }
+        if ((bb >= 0x20 && bb <= 0x7E) || bb === 0xA0 || (bb >= 0xC1 && bb <= 0xDA)) textish++;
         else controlish++;
       }
+      // Pure text block — emit as a comment, skip past it.
       if (textish >= 3 && controlish === 0) {
-        // Pure text block — emit as a comment, skip past it.
         var tstr2 = '';
         for (var ti3 = i; ti3 < look; ti3++) {
           var bb2 = data[ti3];
@@ -2718,15 +2716,35 @@ function tassTokenizeBlock(data, start, end, labels) {
         if (tstr2.length >= 1) {
           lines.push({ label: null, instr: null, operand: null, comment: tstr2, isTextBlock: true });
           i = look;
+          continue;
         }
       }
+      // Pure padding block (all $C0/$2D/$00) — emit a decorative `;───`
+      // separator to represent the user-drawn rule line.
+      if (totalBytes > 0 && paddingCount === totalBytes) {
+        lines.push({ label: null, instr: null, operand: null, comment: null, separator: true });
+        i = look;
+        continue;
+      }
+      // Code/data block — fall through to normal tokenizer.
       continue;
     }
     // $C0, $00, $2D = padding / horizontal-rule filler — skip. ($2D is
     // ambiguous: it's also ASCII '-', but treating it as padding loses '-' in
     // text comments — a small readability trade-off to avoid false `and *`
     // decodes on `$2D $2D` rule-fill bytes.)
-    if (b === 0xC0 || b === 0x00 || b === 0x2D) { i++; continue; }
+    // A run of 30+ padding bytes represents a user-drawn rule line; emit a
+    // synthetic SEP so it renders as `;---` in the output.
+    if (b === 0xC0 || b === 0x00 || b === 0x2D) {
+      var pStart0 = i;
+      while (i < end && (data[i] === 0xC0 || data[i] === 0x00 || data[i] === 0x2D)) i++;
+      if (i - pStart0 >= 30) {
+        flushData();
+        if (cur.label || cur.instr || cur.comment) flush();
+        lines.push({ label: null, instr: null, operand: null, comment: null, separator: true });
+      }
+      continue;
+    }
     if (TASS_OPCODES[b]) {
       var op = TASS_OPCODES[b];
       var mode = op[1];
@@ -2952,14 +2970,16 @@ function showFileTassViewer(entryOff) {
     if (ln.separator && cleaned.length > 0 && cleaned[cleaned.length - 1].separator) continue;
     cleaned.push(ln);
   }
-  while (cleaned.length && cleaned[0].separator) cleaned.shift();
+  // Trim a trailing separator only (the final $80 before the TURBO sentinel
+  // often leaves a stray empty tail). Keep leading separators — user code
+  // often starts with a `;----` rule line right under the `*= $orig` line.
   while (cleaned.length && cleaned[cleaned.length - 1].separator) cleaned.pop();
 
   var totalLines = 0;
   for (var rj = 0; rj < cleaned.length; rj++) {
     var ln2 = cleaned[rj];
     if (ln2.separator) {
-      html += '<div class="basic-line"><span class="text-muted">;' + '\u2500'.repeat(39) + '</span></div>';
+      html += '<div class="basic-line"><span class="text-muted">;' + '-'.repeat(39) + '</span></div>';
       continue;
     }
     if (ln2.isTextBlock) {
