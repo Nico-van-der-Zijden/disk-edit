@@ -191,6 +191,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.75', title: 'TASS viewer: resolves label refs past embedded credits', items: [
+      'Preserves index alignment for dummy/empty label slots (the high-bit filler bytes TASS leaves around embedded credits text in the label table), so branches and jsrs past the credits block now resolve to the right name',
+      'Example: `t.a. char 11` now decodes `bne nk36 / jmp buff1` instead of `bne buff1 / jmp tada`',
+    ]},
     { ver: '1.3.74', title: 'TASS viewer: handles larger source files', items: [
       'Label-table parser now finds labels past embedded screen-code comment blocks (e.g. credits text stored between real label entries) and recognises 1-char labels stored as a lone terminator byte (`D` = `$C4`)',
       'Fixes 400+ label files like `t.a. char 11` where most labels showed as `?lblN` before',

@@ -2376,6 +2376,15 @@ function tassParseLabels(data) {
   // that isn't a label character or terminator. Terminate parsing if we hit
   // a long gap of non-label bytes (>=64), which signals we've walked past
   // the label table.
+  // A lone high-bit byte OUTSIDE the strict terminator range (e.g. $9F, $A0
+  // in the middle of embedded comment text) acts as a dummy/placeholder label
+  // slot — TASS reserves the index but leaves the name empty. Track these so
+  // subsequent labels retain their absolute-index numbering.
+  function isDummyTerm(b) {
+    return (b >= 0x80 && b <= 0xAD) || b === 0xAF || (b >= 0xBA && b <= 0xC0) ||
+           (b >= 0xDB && b <= 0xDE) || (b >= 0xE0 && b <= 0xFA);
+  }
+
   var p = anchor;
   var gap = 0;
   while (p < data.length && gap < 64) {
@@ -2394,6 +2403,12 @@ function tassParseLabels(data) {
       }
       if (name.length > 0 && closed) { labels.push(name.toLowerCase()); gap = 0; }
       else { gap += Math.max(1, p - pStart); if (p === pStart) p++; }
+    } else if (isDummyTerm(b)) {
+      // Placeholder slot — push an empty name so indices line up with the
+      // source's label references.
+      labels.push('');
+      p++;
+      gap = 0;
     } else { gap++; p++; }
   }
   return { labels: labels, start: anchor };
