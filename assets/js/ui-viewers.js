@@ -2719,10 +2719,19 @@ function tassTokenizeBlock(data, start, end, labels) {
           continue;
         }
       }
-      // Pure padding block (all $C0/$2D/$00) — emit a decorative `;───`
-      // separator to represent the user-drawn rule line.
+      // Pure padding block (all $C0/$2D/$00) — emit a separator carrying the
+      // actual byte count and rule character the user used, so rendering
+      // reflects the real source (e.g. `;--` for a 2-char rule vs `;-----`).
       if (totalBytes > 0 && paddingCount === totalBytes) {
-        lines.push({ label: null, instr: null, operand: null, comment: null, separator: true });
+        // Pick the dominant rule byte (ignore $00 which is pure filler)
+        var rc2D = 0, rcC0 = 0;
+        for (var ri = i; ri < look; ri++) {
+          if (data[ri] === 0x2D) rc2D++;
+          else if (data[ri] === 0xC0) rcC0++;
+        }
+        var ruleCh = (rc2D >= rcC0) ? '-' : '\u2500';
+        var ruleLen = rc2D + rcC0;
+        lines.push({ label: null, instr: null, operand: null, comment: null, separator: true, ruleCh: ruleCh, ruleLen: ruleLen });
         i = look;
         continue;
       }
@@ -2737,11 +2746,18 @@ function tassTokenizeBlock(data, start, end, labels) {
     // synthetic SEP so it renders as `;---` in the output.
     if (b === 0xC0 || b === 0x00 || b === 0x2D) {
       var pStart0 = i;
-      while (i < end && (data[i] === 0xC0 || data[i] === 0x00 || data[i] === 0x2D)) i++;
+      var rc2D2 = 0, rcC02 = 0;
+      while (i < end && (data[i] === 0xC0 || data[i] === 0x00 || data[i] === 0x2D)) {
+        if (data[i] === 0x2D) rc2D2++;
+        else if (data[i] === 0xC0) rcC02++;
+        i++;
+      }
       if (i - pStart0 >= 30) {
         flushData();
         if (cur.label || cur.instr || cur.comment) flush();
-        lines.push({ label: null, instr: null, operand: null, comment: null, separator: true });
+        var ch2 = (rc2D2 >= rcC02) ? '-' : '\u2500';
+        var len2 = rc2D2 + rcC02;
+        lines.push({ label: null, instr: null, operand: null, comment: null, separator: true, ruleCh: ch2, ruleLen: len2 });
       }
       continue;
     }
@@ -2979,7 +2995,9 @@ function showFileTassViewer(entryOff) {
   for (var rj = 0; rj < cleaned.length; rj++) {
     var ln2 = cleaned[rj];
     if (ln2.separator) {
-      html += '<div class="basic-line"><span class="text-muted">;' + '-'.repeat(39) + '</span></div>';
+      var rch = ln2.ruleCh || '-';
+      var rln = typeof ln2.ruleLen === 'number' && ln2.ruleLen > 0 ? ln2.ruleLen : 39;
+      html += '<div class="basic-line"><span class="text-muted">;' + rch.repeat(rln) + '</span></div>';
       continue;
     }
     if (ln2.isTextBlock) {
