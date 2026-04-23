@@ -191,6 +191,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.77', title: 'TASS viewer: separators mirror source bytes', items: [
+      'Synthetic rule lines now use the same rule character and length as the source: a block of 28 `$2D` bytes renders as `;` + 28 `-`, a block of 39 `$C0` bytes renders as `;` + 39 `─`',
+      'Previously all synthetic rules were hard-coded to 39 hyphens',
+    ]},
     { ver: '1.3.76', title: 'TASS viewer: cleaner separator lines', items: [
       'Synthetic separator rows render as `;---` (matching the TASS style) instead of the Unicode box-drawing rule',
       'No more duplicate separators: a `;-----` user line next to the synthetic one is detected and only one is emitted',
