@@ -2337,48 +2337,66 @@ function isTassSource(fileData) {
 
 function tassParseLabels(data) {
   var labels = [];
-  // Find the longest run of pure label-bytes (ASCII letter/digit/_./. plus
-  // high-bit terminator bytes). Label tables are dense runs of such bytes;
-  // non-label regions have many "other" values. We accept the table only if
-  // the run is at least 8 bytes AND contains at least one high-bit terminator.
-  function isLabelByte(b) {
+  // The label table is a sequence of label-format runs (chars + high-bit
+  // terminator). In some files the table is interrupted by short embedded
+  // "screen-code" comment/data sections, so we can't just pick the longest
+  // run. Instead: find the FIRST long label-format run (the anchor that tells
+  // us where the table region starts), then greedily parse labels from that
+  // point to end-of-file, skipping over non-label bytes.
+  function isLabelChar(b) {
     return (b >= 0x41 && b <= 0x5A) || (b >= 0x30 && b <= 0x39) ||
-           b === 0x2E || b === 0x5F || (b >= 0xB0 && b <= 0xFA);
+           b === 0x2E || b === 0x5F;
   }
-  var bestStart = -1, bestEnd = -1, bestLen = 0;
+  // Terminator = last char of name with bit 7 set. Only ranges that
+  // correspond to a valid label char: A-Z ($C1-$DA), 0-9 ($B0-$B9), '.'
+  // ($AE), '_' ($DF). Explicitly EXCLUDES $C0 which is decorative padding.
+  function isLabelTerm(b) {
+    return (b >= 0xC1 && b <= 0xDA) || (b >= 0xB0 && b <= 0xB9) || b === 0xAE || b === 0xDF;
+  }
+  function isLabelByte(b) { return isLabelChar(b) || isLabelTerm(b); }
+
+  // Anchor: first run of at least 32 consecutive label-bytes that contains a
+  // high-bit terminator. That's well into the label table and avoids matching
+  // short label-like bursts that can appear in data areas.
+  var anchor = -1;
   var runStart = -1, runLen = 0, runHasTerm = false;
   for (var i = 0; i < data.length; i++) {
     if (isLabelByte(data[i])) {
       if (runLen === 0) { runStart = i; runHasTerm = false; }
       runLen++;
-      if (data[i] >= 0xB0) runHasTerm = true;
+      if (isLabelTerm(data[i])) runHasTerm = true;
+      if (runLen >= 32 && runHasTerm) { anchor = runStart; break; }
     } else {
-      if (runLen >= 8 && runHasTerm && runLen > bestLen) {
-        bestLen = runLen; bestStart = runStart; bestEnd = runStart + runLen;
-      }
       runLen = 0;
     }
   }
-  if (runLen >= 8 && runHasTerm && runLen > bestLen) {
-    bestLen = runLen; bestStart = runStart; bestEnd = runStart + runLen;
-  }
-  if (bestStart < 0) return { labels: labels, start: data.length };
+  if (anchor < 0) return { labels: labels, start: data.length };
 
-  var p = bestStart;
-  while (p < bestEnd) {
-    var name = '';
-    var closed = false;
-    while (p < bestEnd) {
-      var x = data[p];
-      if ((x >= 0x41 && x <= 0x5A) || (x >= 0x30 && x <= 0x39) || x === 0x2E || x === 0x5F) {
-        name += String.fromCharCode(x); p++;
-      } else if (x >= 0xB0 && x <= 0xFA) {
-        name += String.fromCharCode(x - 0x80); p++; closed = true; break;
-      } else { p++; break; }
-    }
-    if (name.length > 0 && closed) labels.push(name.toLowerCase());
+  // From the anchor to end of file, parse label-format tokens. Skip any byte
+  // that isn't a label character or terminator. Terminate parsing if we hit
+  // a long gap of non-label bytes (>=64), which signals we've walked past
+  // the label table.
+  var p = anchor;
+  var gap = 0;
+  while (p < data.length && gap < 64) {
+    var b = data[p];
+    if (isLabelByte(b)) {
+      // Parse a label: zero or more label-chars followed by one terminator.
+      // A lone terminator byte ($C4 = "D", etc.) encodes a 1-char label.
+      var name = '';
+      var closed = false;
+      var pStart = p;
+      while (p < data.length) {
+        var x = data[p];
+        if (isLabelChar(x)) { name += String.fromCharCode(x); p++; }
+        else if (isLabelTerm(x)) { name += String.fromCharCode(x - 0x80); p++; closed = true; break; }
+        else break;
+      }
+      if (name.length > 0 && closed) { labels.push(name.toLowerCase()); gap = 0; }
+      else { gap += Math.max(1, p - pStart); if (p === pStart) p++; }
+    } else { gap++; p++; }
   }
-  return { labels: labels, start: bestStart };
+  return { labels: labels, start: anchor };
 }
 
 function tassDecodeOperand(data, pos, opInfo, labels) {

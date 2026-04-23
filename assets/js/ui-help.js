@@ -191,6 +191,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.74', title: 'TASS viewer: handles larger source files', items: [
+      'Label-table parser now finds labels past embedded screen-code comment blocks (e.g. credits text stored between real label entries) and recognises 1-char labels stored as a lone terminator byte (`D` = `$C4`)',
+      'Fixes 400+ label files like `t.a. char 11` where most labels showed as `?lblN` before',
+    ]},
     { ver: '1.3.73', title: 'Turbo Assembler source viewer', items: [
       'Decodes TASS V5.x source files into readable listing: labels, comments, .byte/.word/.text, *= origin, label+offset, #&lt;label / #&gt;label, jmp *',
       'Auto-detected via the $09 $FF magic \u2014 the View \u2192 TASS option is available on any closed PRG that carries the signature',
