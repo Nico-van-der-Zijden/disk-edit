@@ -67,6 +67,10 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '&bull; <a href="https://github.com/mist64/geowrite2rtf" target="_blank" class="link">geowrite2rtf</a> by Michael Steil — CVT/geoWrite parsing reference<br>' +
       '&bull; <a href="https://thornton2.com/programming/geos/compaction-strategy.html" target="_blank" class="link">Thornton2</a> — GEOS bitmap compaction strategy<br>' +
       '<br>' +
+      '<b>Tape format references:</b><br>' +
+      '&bull; <a href="http://wav-prg.sourceforge.net/" target="_blank" class="link">Final TAP</a> by Stewart Wilson (Subchrist Software) — C64 tape loader format documentation and reference scanners (GPL)<br>' +
+      '&bull; <a href="https://github.com/Luigi-Di-Fraia/tapclean" target="_blank" class="link">TAPClean</a> by Luigi Di Fraia — extended scanner suite, game-specific loaders (Creatures), and per-tape pattern matching (GPL)<br>' +
+      '<br>' +
       '<b>Technical references:</b><br>' +
       '&bull; <a href="https://vice-emu.sourceforge.io/vice_17.html" target="_blank" class="link">VICE Manual</a> — disk image format documentation<br>' +
       '&bull; <a href="https://ist.uwaterloo.ca/~schepers/formats.html" target="_blank" class="link">Peter Schepers</a> — D64, D71, D81, D80, D82, D2M-DNP format specifications<br>' +
@@ -191,6 +195,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.80', title: 'TAP files: extract from turbo loaders', items: [
+      'Decodes Turbotape 250, Novaload, the full Cyberload F1+F2 chain, Cyberload F3 sub-blocks, F4 multiload, and the Creatures-specific loader (Creatures, Creatures 2, Mayhem in Monsterland)',
+      'Encrypted Cyberload F1/F2 show a lock icon; multiload F4 shows a layers icon, in the same column as the file-info and GEOS icons',
+      'Loaders extracted by following Final TAP / TAPClean (both GPL) — opcode-pattern matching for per-tape thresholds + XOR keys, no 6502 emulator',
+    ]},
     { ver: '1.3.79', title: 'Disk header name visible in light theme', items: [
       'The disk name used the accent color, which got washed out in the light theme \u2014 now uses the same muted color as the disk ID',
     ]},

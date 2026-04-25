@@ -14,7 +14,12 @@ if (navigator.userAgent.includes('Edg')) {
 
 // ── Render ────────────────────────────────────────────────────────────
 function buildEntryIconsHtml(e, data, dirTrack) {
-  if (!data) return '';
+  // Tape entries (no raw directory bytes) — show loader-status icons only.
+  if (!data) {
+    if (e.tapeIcon === 'encrypted') return '<span class="dir-icon-tape" title="Encrypted — cannot extract data without per-tape XOR keys"><i class="fa-solid fa-lock"></i></span>';
+    if (e.tapeIcon === 'multiload') return '<span class="dir-icon-tape" title="Multiload format — detection only, decode requires loader variables"><i class="fa-solid fa-layer-group"></i></span>';
+    return '';
+  }
   if (e.deleted) {
     const dt = data[e.entryOff + 3];
     // Skip separators: T/S points to directory track or is 0

@@ -166,7 +166,7 @@
     gap: 6px;
   }
 
-  .dir-icon-info, .dir-icon-geos {
+  .dir-icon-info, .dir-icon-geos, .dir-icon-tape {
     cursor: pointer;
     color: var(--text-muted);
     opacity: 0.7;
@@ -175,13 +175,14 @@
   .dir-icon-recover-partial { color: var(--color-recover-partial); opacity: 0.8; }
   .dir-icon-recover-no { color: var(--color-recover-no); opacity: 0.8; }
 
-  .dir-icon-info:hover, .dir-icon-geos:hover {
+  .dir-icon-info:hover, .dir-icon-geos:hover, .dir-icon-tape:hover {
     color: var(--accent);
     opacity: 1;
   }
 
   .dir-entry.selected .dir-icon-info:hover,
-  .dir-entry.selected .dir-icon-geos:hover {
+  .dir-entry.selected .dir-icon-geos:hover,
+  .dir-entry.selected .dir-icon-tape:hover {
     color: var(--selected-text);
     opacity: 0.8;
   }

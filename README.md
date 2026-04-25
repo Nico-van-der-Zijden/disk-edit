@@ -158,6 +158,7 @@ assets/
     viewers.css         Error bytes, file viewer, separator editor
   js/
     cbm-format.js       Disk format definitions, BAM operations, GCR decoder
+    cbm-tape.js         TAP tape parser (CBM ROM, Turbotape 250, Novaload)
     cbm-editor.js       Version, tabs, undo, BAM integrity, disk optimizer
     cbm-petscii.js      PETSCII character picker
     ui-modals.js        Modal dialogs and input prompts
