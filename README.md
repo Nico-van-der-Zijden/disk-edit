@@ -166,7 +166,8 @@ assets/
     ui-editing.js       Inline editing, save helpers, menu bar, tabs
     ui-disk-ops.js      BAM viewer, validate, optimize, fill, scan, add directory
     ui-options.js       Options menu, settings export/import
-    ui-viewers.js       Graphics, GEOS, BASIC, REL, TASS viewers
+    ui-viewers.js       Graphics, GEOS, BASIC, REL viewers
+    ui-tass-viewer.js   Turbo Assembler V5.x source viewer
     ui-screen.js        PETSCII renderer, hex viewer, sector editor, disassembler
     ui-search.js        Search and Go to Sector
     ui-directory.js     Directory manipulation, sort, separators, property editors

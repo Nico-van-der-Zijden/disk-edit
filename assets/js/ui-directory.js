@@ -466,11 +466,6 @@ function writeNewEntry(data, entryOff) {
   data[entryOff + 31] = 0;
 }
 
-// ── File menu: Rename ─────────────────────────────────────────────────
-function writeFileName(buffer, entryOff, name, overrides) {
-  writePetsciiString(buffer, entryOff + 5, name, 16, overrides);
-}
-
 // ── Change file type ──────────────────────────────────────────────────
 function changeFileType(entryOff, newTypeIdx) {
   if (!currentBuffer) return;

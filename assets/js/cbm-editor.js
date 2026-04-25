@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 78 };
+var APP_VERSION = { major: 1, minor: 3, build: 79 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -643,27 +643,6 @@ function optimizeDisk(buffer, interleave, defragment) {
   log.push('Interleave: ' + interleave + (defragment ? ' (defragmented)' : ''));
 
   return { filesOptimized: filesOptimized, sectorsRewritten: sectorsRewritten, log: log };
-}
-
-// ── Allowed C64 characters ────────────────────────────────────────────
-function isValidPetscii(ch) {
-  var cp = ch.charCodeAt(0);
-  if (cp >= 0xE000 && cp <= 0xE0FF) return true;
-  if (cp >= 0xE100 && cp <= 0xE1FF) return true;
-  return UNICODE_TO_PETSCII.has(ch);
-}
-
-function filterC64Input(str, maxLen) {
-  return Array.from(str).filter(ch => isValidPetscii(ch)).slice(0, maxLen).join('');
-}
-
-// ── Write header fields back to buffer ────────────────────────────────
-function writeDiskName(buffer, name, overrides) {
-  writePetsciiString(buffer, getHeaderOffset() + currentFormat.nameOffset, name, currentFormat.nameLength, overrides);
-}
-
-function writeDiskId(buffer, id, overrides) {
-  writePetsciiString(buffer, getHeaderOffset() + currentFormat.idOffset, id, currentFormat.idLength, overrides);
 }
 
 // ── Validate disk ────────────────────────────────────────────────────

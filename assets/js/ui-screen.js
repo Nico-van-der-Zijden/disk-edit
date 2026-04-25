@@ -228,14 +228,7 @@ function showFileHexViewer(entryOff) {
 
   var titleText = 'Hex View \u2014 "' + name + '" (' + totalBytes + ' bytes' + (isPrg ? ', load $' + baseAddr.toString(16).toUpperCase().padStart(4, '0') : '') + ')';
   if (result.error) titleText += ' \u2014 ' + result.error;
-  document.getElementById('modal-title').textContent = titleText;
-  document.getElementById('modal-body').innerHTML = html;
-  var footer = document.querySelector('#modal-overlay .modal-footer');
-  footer.innerHTML = '<button id="modal-close">OK</button>';
-  document.getElementById('modal-close').addEventListener('click', function() {
-    document.getElementById('modal-overlay').classList.remove('open');
-  });
-  document.getElementById('modal-overlay').classList.add('open');
+  showViewerModal(titleText, html);
 }
 
 function showFileDisasmViewer(entryOff) {

@@ -191,6 +191,9 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.79', title: 'Disk header name visible in light theme', items: [
+      'The disk name used the accent color, which got washed out in the light theme \u2014 now uses the same muted color as the disk ID',
+    ]},
     { ver: '1.3.78', title: 'Reversed chars survive editing; viewers show them properly', items: [
       'Editing a filename, disk name, or separator with reversed chars no longer turns them into normal letters when you press Enter',
       'Reversed chars show reversed everywhere: disk header, hex viewer, BASIC viewer, TASS `.text` strings',

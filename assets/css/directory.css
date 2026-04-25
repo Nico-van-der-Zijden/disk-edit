@@ -28,7 +28,7 @@
   .disk-name {
     flex: 1;
     font-size: 16px;
-    color: var(--accent);
+    color: var(--text-muted);
     letter-spacing: 1px;
     white-space: pre;
   }

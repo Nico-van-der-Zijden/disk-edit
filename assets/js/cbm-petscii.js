@@ -150,7 +150,9 @@ function initPicker() {
   renderPicker();
 }
 
-// ── Insert character into an input element ───────────────────────────
+// Picker → editor insertion. PE editors handle the byte directly; for the
+// remaining plain `<input>` users (e.g. the search box) we splice the PUA
+// char into the value and bump the caret.
 function insertCharAtCursor(input, ch, petsciiCode) {
   if (!input) return;
   if (input._isPetsciiEditor) {
@@ -161,17 +163,10 @@ function insertCharAtCursor(input, ch, petsciiCode) {
   }
   if (input.tagName !== 'INPUT') return;
   var pos = (input._lastCursorPos != null) ? input._lastCursorPos : (input.selectionStart || 0);
-  var val = input.value;
   var maxLen = (input.maxLength > 0) ? input.maxLength : 9999;
-  var newVal = val.slice(0, pos) + ch + val.slice(pos);
+  var newVal = input.value.slice(0, pos) + ch + input.value.slice(pos);
   if (newVal.length > maxLen) return;
   input.value = newVal;
-
-  if (petsciiCode !== undefined) {
-    if (!input._petsciiOverrides) input._petsciiOverrides = {};
-    input._petsciiOverrides[pos] = petsciiCode;
-  }
-
   var newPos = pos + ch.length;
   input.focus();
   input.selectionStart = input.selectionEnd = newPos;
@@ -387,43 +382,6 @@ function createPetsciiEditor(opts) {
   render();
   el._lastCursorPos = shadowLen;
   return el;
-}
-
-// ── Track cursor position on inputs ──────────────────────────────────
-function trackCursorPos(input) {
-  var update = function() { input._lastCursorPos = input.selectionStart; };
-  input.addEventListener('keyup', update);
-  input.addEventListener('mouseup', update);
-  input.addEventListener('input', update);
-  update();
-
-  // Intercept letter/symbol keys and map to correct PETSCII with shift support
-  input.addEventListener('keydown', function(e) {
-    // Skip control keys, Enter, Escape, arrows, etc.
-    if (e.ctrlKey || e.altKey || e.metaKey) return;
-    if (e.key.length !== 1) return;
-
-    var ch = e.key;
-    var code = ch.charCodeAt(0);
-    var petscii = -1;
-
-    // Letters: shift produces $C1-$DA, unshifted produces $41-$5A
-    if (code >= 0x41 && code <= 0x5A) {
-      // Uppercase typed (shift held)
-      petscii = code - 0x41 + 0xC1;
-    } else if (code >= 0x61 && code <= 0x7A) {
-      // Lowercase typed (no shift)
-      petscii = code - 0x61 + 0x41;
-    } else {
-      // Non-letter: use standard mapping, let default handle it
-      petscii = UNICODE_TO_PETSCII.get(ch);
-      if (petscii === undefined) return;
-    }
-
-    e.preventDefault();
-    var displayChar = PETSCII_MAP[petscii];
-    insertCharAtCursor(input, displayChar, petscii);
-  });
 }
 
 // ── Show/hide picker ─────────────────────────────────────────────────

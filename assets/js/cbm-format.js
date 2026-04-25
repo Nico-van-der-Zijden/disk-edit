@@ -2300,21 +2300,6 @@ function unicodeToPetscii(char) {
   return UNICODE_TO_PETSCII.get(char) || 0x20;
 }
 
-function writePetsciiString(buffer, offset, str, maxLen, overrides) {
-  const data = new Uint8Array(buffer);
-  for (let i = 0; i < maxLen; i++) {
-    if (i < str.length) {
-      if (overrides && overrides[i] !== undefined) {
-        data[offset + i] = overrides[i];
-      } else {
-        data[offset + i] = unicodeToPetscii(str[i]);
-      }
-    } else {
-      data[offset + i] = 0xA0;
-    }
-  }
-}
-
 // ── Utility ──────────────────────────────────────────────────────────
 /** @param {number} n @returns {string} */ function hex8(n) { return n.toString(16).toUpperCase().padStart(2, '0'); }
 /** @param {number} n @returns {string} */ function hex16(n) { return n.toString(16).toUpperCase().padStart(4, '0'); }

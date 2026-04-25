@@ -76,6 +76,33 @@ document.getElementById('modal-close').addEventListener('click', () => {
   document.getElementById('modal-overlay').classList.remove('open');
 });
 
+// Drop-in scaffolding for read-only viewer modals (hex, BASIC, TASS,
+// VLIR, REL, ...): set the title, install body content, restore the
+// standard "OK" footer (clearing any custom modal-footer-* classes a
+// previous viewer left behind), and open the overlay.
+//
+//   bodyContent: HTML string, a Node, or null to leave the body untouched
+//                (callers that need to mix in extra elements append them
+//                after this returns).
+//   size:        optional modal size class (passed through to setModalSize).
+// Returns the modal-body element.
+function showViewerModal(title, bodyContent, size) {
+  if (size !== undefined) setModalSize(size);
+  document.getElementById('modal-title').textContent = title;
+  var body = document.getElementById('modal-body');
+  if (typeof bodyContent === 'string') body.innerHTML = bodyContent;
+  else if (bodyContent instanceof Node) { body.innerHTML = ''; body.appendChild(bodyContent); }
+  // else: leave existing body content
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.className = 'modal-footer';
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+  return body;
+}
+
 // Show a progress modal with a title, status text, and progress bar.
 // Returns { status, bar, update(idx, total, label) }.
 function showProgressModal(title) {
