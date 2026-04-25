@@ -35,7 +35,8 @@ function detectPacker(fileData) {
   }
   if (!sysAddr) return { sysAddr: 0, packer: null };
 
-  // Try restore64 scanner database (377 packers) first
+  // restore64-scanners.js carries the full 377-packer signature database;
+  // ask it first.
   if (typeof detectPackerRestore64 === 'function') {
     var r64 = detectPackerRestore64(d);
     if (r64 && r64.name) {
@@ -44,98 +45,18 @@ function detectPacker(fileData) {
     }
   }
 
-  // Fallback: our own signature detection
-  // Calculate offset of SYS target within file data
-  var sysOff = sysAddr - loadAddr + 2; // +2 for the load address bytes in data
-
-  // Search for packer signatures in the code area
-  function findString(str, start, end) {
-    start = start || 0;
-    end = Math.min(end || d.length, d.length);
-    for (var i = start; i <= end - str.length; i++) {
-      var match = true;
-      for (var j = 0; j < str.length; j++) {
-        if (d[i + j] !== str.charCodeAt(j)) { match = false; break; }
-      }
-      if (match) return i;
-    }
-    return -1;
-  }
-
-  function findBytes(pattern, start, end) {
-    start = start || 0;
-    end = Math.min(end || d.length, d.length);
-    for (var i = start; i <= end - pattern.length; i++) {
-      var match = true;
-      for (var j = 0; j < pattern.length; j++) {
-        if (pattern[j] !== null && d[i + j] !== pattern[j]) { match = false; break; }
-      }
-      if (match) return i;
-    }
-    return -1;
-  }
-
-  var packer = null;
-  var searchEnd = Math.min(d.length, 1024);
-
-  // Exact byte signatures (highest confidence, checked first)
-
-  // Exomizer v1: SYS2059, specific stub bytes
-  if (!packer && sysAddr === 2059 && findBytes([0xA0, 0x00, 0x78, 0xE6, 0x01, 0xBA, 0xBD], 13, 22) >= 0) packer = 'Exomizer v1';
-
-  // ByteBoozer 2: SEI + LDA #$34 + STA $01 + LDX #$B7 at offset 12
-  if (!packer && findBytes([0x78, 0xA9, 0x34, 0x85, 0x01, 0xA2, 0xB7], 12, 22) >= 0) packer = 'ByteBoozer 2';
-
-  // PuCrunch: BASIC line number 239 ($EF $00) at offset 4-5
-  if (!packer && d.length > 16 && d[4] === 0xEF && d[5] === 0x00 && findBytes([0x78, 0xA9, 0x38, 0x85, 0x01], 14, 22) >= 0) packer = 'PuCrunch';
-
-  // Dali: BASIC line number 1602 ($42 $06) at offset 4-5
-  if (!packer && d.length > 16 && d[4] === 0x42 && d[5] === 0x06) packer = 'Dali';
-
-  // Exomizer v2/v3: decrunch table at $0334, memory restore A9 37 85 01
-  if (!packer && findBytes([0xA9, 0x37, 0x85, 0x01], sysOff, searchEnd) >= 0) {
-    // Check for $0334 table reference
-    if (findBytes([0x34, 0x03], sysOff, searchEnd) >= 0) packer = 'Exomizer v2/v3';
-  }
-
-  // ByteBoozer 1: BB string + SEI + LDX #0
-  if (!packer && findString('BB', 2, searchEnd) >= 0 && findBytes([0xA2, 0x00, 0x78], sysOff, searchEnd) >= 0) packer = 'ByteBoozer v1';
-
-  // TSCrunch: uses ZP $F8, first decrunch reads LDA ($F8),Y
-  if (!packer && findBytes([0xB1, 0xF8], sysOff, sysOff + 64) >= 0) packer = 'TSCrunch';
-
-  // String-based signatures
-  if (!packer && (findString('exo', 2, searchEnd) >= 0 || findString('Exo', 2, searchEnd) >= 0)) packer = 'Exomizer';
-  if (!packer && findString('PuCr', 2, searchEnd) >= 0) packer = 'PuCrunch';
-  if (!packer && findString('IRC', 2, searchEnd) >= 0) packer = 'IRCrunch';
-  if (!packer && findString('Sub', 2, searchEnd) >= 0 && findBytes([0x4C], sysOff, sysOff + 3) >= 0) packer = 'Subsizer';
-  if (!packer && findString('LC', 2, searchEnd) >= 0 && findBytes([0xA9, null, 0x85], sysOff, searchEnd) >= 0) packer = 'Level Crusher';
-  if (!packer && findString('AB', 2, searchEnd) >= 0 && sysAddr >= 0x080D && sysAddr <= 0x0830) packer = 'Cruncher AB';
-
-  // Code pattern signatures
-  // MegaLZ / Doynax / Doynamite
-  if (!packer && findBytes([0xA2, 0x00, 0xA0, 0x00, 0xB1], sysOff, searchEnd) >= 0) packer = 'MegaLZ/Doynax';
-
-  // Common decruncher init: SEI + memory config change
-  if (!packer && sysOff > 0 && sysOff < d.length) {
-    var initByte = d[sysOff];
-    if (initByte === 0x78) { // SEI
-      // Check memory config: LDA #$34 (all RAM)
-      if (findBytes([0xA9, 0x34, 0x85, 0x01], sysOff, sysOff + 16) >= 0) packer = 'Unknown packer (all-RAM)';
-      // LDA #$35 (I/O + RAM)
-      else if (findBytes([0xA9, 0x35, 0x85, 0x01], sysOff, sysOff + 16) >= 0) packer = 'Unknown packer';
+  // Generic heuristic: if the SYS target lies past the standard BASIC stub
+  // and starts with SEI / JMP / LDA, it's almost certainly a decruncher
+  // restore64 didn't recognise.
+  var sysOff = sysAddr - loadAddr + 2; // +2 for the load address bytes
+  if (sysAddr > 0x080D && sysOff > 0 && sysOff < d.length) {
+    var b = d[sysOff];
+    if (b === 0x78 || b === 0x4C || b === 0xA9) {
+      return { sysAddr: sysAddr, packer: 'Packed (unknown)' };
     }
   }
 
-  // Generic heuristic: SYS points past standard BASIC stub
-  if (!packer && sysAddr > 0x080D) {
-    // Check for common decruncher patterns near SYS target
-    if (sysOff > 0 && sysOff < d.length && (d[sysOff] === 0x78 || d[sysOff] === 0x4C || d[sysOff] === 0xA9)) {
-      packer = 'Packed (unknown)';
-    }
-  }
-
-  return { sysAddr: sysAddr, packer: packer };
+  return { sysAddr: sysAddr, packer: null };
 }
 
 function showFileInfo(entryOff) {
