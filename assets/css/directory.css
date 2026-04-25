@@ -424,9 +424,30 @@
     opacity: 0.5;
   }
 
-  .petscii-rev {
+  /* Reversed PETSCII chars ($00-$1F, $80-$9F): swap fg/bg with the
+     surrounding letters, matching how a C64 draws them. */
+  .petscii-rev, .petscii-editor .pe-rev {
     background: var(--text);
     color: var(--bg);
     border-radius: 2px;
+  }
+  /* On a selected row the surrounding palette changes, so invert against
+     the selected colors instead of the default ones. */
+  .dir-entry.selected .petscii-rev {
+    background: var(--selected-text);
+    color: var(--selected-bg);
+  }
+
+  /* Contenteditable PETSCII editor (replaces <input> for filename rename
+     so reversed bytes $00-$1F / $80-$9F round-trip losslessly). */
+  .petscii-editor {
+    outline: none;
+    white-space: pre;
+    min-height: 1em;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  .petscii-editor .pe-char {
+    display: inline-block;
   }
 

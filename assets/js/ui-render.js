@@ -48,12 +48,42 @@ function renderDisk(info) {
   const bufByteLen = data ? data.byteLength : 0;
   const dirTrack = currentFormat.dirTrack;
 
+  // Rich HTML for disk name / id so reversed bytes ($00-$1F / $80-$9F)
+  // render as reversed glyphs, matching how filenames in the listing render.
+  const richSpans = (bytes, len) => {
+    let s = '';
+    for (let i = 0; i < len; i++) {
+      const b = bytes[i];
+      const rev = (b <= 0x1F) || (b >= 0x80 && b <= 0x9F);
+      const ch = escHtml(petsciiToAscii(b));
+      s += rev ? '<span class="petscii-rev">' + ch + '</span>' : ch;
+    }
+    return s;
+  };
+  let nameHtml, idHtml;
+  if (data) {
+    const headerOff = getHeaderOffset();
+    const nameStart = headerOff + currentFormat.nameOffset;
+    const idStart = headerOff + currentFormat.idOffset;
+    // Name stops at $A0 padding; pad to full width with regular spaces.
+    let nameLen = currentFormat.nameLength;
+    for (let i = 0; i < currentFormat.nameLength; i++) {
+      if (data[nameStart + i] === 0xA0) { nameLen = i; break; }
+    }
+    nameHtml = '"' + richSpans(data.subarray(nameStart, nameStart + nameLen), nameLen) +
+               '"' + ' '.repeat(Math.max(0, currentFormat.nameLength - nameLen));
+    idHtml = richSpans(data.subarray(idStart, idStart + currentFormat.idLength), currentFormat.idLength);
+  } else {
+    nameHtml = '"' + escHtml(info.diskName.padEnd(currentFormat.nameLength)) + '"';
+    idHtml = escHtml(info.diskId);
+  }
+
   let html = `
     <div class="disk-panel${showAddresses ? ' show-addresses' : ''}${showTrackSector ? ' show-tracksector' : ''}">
       <div class="disk-header">
         <div class="disk-header-spacer">0</div>
-        <div class="disk-name"><span class="editable" id="edit-name" data-field="name" data-max="${currentFormat.nameLength}">"${escHtml(info.diskName.padEnd(currentFormat.nameLength))}"</span></div>
-        <div class="disk-id"><span class="editable" id="edit-id" data-field="id" data-max="${currentFormat.idLength}">${escHtml(info.diskId)}</span></div>
+        <div class="disk-name"><span class="editable" id="edit-name" data-field="name" data-max="${currentFormat.nameLength}">${nameHtml}</span></div>
+        <div class="disk-id"><span class="editable" id="edit-id" data-field="id" data-max="${currentFormat.idLength}">${idHtml}</span></div>
       </div>
       <div class="dir-entry dir-header-row">
         <span class="dir-grip"></span>

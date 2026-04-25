@@ -373,6 +373,14 @@
     border-radius: 2px;
   }
 
+  /* Reversed PETSCII bytes in the hex-ascii column: invert against the
+     accent color the column already uses, so the fg/bg pair matches the
+     surrounding chars instead of falling back to the default --text/--bg. */
+  .hex-ascii .petscii-rev {
+    background: var(--accent);
+    color: var(--bg);
+  }
+
   .hex-char.highlight {
     background: var(--accent);
     color: var(--bg);

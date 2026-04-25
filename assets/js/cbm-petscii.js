@@ -152,7 +152,14 @@ function initPicker() {
 
 // ── Insert character into an input element ───────────────────────────
 function insertCharAtCursor(input, ch, petsciiCode) {
-  if (!input || input.tagName !== 'INPUT') return;
+  if (!input) return;
+  if (input._isPetsciiEditor) {
+    if (petsciiCode === undefined) return;
+    input.focus();
+    input.insertByte(petsciiCode);
+    return;
+  }
+  if (input.tagName !== 'INPUT') return;
   var pos = (input._lastCursorPos != null) ? input._lastCursorPos : (input.selectionStart || 0);
   var val = input.value;
   var maxLen = (input.maxLength > 0) ? input.maxLength : 9999;
@@ -169,6 +176,217 @@ function insertCharAtCursor(input, ch, petsciiCode) {
   input.focus();
   input.selectionStart = input.selectionEnd = newPos;
   input._lastCursorPos = newPos;
+}
+
+// ── PETSCII contenteditable editor ────────────────────────────────────
+// A lossless replacement for <input> when editing PETSCII strings.
+// Tracks a shadow Uint8Array so bytes round-trip losslessly — editing a
+// name containing $01 $02 (which render as reversed A, B) preserves those
+// bytes on commit instead of collapsing them to $41 $42 via the display
+// map's aliasing (where $01 and $41 both map to the same PUA glyph).
+//
+// Reversed bytes ($00-$1F, $80-$9F) render with the .pe-rev class so
+// they're visible as such during editing, matching the listing's
+// readPetsciiRich behavior.
+//
+// Returns a div with:
+//   .getBytes(padLen, padByte) → Uint8Array of current bytes
+//   .getLength()                → current byte count
+//   .insertByte(byte)           → insert one byte at the caret (used by picker)
+//   ._isPetsciiEditor           → flag for insertCharAtCursor routing
+//   ._lastCursorPos             → caret byte index (kept in sync)
+//   ._maxLen                    → configured max byte count
+function createPetsciiEditor(opts) {
+  var maxLen = opts.maxLen;
+  var shadow = new Uint8Array(maxLen);
+  var shadowLen = 0;
+  if (opts.initialBytes) {
+    shadowLen = Math.min(opts.initialLen != null ? opts.initialLen : maxLen, maxLen);
+    for (var i = 0; i < shadowLen; i++) shadow[i] = opts.initialBytes[i];
+  }
+
+  var el = document.createElement('div');
+  el.className = 'petscii-editor ' + (opts.className || '');
+  el.setAttribute('contenteditable', 'true');
+  el.setAttribute('tabindex', '0');
+  el.spellcheck = false;
+  // .dir-entry sets draggable=true, which intercepts mousedown on child
+  // contenteditables — Chrome/Edge start a drag instead of moving the caret.
+  // Override it here so typing and text selection work normally.
+  el.draggable = false;
+  el.setAttribute('draggable', 'false');
+  el._isPetsciiEditor = true;
+  el._maxLen = maxLen;
+
+  function render() {
+    var html = '';
+    for (var i = 0; i < shadowLen; i++) {
+      var b = shadow[i];
+      var rev = (b <= 0x1F) || (b >= 0x80 && b <= 0x9F);
+      var ch = escHtml(petsciiToAscii(b));
+      html += '<span class="pe-char' + (rev ? ' pe-rev' : '') + '">' + ch + '</span>';
+    }
+    el.innerHTML = html;
+  }
+
+  function setCaret(pos) {
+    pos = Math.max(0, Math.min(pos, shadowLen));
+    var sel = window.getSelection();
+    var range = document.createRange();
+    if (shadowLen === 0 || pos === 0) {
+      range.setStart(el, 0);
+    } else {
+      range.setStartAfter(el.children[pos - 1]);
+    }
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    el._lastCursorPos = pos;
+  }
+
+  function nodeToByteIdx(node, offset) {
+    if (node === el) return Math.min(offset, shadowLen);
+    if (node.nodeType === 3 && node.parentNode && node.parentNode.parentNode === el) {
+      var idx = Array.prototype.indexOf.call(el.children, node.parentNode);
+      return idx + (offset > 0 ? 1 : 0);
+    }
+    if (node.parentNode === el) {
+      var spanIdx = Array.prototype.indexOf.call(el.children, node);
+      return spanIdx + (offset > 0 ? 1 : 0);
+    }
+    return shadowLen;
+  }
+
+  function getSelectionRange() {
+    var sel = window.getSelection();
+    if (!sel.rangeCount) return { start: shadowLen, end: shadowLen };
+    var range = sel.getRangeAt(0);
+    if (!el.contains(range.startContainer) || !el.contains(range.endContainer)) {
+      return { start: shadowLen, end: shadowLen };
+    }
+    var a = nodeToByteIdx(range.startContainer, range.startOffset);
+    var b = nodeToByteIdx(range.endContainer, range.endOffset);
+    return { start: Math.min(a, b), end: Math.max(a, b) };
+  }
+
+  function replaceRange(start, end, bytes) {
+    var delLen = end - start;
+    var room = maxLen - (shadowLen - delLen);
+    if (bytes.length > room) bytes = bytes.slice(0, Math.max(0, room));
+    var shift = bytes.length - delLen;
+    if (shift > 0) {
+      for (var i = shadowLen - 1; i >= end; i--) shadow[i + shift] = shadow[i];
+    } else if (shift < 0) {
+      for (var j = end; j < shadowLen; j++) shadow[j + shift] = shadow[j];
+    }
+    for (var k = 0; k < bytes.length; k++) shadow[start + k] = bytes[k];
+    shadowLen = shadowLen - delLen + bytes.length;
+    render();
+    setCaret(start + bytes.length);
+  }
+
+  // Backstop for paste and IME input (keydown doesn't fire for these).
+  el.addEventListener('beforeinput', function(e) {
+    var it = e.inputType;
+    // Insertion via paste / IME: accept the data, convert per-char.
+    if (it === 'insertFromPaste' || it === 'insertCompositionText' || it === 'insertReplacementText') {
+      e.preventDefault();
+      var text = e.data || '';
+      if (!text && e.dataTransfer) text = e.dataTransfer.getData('text/plain') || '';
+      var bytes = [];
+      for (var ci = 0; ci < text.length; ci++) {
+        var bc = unicodeToPetscii(text[ci]);
+        if (bc !== undefined) bytes.push(bc);
+      }
+      var r = getSelectionRange();
+      replaceRange(r.start, r.end, bytes);
+      return;
+    }
+    // For everything else (insertText, deletions, line breaks, history),
+    // block the default DOM mutation — the keydown handler below owns edits.
+    e.preventDefault();
+  });
+
+  // Handle all edits in keydown so we don't depend on beforeinput firing
+  // reliably for every key. Letters use shift-aware PETSCII mapping; other
+  // printable keys go through UNICODE_TO_PETSCII; Delete/Backspace map to
+  // range deletions on the shadow array.
+  el.addEventListener('keydown', function(e) {
+    // Let outer handlers see Enter / Escape.
+    if (e.key === 'Enter' || e.key === 'Escape') return;
+    // Don't interfere with arrow navigation, Home/End, Tab etc.
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
+        e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
+        e.key === 'Home' || e.key === 'End' || e.key === 'Tab') return;
+
+    // Backspace: delete the char before the caret (or the selection).
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      var rb = getSelectionRange();
+      if (rb.start !== rb.end) replaceRange(rb.start, rb.end, []);
+      else if (rb.start > 0) replaceRange(rb.start - 1, rb.end, []);
+      return;
+    }
+
+    // Delete: delete the char after the caret (or the selection).
+    if (e.key === 'Delete') {
+      e.preventDefault();
+      var rd = getSelectionRange();
+      if (rd.start !== rd.end) replaceRange(rd.start, rd.end, []);
+      else if (rd.end < shadowLen) replaceRange(rd.start, rd.end + 1, []);
+      return;
+    }
+
+    // Ctrl/Meta combos: let the browser handle them (copy/paste/select-all).
+    // Alt is a modifier used by AltGr; don't skip based on alt alone because
+    // AltGr combos on some layouts still produce printable chars.
+    if (e.ctrlKey || e.metaKey) return;
+
+    // Printable single-char keys.
+    if (e.key.length !== 1) return;
+
+    var code = e.key.charCodeAt(0);
+    var petscii = -1;
+    if (code >= 0x41 && code <= 0x5A) petscii = code - 0x41 + 0xC1;      // shifted letter → $C1-$DA
+    else if (code >= 0x61 && code <= 0x7A) petscii = code - 0x61 + 0x41; // lowercase letter → $41-$5A
+    else {
+      var mapped = UNICODE_TO_PETSCII.get(e.key);
+      if (mapped !== undefined) petscii = mapped;
+      else return;   // character not representable in PETSCII — drop silently
+    }
+    e.preventDefault();
+    var r = getSelectionRange();
+    replaceRange(r.start, r.end, [petscii]);
+  });
+
+  function updateCursor() { el._lastCursorPos = getSelectionRange().start; }
+  el.addEventListener('keyup', updateCursor);
+  el.addEventListener('mouseup', updateCursor);
+  el.addEventListener('focus', updateCursor);
+
+  // Stop mousedown from bubbling to the draggable .dir-entry ancestor —
+  // otherwise the browser starts a drag instead of moving the caret.
+  el.addEventListener('mousedown', function(e) { e.stopPropagation(); });
+
+  el.getBytes = function(padTo, padByte) {
+    var out = new Uint8Array(padTo != null ? padTo : shadowLen);
+    var lim = Math.min(shadowLen, out.length);
+    for (var i = 0; i < lim; i++) out[i] = shadow[i];
+    if (padByte !== undefined) {
+      for (var j = lim; j < out.length; j++) out[j] = padByte;
+    }
+    return out;
+  };
+  el.getLength = function() { return shadowLen; };
+  el.insertByte = function(byte) {
+    var r = getSelectionRange();
+    replaceRange(r.start, r.end, [byte]);
+  };
+  el._setCaret = setCaret;
+
+  render();
+  el._lastCursorPos = shadowLen;
+  return el;
 }
 
 // ── Track cursor position on inputs ──────────────────────────────────

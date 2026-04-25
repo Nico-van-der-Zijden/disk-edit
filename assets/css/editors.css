@@ -28,12 +28,36 @@
     border-radius: 4px;
   }
 
+  /* Viewer modals: scroll the listing/editor area, not the whole modal body
+     — this keeps any controls above the listing (e.g. the BASIC dialect
+     selector) in view as the user scrolls through the source. */
+  .modal-body:has(.basic-listing),
+  .modal-body:has(.hex-editor) {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .modal-body .basic-listing,
+  .modal-body .hex-editor {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
   .basic-line { white-space: pre-wrap; word-break: break-all; }
   .basic-linenum { color: var(--c64-text); }
   .basic-keyword { color: var(--c64-text); }
   .basic-string { color: var(--c64-string); }
   .basic-rem { color: var(--c64-text-muted); }
   .basic-ctrl { color: var(--c64-control); font-family: inherit; font-size: 10px; }
+
+  /* In the BASIC/TASS listing, the surrounding palette is the C64 blue
+     scheme rather than the app default, so swap fg/bg against THAT pair
+     to get the proper inverted-blue look for reversed PETSCII bytes. */
+  .basic-listing .petscii-rev {
+    background: var(--c64-text);
+    color: var(--c64-screen-bg);
+  }
 
   /* geoWrite document viewer */
   .geowrite-doc {

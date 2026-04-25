@@ -162,6 +162,39 @@ document.addEventListener('keydown', (e) => {
     hidePetsciiPicker();
     document.getElementById('modal-overlay').classList.remove('open');
   }
+
+  // While a viewer modal is open, scroll its content with the cursor / page
+  // keys instead of letting the directory listing intercept them. Skip when
+  // an editable element is focused so input fields keep working.
+  var overlay = document.getElementById('modal-overlay');
+  if (overlay && overlay.classList.contains('open')) {
+    var ae = document.activeElement;
+    var inField = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
+    if (!inField && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      // Prefer an inner viewer container (.basic-listing / .hex-editor)
+      // if present — those have their own scrollbar so a static header
+      // (e.g. the BASIC dialect selector) stays in view. Fall back to
+      // modal-body for plain modals.
+      var body = document.getElementById('modal-body');
+      var scroller = body && (body.querySelector('.basic-listing, .hex-editor') || body);
+      if (scroller) {
+        var page = scroller.clientHeight - 32;
+        var step = 32;
+        var dy = 0;
+        if (e.key === 'ArrowDown') dy = step;
+        else if (e.key === 'ArrowUp') dy = -step;
+        else if (e.key === 'PageDown') dy = page;
+        else if (e.key === 'PageUp') dy = -page;
+        else if (e.key === 'Home') { e.preventDefault(); scroller.scrollTop = 0; return; }
+        else if (e.key === 'End')  { e.preventDefault(); scroller.scrollTop = scroller.scrollHeight; return; }
+        if (dy !== 0) {
+          e.preventDefault();
+          scroller.scrollTop += dy;
+          return;
+        }
+      }
+    }
+  }
   // Ctrl+Alt+G: view as graphics
   if (e.ctrlKey && e.altKey && e.code === 'KeyG') {
     e.preventDefault();

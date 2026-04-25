@@ -8,47 +8,51 @@ function bindEditableFields() {
 function startEditing(el) {
   if (isTapeFormat()) return;
   if (el.classList.contains('editing')) return;
-  if (el.querySelector('input')) return;
+  if (el.querySelector('.petscii-editor')) return;
   cancelActiveEdits();
   const field = el.dataset.field;
   const maxLen = parseInt(el.dataset.max, 10);
-  // Read actual content from buffer (stops at 0xA0 padding)
-  let currentValue = '';
+
+  // Read original bytes from the buffer (we'll write the exact same bytes
+  // back unless the user changed them — no round-trip via unicodeToPetscii,
+  // which aliases $00-$1F / $80-$9F onto $40-$5F / $C0-$DF).
+  const origBytes = new Uint8Array(maxLen);
+  let origLen = maxLen;
+  const stopAtPadding = field === 'name';
   if (currentBuffer) {
     const data = new Uint8Array(currentBuffer);
-    var headerOff = getHeaderOffset();
-    if (field === 'name') currentValue = readPetsciiString(data, headerOff + currentFormat.nameOffset, currentFormat.nameLength);
-    else if (field === 'id') currentValue = readPetsciiString(data, headerOff + currentFormat.idOffset, currentFormat.idLength, false);
+    const headerOff = getHeaderOffset();
+    const fieldOff = field === 'name' ? headerOff + currentFormat.nameOffset : headerOff + currentFormat.idOffset;
+    for (let i = 0; i < maxLen; i++) {
+      origBytes[i] = data[fieldOff + i];
+      if (stopAtPadding && origBytes[i] === 0xA0 && origLen === maxLen) origLen = i;
+    }
   } else {
-    const isEmpty = el.classList.contains('empty');
-    currentValue = isEmpty ? '' : el.textContent;
+    origLen = 0;
   }
 
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.maxLength = maxLen;
-  input.value = currentValue;
-  input.className = 'header-input';
-  input.style.width = (maxLen + 1) + 'ch';
+  const editor = createPetsciiEditor({
+    maxLen: maxLen,
+    initialBytes: origBytes,
+    initialLen: origLen,
+    className: 'header-input'
+  });
+  editor.style.width = (maxLen + 1) + 'ch';
 
   el.textContent = '';
-  el.appendChild(input);
+  el.appendChild(editor);
   el.classList.add('editing');
   el.classList.remove('empty');
-  trackCursorPos(input);
-  input.focus();
-  input.selectionStart = input.selectionEnd = currentValue.length;
-
-  showPetsciiPicker(input, maxLen);
-
-  function setDisplay(value) {
-    el.classList.remove('empty');
-    if (field === 'name') {
-      el.textContent = '"' + value.padEnd(16) + '"';
-    } else {
-      el.textContent = value;
+  editor.focus();
+  editor._setCaret(origLen);
+  setTimeout(function() {
+    if (document.activeElement !== editor) {
+      editor.focus();
+      editor._setCaret(editor._lastCursorPos);
     }
-  }
+  }, 0);
+
+  showPetsciiPicker(editor, maxLen);
 
   let reverted = false;
 
@@ -57,21 +61,29 @@ function startEditing(el) {
     hidePetsciiPicker();
   }
 
+  function bytesEqual(a, b, len) {
+    for (let i = 0; i < len; i++) { if (a[i] !== b[i]) return false; }
+    return true;
+  }
+
   async function commitEdit() {
     if (reverted) return;
-    let value = filterC64Input(input.value, maxLen);
-    var overrideCount = input._petsciiOverrides ? Object.keys(input._petsciiOverrides).length : 0;
-    var changed = value !== currentValue || overrideCount > 0;
+    // For 'name' we pad with $A0; for 'id' we write exactly what's there
+    // (id's default is space-filled, not A0-terminated).
+    const padByte = field === 'name' ? 0xA0 : 0x20;
+    const newBytes = editor.getBytes(maxLen, padByte);
+    const changed = !bytesEqual(newBytes, origBytes, maxLen);
     if (currentBuffer && changed) {
       pushUndo();
-      if (field === 'name') writeDiskName(currentBuffer, value, input._petsciiOverrides);
-      else if (field === 'id') writeDiskId(currentBuffer, value, input._petsciiOverrides);
+      const data = new Uint8Array(currentBuffer);
+      const headerOff = getHeaderOffset();
+      const fieldOff = field === 'name' ? headerOff + currentFormat.nameOffset : headerOff + currentFormat.idOffset;
+      for (let i = 0; i < maxLen; i++) data[fieldOff + i] = newBytes[i];
 
-      // For formats with linked subdirs, offer to update subdirectory headers
       if (field === 'id' && currentFormat.subdirLinked && !currentPartition) {
-        var subdirCount = countLinkedSubdirs(currentBuffer);
+        const subdirCount = countLinkedSubdirs(currentBuffer);
         if (subdirCount > 0) {
-          var choice = await showChoiceModal(
+          const choice = await showChoiceModal(
             'Update Subdirectories',
             subdirCount + ' subdirector' + (subdirCount === 1 ? 'y' : 'ies') + ' found. Update ' + (subdirCount === 1 ? 'its' : 'their') + ' ID to match?',
             [
@@ -79,27 +91,27 @@ function startEditing(el) {
               { label: 'Yes', value: 'yes' }
             ]
           );
-          if (choice === 'yes') {
-            updateLinkedSubdirIds(currentBuffer);
-          }
+          if (choice === 'yes') updateLinkedSubdirIds(currentBuffer);
         }
       }
     }
     cleanup();
-    setDisplay(value);
+    // Re-render the whole disk so the header picks up rich display of any
+    // reversed chars (matching how the listing renders filenames).
+    if (currentBuffer) renderDisk(parseCurrentDir(currentBuffer));
   }
 
   function revert() {
     reverted = true;
     cleanup();
-    setDisplay(currentValue);
+    if (currentBuffer) renderDisk(parseCurrentDir(currentBuffer));
   }
 
-  input.addEventListener('blur', () => {
-    if (pickerClicking) { input.focus(); input.selectionStart = input.selectionEnd = input._lastCursorPos || 0; return; }
+  editor.addEventListener('blur', () => {
+    if (pickerClicking) { editor.focus(); editor._setCaret(editor._lastCursorPos || 0); return; }
     commitEdit();
   });
-  input.addEventListener('keydown', (e) => {
+  editor.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commitEdit(); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); revert(); }
   });

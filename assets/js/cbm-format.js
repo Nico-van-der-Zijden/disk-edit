@@ -1456,10 +1456,59 @@ function buildPetsciiMap(mode) {
 
 var PETSCII_MAP = buildPetsciiMap(charsetMode);
 
+// Screen-code map for monitor/hex-dump style display.
+// On a real C64 a memory dump prints each byte as the glyph at that
+// screen-code position in the character ROM. Screen codes $00-$7F address
+// the 128 normal glyphs; $80-$FF are the same glyphs drawn reversed.
+//
+// Screen codes do NOT line up 1:1 with PETSCII byte values, and the
+// C64 Pro Mono PUA only populates PETSCII positions ($E020-$E07F /
+// $E0A0-$E0FF). So screen code N maps to its PETSCII equivalent first,
+// then to the PUA glyph at that PETSCII code:
+//
+//   sc $00-$1F  letters / brackets  → PETSCII $40-$5F  (sc + $40)
+//   sc $20-$3F  punctuation/digits  → PETSCII $20-$3F  (identity)
+//   sc $40-$5F  graphics block A    → PETSCII $60-$7F  (sc + $20)
+//   sc $60-$7F  graphics block B    → PETSCII $A0-$BF  (sc + $40)
+//
+// Each entry: { char: <PUA glyph>, reversed: <bool> } so the renderer can
+// wrap the reversed half in `.petscii-rev` for the inverse-color box —
+// the same trick the directory listing uses for filenames.
+function buildScreencodeMap(mode) {
+  var base = mode === 'lowercase' ? 0xE100 : 0xE000;
+  var m = new Array(256);
+  for (var i = 0; i < 256; i++) {
+    var reversed = i >= 0x80;
+    var sc = reversed ? (i - 0x80) : i;
+    var pua;
+    if (sc <= 0x1F)      pua = base + sc + 0x40;  // letters/brackets → PETSCII $40-$5F
+    else if (sc <= 0x3F) pua = base + sc;          // punctuation/digits identity
+    else                 pua = base + sc + 0x80;  // alt letters / graphics → PETSCII $C0-$FF
+    m[i] = { char: String.fromCharCode(pua), reversed: reversed };
+  }
+  return m;
+}
+var SCREENCODE_MAP = buildScreencodeMap(charsetMode);
+
+// PETSCII byte → screen-code conversion (the mapping the C64 KERNAL applies
+// when PRINTing). Used by the TASS source viewer to render `.text` strings
+// the way TASS does — control codes ($00-$1F, $80-$9F) appear as reversed
+// letters/brackets, regular printables look like themselves.
+function petsciiToScreencode(b) {
+  if (b <= 0x1F) return b + 0x80;
+  if (b <= 0x3F) return b;
+  if (b <= 0x5F) return b - 0x40;
+  if (b <= 0x7F) return b - 0x20;
+  if (b <= 0x9F) return b;
+  if (b <= 0xBF) return b - 0x40;
+  return b - 0x80;
+}
+
 function setCharsetMode(mode) {
   charsetMode = mode;
   localStorage.setItem('cbm-charsetMode', mode);
   PETSCII_MAP = buildPetsciiMap(mode);
+  SCREENCODE_MAP = buildScreencodeMap(mode);
 }
 
 /** @param {number} byte @returns {string} PUA character */

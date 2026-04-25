@@ -998,31 +998,50 @@ function startRenameEntry(entryEl) {
   if (!currentBuffer || !entryEl || isTapeFormat()) return;
   const entryOff = parseInt(entryEl.dataset.offset, 10);
   const nameSpan = entryEl.querySelector('.dir-name');
-  if (nameSpan.querySelector('input')) return;
+  if (nameSpan.querySelector('.petscii-editor')) return;
 
   cancelActiveEdits();
-  // Read actual content from buffer (stops at 0xA0 padding)
-  const currentValue = readPetsciiString(new Uint8Array(currentBuffer), entryOff + 5, 16);
+  const disk = new Uint8Array(currentBuffer);
+  const origBytes = new Uint8Array(16);
+  let origLen = 16;
+  for (let i = 0; i < 16; i++) {
+    origBytes[i] = disk[entryOff + 5 + i];
+    if (origBytes[i] === 0xA0 && origLen === 16) origLen = i;
+  }
 
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.maxLength = 16;
-  input.value = currentValue;
-  input.className = 'name-input';
+  const editor = createPetsciiEditor({
+    maxLen: 16,
+    initialBytes: origBytes,
+    initialLen: origLen,
+    className: 'name-input'
+  });
 
   nameSpan.textContent = '';
-  nameSpan.appendChild(input);
+  nameSpan.appendChild(editor);
   nameSpan.classList.add('editing');
-  trackCursorPos(input);
-  input.focus();
-  input.selectionStart = input.selectionEnd = currentValue.length;
+  // .dir-entry is draggable=true for reordering; while editing we disable
+  // it so mousedown on the contenteditable moves the caret instead of
+  // starting a drag.
+  const wasDraggable = entryEl.draggable;
+  entryEl.draggable = false;
+  editor.focus();
+  editor._setCaret(origLen);
+  // dblclick's default word-selection behavior can reset focus after our
+  // handler runs. Re-focus on the next tick so the caret stays on the PE.
+  setTimeout(function() {
+    if (document.activeElement !== editor) {
+      editor.focus();
+      editor._setCaret(editor._lastCursorPos);
+    }
+  }, 0);
 
-  showPetsciiPicker(input, 16);
+  showPetsciiPicker(editor, 16);
 
   let reverted = false;
 
   function cleanup() {
     nameSpan.classList.remove('editing');
+    entryEl.draggable = wasDraggable;
     hidePetsciiPicker();
     activeEditEl = null;
     activeEditCleanup = null;
@@ -1030,15 +1049,17 @@ function startRenameEntry(entryEl) {
 
   function commitRename() {
     if (reverted) return;
-    let value = filterC64Input(input.value, 16);
-    var overrideCount = input._petsciiOverrides ? Object.keys(input._petsciiOverrides).length : 0;
-    var changed = value !== currentValue || overrideCount > 0;
+    const newBytes = editor.getBytes(16, 0xA0);
+    let changed = false;
+    for (let i = 0; i < 16; i++) {
+      if (newBytes[i] !== origBytes[i]) { changed = true; break; }
+    }
     if (currentBuffer && changed) {
       pushUndo();
-      writeFileName(currentBuffer, entryOff, value, input._petsciiOverrides);
+      const data = new Uint8Array(currentBuffer);
+      for (let i = 0; i < 16; i++) data[entryOff + 5 + i] = newBytes[i];
     }
     cleanup();
-    // Re-render to show reversed chars properly
     const info = parseCurrentDir(currentBuffer);
     renderDisk(info);
   }
@@ -1046,14 +1067,15 @@ function startRenameEntry(entryEl) {
   function revert() {
     reverted = true;
     cleanup();
-    nameSpan.textContent = '"' + currentValue.padEnd(16) + '"';
+    const info = parseCurrentDir(currentBuffer);
+    renderDisk(info);
   }
 
-  input.addEventListener('blur', () => {
-    if (pickerClicking) { input.focus(); input.selectionStart = input.selectionEnd = input._lastCursorPos || 0; return; }
+  editor.addEventListener('blur', () => {
+    if (pickerClicking) { editor.focus(); editor._setCaret(editor._lastCursorPos || 0); return; }
     commitRename();
   });
-  input.addEventListener('keydown', (ev) => {
+  editor.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); commitRename(); }
     else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); revert(); }
   });
@@ -1147,7 +1169,12 @@ function getAllSeparators() {
 
 function sepBytesToPreview(bytes) {
   var preview = '';
-  for (var j = 0; j < 16; j++) preview += escHtml(PETSCII_MAP[bytes[j] || 0xA0]);
+  for (var j = 0; j < 16; j++) {
+    var b = bytes[j] != null ? bytes[j] : 0xA0;
+    var rev = (b <= 0x1F) || (b >= 0x80 && b <= 0x9F);
+    var ch = escHtml(PETSCII_MAP[b]);
+    preview += rev ? '<span class="petscii-rev">' + ch + '</span>' : ch;
+  }
   return preview;
 }
 
@@ -1193,10 +1220,11 @@ function showSeparatorEditor() {
     }
     html += '</div>';
 
-    // Add/Edit form (fixed at bottom)
+    // Add/Edit form (fixed at bottom). The pattern input is a contenteditable
+    // PETSCII editor (populated after render so reversed bytes round-trip).
     html += '<div class="sep-editor-form">';
     html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">';
-    html += '<input type="text" id="sep-edit-input" class="sep-editor-input" maxlength="16" value="" placeholder="Pattern">';
+    html += '<div id="sep-edit-input-host" class="sep-editor-input" style="min-width:18ch"></div>';
     html += '<input type="text" id="sep-edit-name" style="flex:1;padding:4px 8px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:3px;font-size:12px;outline:none" value="' +
       (editIdx >= 0 ? escHtml(customSeparators[editIdx].name || '') : '') + '" placeholder="Name (optional)">';
     html += '<button class="sep-editor-btn" id="sep-edit-save">' + (editIdx >= 0 ? 'Update' : 'Add') + '</button>';
@@ -1212,32 +1240,45 @@ function showSeparatorEditor() {
   var body = document.getElementById('modal-body');
   body.innerHTML = render();
 
-  function attachEvents() {
-    var input = document.getElementById('sep-edit-input');
-    if (input) {
-      // Track cursor for PETSCII picker insertion
-      var updateCursor = function() { input._lastCursorPos = input.selectionStart; };
-      input.addEventListener('keyup', updateCursor);
-      input.addEventListener('mouseup', updateCursor);
-      input.addEventListener('input', updateCursor);
+  function mountPetsciiInput(initialBytes, initialLen) {
+    var host = document.getElementById('sep-edit-input-host');
+    if (!host) return null;
+    host.innerHTML = '';
+    var editor = createPetsciiEditor({
+      maxLen: 16,
+      initialBytes: initialBytes || new Uint8Array(16),
+      initialLen: initialLen || 0,
+      className: 'sep-editor-input'
+    });
+    host.appendChild(editor);
+    editor.addEventListener('focus', function() { showPetsciiPicker(editor, 16); });
+    editor.addEventListener('blur', function() { if (!pickerClicking) hidePetsciiPicker(); });
+    return editor;
+  }
 
-      input.addEventListener('focus', function() { showPetsciiPicker(input, 16); });
-      input.addEventListener('blur', function() { if (!pickerClicking) hidePetsciiPicker(); });
+  function attachEvents() {
+    var preBytes = null, preLen = 0;
+    if (editIdx >= 0) {
+      var src = customSeparators[editIdx].bytes;
+      preBytes = new Uint8Array(16);
+      preLen = Math.min(src.length, 16);
+      for (var m = 0; m < preLen; m++) preBytes[m] = src[m];
     }
+    mountPetsciiInput(preBytes, preLen);
 
     body.addEventListener('click', function handler(e) {
       if (e.target.tagName === 'INPUT') return;
+      if (e.target.closest('.petscii-editor')) return;
       var btn = e.target.closest('[data-action]');
       if (!btn) {
         // Save/Cancel buttons
         if (e.target.closest('#sep-edit-save')) {
-          var inp = document.getElementById('sep-edit-input');
-          if (!inp || inp.value.length === 0) return;
-          // Convert input value to PETSCII bytes (no padding)
+          var host = document.getElementById('sep-edit-input-host');
+          var editor = host && host.querySelector('.petscii-editor');
+          if (!editor || editor.getLength() === 0) return;
+          var byteArr = editor.getBytes();  // no padding
           var bytes = [];
-          for (var k = 0; k < inp.value.length; k++) {
-            bytes.push(unicodeToPetscii(inp.value[k]));
-          }
+          for (var k = 0; k < byteArr.length; k++) bytes.push(byteArr[k]);
           var nameInput = document.getElementById('sep-edit-name');
           var sepName = nameInput ? nameInput.value.trim() : '';
           if (editIdx >= 0) {
@@ -1280,16 +1321,6 @@ function showSeparatorEditor() {
         editIdx = cidx;
         body.removeEventListener('click', handler);
         body.innerHTML = render();
-        // Pre-fill input with existing bytes
-        var inp2 = document.getElementById('sep-edit-input');
-        if (inp2) {
-          var val = '';
-          for (var m = 0; m < customSeparators[cidx].bytes.length; m++) {
-            var ch = PETSCII_MAP[customSeparators[cidx].bytes[m]];
-            if (ch) val += ch;
-          }
-          inp2.value = val;
-        }
         attachEvents();
       }
     });

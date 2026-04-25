@@ -2630,13 +2630,22 @@ function tassTokenizeBlock(data, start, end, labels) {
           flushData();
           if (cur.instr) flush();
           cur.instr = '.text';
-          var tstr = '';
+          // Render through the same PETSCII map filenames use, with
+          // `.petscii-rev` wrapping bytes in the control-code ranges
+          // ($00-$1F, $80-$9F). The `.basic-listing .petscii-rev` CSS
+          // override gives those spans the proper inverted-blue look.
+          var tplain = '';
+          var thtml = '';
           for (var tk2 = 0; tk2 < tlen; tk2++) {
-            var ch = data[i + 2 + tk2];
-            if (ch >= 0x20 && ch <= 0x7E) tstr += String.fromCharCode(ch).toLowerCase();
-            else tstr += '{$' + ch.toString(16).padStart(2, '0') + '}';
+            var bb = data[i + 2 + tk2];
+            var glyph = petsciiToAscii(bb);
+            var rev = (bb <= 0x1F) || (bb >= 0x80 && bb <= 0x9F);
+            tplain += glyph;
+            if (rev) thtml += '<span class="petscii-rev">' + escHtml(glyph) + '</span>';
+            else thtml += escHtml(glyph);
           }
-          cur.operand = '"' + tstr + '"';
+          cur.operand = '"' + tplain + '"';
+          cur.operandHtml = '"' + thtml + '"';
           i += 2 + tlen;
           continue;
         }
@@ -2694,46 +2703,83 @@ function tassTokenizeBlock(data, start, end, labels) {
       // Look ahead to the next $80 and classify the block.
       var look = i;
       while (look < end && data[look] !== 0x80) look++;
-      var textish = 0, controlish = 0, paddingCount = 0, totalBytes = 0;
+      // Classify the block: is it a "pure comment line" (no code/directive
+      // bytes) or does it contain instructions?
+      //
+      // A whole-line comment in TASS is just a block of text/decoration
+      // without any opcode or directive marker. The `;` prefix we show
+      // is TASS's comment-marker convention — it's NOT stored in the
+      // bytes. Whatever is in the bytes renders literally after `;`.
+      //
+      // Note: $20 (JSR), $38 (label-ref prefix), etc. are printable ASCII
+      // AND valid code bytes. Distinguish by looking for opcode+operand-prefix
+      // sequences, directive markers, and comment markers — if any of those
+      // are present, the block is code.
+      var hasCode = false;
+      var renderable = 0;
       for (var ti2 = i; ti2 < look; ti2++) {
         var bb = data[ti2];
-        totalBytes++;
-        if (bb === 0xC0 || bb === 0x00 || bb === 0x2D) { paddingCount++; continue; }
-        if ((bb >= 0x20 && bb <= 0x7E) || bb === 0xA0 || (bb >= 0xC1 && bb <= 0xDA)) textish++;
-        else controlish++;
-      }
-      // Pure text block — emit as a comment, skip past it.
-      if (textish >= 3 && controlish === 0) {
-        var tstr2 = '';
-        for (var ti3 = i; ti3 < look; ti3++) {
-          var bb2 = data[ti3];
-          if (bb2 === 0xC0 || bb2 === 0x00) continue;
-          if (bb2 >= 0x20 && bb2 <= 0x7E) tstr2 += String.fromCharCode(bb2).toLowerCase();
-          else if (bb2 === 0xA0) tstr2 += ' ';
-          else if (bb2 >= 0xC1 && bb2 <= 0xDA) tstr2 += String.fromCharCode(bb2 - 0x80).toLowerCase();
-          else if (bb2 === 0x2D) tstr2 += '-';
+        if (bb === 0x00) continue;
+        // Strong code indicators — bytes / patterns that are unambiguous:
+        //   * High-bit opcode ($80+) that takes an operand, followed by a
+        //     valid TASS operand prefix. These bytes are outside printable
+        //     ASCII, so they can't appear in comment text.
+        //   * `$20 $38/$39` = `jsr label` (JSR + label-ref prefix). $20 alone
+        //     is ASCII space, so we require the following $38/$39.
+        //   * `$4C $29/$38/$39/$2D` = `jmp $XXXX/label/*`. $4C is ASCII 'L'
+        //     but these specific next bytes are unlikely in text.
+        //   * Directive markers $02/$03/$04/$06 followed by a valid prefix.
+        //   * Inline comment markers $93-$97.
+        if (bb >= 0x80 && TASS_OPCODES[bb] && ti2 + 1 < look) {
+          var mode0 = TASS_OPCODES[bb][1];
+          var next0 = data[ti2 + 1];
+          if (mode0 !== 'none' && mode0 !== 'acc' &&
+              (next0 === 0x28 || next0 === 0x29 || next0 === 0x2A ||
+               next0 === 0x38 || next0 === 0x39 || next0 === 0x2D ||
+               next0 === 0x44 || next0 === 0x45 || next0 === 0x30 ||
+               (next0 === 0x2E && mode0 === 'imm'))) {
+            hasCode = true; break;
+          }
         }
-        if (tstr2.length >= 1) {
-          lines.push({ label: null, instr: null, operand: null, comment: tstr2, isTextBlock: true });
+        if (bb === 0x20 && ti2 + 1 < look && (data[ti2 + 1] === 0x38 || data[ti2 + 1] === 0x39 || data[ti2 + 1] === 0x29)) {
+          hasCode = true; break;
+        }
+        if (bb === 0x4C && ti2 + 1 < look) {
+          var jn = data[ti2 + 1];
+          if (jn === 0x29 || jn === 0x38 || jn === 0x39 || jn === 0x2D) {
+            hasCode = true; break;
+          }
+        }
+        if ((bb === 0x02 || bb === 0x03 || bb === 0x04 || bb === 0x06) && ti2 + 1 < look) {
+          var dnx0 = data[ti2 + 1];
+          if (dnx0 === 0x28 || dnx0 === 0x29 || dnx0 === 0x2A || dnx0 === 0x38 || dnx0 === 0x39 ||
+              (bb === 0x02 && dnx0 > 0 && dnx0 <= 64)) {
+            hasCode = true; break;
+          }
+        }
+        if (bb >= 0x93 && bb <= 0x97) { hasCode = true; break; }
+        // Otherwise check if byte is a plausible comment character.
+        var isCommentChar = (bb >= 0x20 && bb <= 0x7E) || bb === 0xA0 ||
+                            (bb >= 0xC1 && bb <= 0xDA) || bb === 0xC0;
+        if (isCommentChar) { renderable++; continue; }
+        hasCode = true;
+        break;
+      }
+      if (!hasCode && renderable >= 1) {
+        // Whole-line comment. Render each byte through the PETSCII PUA map
+        // so the C64 Pro font picks the correct glyph. $00 is skipped
+        // (pure padding, never typed).
+        var cmtStr = '';
+        for (var ri = i; ri < look; ri++) {
+          var rb = data[ri];
+          if (rb === 0x00) continue;
+          cmtStr += petsciiToAscii(rb);
+        }
+        if (cmtStr.length >= 1) {
+          lines.push({ label: null, instr: null, operand: null, comment: cmtStr, isTextBlock: true });
           i = look;
           continue;
         }
-      }
-      // Pure padding block (all $C0/$2D/$00) — emit a separator carrying the
-      // actual byte count and rule character the user used, so rendering
-      // reflects the real source (e.g. `;--` for a 2-char rule vs `;-----`).
-      if (totalBytes > 0 && paddingCount === totalBytes) {
-        // Pick the dominant rule byte (ignore $00 which is pure filler)
-        var rc2D = 0, rcC0 = 0;
-        for (var ri = i; ri < look; ri++) {
-          if (data[ri] === 0x2D) rc2D++;
-          else if (data[ri] === 0xC0) rcC0++;
-        }
-        var ruleCh = (rc2D >= rcC0) ? '-' : '\u2500';
-        var ruleLen = rc2D + rcC0;
-        lines.push({ label: null, instr: null, operand: null, comment: null, separator: true, ruleCh: ruleCh, ruleLen: ruleLen });
-        i = look;
-        continue;
       }
       // Code/data block — fall through to normal tokenizer.
       continue;
@@ -2744,20 +2790,21 @@ function tassTokenizeBlock(data, start, end, labels) {
     // decodes on `$2D $2D` rule-fill bytes.)
     // A run of 30+ padding bytes represents a user-drawn rule line; emit a
     // synthetic SEP so it renders as `;---` in the output.
-    if (b === 0xC0 || b === 0x00 || b === 0x2D) {
+    // A long run of padding/decoration bytes in the middle of a block is a
+    // user-drawn rule line. Emit the actual character sequence as a comment.
+    if (b === 0xC0 || b === 0x00 || b === 0x2D || b === 0x3D || b === 0x5F) {
       var pStart0 = i;
-      var rc2D2 = 0, rcC02 = 0;
-      while (i < end && (data[i] === 0xC0 || data[i] === 0x00 || data[i] === 0x2D)) {
-        if (data[i] === 0x2D) rc2D2++;
-        else if (data[i] === 0xC0) rcC02++;
-        i++;
-      }
+      while (i < end && (data[i] === 0xC0 || data[i] === 0x00 || data[i] === 0x2D || data[i] === 0x3D || data[i] === 0x5F)) i++;
       if (i - pStart0 >= 30) {
         flushData();
         if (cur.label || cur.instr || cur.comment) flush();
-        var ch2 = (rc2D2 >= rcC02) ? '-' : '\u2500';
-        var len2 = rc2D2 + rcC02;
-        lines.push({ label: null, instr: null, operand: null, comment: null, separator: true, ruleCh: ch2, ruleLen: len2 });
+        var cStr = '';
+        for (var ri2 = pStart0; ri2 < i; ri2++) {
+          var rb2 = data[ri2];
+          if (rb2 === 0x00) continue;
+          cStr += petsciiToAscii(rb2);
+        }
+        if (cStr.length > 0) lines.push({ label: null, instr: null, operand: null, comment: cStr, isTextBlock: true });
       }
       continue;
     }
@@ -2828,7 +2875,9 @@ function tassRenderLineHtml(line) {
     html += '<span class="basic-keyword">' + escHtml(line.instr) + '</span>';
     instrLen += line.instr.length;
     if (line.operand) {
-      html += ' ' + escHtml(line.operand);
+      // operandHtml carries pre-built HTML (e.g. `.text` strings with
+      // reversed-char spans); operand stays as plain text for length math.
+      html += ' ' + (line.operandHtml || escHtml(line.operand));
       instrLen += 1 + line.operand.length;
     }
   }
@@ -2995,13 +3044,14 @@ function showFileTassViewer(entryOff) {
   for (var rj = 0; rj < cleaned.length; rj++) {
     var ln2 = cleaned[rj];
     if (ln2.separator) {
-      var rch = ln2.ruleCh || '-';
-      var rln = typeof ln2.ruleLen === 'number' && ln2.ruleLen > 0 ? ln2.ruleLen : 39;
-      html += '<div class="basic-line"><span class="text-muted">;' + rch.repeat(rln) + '</span></div>';
+      var rstr = typeof ln2.ruleStr === 'string' && ln2.ruleStr.length ? ln2.ruleStr : '-'.repeat(39);
+      html += '<div class="basic-line"><span class="text-muted">;' + escHtml(rstr) + '</span></div>';
+      totalLines++;
       continue;
     }
     if (ln2.isTextBlock) {
       html += '<div class="basic-line"><span class="text-muted">;' + escHtml(ln2.comment) + '</span></div>';
+      totalLines++;
       continue;
     }
     html += '<div class="basic-line">' + tassRenderLineHtml(ln2) + '</div>';
@@ -3009,7 +3059,7 @@ function showFileTassViewer(entryOff) {
   }
   html += '</div>';
 
-  var titleText = 'Turbo Assembler \u2014 "' + name + '" (load $' + loadAddr.toString(16).toUpperCase() + ', ' + labels.length + ' labels, ' + totalLines + ' lines \u2014 best-effort decode)';
+  var titleText = 'Turbo Assembler \u2014 "' + name + '" (' + labels.length + ' labels, ' + totalLines + ' lines)';
   if (result.error) titleText += ' \u2014 ' + result.error;
   document.getElementById('modal-title').textContent = titleText;
   document.getElementById('modal-body').innerHTML = html;
@@ -3112,17 +3162,6 @@ var BASIC_LOAD_ADDRS = {
   0x1C01: 'V7'    // C128
 };
 
-// Control code names for display in strings/REM
-var PETSCII_CTRL_NAMES = {
-  0x03: 'stop', 0x05: 'wht', 0x07: 'bell', 0x0A: 'lf', 0x0D: 'cr',
-  0x0E: 'lower', 0x11: 'down', 0x12: 'rvon', 0x13: 'home',
-  0x14: 'del', 0x1C: 'red', 0x1D: 'right', 0x1E: 'grn', 0x1F: 'blu',
-  0x81: 'orng', 0x8E: 'upper', 0x90: 'blk', 0x91: 'up',
-  0x92: 'rvof', 0x93: 'clr', 0x95: 'brn', 0x96: 'lred',
-  0x97: 'dgry', 0x98: 'mgry', 0x99: 'lgrn', 0x9A: 'lblu',
-  0x9B: 'lgry', 0x9C: 'pur', 0x9D: 'left', 0x9E: 'yel', 0x9F: 'cyn'
-};
-
 // Check if file data looks like a BASIC program
 function isBasicProgram(fileData) {
   if (!fileData || fileData.length < 6) return false;
@@ -3131,15 +3170,14 @@ function isBasicProgram(fileData) {
 }
 
 function emitLiteral(parts, b, type) {
-  if (b >= 0x20 && b <= 0x7E) {
-    parts.push({ type: type, text: String.fromCharCode(b) });
-  } else if (PETSCII_CTRL_NAMES[b]) {
-    parts.push({ type: 'ctrl', text: '{' + PETSCII_CTRL_NAMES[b] + '}' });
-  } else if (b >= 0xA0 || (b >= 0x01 && b <= 0x1F)) {
-    parts.push({ type: type, text: PETSCII_MAP[b] || '?' });
-  } else {
-    parts.push({ type: 'ctrl', text: '{$' + b.toString(16).toUpperCase().padStart(2, '0') + '}' });
-  }
+  // Render every PETSCII byte through the same map filenames/TASS use,
+  // so the visible glyph is consistent across the app and the C64 Pro
+  // font handles all 256 positions. Control-code ranges ($00-$1F and
+  // $80-$9F) get reversed:true so the renderer wraps them in
+  // `.petscii-rev` — matching how the C64 LIST routine displays them
+  // and how TASS draws .text strings.
+  var rev = (b <= 0x1F) || (b >= 0x80 && b <= 0x9F);
+  parts.push({ type: type, text: petsciiToAscii(b), reversed: rev });
 }
 
 function detokenizeBasic(fileData, dialect) {
@@ -3250,12 +3288,10 @@ function detokenizeBasic(fileData, dialect) {
         }
       }
 
-      // Literal character
-      if (b >= 0x20 && b <= 0x7E) {
-        parts.push({ type: 'text', text: String.fromCharCode(b) });
-      } else {
-        parts.push({ type: 'ctrl', text: '{$' + b.toString(16).toUpperCase().padStart(2, '0') + '}' });
-      }
+      // Literal character (rare — should normally be inside a string or REM,
+      // but handle gracefully). Same PETSCII rendering rules as emitLiteral.
+      var revLit = (b <= 0x1F) || (b >= 0x80 && b <= 0x9F);
+      parts.push({ type: 'text', text: petsciiToAscii(b), reversed: revLit });
       pos++;
     }
 
@@ -3348,21 +3384,23 @@ function renderBasicHtml(basic, name, result) {
     html += '<span class="basic-linenum">' + line.lineNum + ' </span>';
     for (var pi = 0; pi < line.parts.length; pi++) {
       var part = line.parts[pi];
+      var inner = escHtml(part.text);
+      if (part.reversed) inner = '<span class="petscii-rev">' + inner + '</span>';
       switch (part.type) {
         case 'keyword':
-          html += '<span class="basic-keyword">' + escHtml(part.text) + '</span>';
+          html += '<span class="basic-keyword">' + inner + '</span>';
           break;
         case 'string':
-          html += '<span class="basic-string">' + escHtml(part.text) + '</span>';
+          html += '<span class="basic-string">' + inner + '</span>';
           break;
         case 'rem':
-          html += '<span class="basic-rem">' + escHtml(part.text) + '</span>';
+          html += '<span class="basic-rem">' + inner + '</span>';
           break;
         case 'ctrl':
-          html += '<span class="basic-ctrl">' + escHtml(part.text) + '</span>';
+          html += '<span class="basic-ctrl">' + inner + '</span>';
           break;
         default:
-          html += escHtml(part.text);
+          html += inner;
           break;
       }
     }

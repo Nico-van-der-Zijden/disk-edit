@@ -187,27 +187,46 @@ function showFileHexViewer(entryOff) {
   var result = readFileData(currentBuffer, entryOff);
   var fileData = result.data;
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
-  var totalBytes = fileData.length;
+
+  // PRG files start with a 2-byte load address. Skip those bytes in the hex
+  // view (they aren't actual content) and label the row offsets as the
+  // corresponding C64 memory address so the addresses match what the program
+  // sees at run time.
+  var typeIdx = data[entryOff + 2] & 0x07;
+  var isPrg = typeIdx === 2 && fileData.length >= 2;
+  var baseAddr = 0;
+  var payload = fileData;
+  if (isPrg) {
+    baseAddr = fileData[0] | (fileData[1] << 8);
+    payload = fileData.subarray(2);
+  }
+  var totalBytes = payload.length;
 
   var html = '<div class="hex-editor">';
   var rows = Math.ceil(totalBytes / 8) || 1;
   for (var row = 0; row < rows; row++) {
     var rowOff = row * 8;
-    html += '<div class="hex-row"><span class="hex-offset">' + rowOff.toString(16).toUpperCase().padStart(4, '0') + '</span><span class="hex-bytes">';
+    var addr = (baseAddr + rowOff) & 0xFFFF;
+    html += '<div class="hex-row"><span class="hex-offset">' + addr.toString(16).toUpperCase().padStart(4, '0') + '</span><span class="hex-bytes">';
     for (var col = 0; col < 8; col++) {
       var idx = rowOff + col;
-      html += idx < totalBytes ? '<span class="hex-byte">' + fileData[idx].toString(16).toUpperCase().padStart(2, '0') + '</span>' : '<span class="hex-byte" style="opacity:0.2">--</span>';
+      html += idx < totalBytes ? '<span class="hex-byte">' + payload[idx].toString(16).toUpperCase().padStart(2, '0') + '</span>' : '<span class="hex-byte" style="opacity:0.2">--</span>';
     }
     html += '</span><span class="hex-separator"></span><span class="hex-ascii">';
     for (var col2 = 0; col2 < 8; col2++) {
       var idx2 = rowOff + col2;
-      html += idx2 < totalBytes ? '<span class="hex-char">' + escHtml(PETSCII_MAP[fileData[idx2]]) + '</span>' : '<span class="hex-char" style="opacity:0.2">.</span>';
+      if (idx2 < totalBytes) {
+        var sc = SCREENCODE_MAP[payload[idx2]];
+        html += '<span class="hex-char' + (sc.reversed ? ' petscii-rev' : '') + '">' + escHtml(sc.char) + '</span>';
+      } else {
+        html += '<span class="hex-char" style="opacity:0.2">.</span>';
+      }
     }
     html += '</span></div>';
   }
   html += '</div>';
 
-  var titleText = 'Hex View \u2014 "' + name + '" (' + totalBytes + ' bytes)';
+  var titleText = 'Hex View \u2014 "' + name + '" (' + totalBytes + ' bytes' + (isPrg ? ', load $' + baseAddr.toString(16).toUpperCase().padStart(4, '0') : '') + ')';
   if (result.error) titleText += ' \u2014 ' + result.error;
   document.getElementById('modal-title').textContent = titleText;
   document.getElementById('modal-body').innerHTML = html;

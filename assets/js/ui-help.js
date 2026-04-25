@@ -191,6 +191,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.78', title: 'PETSCII editing and viewer polish', items: [
+      'Renaming a filename, disk name, or separator with reversed PETSCII bytes ($00-$1F, $80-$9F) no longer rewrites them as their non-reversed alias \u2014 the original bytes survive the round trip',
+      'Reversed bytes now show reversed in the disk header, hex viewer, BASIC viewer, and TASS `.text` strings (matching the directory listing)',
+      'Hex viewer\u2019s PETSCII column uses screen-code rendering \u2014 $80-$FF show as the reversed version of $00-$7F',
+      'View \u2192 Turbo Assembler is only enabled for files that actually carry the TASS $09 $FF signature',
+      'Arrow / Page / Home / End now scroll the viewer content; the BASIC dialect selector stays pinned at the top instead of scrolling away',
+    ]},
     { ver: '1.3.77', title: 'TASS viewer: separators mirror source bytes', items: [
       'Synthetic rule lines now use the same rule character and length as the source: a block of 28 `$2D` bytes renders as `;` + 28 `-`, a block of 39 `$C0` bytes renders as `;` + 39 `─`',
       'Previously all synthetic rules were hard-coded to 39 hyphens',

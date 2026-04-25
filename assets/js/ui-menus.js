@@ -153,6 +153,10 @@ document.addEventListener('keydown', (e) => {
   if (!currentBuffer) return;
   if (openMenu) return; // menu keyboard navigation handles arrow keys
   if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.isContentEditable)) return;
+  // A viewer modal is open: arrows / page keys belong to the modal body
+  // for scrolling, not to the directory listing.
+  var modalOpen = document.getElementById('modal-overlay');
+  if (modalOpen && modalOpen.classList.contains('open')) return;
 
   // Enter: edit selected filename
   if (e.key === 'Enter' && selectedEntryIndex >= 0) {
@@ -483,10 +487,21 @@ function updateEntryMenuState() {
   document.getElementById('opt-view-vlir').classList.toggle('disabled', !isVlir);
   var isRel = hasSelection && !tape && edata && (edata[selectedEntryIndex + 2] & 0x07) === 4;
   document.getElementById('opt-view-rel').classList.toggle('disabled', !isRel);
-  // TASS: offer for any closed PRG — the viewer detects the $09 $FF magic itself
-  // and shows a friendly message if the file isn't actually a TASS source.
-  var isTassCandidate = hasSelection && !tape && edata &&
-    (edata[selectedEntryIndex + 2] & 0x87) === 0x82;
+  // TASS: only enable when the file actually carries the $09 $FF magic at
+  // payload offset $0C-$0D (= sector bytes $10-$11 in the first data sector).
+  // Skip the check entirely on tape and on non-PRG types.
+  var isTassCandidate = false;
+  if (hasSelection && !tape && edata && (edata[selectedEntryIndex + 2] & 0x87) === 0x82) {
+    var tt = edata[selectedEntryIndex + 3];
+    var ts = edata[selectedEntryIndex + 4];
+    if (tt > 0) {
+      var tassFoff = sectorOffset(tt, ts);
+      if (tassFoff >= 0 && tassFoff + 0x12 <= edata.length &&
+          edata[tassFoff + 0x10] === 0x09 && edata[tassFoff + 0x11] === 0xFF) {
+        isTassCandidate = true;
+      }
+    }
+  }
   document.getElementById('opt-view-tass').classList.toggle('disabled', !isTassCandidate);
   document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
   document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect || tape);
