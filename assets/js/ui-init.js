@@ -11,11 +11,19 @@ document.addEventListener('dragleave', function(e) {
   if (dragCounter <= 0) { dragCounter = 0; document.body.classList.remove('drop-active'); }
 });
 document.addEventListener('dragover', function(e) {
+  // Only intervene when an actual OS file is being dragged in. In-page
+  // drags (directory reorder) have empty dataTransfer.types and use
+  // 'move' effects via their own per-row handlers; setting 'copy' here
+  // would clash with effectAllowed='move' and silently cancel the drop.
+  if (!e.dataTransfer || (e.dataTransfer.types || []).indexOf('Files') < 0) return;
   e.preventDefault();
   e.dataTransfer.dropEffect = 'copy';
 });
 
 document.addEventListener('drop', function(e) {
+  // Same gating as the dragover above — leave in-page drops to the
+  // dir-panel / per-entry handlers.
+  if (!e.dataTransfer || (e.dataTransfer.types || []).indexOf('Files') < 0) return;
   e.preventDefault();
   dragCounter = 0;
   document.body.classList.remove('drop-active');

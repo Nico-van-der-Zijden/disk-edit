@@ -368,6 +368,17 @@ function bindDirSelection() {
       dragSrcOffset = parseInt(el.dataset.offset, 10);
       el.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
+
+      // Custom drag image: clone the row, style with strong border + shadow
+      // so it stays visible. Browser snapshots it synchronously so we can
+      // remove the temporary node right after.
+      const ghost = el.cloneNode(true);
+      ghost.classList.add('drag-ghost');
+      ghost.classList.remove('selected', 'dragging');
+      ghost.style.width = el.offsetWidth + 'px';
+      document.body.appendChild(ghost);
+      e.dataTransfer.setDragImage(ghost, 20, ghost.offsetHeight / 2);
+      setTimeout(() => ghost.remove(), 0);
     });
 
     el.addEventListener('dragend', () => {
@@ -406,11 +417,16 @@ function bindDirSelection() {
       let targetIdx = slots.indexOf(targetOffset);
       if (srcIdx < 0 || targetIdx < 0) return;
 
-      // Determine if dropping above or below
+      // Determine if dropping above or below.
       const rect = el.getBoundingClientRect();
       const midY = rect.top + rect.height / 2;
-      if (e.clientY >= midY && targetIdx < srcIdx) targetIdx++;
-      else if (e.clientY < midY && targetIdx > srcIdx) targetIdx--;
+      // Adjacent rows: drop anywhere on the adjacent row swaps the two —
+      // the usual top/bottom adjustment would resolve to "where source
+      // already is" (dead zone), so skip it for adjacent targets.
+      if (Math.abs(targetIdx - srcIdx) !== 1) {
+        if (e.clientY >= midY && targetIdx < srcIdx) targetIdx++;
+        else if (e.clientY < midY && targetIdx > srcIdx) targetIdx--;
+      }
 
       pushUndo();
       // Move by repeatedly swapping adjacent entries
@@ -426,6 +442,82 @@ function bindDirSelection() {
       renderDisk(info);
     });
   });
+
+  // Panel-level drop zone: anywhere in the disk panel that isn't a real
+  // entry counts as "drop at start" or "drop at end" based on cursor Y.
+  // This covers the dir-listing's blank padding plus the dir-header-row
+  // (column headers) and dir-footer (blocks-free area) — without it,
+  // those areas show the browser's "not allowed" cursor since they have
+  // no drop handler.
+  const diskPanel = document.querySelector('.disk-panel');
+  if (diskPanel && entries.length > 0) {
+    const isPanelDropZone = (target) => {
+      if (!target) return false;
+      // Real entries are handled by per-entry listeners below.
+      if (target.closest('.dir-entry:not(.dir-header-row):not(.dir-parent-row)')) return false;
+      // Disk-header has editable name/ID fields — don't claim those.
+      if (target.closest('.disk-header')) return false;
+      // The cloned drag image briefly lives in the DOM at dragstart.
+      if (target.closest('.drag-ghost')) return false;
+      return true;
+    };
+
+    diskPanel.addEventListener('dragover', (e) => {
+      if (dragSrcOffset === null) return;
+      if (!isPanelDropZone(e.target)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      entries.forEach(en => en.classList.remove('drag-over-top', 'drag-over-bottom'));
+      const firstRect = entries[0].getBoundingClientRect();
+      const lastRect = entries[entries.length - 1].getBoundingClientRect();
+      const firstMid = (firstRect.top + firstRect.bottom) / 2;
+      const lastMid = (lastRect.top + lastRect.bottom) / 2;
+      if (e.clientY < firstMid) {
+        entries[0].classList.add('drag-over-top');
+      } else if (e.clientY > lastMid) {
+        entries[entries.length - 1].classList.add('drag-over-bottom');
+      }
+    });
+
+    diskPanel.addEventListener('drop', (e) => {
+      if (dragSrcOffset === null || !currentBuffer) return;
+      if (!isPanelDropZone(e.target)) return;
+      e.preventDefault();
+      entries.forEach(en => en.classList.remove('drag-over-top', 'drag-over-bottom'));
+
+      const firstRect = entries[0].getBoundingClientRect();
+      const lastRect = entries[entries.length - 1].getBoundingClientRect();
+      const firstMid = (firstRect.top + firstRect.bottom) / 2;
+      const lastMid = (lastRect.top + lastRect.bottom) / 2;
+      const aboveFirst = e.clientY < firstMid;
+      const belowLast = e.clientY > lastMid;
+      if (!aboveFirst && !belowLast) return; // ambiguous middle gap, ignore
+      const targetEl = aboveFirst ? entries[0] : entries[entries.length - 1];
+      const targetOffset = parseInt(targetEl.dataset.offset, 10);
+      if (dragSrcOffset === targetOffset) return;
+
+      const slots = getDirSlotOffsets(currentBuffer);
+      const srcIdx = slots.indexOf(dragSrcOffset);
+      let targetIdx = slots.indexOf(targetOffset);
+      if (srcIdx < 0 || targetIdx < 0) return;
+
+      if (Math.abs(targetIdx - srcIdx) !== 1) {
+        if (!aboveFirst && targetIdx < srcIdx) targetIdx++;
+        else if (aboveFirst && targetIdx > srcIdx) targetIdx--;
+      }
+
+      pushUndo();
+      const dir = targetIdx > srcIdx ? 1 : -1;
+      let cur = srcIdx;
+      while (cur !== targetIdx) {
+        swapDirEntries(currentBuffer, slots[cur], slots[cur + dir]);
+        cur += dir;
+      }
+      selectedEntryIndex = slots[targetIdx];
+      const info = parseCurrentDir(currentBuffer);
+      renderDisk(info);
+    });
+  }
 
   // Parent directory row — click to go back to root
   var parentRow = document.getElementById('dir-parent');

@@ -80,13 +80,16 @@
   }
 
   /* --- Directory Listing --- */
+  /* Top/bottom padding doubles as the drop zone for placing files at the
+     very start or end of the listing — too thin and the cursor target is
+     unhittable. */
   .dir-listing {
     font-size: 14px;
     line-height: 1;
     overflow-y: auto;
     flex: 1;
     min-height: 200px;
-    padding: 8px 0;
+    padding: 18px 0;
     border-left: 1px solid var(--accent);
     border-right: 1px solid var(--accent);
   }
@@ -328,16 +331,48 @@
     opacity: 0 !important;
   }
 
-  .dir-entry.drag-over-top {
-    border-top: 2px solid var(--accent);
-  }
-
+  /* Drop indicator: a 5px accent-colored bar sitting in the gap above or
+     below the hovered row. Pseudo-element so we don't disturb row layout
+     and the bar reads as a clear "between rows" target instead of an
+     edge-line stuck to one row. */
+  .dir-entry.drag-over-top,
   .dir-entry.drag-over-bottom {
-    border-bottom: 2px solid var(--accent);
+    position: relative;
   }
+  .dir-entry.drag-over-top::before,
+  .dir-entry.drag-over-bottom::after {
+    content: '';
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    height: 5px;
+    background: var(--accent);
+    border-radius: 3px;
+    box-shadow: 0 0 6px rgba(0, 0, 0, 0.4);
+    z-index: 5;
+    pointer-events: none;
+  }
+  .dir-entry.drag-over-top::before { top: -3px; }
+  .dir-entry.drag-over-bottom::after { bottom: -3px; }
 
   .dir-entry.dragging {
     opacity: 0.4;
+  }
+
+  /* Cloned dragstart-time element used as the browser's drag image. Lives
+     offscreen just long enough for the browser to snapshot it. Strong
+     contrast + shadow makes the resulting ghost much easier to track than
+     the default semi-transparent screenshot. */
+  .dir-entry.drag-ghost {
+    position: absolute;
+    top: -2000px;
+    left: -2000px;
+    background: var(--bg);
+    border: 2px solid var(--accent);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    opacity: 1;
+    pointer-events: none;
   }
 
   .type-dropdown {

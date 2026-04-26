@@ -195,6 +195,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.81', title: 'Directory drag-drop: actually works for every file', items: [
+      'Drops on separators, GEOS VLIR files (DESK TOP, CONFIGURE), and scratched-with-name entries (Swap File) were silently rejected — fixed',
+      'Wider, more visible 5px accent drop bar; clearer custom drag image (solid border + shadow) instead of the faint browser default',
+      'Panel-level drop zones: column-header row, blocks-free footer, and the listing\'s top/bottom padding now accept drops as "place at start/end"',
+      'Dragging onto an adjacent row now swaps the two — the previous logic resolved adjacent drops to a no-op (especially noticeable for the first/last few rows)',
+    ]},
     { ver: '1.3.80', title: 'TAP files: extract from turbo loaders', items: [
       'Decodes Turbotape 250, Novaload, the full Cyberload F1+F2 chain, Cyberload F3 sub-blocks, F4 multiload, and the Creatures-specific loader (Creatures, Creatures 2, Mayhem in Monsterland)',
       'Encrypted Cyberload F1/F2 show a lock icon; multiload F4 shows a layers icon, in the same column as the file-info and GEOS icons',
