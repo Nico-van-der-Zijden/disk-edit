@@ -195,6 +195,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.83', title: 'File Chains: GEOS VLIR support and a clearer layout', items: [
+      'GEOS VLIR files now show each record\'s sub-chain on its own row — the old version walked only the VLIR index sector and stopped, hiding all record sectors',
+      'GEOS sequential files show their info block alongside the data chain; REL files show side-sectors separately',
+      'Card-per-file layout with type badge, filename in C64 Pro Mono, structure label, and sector count; T:S chips connected by arrows, color-coded per chain kind',
+      'Moved "Compare with..." from "Export Disk" to "Disk Tools" — it sits next to Validate now, where it belongs',
+    ]},
     { ver: '1.3.82', title: 'Compare With: tabs for files, directory and sectors', items: [
       'Pick another open tab as the source instead of always loading from disk; "From file..." stays available as a footer button',
       'Files tab: per-file diff classified as identical / differs / only in A / only in B with FontAwesome markers and a colour legend',

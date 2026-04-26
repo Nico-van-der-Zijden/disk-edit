@@ -391,6 +391,121 @@ function openLnxArchiveAsTab(buffer, archiveName) {
 }
 
 // ── File Chains ──────────────────────────────────────────────────────
+// Walk a single sector chain via T/S links. Returns the list of sectors
+// visited and a `loop` flag if a cycle was detected. Does not call any
+// external helpers \u2014 keeps this self-contained for the file-chain view.
+function fchainWalkChain(data, startT, startS) {
+  var fmt = currentFormat;
+  var sectors = [];
+  var loop = false;
+  var visited = {};
+  var ft = startT, fs = startS;
+  while (ft !== 0) {
+    if (ft < 1 || ft > currentTracks) break;
+    if (fs >= fmt.sectorsPerTrack(ft)) break;
+    var key = ft + ':' + fs;
+    if (visited[key]) { loop = true; break; }
+    visited[key] = true;
+    sectors.push({ t: ft, s: fs });
+    var off = sectorOffset(ft, fs);
+    if (off < 0) break;
+    ft = data[off]; fs = data[off + 1];
+  }
+  return { sectors: sectors, loop: loop };
+}
+
+// Decompose a directory entry into its constituent sector chains. The
+// shape depends on the file type:
+//   regular file  \u2192 [{ kind:'main', sectors }]
+//   REL file      \u2192 [main, side-sectors]
+//   GEOS sequential \u2192 [info-block, main]
+//   GEOS VLIR     \u2192 [info-block, vlir-index, record 0, record 1, ...]
+// Each entry: { kind, label, sectors[], loop?, byteCount? }
+function fchainAnalyse(data, entryOff) {
+  var fmt = currentFormat;
+  var typeIdx = data[entryOff + 2] & 0x07;
+  var startT = data[entryOff + 3], startS = data[entryOff + 4];
+  var isRel = (typeIdx === FILE_TYPE.REL);
+  var isGeos = data[entryOff + 0x18] > 0 && !isRel;
+  var isVlir = isGeos && data[entryOff + 0x17] === 0x01;
+
+  var chains = [];
+
+  function addInfoBlock() {
+    var t = data[entryOff + 0x15], s = data[entryOff + 0x16];
+    if (t < 1 || t > currentTracks || s >= fmt.sectorsPerTrack(t)) return;
+    chains.push({ kind: 'info', label: 'GEOS info', sectors: [{ t: t, s: s }] });
+  }
+
+  if (isVlir) {
+    addInfoBlock();
+    chains.push({ kind: 'index', label: 'VLIR index', sectors: [{ t: startT, s: startS }] });
+    var idxOff = sectorOffset(startT, startS);
+    if (idxOff >= 0) {
+      for (var vri = 0; vri < 127; vri++) {
+        var recT = data[idxOff + 2 + vri * 2];
+        var recS = data[idxOff + 2 + vri * 2 + 1];
+        if (recT === 0 && recS === 0) break; // end of records
+        if (recT === 0) {
+          // Empty record slot (recS = $FF for unused). Show as placeholder
+          // so the record-number sequence stays visible.
+          chains.push({ kind: 'record-empty', label: 'Record ' + vri, sectors: [], note: 'empty' });
+          continue;
+        }
+        var rec = fchainWalkChain(data, recT, recS);
+        chains.push({ kind: 'record', label: 'Record ' + vri, sectors: rec.sectors, loop: rec.loop });
+      }
+    }
+  } else if (isGeos) {
+    addInfoBlock();
+    var seqMain = fchainWalkChain(data, startT, startS);
+    chains.push({ kind: 'main', label: 'Data', sectors: seqMain.sectors, loop: seqMain.loop });
+  } else if (isRel) {
+    var relMain = fchainWalkChain(data, startT, startS);
+    chains.push({ kind: 'main', label: 'Data', sectors: relMain.sectors, loop: relMain.loop });
+    var sideT = data[entryOff + 0x15], sideS = data[entryOff + 0x16];
+    if (sideT >= 1) {
+      var side = fchainWalkChain(data, sideT, sideS);
+      chains.push({ kind: 'side', label: 'Side-sectors', sectors: side.sectors, loop: side.loop });
+    }
+  } else {
+    var main = fchainWalkChain(data, startT, startS);
+    chains.push({ kind: 'main', label: 'Data', sectors: main.sectors, loop: main.loop });
+  }
+
+  return { chains: chains, isGeos: isGeos, isVlir: isVlir, isRel: isRel, typeIdx: typeIdx };
+}
+
+function fchainRenderName(data, entryOff) {
+  var rich = readPetsciiRich(data, entryOff + 5, 16);
+  if (!rich || rich.length === 0) return '<span class="text-muted">(unnamed)</span>';
+  return rich.map(function(c) {
+    var ch = escHtml(c.char);
+    return c.reversed ? '<span class="petscii-rev">' + ch + '</span>' : ch;
+  }).join('');
+}
+
+function fchainRenderSectors(chain) {
+  if (chain.note === 'empty') {
+    return '<span class="fchain-empty-note">(empty)</span>';
+  }
+  if (chain.sectors.length === 0) {
+    return '<span class="fchain-empty-note">(none)</span>';
+  }
+  var html = '';
+  for (var i = 0; i < chain.sectors.length; i++) {
+    var s = chain.sectors[i];
+    if (i > 0) html += '<span class="fchain-arrow"><i class="fa-solid fa-angle-right"></i></span>';
+    html += '<span class="fchain-chip fchain-chip-' + chain.kind + '">' +
+      '$' + s.t.toString(16).toUpperCase().padStart(2, '0') + ':$' +
+      s.s.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+  }
+  if (chain.loop) {
+    html += '<span class="fchain-loop"><i class="fa-solid fa-arrow-rotate-left"></i> loop</span>';
+  }
+  return html;
+}
+
 document.getElementById('opt-file-chains').addEventListener('click', function(e) {
   e.stopPropagation();
   if (!currentBuffer) return;
@@ -398,41 +513,82 @@ document.getElementById('opt-file-chains').addEventListener('click', function(e)
 
   var data = new Uint8Array(currentBuffer);
   var info = parseCurrentDir(currentBuffer);
-  var html = '<div style="font-size:12px">';
 
+  // Counters for the summary strip at the top.
+  var fileCount = 0, geosCount = 0, vlirCount = 0, relCount = 0, totalSectors = 0;
+
+  var cardsHtml = '';
   for (var i = 0; i < info.entries.length; i++) {
     var en = info.entries[i];
-    if (en.deleted || !en.name) continue;
+    if (en.deleted) continue;
     var typeByte = data[en.entryOff + 2];
-    if ((typeByte & 0x07) === 0) continue;
+    var ftype = typeByte & 0x07;
+    if (ftype === 0) continue; // separators / scratched
+    var startT = data[en.entryOff + 3];
+    if (startT === 0) continue;
 
-    var ft = data[en.entryOff + 3], fs = data[en.entryOff + 4];
-    if (ft === 0) continue;
+    var an = fchainAnalyse(data, en.entryOff);
+    fileCount++;
+    if (an.isVlir) vlirCount++;
+    else if (an.isGeos) geosCount++;
+    if (an.isRel) relCount++;
 
-    var chain = [];
-    var visited = {};
-    var t = ft, s = fs;
-    while (t !== 0) {
-      if (t > currentTracks || s >= currentFormat.sectorsPerTrack(t)) break;
-      var key = t + ':' + s;
-      if (visited[key]) { chain.push(key + ' (loop!)'); break; }
-      visited[key] = true;
-      chain.push('$' + t.toString(16).toUpperCase().padStart(2, '0') + ':$' + s.toString(16).toUpperCase().padStart(2, '0'));
-      var off = sectorOffset(t, s);
-      if (off < 0) break;
-      t = data[off]; s = data[off + 1];
-    }
+    var sectorCount = 0;
+    an.chains.forEach(function(c) { sectorCount += c.sectors.length; });
+    totalSectors += sectorCount;
 
-    var name = petsciiToReadable(en.name).trim();
-    html += '<div style="margin-bottom:6px">';
-    html += '<b style="color:var(--accent)">' + escHtml(name) + '</b>';
-    html += ' <span style="color:var(--text-muted)">(' + chain.length + ' sector' + (chain.length > 1 ? 's' : '') + ')</span><br>';
-    html += '<span style="color:var(--text-muted);word-break:break-all">' + chain.join(' \u2192 ') + '</span>';
-    html += '</div>';
+    var typeName = (en.type || '').trim();
+    var locked = (typeByte & 0x40) !== 0;
+
+    // Type badge \u2014 let the type letter be colour-coded by category so
+    // a quick glance shows GEOS / REL / standard at once.
+    var typeBadgeClass = 'fchain-badge-type';
+    if (an.isVlir) typeBadgeClass += ' fchain-badge-geos';
+    else if (an.isGeos) typeBadgeClass += ' fchain-badge-geos-seq';
+    else if (an.isRel) typeBadgeClass += ' fchain-badge-rel';
+    var typeLabel = typeName + (locked ? '<' : '');
+
+    var structLabel =
+      an.isVlir ? 'VLIR' :
+      an.isGeos ? 'GEOS sequential' :
+      an.isRel ? 'REL' :
+      'sequential';
+
+    cardsHtml += '<div class="fchain-card">';
+    cardsHtml += '<div class="fchain-header">';
+    cardsHtml +=   '<span class="fchain-badge ' + typeBadgeClass + '">' + escHtml(typeLabel) + '</span>';
+    cardsHtml +=   '<span class="fchain-name">' + fchainRenderName(data, en.entryOff) + '</span>';
+    cardsHtml +=   '<span class="fchain-struct">' + escHtml(structLabel) + '</span>';
+    cardsHtml +=   '<span class="fchain-count">' + sectorCount + ' sector' + (sectorCount === 1 ? '' : 's') + '</span>';
+    cardsHtml += '</div>';
+
+    cardsHtml += '<div class="fchain-body">';
+    an.chains.forEach(function(c) {
+      cardsHtml += '<div class="fchain-row">';
+      cardsHtml +=   '<span class="fchain-row-label fchain-label-' + c.kind + '">' + escHtml(c.label) + '</span>';
+      cardsHtml +=   '<span class="fchain-row-sectors">' + fchainRenderSectors(c) + '</span>';
+      cardsHtml += '</div>';
+    });
+    cardsHtml += '</div>';
+
+    cardsHtml += '</div>';
   }
 
-  html += '</div>';
+  // Summary strip / legend at top.
+  var summaryHtml = '<div class="fchain-summary">' +
+    '<span><b>' + fileCount + '</b> file' + (fileCount === 1 ? '' : 's') + '</span>' +
+    '<span class="fchain-summary-sep">\u00b7</span>' +
+    '<span><b>' + totalSectors + '</b> sectors</span>';
+  if (vlirCount) summaryHtml += '<span class="fchain-summary-sep">\u00b7</span><span><b>' + vlirCount + '</b> GEOS VLIR</span>';
+  if (geosCount) summaryHtml += '<span class="fchain-summary-sep">\u00b7</span><span><b>' + geosCount + '</b> GEOS sequential</span>';
+  if (relCount)  summaryHtml += '<span class="fchain-summary-sep">\u00b7</span><span><b>' + relCount + '</b> REL</span>';
+  summaryHtml += '</div>';
+
+  var emptyHtml = '<div class="text-base text-muted">No files to show.</div>';
+  var html = '<div class="fchain-list">' + summaryHtml + (cardsHtml || emptyHtml) + '</div>';
+
   showModal('File Chains', []);
+  setModalSize('xl');
   document.getElementById('modal-body').innerHTML = html;
 });
 
