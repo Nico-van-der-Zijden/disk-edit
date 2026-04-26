@@ -195,6 +195,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.82', title: 'Compare With: tabs for files, directory and sectors', items: [
+      'Pick another open tab as the source instead of always loading from disk; "From file..." stays available as a footer button',
+      'Files tab: per-file diff classified as identical / differs / only in A / only in B with FontAwesome markers and a colour legend',
+      'Directory tab: side-by-side listing aligned by file, with diff marker between the two columns',
+      'Sectors tab: visual sector map (track × sector grid) with hover tooltip; click a sector for a side-by-side hex diff using the standard hex viewer style, differing bytes highlighted',
+    ]},
     { ver: '1.3.81', title: 'Directory drag-drop: actually works for every file', items: [
       'Drops on separators, GEOS VLIR files (DESK TOP, CONFIGURE), and scratched-with-name entries (Swap File) were silently rejected — fixed',
       'Wider, more visible 5px accent drop bar; clearer custom drag image (solid border + shadow) instead of the faint browser default',

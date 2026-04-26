@@ -171,4 +171,290 @@
     flex-shrink: 0;
   }
 
+  /* ── Compare modal ───────────────────────────────────────────────────
+     Tabbed layout: pinned tab bar + scrollable content area. Mirrors the
+     bam-tab pattern. */
+  .cmp-layout {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .modal-body:has(.cmp-layout) {
+    overflow-y: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .cmp-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .cmp-tab {
+    padding: 5px 14px;
+    font-size: 12px;
+    cursor: pointer;
+    color: var(--text-muted);
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .cmp-tab:hover { color: var(--text); }
+  .cmp-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .cmp-tab-scroll {
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+  }
+  .cmp-summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .cmp-summary-card {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  .cmp-summary-card .cmp-summary-num {
+    font-size: 18px;
+    font-weight: bold;
+    line-height: 1.1;
+    color: var(--text);
+  }
+  .cmp-summary-card .cmp-summary-label {
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .cmp-summary-card.cmp-c-identical .cmp-summary-num { color: var(--color-recover); }
+  .cmp-summary-card.cmp-c-differ    .cmp-summary-num { color: var(--color-warn); }
+  .cmp-summary-card.cmp-c-only-a    .cmp-summary-num { color: var(--color-error); }
+  .cmp-summary-card.cmp-c-only-b    .cmp-summary-num { color: var(--accent); }
+
+  .cmp-section-title {
+    font-weight: bold;
+    margin: 12px 0 6px;
+    color: var(--text);
+  }
+  .cmp-section-title .cmp-section-count {
+    color: var(--text-muted);
+    font-weight: normal;
+    font-size: 12px;
+    margin-left: 6px;
+  }
+
+  .cmp-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    table-layout: fixed;
+  }
+  .cmp-table th, .cmp-table td {
+    padding: 3px 8px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cmp-table th {
+    color: var(--text-muted);
+    font-weight: normal;
+    font-size: 11px;
+  }
+  .cmp-table tr.cmp-section-row td {
+    font-weight: bold;
+    padding-top: 12px;
+    padding-bottom: 4px;
+    color: var(--text);
+    background: var(--hover);
+    border-bottom: 1px solid var(--border);
+  }
+  .cmp-table tr.cmp-section-row:first-child td {
+    padding-top: 4px;
+  }
+  .cmp-table td.cmp-marker, .cmp-marker {
+    text-align: center;
+    font-size: 11px;
+    overflow: visible;
+    text-overflow: clip;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+  .cmp-table td.cmp-fname,
+  .cmp-petscii {
+    font-family: 'C64 Pro Mono', monospace;
+    white-space: nowrap;
+  }
+  .cmp-marker-eq      { color: var(--color-recover); }
+  .cmp-marker-ne      { color: var(--color-warn); }
+  .cmp-marker-only-a  { color: var(--color-error); }
+  .cmp-marker-only-b  { color: var(--accent); }
+
+  .cmp-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--hover);
+    border-radius: 4px;
+  }
+  .cmp-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .cmp-legend-item .cmp-marker {
+    display: inline-block;
+    min-width: 16px;
+  }
+
+  /* Side-by-side directory listing (Directory tab) */
+  .cmp-side-by-side {
+    display: grid;
+    grid-template-columns: 1fr 20px 1fr;
+    gap: 0 8px;
+    font-size: 12px;
+  }
+  .cmp-side-col {
+    display: flex;
+    flex-direction: column;
+  }
+  .cmp-side-header {
+    font-weight: bold;
+    padding: 6px 8px;
+    background: var(--hover);
+    border-radius: 3px;
+    margin-bottom: 4px;
+  }
+  .cmp-side-row {
+    display: flex;
+    gap: 6px;
+    padding: 2px 8px;
+    align-items: baseline;
+  }
+  .cmp-side-row.cmp-r-eq   { background: transparent; }
+  .cmp-side-row.cmp-r-ne   { background: rgba(255, 200, 0, 0.08); }
+  .cmp-side-row.cmp-r-only-a, .cmp-side-row.cmp-r-only-b { background: rgba(255, 100, 100, 0.08); }
+  .cmp-side-row .cmp-side-blocks {
+    width: 36px;
+    text-align: right;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .cmp-side-row .cmp-side-name {
+    flex: 1;
+    font-family: 'C64 Pro Mono', monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .cmp-side-row .cmp-side-type {
+    width: 32px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .cmp-side-row.cmp-r-empty {
+    visibility: hidden;
+  }
+  .cmp-side-mid {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding-top: 2px;
+  }
+
+  /* Sectors tab */
+  .cmp-sector-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--hover);
+    border-radius: 4px;
+  }
+  .cmp-sector-legend .cmp-legend-box {
+    width: 12px;
+    height: 8px;
+    border-radius: 2px;
+    display: inline-block;
+  }
+  .cmp-sec-eq { background: var(--border); opacity: 0.7; }
+  .cmp-sec-ne { background: var(--color-warn); }
+
+  .cmp-sector-map {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    overflow: auto;
+    max-height: 50vh;
+  }
+
+  .cmp-sector-hex {
+    margin-top: 14px;
+  }
+  .cmp-sector-hex:empty {
+    display: none;
+  }
+  .cmp-sector-hex-header {
+    font-weight: bold;
+    margin-bottom: 8px;
+    font-size: 13px;
+  }
+  /* Wraps the standard .hex-editor in a panel so it visually anchors as
+     a drill-down beneath the sector map. */
+  .cmp-hex-editor {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 8px;
+    overflow-x: auto;
+  }
+  /* A/B side label sits to the left of the standard offset column. */
+  .cmp-hex-row .cmp-hex-side {
+    width: 1.5ch;
+    color: var(--text-muted);
+    text-align: right;
+    padding-right: 6px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    flex-shrink: 0;
+  }
+  /* Pair groups: keep A and B visually together, separate row-pairs
+     with a faint divider. */
+  .cmp-hex-row + .cmp-hex-row {
+    /* even-numbered (B) rows get no divider; odd row-pairs are separated */
+  }
+  .cmp-hex-row:nth-of-type(even) {
+    border-bottom: 1px dotted var(--border);
+    padding-bottom: 1px;
+    margin-bottom: 1px;
+  }
+  /* Highlight a differing byte / PETSCII char. Use the warn token so
+     the diff colour matches the marker icons and sector-map cells. */
+  .cmp-hex-editor .hex-byte.cmp-hex-diff,
+  .cmp-hex-editor .hex-char.cmp-hex-diff {
+    background: var(--color-warn);
+    color: var(--bg);
+    border-radius: 2px;
+  }
+  /* Override the existing hex-byte:hover so a diff stays visible while
+     hovering — the warn highlight is the more important signal. */
+  .cmp-hex-editor .hex-byte.cmp-hex-diff:hover {
+    background: var(--color-warn);
+    color: var(--bg);
+  }
+
 
