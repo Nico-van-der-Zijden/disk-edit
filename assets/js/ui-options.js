@@ -8,6 +8,12 @@ document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
   localStorage.setItem('cbm-allowUnsafe', allowUnsafeChars);
   document.getElementById('check-unsafe').innerHTML = allowUnsafeChars ? '<i class="fa-solid fa-check"></i>' : '';
   if (pickerTarget) renderPicker();
+  // The floating charset window has its own DOM — refresh its grid too
+  // so disabled/unsafe cell classes stay in sync with the toggle.
+  var fl = document.getElementById('petscii-float');
+  if (fl && fl.classList.contains('open')) {
+    fl.querySelector('.petscii-float-body').innerHTML = buildAllGridHtml();
+  }
 });
 
 document.getElementById('opt-picker-all').addEventListener('click', (e) => {

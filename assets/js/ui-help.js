@@ -194,6 +194,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.88', title: 'PETSCII full charset is a draggable floating window', items: [
+      'Pressing ALL on the PETSCII keyboard now opens the 16×16 charset as a separate floating window you can drag anywhere on screen instead of cramming it into the docked picker',
+      'With "Show All Characters by Default" on, the float opens directly when you start editing — the docked picker stays for the C64 keyboard layout',
+      'Drag position is remembered for the rest of the session; the floating window doesn\'t use the sticky-keyboard setting (always position-independent)',
+    ]},
     { ver: '1.3.87', title: 'Modals fit the screen on phones', items: [
       'Below 600px every modal collapses to viewport width regardless of the size class — no more horizontal page scroll on the Compare Disk, Hex, BAM, File Chains, and other wide modals',
       'Wide content (hex tables, sector grids, side-by-side compare) scrolls horizontally inside the modal body so the C64 fixed-column layouts stay intact',

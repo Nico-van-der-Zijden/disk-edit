@@ -121,3 +121,43 @@
     visibility: hidden;
   }
 
+  /* --- Floating 16x16 PETSCII charset window ------------------------
+     Opened from the ALL button or directly when "show all by default"
+     is on. Drag-positioned by the user; doesn't honor the sticky-keyboard
+     setting. Cells reuse .petscii-kb-row / .petscii-key from above. */
+  .petscii-float {
+    display: none;
+    position: fixed;
+    background: var(--bg-menu);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.4);
+    z-index: 250;
+  }
+  .petscii-float.open { display: block; }
+
+  .petscii-float-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--selected-bg);
+    color: var(--selected-text);
+    border-bottom: 1px solid var(--border);
+    border-radius: 3px 3px 0 0;
+    cursor: grab;
+    /* Stop touch drag from being eaten by page / parent scroll on
+       phones — without this, pointermove never reaches our handler. */
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    font-size: 11px;
+    font-weight: bold;
+  }
+  .petscii-float-titlebar.dragging { cursor: grabbing; }
+  .petscii-float-titlebar i { font-size: 12px; opacity: 0.8; }
+
+  .petscii-float-body {
+    padding: 10px;
+  }
+

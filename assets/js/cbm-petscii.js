@@ -16,6 +16,39 @@ const KB_ROWS = [
   [['Z',0x5A,0xDA,0xAD],['X',0x58,0xD8,0xBD],['C',0x43,0xC3,0xBC],['V',0x56,0xD6,0xBE],['B',0x42,0xC2,0xBF],['N',0x4E,0xCE,0xAA],['M',0x4D,0xCD,0xA7],[',',0x2C,0x3C,-1],['.',0x2E,0x3E,-1],['/',0x2F,0x3F,-1]],
 ];
 
+// 16x16 PETSCII character grid HTML, with hex column/row headers. Used
+// by the floating "All charset" window and (legacy) by renderPicker's
+// All branch. Doesn't include any modifier bar — that's the caller's
+// concern.
+function buildAllGridHtml() {
+  var html = '';
+  // Header row with column numbers
+  html += '<div class="petscii-kb-row"><div class="petscii-key empty" style="width:28px;font-size:9px;color:var(--text-muted)"></div>';
+  for (var col = 0; col < 16; col++) {
+    html += '<div class="petscii-key empty" style="font-size:9px;color:var(--text-muted);cursor:default">' + col.toString(16).toUpperCase() + '</div>';
+  }
+  html += '</div>';
+
+  for (var row = 0; row < 16; row++) {
+    html += '<div class="petscii-kb-row">';
+    html += '<div class="petscii-key empty" style="width:28px;font-size:9px;color:var(--text-muted);cursor:default">' + row.toString(16).toUpperCase() + 'x</div>';
+    for (col = 0; col < 16; col++) {
+      var code = row * 16 + col;
+      var isSafe = SAFE_PETSCII.has(code);
+      var disabled = !isSafe && !allowUnsafeChars;
+      var isReversed = (code >= 0x00 && code <= 0x1F) || (code >= 0x80 && code <= 0x9F);
+      var ch = PETSCII_MAP[code];
+      var title = '$' + code.toString(16).toUpperCase().padStart(2, '0');
+      html += '<div class="petscii-key' +
+        (isReversed ? ' rev-char' : '') +
+        (disabled ? ' disabled' : (!isSafe ? ' unsafe' : '')) +
+        '" data-code="' + code + '" title="' + title + '">' + escHtml(ch) + '</div>';
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
 // ── Render the picker HTML ───────────────────────────────────────────
 function renderPicker() {
   const el = document.getElementById('petscii-picker');
@@ -27,32 +60,9 @@ function renderPicker() {
   html += '</div>';
 
   if (pickerModifier === 'all') {
-    // Show all PETSCII characters in a 16x16 grid
-    // Header row with column numbers
-    html += '<div class="petscii-kb-row"><div class="petscii-key empty" style="width:28px;font-size:9px;color:var(--text-muted)"></div>';
-    for (var col = 0; col < 16; col++) {
-      html += '<div class="petscii-key empty" style="font-size:9px;color:var(--text-muted);cursor:default">' + col.toString(16).toUpperCase() + '</div>';
-    }
-    html += '</div>';
-
-    for (var row = 0; row < 16; row++) {
-      html += '<div class="petscii-kb-row">';
-      // Row label
-      html += '<div class="petscii-key empty" style="width:28px;font-size:9px;color:var(--text-muted);cursor:default">' + row.toString(16).toUpperCase() + 'x</div>';
-      for (col = 0; col < 16; col++) {
-        var code = row * 16 + col;
-        var isSafe = SAFE_PETSCII.has(code);
-        var disabled = !isSafe && !allowUnsafeChars;
-        var isReversed = (code >= 0x00 && code <= 0x1F) || (code >= 0x80 && code <= 0x9F);
-        var ch = PETSCII_MAP[code];
-        var title = '$' + code.toString(16).toUpperCase().padStart(2, '0');
-        html += '<div class="petscii-key' +
-          (isReversed ? ' rev-char' : '') +
-          (disabled ? ' disabled' : (!isSafe ? ' unsafe' : '')) +
-          '" data-code="' + code + '" title="' + title + '">' + escHtml(ch) + '</div>';
-      }
-      html += '</div>';
-    }
+    // Legacy in-place 16x16 grid — unreachable in normal flow now that the
+    // ALL button switches to the floating window, but kept as a backup.
+    html += buildAllGridHtml();
   } else {
     // Standard keyboard layout
     for (var r = 0; r < KB_ROWS.length; r++) {
@@ -121,6 +131,14 @@ function initPicker() {
     if (mod) {
       if (mod.classList.contains('disabled')) return;
       var m = mod.getAttribute('data-mod');
+      if (m === 'all') {
+        // ALL switches over to the floating 16x16 window. Tear down the
+        // compact picker (incl. sticky-modal flip) but keep pickerTarget
+        // — the float reuses it.
+        hideCompactPicker();
+        showPetsciiFloat(pickerTarget);
+        return;
+      }
       if (m === 'rev') {
         pickerReverse = !pickerReverse;
       } else {
@@ -471,10 +489,141 @@ function positionPicker(isInitial) {
   }
 }
 
-function showPetsciiPicker(targetEl, maxLen) {
-  var el = document.getElementById('petscii-picker');
+// ── Floating "All charset" window ─────────────────────────────────────
+// Separate window for the 16x16 grid because it's too dense to live next
+// to the input. The user drags it where they want; the position is kept
+// in module state for the rest of the page session and resets to default
+// on reload. The sticky-keyboard option doesn't apply here — float is
+// always position:fixed and user-positioned.
+var floatPosition = null; // { left, top } or null = default centered
+
+function ensureFloatBuilt() {
+  var fl = document.getElementById('petscii-float');
+  if (fl) return fl;
+  fl = document.createElement('div');
+  fl.id = 'petscii-float';
+  fl.className = 'petscii-float';
+  fl.innerHTML =
+    '<div class="petscii-float-titlebar">' +
+      '<i class="fa-solid fa-grip-vertical"></i>' +
+      '<span class="petscii-float-label">PETSCII Charset</span>' +
+    '</div>' +
+    '<div class="petscii-float-body"></div>';
+  document.body.appendChild(fl);
+
+  var titleBar = fl.querySelector('.petscii-float-titlebar');
+  var body = fl.querySelector('.petscii-float-body');
+
+  bindFloatDrag(fl, titleBar);
+
+  // Same pickerClicking bracket as the compact picker, so the editor's
+  // blur handler doesn't commit the edit while the user clicks a cell.
+  body.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    pickerClicking = true;
+  });
+  body.addEventListener('mouseup', function() {
+    setTimeout(function() { pickerClicking = false; }, 200);
+  });
+  body.addEventListener('click', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    var t = e.target;
+    if (t.nodeType === 3) t = t.parentElement;
+    if (!t) return;
+    var key = t.closest('.petscii-key');
+    if (!key || !pickerTarget || key.classList.contains('empty') || key.classList.contains('disabled')) return;
+    var code = parseInt(key.getAttribute('data-code'), 10);
+    if (isNaN(code) || code < 0) return;
+    var ch = PETSCII_MAP[code];
+    insertCharAtCursor(pickerTarget, ch, code);
+  });
+
+  return fl;
+}
+
+function bindFloatDrag(fl, handle) {
+  handle.addEventListener('pointerdown', function(e) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+
+    // First-drag normalization: convert the centered transform to inline
+    // left/top so subsequent moves are deltas rather than transforms.
+    var rect = fl.getBoundingClientRect();
+    fl.style.transform = '';
+    fl.style.left = rect.left + 'px';
+    fl.style.top = rect.top + 'px';
+
+    var startX = e.clientX, startY = e.clientY;
+    var origLeft = rect.left, origTop = rect.top;
+    var width = rect.width, height = rect.height;
+    var pointerId = e.pointerId;
+
+    handle.classList.add('dragging');
+    try { handle.setPointerCapture(pointerId); } catch (_) {}
+
+    function onMove(ev) {
+      if (ev.pointerId !== pointerId) return;
+      var nx = origLeft + (ev.clientX - startX);
+      var ny = origTop + (ev.clientY - startY);
+      // Clamp to viewport so the title bar can't be dragged off-screen
+      // (otherwise the user can't grab it again to bring it back).
+      nx = Math.max(0, Math.min(window.innerWidth - width, nx));
+      ny = Math.max(0, Math.min(window.innerHeight - height, ny));
+      fl.style.left = nx + 'px';
+      fl.style.top = ny + 'px';
+      floatPosition = { left: nx, top: ny };
+    }
+    function onUp() {
+      handle.classList.remove('dragging');
+      try { handle.releasePointerCapture(pointerId); } catch (_) {}
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+    }
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  });
+}
+
+function showPetsciiFloat(targetEl) {
   pickerTarget = targetEl;
-  pickerModifier = pickerDefaultAll ? 'all' : 'normal';
+  var fl = ensureFloatBuilt();
+  fl.querySelector('.petscii-float-body').innerHTML = buildAllGridHtml();
+
+  if (floatPosition) {
+    fl.style.left = floatPosition.left + 'px';
+    fl.style.top = floatPosition.top + 'px';
+    fl.style.transform = '';
+  } else {
+    fl.style.left = '50%';
+    fl.style.top = '50%';
+    fl.style.transform = 'translate(-50%, -50%)';
+  }
+
+  // Stay above any open modal, same z-index lift as the compact picker.
+  if (typeof modalZCounter !== 'undefined') fl.style.zIndex = modalZCounter + 5;
+
+  fl.classList.add('open');
+}
+
+function hidePetsciiFloat() {
+  var fl = document.getElementById('petscii-float');
+  if (fl) fl.classList.remove('open');
+}
+
+function showPetsciiPicker(targetEl, maxLen) {
+  pickerTarget = targetEl;
+  // Show-all-by-default skips the compact picker entirely and brings up
+  // the floating window — the docked picker is reserved for the C64
+  // keyboard layout.
+  if (pickerDefaultAll) {
+    showPetsciiFloat(targetEl);
+    return;
+  }
+  var el = document.getElementById('petscii-picker');
+  pickerModifier = 'normal';
   pickerReverse = false;
   renderPicker();
   el.classList.add('open');
@@ -526,12 +675,13 @@ function showPetsciiPicker(targetEl, maxLen) {
   }
 }
 
-function hidePetsciiPicker() {
+// Tear down only the compact picker (and its sticky-modal side effects).
+// Caller decides whether to clear pickerTarget — the ALL→float transition
+// keeps the same target alive.
+function hideCompactPicker() {
   document.getElementById('petscii-picker').classList.remove('open');
-  pickerTarget = null;
   if (document.body.classList.contains('sticky-picker-in-modal')) {
     document.body.classList.remove('sticky-picker-in-modal');
-    // Clear the overlay height we set on open.
     var openOverlay = document.querySelector('.modal-overlay.open');
     if (openOverlay) openOverlay.style.height = '';
     if (pickerSavedScrollY) window.scrollTo(0, pickerSavedScrollY);
@@ -541,6 +691,12 @@ function hidePetsciiPicker() {
     document.removeEventListener('scroll', pickerScrollHandler, true);
     pickerScrollHandler = null;
   }
+}
+
+function hidePetsciiPicker() {
+  hideCompactPicker();
+  hidePetsciiFloat();
+  pickerTarget = null;
 }
 
 // Old name compatibility
