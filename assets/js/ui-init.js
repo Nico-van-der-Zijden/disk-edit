@@ -20,7 +20,7 @@ document.addEventListener('dragover', function(e) {
   e.dataTransfer.dropEffect = 'copy';
 });
 
-document.addEventListener('drop', function(e) {
+document.addEventListener('drop', async function(e) {
   // Same gating as the dragover above — leave in-page drops to the
   // dir-panel / per-entry handlers.
   if (!e.dataTransfer || (e.dataTransfer.types || []).indexOf('Files') < 0) return;
@@ -30,111 +30,89 @@ document.addEventListener('drop', function(e) {
   var files = Array.from(e.dataTransfer.files);
   if (files.length === 0) return;
 
+  // expandArchives reads each file once, transparently decompresses .gz,
+  // and pops the picker for .zip — the result is a flat list of
+  // { name, buffer } entries with the user's archive choices already
+  // resolved. Everything below is the existing classify-by-extension
+  // dispatch, just driven by pre-loaded buffers.
+  var entries = await expandArchives(files);
+  if (entries.length === 0) return;
+
   var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp'];
   var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
   var archiveExts = ['.lnx'];
-  var diskFiles = [];
-  var importFiles = [];
-  var archiveFiles = [];
-
-  for (var i = 0; i < files.length; i++) {
-    var name = files[i].name.toLowerCase();
-    var ext = name.substring(name.lastIndexOf('.'));
-    if (diskExts.indexOf(ext) >= 0) diskFiles.push(files[i]);
-    else if (archiveExts.indexOf(ext) >= 0) archiveFiles.push(files[i]);
-    else if (fileExts.indexOf(ext) >= 0) importFiles.push(files[i]);
+  var diskEntries = [], importEntries = [], archiveEntries = [];
+  for (var i = 0; i < entries.length; i++) {
+    var lname = entries[i].name.toLowerCase();
+    var ext = lname.substring(lname.lastIndexOf('.'));
+    if (diskExts.indexOf(ext) >= 0) diskEntries.push(entries[i]);
+    else if (archiveExts.indexOf(ext) >= 0) archiveEntries.push(entries[i]);
+    else if (fileExts.indexOf(ext) >= 0) importEntries.push(entries[i]);
   }
 
   // Open disk images in new tabs
-  if (diskFiles.length > 0) {
-    function openDiskFile(file) {
-      return new Promise(function(resolve, reject) {
-        var reader = new FileReader();
-        reader.onload = function() { resolve({ name: file.name, buffer: reader.result }); };
-        reader.onerror = function() { reject(file.name); };
-        reader.readAsArrayBuffer(file);
-      });
-    }
-    Promise.all(diskFiles.map(openDiskFile)).then(async function(results) {
-      saveActiveTab();
-      for (var i = 0; i < results.length; i++) {
-        try {
-          var buf = results[i].buffer;
-          var fname = results[i].name;
-
-          currentBuffer = buf;
-          currentFileName = fname;
-          currentPartition = null;
-          selectedEntryIndex = -1;
-          parseDisk(currentBuffer);
-          var tab = createTab(fname, currentBuffer, fname);
-          activeTabId = tab.id;
-          tabDirty = false;
-          clearUndo();
-          addRecentDisk(fname, buf);
-        } catch (err) {
-          showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
-        }
+  if (diskEntries.length > 0) {
+    saveActiveTab();
+    for (var di = 0; di < diskEntries.length; di++) {
+      try {
+        var buf = diskEntries[di].buffer;
+        var fname = diskEntries[di].name;
+        currentBuffer = buf;
+        currentFileName = fname;
+        currentPartition = null;
+        selectedEntryIndex = -1;
+        parseDisk(currentBuffer);
+        var tab = createTab(fname, currentBuffer, fname);
+        activeTabId = tab.id;
+        tabDirty = false;
+        clearUndo();
+        addRecentDisk(fname, buf);
+      } catch (err) {
+        showModal('Error', ['Error reading ' + diskEntries[di].name + ': ' + err.message]);
       }
-      var info = parseCurrentDir(currentBuffer);
-      renderDisk(info);
-      renderTabs();
-      updateMenuState();
-    });
+    }
+    var info = parseCurrentDir(currentBuffer);
+    renderDisk(info);
+    renderTabs();
+    updateMenuState();
   }
 
   // Archives (LNX): extract each one to a new D64 tab
-  if (archiveFiles.length > 0) {
-    function readArchive(file) {
-      return new Promise(function(resolve, reject) {
-        var reader = new FileReader();
-        reader.onload = function() { resolve({ name: file.name, buffer: reader.result }); };
-        reader.onerror = function() { reject(file.name); };
-        reader.readAsArrayBuffer(file);
-      });
-    }
-    Promise.all(archiveFiles.map(readArchive)).then(function(results) {
-      saveActiveTab();
-      for (var ai = 0; ai < results.length; ai++) {
-        openLnxArchiveAsTab(results[ai].buffer, results[ai].name);
-        addRecentDisk(results[ai].name, results[ai].buffer);
+  if (archiveEntries.length > 0) {
+    saveActiveTab();
+    for (var ai = 0; ai < archiveEntries.length; ai++) {
+      try {
+        openLnxArchiveAsTab(archiveEntries[ai].buffer, archiveEntries[ai].name);
+        addRecentDisk(archiveEntries[ai].name, archiveEntries[ai].buffer);
+      } catch (err) {
+        showModal('Error', ['Failed to read archive ' + archiveEntries[ai].name + ': ' + err.message]);
       }
-    }).catch(function(n) {
-      showModal('Error', ['Failed to read archive: ' + n]);
-    });
+    }
   }
 
   // Import PRG/SEQ/USR/REL/CVT files into current disk
-  if (importFiles.length > 0 && currentBuffer) {
+  if (importEntries.length > 0 && currentBuffer) {
     var imported = 0, failed = 0;
-    function importNext(idx) {
-      if (idx >= importFiles.length) {
-        if (imported > 0) {
-          var info = parseCurrentDir(currentBuffer);
-          renderDisk(info);
-          showModal('Import Complete', [imported + ' file(s) imported.' + (failed > 0 ? ' ' + failed + ' failed.' : '')]);
+    for (var ii = 0; ii < importEntries.length; ii++) {
+      try {
+        var ent = importEntries[ii];
+        var iext = ent.name.substring(ent.name.lastIndexOf('.')).toLowerCase();
+        if (iext === '.cvt') {
+          await importCvtFile(ent.name, new Uint8Array(ent.buffer));
+        } else {
+          importFileToDisk(ent.name, new Uint8Array(ent.buffer));
+          imported++;
         }
-        return;
+      } catch (err) {
+        failed++;
       }
-      var file = importFiles[idx];
-      var reader = new FileReader();
-      reader.onload = async function() {
-        var ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-        if (ext === '.cvt') {
-          // CVT import is async (confirmation dialog) and shows its own result
-          await importCvtFile(file.name, new Uint8Array(reader.result));
-          importNext(idx + 1);
-          return;
-        }
-        importFileToDisk(file.name, new Uint8Array(reader.result));
-        imported++;
-        importNext(idx + 1);
-      };
-      reader.onerror = function() { failed++; importNext(idx + 1); };
-      reader.readAsArrayBuffer(file);
     }
-    importNext(0);
-  } else if (importFiles.length > 0 && !currentBuffer) {
+    if (imported > 0) {
+      var info2 = parseCurrentDir(currentBuffer);
+      renderDisk(info2);
+      showModal('Import Complete', [imported + ' file(s) imported.' + (failed > 0 ? ' ' + failed + ' failed.' : '')]);
+    }
+  } else if (importEntries.length > 0 && !currentBuffer) {
     showModal('Drop Error', ['No disk open to import files into. Open or create a disk first.']);
   }
 });

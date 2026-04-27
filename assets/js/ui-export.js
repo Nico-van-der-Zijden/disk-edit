@@ -815,54 +815,47 @@ document.getElementById('opt-export-png-dir').addEventListener('click', function
 // ── geoWrite to Plain Text ──────────────────────────────────────────
 document.getElementById('opt-export-rtf').parentElement.insertAdjacentHTML('beforeend', '');
 
-fileInput.addEventListener('change', () => {
+fileInput.addEventListener('change', async () => {
   var files = Array.from(fileInput.files);
   if (files.length === 0) return;
   fileInput.value = '';
 
-  function openFile(file) {
-    return new Promise(function(resolve, reject) {
-      var reader = new FileReader();
-      reader.onload = function() { resolve({ name: file.name, buffer: reader.result }); };
-      reader.onerror = function() { reject(file.name); };
-      reader.readAsArrayBuffer(file);
-    });
-  }
+  // Same expansion as the drop handler — .gz transparently decompresses,
+  // .zip pops the picker. Result is { name, buffer } entries already
+  // loaded into memory.
+  var entries = await expandArchives(files);
+  if (entries.length === 0) return;
 
-  Promise.all(files.map(openFile)).then(async function(results) {
-    saveActiveTab();
-    for (var i = 0; i < results.length; i++) {
-      try {
-        var buf = results[i].buffer;
-        var fname = results[i].name;
+  saveActiveTab();
+  for (var i = 0; i < entries.length; i++) {
+    try {
+      var buf = entries[i].buffer;
+      var fname = entries[i].name;
 
-        // LNX archives: extract into a new D64 tab instead of opening as-is.
-        if (/\.lnx$/i.test(fname)) {
-          openLnxArchiveAsTab(buf, fname);
-          addRecentDisk(fname, buf);
-          continue;
-        }
-
-        currentBuffer = buf;
-        currentFileName = fname;
-        currentPartition = null;
-        selectedEntryIndex = -1;
-        parseDisk(currentBuffer);
-        var tab = createTab(fname, currentBuffer, fname);
-        activeTabId = tab.id;
-        tabDirty = false;
-        clearUndo();
+      // LNX archives: extract into a new D64 tab instead of opening as-is.
+      if (/\.lnx$/i.test(fname)) {
+        openLnxArchiveAsTab(buf, fname);
         addRecentDisk(fname, buf);
-      } catch (err) {
-        showModal('Error', ['Error reading ' + results[i].name + ': ' + err.message]);
+        continue;
       }
+
+      currentBuffer = buf;
+      currentFileName = fname;
+      currentPartition = null;
+      selectedEntryIndex = -1;
+      parseDisk(currentBuffer);
+      var tab = createTab(fname, currentBuffer, fname);
+      activeTabId = tab.id;
+      tabDirty = false;
+      clearUndo();
+      addRecentDisk(fname, buf);
+    } catch (err) {
+      showModal('Error', ['Error reading ' + entries[i].name + ': ' + err.message]);
     }
-    var info = parseCurrentDir(currentBuffer);
-    renderDisk(info);
-    renderTabs();
-    updateMenuState();
-  }).catch(function(name) {
-    showModal('Error', ['Failed to read file: ' + name]);
-  });
+  }
+  var info = parseCurrentDir(currentBuffer);
+  renderDisk(info);
+  renderTabs();
+  updateMenuState();
 });
 

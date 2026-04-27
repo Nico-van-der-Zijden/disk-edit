@@ -194,6 +194,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.89', title: 'Open .gz and .zip archives directly', items: [
+      'Drop a gzipped disk image (.d64.gz, .d81.gz, …) and it\'s decompressed transparently before opening',
+      'Drop a .zip and pick which entries to open: every disk and importable file gets a checkbox (selected by default), then "Open Selected" dispatches them all in one go',
+      'ZIPs that hold a single disk image (with optional README/etc.) skip the picker and open straight into a new tab',
+    ]},
     { ver: '1.3.88', title: 'PETSCII full charset is a draggable floating window', items: [
       'Pressing ALL on the PETSCII keyboard now opens the 16×16 charset as a separate floating window you can drag anywhere on screen instead of cramming it into the docked picker',
       'With "Show All Characters by Default" on, the float opens directly when you start editing — the docked picker stays for the C64 keyboard layout',
