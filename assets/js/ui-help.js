@@ -195,6 +195,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.85', title: 'Tab bar: scroll, reorder, context menu', items: [
+      'Tab strip overflows cleanly — chevrons scroll left/right and a » button opens a dropdown listing every open tab',
+      'Disk icon on every tab, red when there are unsaved changes; tape (read-only) tabs keep the TAPE badge instead',
+      'Right-click a tab for Close, Close Others, Close Tabs to the Right, Move Left, Move Right, Close All; middle-click closes',
+      'Drag a tab to reorder — a glowing accent bar marks the drop position',
+      'File listing: long-press on touch opens the same context menu as right-click, and submenu items (Align, Name Case, View As, …) now actually fire from it',
+    ]},
     { ver: '1.3.84', title: 'Mobile menu rewrite + Theme menu + tap-friendly submenus', items: [
       'Below 900px the desktop menubar collapses to a hamburger button that opens a drill-down menu (iOS Settings style) — one level visible at a time, every row a clear tap target, no accordion ambiguity',
       'Options → Theme → Dark / Light replaces the desktop-only sun/moon icon on small screens; the icon stays on wider screens',

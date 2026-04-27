@@ -37,17 +37,121 @@
   }
 
   /* --- Tab Bar --- */
+  /* The wrap holds the scrollable strip plus three controls that appear
+     only when the tabs overflow (.tab-bar-overflow class added by JS):
+       <  scroll left
+       >  scroll right
+       »  open a dropdown listing every tab
+     The strip itself is always one row, scrolls horizontally, and hides
+     its scrollbar so the only way to scroll is via the buttons / drag /
+     touch swipe — keeps the chrome clean. */
+  .tab-bar-wrap {
+    display: flex;
+    align-items: stretch;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .tab-bar-wrap:has(.tab-bar:empty) { display: none; }
+
   .tab-bar {
     display: flex;
     gap: 2px;
     padding: 4px 10px 0;
     background: var(--bg);
     overflow-x: auto;
-    flex-shrink: 0;
-    border-bottom: 1px solid var(--border);
+    flex: 1;
+    min-width: 0;
+    /* Hide the native scrollbar — buttons / swipe drive scrolling. */
+    scrollbar-width: none;
+    /* Anchor for the absolutely-positioned drag-drop indicator. */
+    position: relative;
   }
+  .tab-bar::-webkit-scrollbar { display: none; }
 
   .tab-bar:empty { display: none; }
+
+  .tab-scroll-btn,
+  .tab-list-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    background: var(--bg);
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .tab-scroll-btn:hover,
+  .tab-list-btn:hover {
+    color: var(--text);
+    background: var(--hover);
+  }
+  .tab-scroll-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+  }
+  .tab-list-btn[aria-expanded="true"] {
+    color: var(--accent);
+    background: var(--hover);
+  }
+  .tab-bar-wrap.tab-bar-overflow .tab-scroll-btn,
+  .tab-bar-wrap.tab-bar-overflow .tab-list-btn {
+    display: inline-flex;
+  }
+
+  /* Floating dropdown listing every open tab — anchored below the »
+     button. Each row mirrors the tab's appearance (dirty asterisk, tape
+     badge) so users can spot what they're picking. */
+  .tab-list-dropdown {
+    position: fixed;
+    background: var(--bg-panel);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+    padding: 4px 0;
+    min-width: 220px;
+    max-width: min(360px, calc(100vw - 16px));
+    max-height: 70vh;
+    overflow-y: auto;
+    z-index: 200;
+  }
+  .tab-list-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    color: var(--text);
+    white-space: nowrap;
+  }
+  .tab-list-dropdown-item:hover {
+    background: var(--hover);
+  }
+  .tab-list-dropdown-item.active {
+    color: var(--accent);
+  }
+  .tab-list-dropdown-item .tab-list-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tab-list-dropdown-item .tab-list-close {
+    color: var(--text-muted);
+    opacity: 0.5;
+    flex-shrink: 0;
+    padding: 2px 4px;
+    border-radius: 2px;
+  }
+  .tab-list-dropdown-item .tab-list-close:hover {
+    opacity: 1;
+    color: var(--color-error);
+    background: rgba(0, 0, 0, 0.2);
+  }
 
   .tab {
     display: flex;
@@ -64,6 +168,10 @@
     white-space: nowrap;
     max-width: 180px;
     overflow: hidden;
+    /* Don't shrink to fit — keep tabs at their natural / 180px width
+       so the strip overflows horizontally when too many are open. The
+       overflow controls in .tab-bar-wrap rely on scrollWidth growing. */
+    flex-shrink: 0;
   }
 
   .tab.active {
@@ -73,9 +181,79 @@
     border-bottom: 1px solid var(--bg);
   }
 
+  /* Drag-to-reorder visuals. The dragged tab fades; a single floating
+     bar (#tab-drop-line) — not per-tab pseudo-elements — shows the drop
+     boundary. Keeping tab geometry stable while dragging avoids the
+     dragenter/leave loop that any layout-shifting indicator would
+     trigger on a flex container. */
+  .tab.tab-dragging {
+    opacity: 0.4;
+  }
+  .tab-drop-line {
+    position: absolute;
+    top: 4px;
+    bottom: 0;
+    width: 4px;
+    margin-left: -2px; /* center on the boundary X */
+    border-radius: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent), 0 0 3px var(--accent);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  /* Disk icon at the start of every tab (and tab-list dropdown row) —
+     replaces the legacy "* " dirty indicator. Muted by default, turns
+     red when the tab has unsaved changes (.tab-dirty). Uses
+     --color-error which is tuned for both light and dark themes. */
+  .tab-disk-icon {
+    font-size: 11px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+  }
+  .tab.tab-dirty .tab-disk-icon,
+  .tab-list-dropdown-item.tab-dirty .tab-disk-icon {
+    color: var(--color-error);
+  }
+
   .tab:hover:not(.active) {
     color: var(--text);
     background: var(--hover);
+  }
+
+  /* Tab context menu — right-click / long-press on a tab. Built fresh
+     each time, dismissed via outside click / Escape / another right-click
+     elsewhere. Mirrors menu-dropdown styling but stands on its own so
+     it doesn't depend on .menu-item.open / .menu-active state. */
+  .tab-context-menu {
+    position: fixed;
+    z-index: 200;
+    background: var(--bg-panel);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+    padding: 4px 0;
+    min-width: 200px;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .tab-context-menu .tab-ctx-item {
+    padding: 6px 14px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .tab-context-menu .tab-ctx-item:hover:not(.disabled) {
+    background: var(--hover);
+  }
+  .tab-context-menu .tab-ctx-item.disabled {
+    color: var(--text-muted);
+    cursor: default;
+    opacity: 0.5;
+  }
+  .tab-context-menu .tab-ctx-separator {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
   }
 
   .tape-warning {

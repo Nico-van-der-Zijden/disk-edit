@@ -98,6 +98,11 @@
     display: flex;
     gap: 8px;
     padding: 0 16px;
+    /* Suppress iOS Safari's native long-press callout (copy/select) so
+       our 500ms timer can fire showContextMenu instead. */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
 
   .dir-entry {

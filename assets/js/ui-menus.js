@@ -63,6 +63,10 @@ function showContextMenu(x, y) {
     });
     item.addEventListener('click', function(e) {
       if (item.classList.contains('disabled')) return;
+      // Don't swallow clicks that originate inside the .submenu — they
+      // need to bubble up to the delegated #context-menu handler so the
+      // original action fires. Only the header itself toggles the submenu.
+      if (e.target.closest('.submenu')) return;
       e.stopPropagation();
       openContextSubmenu(item);
     });
@@ -128,18 +132,16 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeContextMenu();
 });
 
-// Right-click on dir entries
-document.getElementById('content').addEventListener('contextmenu', function(e) {
-  // Only show context menu when a disk is loaded
-  if (!currentBuffer) return;
-
-  var entry = e.target.closest('.dir-entry:not(.dir-header-row):not(.dir-parent-row)');
-  var dirListing = e.target.closest('.dir-listing');
-  if (!entry && !dirListing) return;
-  e.preventDefault();
+// Right-click on dir entries — and the equivalent long-press on touch.
+// Both routes select the targeted entry (or deselect on empty area) and
+// then open the context menu at the pointer position.
+function tryShowEntryContextMenu(target, x, y) {
+  if (!currentBuffer) return false;
+  var entry = target.closest('.dir-entry:not(.dir-header-row):not(.dir-parent-row)');
+  var dirListing = target.closest('.dir-listing');
+  if (!entry && !dirListing) return false;
 
   if (entry && entry.dataset.offset) {
-    // Right-click on a file entry — select it
     var offset = parseInt(entry.dataset.offset, 10);
     if (selectedEntryIndex !== offset) {
       document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
@@ -148,14 +150,73 @@ document.getElementById('content').addEventListener('contextmenu', function(e) {
       updateEntryMenuState();
     }
   } else {
-    // Right-click on empty area — deselect
     document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
     selectedEntryIndex = -1;
     updateEntryMenuState();
   }
+  showContextMenu(x, y);
+  return true;
+}
 
-  showContextMenu(e.clientX, e.clientY);
+document.getElementById('content').addEventListener('contextmenu', function(e) {
+  if (tryShowEntryContextMenu(e.target, e.clientX, e.clientY)) e.preventDefault();
 });
+
+// Long-press on touch → same context menu. iOS Safari doesn't reliably
+// fire `contextmenu` on long-press (and runs its own callout), so we use
+// an explicit timer. Cancel on touchmove > 10px so vertical scrolling of
+// the file listing still works.
+(function bindEntryLongPress() {
+  var content = document.getElementById('content');
+  if (!content) return;
+  var lpTimer = null, lpStart = null, lpFired = false, lpTarget = null;
+  function clearLP() {
+    if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
+    lpStart = null;
+    lpTarget = null;
+  }
+  content.addEventListener('touchstart', function(e) {
+    if (e.touches.length !== 1) { clearLP(); return; }
+    if (!currentBuffer) return;
+    // Only arm if the touch starts on something that could open a menu;
+    // avoids firing inside modals, viewers, etc.
+    var t = e.touches[0];
+    var hit = e.target.closest('.dir-entry:not(.dir-header-row):not(.dir-parent-row), .dir-listing');
+    if (!hit) return;
+    lpFired = false;
+    lpStart = { x: t.clientX, y: t.clientY };
+    lpTarget = e.target;
+    lpTimer = setTimeout(function() {
+      lpFired = true;
+      lpTimer = null;
+      tryShowEntryContextMenu(lpTarget, lpStart.x, lpStart.y);
+    }, 500);
+  }, { passive: true });
+  content.addEventListener('touchmove', function(e) {
+    if (!lpStart) return;
+    var t = e.touches[0];
+    var dx = t.clientX - lpStart.x, dy = t.clientY - lpStart.y;
+    if (dx * dx + dy * dy > 100) clearLP();
+  }, { passive: true });
+  content.addEventListener('touchend', function(e) {
+    var fired = lpFired;
+    clearLP();
+    // Swallow the synthesized click that follows a long-press so the
+    // entry doesn't also get activated (e.g. open a viewer).
+    if (fired) {
+      e.preventDefault();
+      // Some browsers still dispatch the click after touchend; block one.
+      var blocker = function(ev) {
+        ev.stopPropagation();
+        ev.preventDefault();
+        content.removeEventListener('click', blocker, true);
+      };
+      content.addEventListener('click', blocker, true);
+      setTimeout(function() { content.removeEventListener('click', blocker, true); }, 600);
+    }
+  });
+  content.addEventListener('touchcancel', clearLP, { passive: true });
+})();
 
 // Click outside dir entries — do NOT deselect (selection persists until another file is clicked)
 

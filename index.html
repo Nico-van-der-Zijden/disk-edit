@@ -318,7 +318,18 @@
 
 <input type="file" id="file-input" accept=".d64,.d71,.d81,.d80,.d82,.t64,.tap,.x64,.g64,.d1m,.d2m,.d4m,.dnp,.p00,.s00,.u00,.r00,.lnx" multiple>
 
-<div class="tab-bar" id="tab-bar"></div>
+<div class="tab-bar-wrap" id="tab-bar-wrap">
+  <div class="tab-bar" id="tab-bar"></div>
+  <button class="tab-scroll-btn tab-scroll-left" type="button" aria-label="Scroll tabs left">
+    <i class="fa-solid fa-chevron-left"></i>
+  </button>
+  <button class="tab-scroll-btn tab-scroll-right" type="button" aria-label="Scroll tabs right">
+    <i class="fa-solid fa-chevron-right"></i>
+  </button>
+  <button class="tab-list-btn" type="button" aria-label="All tabs" aria-haspopup="true" aria-expanded="false">
+    <i class="fa-solid fa-angles-right"></i>
+  </button>
+</div>
 
 <div class="content" id="content"></div>
 
