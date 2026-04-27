@@ -2,6 +2,23 @@
 function bindEditableFields() {
   document.querySelectorAll('.editable').forEach(el => {
     el.addEventListener('dblclick', () => startEditing(el));
+    bindTouchTapEdit(el, () => startEditing(el));
+  });
+}
+
+// Single-tap on touch is the equivalent of double-click on desktop for
+// fields that don't have any other tap behavior (disk name, disk id,
+// blocks-free). Tracks pointerType on pointerdown so a mouse user on a
+// hybrid device still needs the dblclick.
+function bindTouchTapEdit(el, openEdit) {
+  var lastType = '';
+  el.addEventListener('pointerdown', function(e) { lastType = e.pointerType; });
+  el.addEventListener('click', function(e) {
+    if (lastType !== 'touch' && lastType !== 'pen') return;
+    if (el.classList.contains('editing')) return;
+    if (el.querySelector('.petscii-editor')) return;
+    e.stopPropagation();
+    openEdit();
   });
 }
 

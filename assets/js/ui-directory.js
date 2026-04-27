@@ -1518,6 +1518,28 @@ document.getElementById('opt-block-size').addEventListener('click', (e) => {
   startEditBlockSize(selected);
 });
 
+document.getElementById('opt-change-ts').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  const selected = document.querySelector('.dir-entry.selected');
+  if (selected) startEditTrackSector(selected);
+});
+
+document.getElementById('opt-move-up').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  moveEntry(-1);
+});
+
+document.getElementById('opt-move-down').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (!currentBuffer || selectedEntryIndex < 0) return;
+  closeMenus();
+  moveEntry(1);
+});
+
 document.getElementById('opt-recalc-size').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;

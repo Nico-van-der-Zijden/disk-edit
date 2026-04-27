@@ -442,11 +442,14 @@ function updateEntryMenuState() {
   document.getElementById('opt-insert').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
   document.getElementById('opt-insert-sep').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
   document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection || multiSelect || tape);
+  document.getElementById('opt-change-ts').classList.toggle('disabled', !hasSelection || multiSelect || tape);
   document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection || multiSelect);
   var noNesting = inPartition && !currentFormat.subdirLinked; // D81: no nesting; DNP: nesting allowed
   document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || noNesting || !currentBuffer || !currentFormat.supportsSubdirs || !canInsertFile() || tape);
   // Multi-select compatible operations (all disabled for tape except copy/export)
   document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection || tape);
+  document.getElementById('opt-move-up').classList.toggle('disabled', !hasSelection || tape);
+  document.getElementById('opt-move-down').classList.toggle('disabled', !hasSelection || tape);
   document.getElementById('opt-align').classList.toggle('disabled', !hasSelection || tape);
   document.getElementById('opt-recalc-size').classList.toggle('disabled', !hasSelection || tape);
   document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection || tape);

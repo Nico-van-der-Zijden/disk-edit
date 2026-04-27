@@ -12,6 +12,133 @@ if (navigator.userAgent.includes('Edg')) {
   });
 }
 
+// ── Touch drag-to-reorder via the .dir-grip handle ───────────────────
+// HTML5 native DnD doesn't fire on touch. This runs a pointer-events
+// drag that mirrors the per-row dragover/drop logic but uses
+// document.elementFromPoint to find the row under the finger. Mouse
+// pointerType bails out so the existing native DnD flow still drives
+// desktop drags.
+function bindGripTouchDrag(rowEl, allEntries) {
+  var grip = rowEl.querySelector('.dir-grip');
+  if (!grip) return;
+  grip.addEventListener('pointerdown', function(e) {
+    if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
+    if (isTapeFormat() || !currentBuffer) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    var entryOff = parseInt(rowEl.dataset.offset, 10);
+    var pointerId = e.pointerId;
+    var startY = e.clientY;
+    var dragging = false;
+    var lastTarget = null; // { row, above }
+    var autoScrollTimer = null;
+
+    function clearMarkers() {
+      document.querySelectorAll('.dir-entry.drag-over-top, .dir-entry.drag-over-bottom').forEach(function(r) {
+        r.classList.remove('drag-over-top', 'drag-over-bottom');
+      });
+    }
+
+    function autoScroll(dir) {
+      var listing = rowEl.closest('.dir-listing');
+      if (!listing) return;
+      listing.scrollTop += dir * 8;
+    }
+
+    function onMove(ev) {
+      if (ev.pointerId !== pointerId) return;
+      if (!dragging) {
+        if (Math.abs(ev.clientY - startY) < 6) return;
+        dragging = true;
+        rowEl.classList.add('dragging');
+        try { grip.setPointerCapture(pointerId); } catch (_) {}
+      }
+      ev.preventDefault();
+
+      // Hide the row briefly so elementFromPoint sees what's underneath.
+      var prevPe = rowEl.style.pointerEvents;
+      rowEl.style.pointerEvents = 'none';
+      var hit = document.elementFromPoint(ev.clientX, ev.clientY);
+      rowEl.style.pointerEvents = prevPe;
+
+      var row = hit ? hit.closest('.dir-entry:not(.dir-header-row):not(.dir-parent-row)') : null;
+      clearMarkers();
+      if (row && row !== rowEl) {
+        var rect = row.getBoundingClientRect();
+        var midY = rect.top + rect.height / 2;
+        var above = ev.clientY < midY;
+        row.classList.add(above ? 'drag-over-top' : 'drag-over-bottom');
+        lastTarget = { row: row, above: above };
+      } else {
+        lastTarget = null;
+      }
+
+      // Auto-scroll near the listing edges so long lists stay reachable.
+      var listing = rowEl.closest('.dir-listing');
+      if (listing) {
+        var listRect = listing.getBoundingClientRect();
+        var nearTop = ev.clientY < listRect.top + 32;
+        var nearBottom = ev.clientY > listRect.bottom - 32;
+        if (nearTop || nearBottom) {
+          if (!autoScrollTimer) {
+            autoScrollTimer = setInterval(function() { autoScroll(nearTop ? -1 : 1); }, 30);
+          }
+        } else if (autoScrollTimer) {
+          clearInterval(autoScrollTimer);
+          autoScrollTimer = null;
+        }
+      }
+    }
+
+    function cleanup() {
+      if (autoScrollTimer) { clearInterval(autoScrollTimer); autoScrollTimer = null; }
+      rowEl.classList.remove('dragging');
+      clearMarkers();
+      try { grip.releasePointerCapture(pointerId); } catch (_) {}
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', cleanup);
+    }
+
+    function onUp(ev) {
+      if (ev.pointerId !== pointerId) return;
+      var target = lastTarget;
+      cleanup();
+      if (!dragging || !target) return;
+
+      var targetOffset = parseInt(target.row.dataset.offset, 10);
+      var slots = getDirSlotOffsets(currentBuffer);
+      var srcIdx = slots.indexOf(entryOff);
+      var targetIdx = slots.indexOf(targetOffset);
+      if (srcIdx < 0 || targetIdx < 0) return;
+
+      // Same adjacency rule as the desktop drop handler — adjacent rows
+      // skip the above/below adjustment so the swap is unambiguous.
+      if (Math.abs(targetIdx - srcIdx) !== 1) {
+        if (!target.above && targetIdx < srcIdx) targetIdx++;
+        else if (target.above && targetIdx > srcIdx) targetIdx--;
+      }
+      if (srcIdx === targetIdx) return;
+
+      pushUndo();
+      var dir = targetIdx > srcIdx ? 1 : -1;
+      var cur = srcIdx;
+      while (cur !== targetIdx) {
+        swapDirEntries(currentBuffer, slots[cur], slots[cur + dir]);
+        cur += dir;
+      }
+      selectedEntryIndex = slots[targetIdx];
+      var info = parseCurrentDir(currentBuffer);
+      renderDisk(info);
+    }
+
+    document.addEventListener('pointermove', onMove, { passive: false });
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', cleanup);
+  });
+}
+
 // ── Render ────────────────────────────────────────────────────────────
 function buildEntryIconsHtml(e, data, dirTrack) {
   // Tape entries (no raw directory bytes) — show loader-status icons only.
@@ -178,13 +305,14 @@ function renderDisk(info) {
   bindEditableFields();
   bindDirSelection();
 
-  // Double-click on blocks free to edit
+  // Double-click on blocks free to edit (single-tap on touch).
   const footerBlocks = document.querySelector('.dir-footer-blocks');
   if (footerBlocks) {
     footerBlocks.style.cursor = 'pointer';
     footerBlocks.addEventListener('dblclick', () => {
       startEditFreeBlocks(footerBlocks);
     });
+    bindTouchTapEdit(footerBlocks, () => startEditFreeBlocks(footerBlocks));
   }
 
   // Restore scroll position
@@ -441,6 +569,12 @@ function bindDirSelection() {
       const info = parseCurrentDir(currentBuffer);
       renderDisk(info);
     });
+
+    // Touch drag via the grip handle. Native HTML5 DnD doesn't fire on
+    // touch, so we run a manual pointer-events drag that mirrors the
+    // dragover / drop logic above. Mouse pointers fall through to the
+    // native handlers.
+    bindGripTouchDrag(el, entries);
   });
 
   // Panel-level drop zone: anywhere in the disk panel that isn't a real

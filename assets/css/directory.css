@@ -27,6 +27,11 @@
 
   .disk-name {
     flex: 1;
+    /* Override the default flex `min-width: auto` (which equals the
+       child's min-content) so .disk-name can shrink below 18ch on
+       narrow screens — otherwise the .disk-id flex-shrink:0 sibling
+       gets pushed past the header's right edge. */
+    min-width: 0;
     font-size: 16px;
     color: var(--text-muted);
     letter-spacing: 1px;
@@ -44,6 +49,25 @@
 
   .disk-name .editable {
     min-width: 18ch;
+  }
+
+  /* ── Narrow viewports ────────────────────────────────────────────
+     Below ~600px the 16px C64 Pro Mono header line ("0 \"NAME      \" ID 2A")
+     no longer fits in one row on a phone. Drop the font size and tighten
+     padding first; below ~420px allow the header to wrap so the disk-id
+     drops to its own right-aligned row. */
+  @media (max-width: 600px) {
+    .disk-header { padding: 10px 12px; gap: 6px; }
+    .disk-name { font-size: 13px; letter-spacing: 0; }
+    .disk-id { font-size: 12px; }
+    .disk-header-spacer { width: 24px; }
+    .disk-name .editable { min-width: 0; }
+  }
+  @media (max-width: 420px) {
+    .disk-header { flex-wrap: wrap; }
+    /* Force disk-id to its own row, right-aligned. spacer + disk-name
+       stay together on row 1. */
+    .disk-id { flex: 1 1 100%; text-align: right; }
   }
 
   .disk-id .editable {
@@ -321,6 +345,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    /* Without this, a vertical touch on the grip is intercepted by the
+       .dir-listing's scrolling (overflow-y: auto) and pointermove never
+       fires for our drag handler. */
+    touch-action: none;
   }
 
   .dir-entry:hover .dir-grip {
@@ -329,6 +357,12 @@
 
   .dir-entry.selected .dir-grip {
     color: var(--selected-text);
+  }
+
+  /* On touch devices there's no hover, so the grip is only visible for
+     the currently-selected row — that's the one the user can drag. */
+  @media (hover: none) and (pointer: coarse) {
+    .dir-entry.selected .dir-grip { opacity: 1; }
   }
 
   .dir-header-row .dir-grip {

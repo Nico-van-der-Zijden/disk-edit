@@ -195,6 +195,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.86', title: 'Mobile: edit fields and reorder files by touch', items: [
+      'Disk header (name + ID) and the blocks-free counter accept a single tap to edit on touch — desktop still needs a double-click',
+      'File context menu adds Edit Track/Sector and Move Up / Move Down so every desktop dblclick or Ctrl+Arrow has a touch path',
+      'Drag the grip handle to reorder files on touch — the handle stays visible only on the selected row, mirrors the desktop drop indicator and auto-scrolls near the listing edges',
+      'Disk header layout no longer pushes the disk-id off-screen on phones (min-width:0 + tighter font/padding under 600px, wraps the id to its own row under 420px)',
+    ]},
     { ver: '1.3.85', title: 'Tab bar: scroll, reorder, context menu', items: [
       'Tab strip overflows cleanly — chevrons scroll left/right and a » button opens a dropdown listing every open tab',
       'Disk icon on every tab, red when there are unsaved changes; tape (read-only) tabs keep the TAPE badge instead',
