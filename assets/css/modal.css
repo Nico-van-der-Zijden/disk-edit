@@ -63,7 +63,10 @@
 
   .modal-body {
     padding: 16px;
-    overflow-y: auto;
+    /* Both axes: lets wide content (hex tables, sector grids, side-by-side
+       compare) scroll horizontally inside the body when the modal frame
+       is narrower than the content — the page itself never has to scroll. */
+    overflow: auto;
     overscroll-behavior: contain;
     flex: 1;
     min-height: 0;
@@ -236,5 +239,38 @@
 
   .modal-input:focus {
     border-color: var(--accent);
+  }
+
+  /* ── Phones ──────────────────────────────────────────────────────────
+     Below 600px the size classes (sm/md/lg/xl/xxl, 460–1100px) make every
+     modal wider than the screen and force horizontal page scroll. Drop
+     the frame to viewport width regardless of which size was requested
+     — wide content still scrolls horizontally inside .modal-body thanks
+     to the base overflow:auto rule, so we don't lose any density. */
+  @media (max-width: 600px) {
+    .modal-overlay { padding-top: 0; }
+    .modal,
+    .modal.modal-sm,
+    .modal.modal-md,
+    .modal.modal-lg,
+    .modal.modal-xl,
+    .modal.modal-xxl {
+      width: 100vw;
+      min-width: 0;
+      max-width: 100vw;
+      max-height: 100vh;
+      border-radius: 0;
+      border-left: none;
+      border-right: none;
+    }
+    .modal-title  { padding: 8px 12px; }
+    .modal-body   { padding: 12px; }
+    .modal-footer {
+      padding: 8px 12px;
+      /* Many modals have 3+ buttons (compare-disk navigation, viewer
+         prev/next + actions); let them wrap rather than overflow. */
+      flex-wrap: wrap;
+    }
+    .modal-footer button { padding: 6px 14px; }
   }
 

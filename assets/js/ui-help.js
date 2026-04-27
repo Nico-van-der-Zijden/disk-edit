@@ -195,6 +195,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.87', title: 'Modals fit the screen on phones', items: [
+      'Below 600px every modal collapses to viewport width regardless of the size class — no more horizontal page scroll on the Compare Disk, Hex, BAM, File Chains, and other wide modals',
+      'Wide content (hex tables, sector grids, side-by-side compare) scrolls horizontally inside the modal body so the C64 fixed-column layouts stay intact',
+      'Footer buttons wrap to a second row when too many to fit on one line',
+    ]},
     { ver: '1.3.86', title: 'Mobile: edit fields and reorder files by touch', items: [
       'Disk header (name + ID) and the blocks-free counter accept a single tap to edit on touch — desktop still needs a double-click',
       'File context menu adds Edit Track/Sector and Move Up / Move Down so every desktop dblclick or Ctrl+Arrow has a touch path',
