@@ -53,8 +53,7 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
   body.innerHTML =
     '<div class="text-base line-tall">' +
       '<b>Packer detection:</b><br>' +
-      '&bull; <a href="https://restore64.dev/" target="_blank" class="link">Restore64</a> — 370+ packer signatures<br>' +
-      '&bull; <a href="https://csdb.dk/release/?id=235681" target="_blank" class="link">UNP64</a> by iAN CooG — signature architecture (GPL)<br>' +
+      '&bull; <a href="https://restore64.dev/" target="_blank" class="link">Restore64</a> — 370+ packer signatures, based on <a href="https://csdb.dk/release/?id=235681" target="_blank" class="link">UNP64</a> by iAN CooG (GPL)<br>' +
       '<br>' +
       '<b>C64 color palette:</b><br>' +
       '&bull; <a href="https://www.pepto.de/projects/colorvic/2001/" target="_blank" class="link">Pepto\'s VIC-II palette</a> — accurate VIC-II color reproduction<br>' +
