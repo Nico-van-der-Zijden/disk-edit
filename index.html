@@ -83,6 +83,10 @@
 <!-- SEO:END -->
 
 <div class="menubar">
+  <button class="menubar-hamburger" type="button" id="menubar-hamburger" aria-label="Menu" aria-expanded="false">
+    <i class="fa-solid fa-bars"></i>
+  </button>
+  <div class="menubar-items">
   <div class="menu-item" id="menu-file">
     Disk
     <div class="menu-dropdown">
@@ -277,6 +281,13 @@
   <div class="menu-item" id="menu-options">
     Options
     <div class="menu-dropdown">
+      <div class="option has-submenu" id="opt-theme">Theme
+        <div class="submenu">
+          <div class="option" id="opt-theme-dark"><span class="check" id="check-theme-dark"></span>Dark</div>
+          <div class="option" id="opt-theme-light"><span class="check" id="check-theme-light"></span>Light</div>
+        </div>
+      </div>
+      <div class="separator"></div>
       <div class="option" id="opt-unsafe-chars"><span class="check" id="check-unsafe"></span>Allow Unsafe Characters</div>
       <div class="option" id="opt-picker-all"><span class="check" id="check-picker-all"></span>Show All Characters by Default</div>
       <div class="option" id="opt-picker-stick"><span class="check" id="check-picker-stick"></span>Stick Keyboard to Edit Field</div>
@@ -300,6 +311,7 @@
       <div class="option" id="opt-download">Download Standalone Version</div>
     </div>
   </div>
+  </div><!-- /.menubar-items -->
   <div class="spacer"></div>
   <div class="theme-toggle" id="theme-toggle" title="Toggle theme"></div>
 </div>
@@ -358,6 +370,7 @@
 <script src="assets/js/ui-recent.js"></script>
 <script src="assets/js/ui-init.js"></script>
 <script src="assets/js/ui-help.js"></script>
+<script src="assets/js/ui-mobile-menu.js"></script>
 
 <!-- Matomo (excluded from dist builds) -->
 <script src="assets/js/matomo.js"></script>

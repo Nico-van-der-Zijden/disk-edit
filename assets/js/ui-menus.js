@@ -39,20 +39,32 @@ function showContextMenu(x, y) {
     }
   });
 
-  // Bind submenu open/close via mouseenter/mouseleave (more reliable than CSS :hover)
+  // Bind submenu open/close via mouseenter/mouseleave (more reliable than
+  // CSS :hover). Plus a click handler so taps work on touch devices —
+  // mouseenter doesn't fire reliably on touch and the bare tap would
+  // otherwise bubble out and close the context menu before the submenu
+  // appears.
+  function openContextSubmenu(item) {
+    contextMenu.querySelectorAll('.has-submenu.submenu-open').forEach(function(el) {
+      if (el !== item) el.classList.remove('submenu-open');
+    });
+    if (!item.classList.contains('disabled')) {
+      item.classList.add('submenu-open');
+      var sub = item.querySelector('.submenu');
+      if (sub) adjustSubmenu(sub);
+    }
+  }
   contextMenu.querySelectorAll('.has-submenu').forEach(function(item) {
     item.addEventListener('mouseenter', function() {
-      contextMenu.querySelectorAll('.has-submenu.submenu-open').forEach(function(el) {
-        el.classList.remove('submenu-open');
-      });
-      if (!item.classList.contains('disabled')) {
-        item.classList.add('submenu-open');
-        var sub = item.querySelector('.submenu');
-        if (sub) adjustSubmenu(sub);
-      }
+      openContextSubmenu(item);
     });
     item.addEventListener('mouseleave', function() {
       item.classList.remove('submenu-open');
+    });
+    item.addEventListener('click', function(e) {
+      if (item.classList.contains('disabled')) return;
+      e.stopPropagation();
+      openContextSubmenu(item);
     });
   });
 

@@ -11,6 +11,38 @@
     color: var(--text);
   }
 
+  /* On desktop the wrapper is transparent — its children participate in
+     the menubar's flex layout directly. On mobile (≤ 900px) the whole
+     wrapper is hidden and the hamburger button drives the separate
+     mobile-menu component instead. */
+  .menubar-items {
+    display: contents;
+  }
+
+  /* Hamburger button — hidden on desktop, shown by the mobile media
+     query at the bottom of this file. Tapping it opens the mobile-menu
+     overlay (see .mm-* rules and assets/js/ui-mobile-menu.js). */
+  .menubar-hamburger {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 28px;
+    margin-right: 4px;
+    background: none;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 16px;
+    border-radius: 4px;
+    padding: 0;
+  }
+  .menubar-hamburger:hover,
+  .menubar-hamburger:focus-visible {
+    background: rgba(255, 255, 255, 0.1);
+    outline: none;
+  }
+
   .menu-item {
     position: relative;
     padding: 4px 10px;
@@ -142,4 +174,150 @@
     font-size: 13px;
   }
   .theme-toggle:hover { background: var(--menu-hover); }
+
+  /* ── Mobile menubar (≤ 900px) ──────────────────────────────────────
+     The horizontal desktop menubar items are hidden; only the hamburger
+     stays. Tapping the hamburger drives the separate mobile-menu
+     component (assets/js/ui-mobile-menu.js + .mm-* styles below). */
+  @media (max-width: 900px) {
+    .menubar-hamburger {
+      display: inline-flex;
+    }
+    .menubar-items {
+      display: none;
+    }
+    /* The theme toggle icon is redundant on small screens — the same
+       setting is reachable from Options → Theme. */
+    .theme-toggle {
+      display: none;
+    }
+  }
+
+  /* ── Mobile menu (drill-down, touch-first) ─────────────────────────
+     A separate full-panel component that overlays the content area
+     below the menubar. Each level of the menu is rendered as a flat
+     list — tapping a row either drills into its submenu (chevron) or
+     fires the original desktop option's click handler. This avoids the
+     accordion's tap-precision problems where a tap on "Help" might
+     land on "Changelog" because the dropdown is rendered inline below
+     the header. */
+  .mm-root {
+    display: none;
+    position: fixed;
+    top: 32px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--bg-panel);
+    z-index: 200;
+    flex-direction: column;
+    user-select: none;
+  }
+  .mm-root.mm-open {
+    display: flex;
+  }
+
+  .mm-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 48px;
+    padding: 0 8px;
+    background: var(--bg-menu);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .mm-header .mm-back,
+  .mm-header .mm-close {
+    width: 40px;
+    height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 16px;
+  }
+  .mm-header .mm-back:hover,
+  .mm-header .mm-back:active,
+  .mm-header .mm-close:hover,
+  .mm-header .mm-close:active {
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .mm-header .mm-back[hidden] {
+    display: none;
+  }
+  .mm-header .mm-title {
+    flex: 1;
+    text-align: center;
+    font-size: 15px;
+    font-weight: bold;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding-right: 40px; /* balance the back button on the left */
+  }
+  .mm-header .mm-back:not([hidden]) ~ .mm-title {
+    padding-right: 0;
+  }
+
+  .mm-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+
+  .mm-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 16px 16px;
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    font-size: 15px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .mm-item:active:not(.mm-disabled) {
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .mm-item.mm-disabled {
+    color: var(--text-muted);
+    opacity: 0.5;
+    cursor: default;
+  }
+  .mm-item .mm-check {
+    width: 18px;
+    color: var(--accent);
+    flex-shrink: 0;
+    text-align: center;
+    font-size: 12px;
+  }
+  .mm-item:not(.mm-has-check) .mm-check {
+    /* preserve alignment when not all rows have a check column */
+  }
+  .mm-item .mm-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mm-item .mm-chevron {
+    color: var(--text-muted);
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+
+  .mm-separator {
+    height: 1px;
+    background: var(--border);
+    margin: 6px 0;
+  }
 

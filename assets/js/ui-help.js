@@ -195,6 +195,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.84', title: 'Mobile menu rewrite + Theme menu + tap-friendly submenus', items: [
+      'Below 900px the desktop menubar collapses to a hamburger button that opens a drill-down menu (iOS Settings style) — one level visible at a time, every row a clear tap target, no accordion ambiguity',
+      'Options → Theme → Dark / Light replaces the desktop-only sun/moon icon on small screens; the icon stays on wider screens',
+      'Submenu containers (e.g. Disk Tools, New) keep the menu open on click instead of dismissing it',
+    ]},
     { ver: '1.3.83', title: 'File Chains: GEOS VLIR support and a clearer layout', items: [
       'GEOS VLIR files now show each record\'s sub-chain on its own row — the old version walked only the VLIR index sector and stopped, hiding all record sectors',
       'GEOS sequential files show their info block alongside the data chain; REL files show side-sectors separately',

@@ -280,22 +280,33 @@ function adjustSubmenu(sub) {
 // mutations (e.g. when closing the menu after a click fires inside a submenu),
 // which can leave a submenu looking "stuck open" the next time its parent
 // menu is reopened. The context menu already uses this pattern.
+function openMenubarSubmenu(item) {
+  if (item.classList.contains('disabled')) return;
+  // Close siblings so only one submenu is open per dropdown level
+  var parent = item.parentElement;
+  if (parent) {
+    parent.querySelectorAll(':scope > .has-submenu.submenu-open').forEach(function(el) {
+      if (el !== item) el.classList.remove('submenu-open');
+    });
+  }
+  item.classList.add('submenu-open');
+  var sub = item.querySelector('.submenu');
+  if (sub) adjustSubmenu(sub);
+}
+
 document.querySelectorAll('.menubar .has-submenu').forEach(function(item) {
   item.addEventListener('mouseenter', function() {
-    if (item.classList.contains('disabled')) return;
-    // Close siblings so only one submenu is open per dropdown level
-    var parent = item.parentElement;
-    if (parent) {
-      parent.querySelectorAll(':scope > .has-submenu.submenu-open').forEach(function(el) {
-        if (el !== item) el.classList.remove('submenu-open');
-      });
-    }
-    item.classList.add('submenu-open');
-    var sub = item.querySelector('.submenu');
-    if (sub) adjustSubmenu(sub);
+    openMenubarSubmenu(item);
   });
   item.addEventListener('mouseleave', function() {
     item.classList.remove('submenu-open');
+  });
+  // Click on a has-submenu shouldn't close the menu — submenus are
+  // hover-driven, so a click on (say) "Disk Tools" should leave the
+  // dropdown up while the user picks a child.
+  item.addEventListener('click', function(e) {
+    if (item.classList.contains('disabled')) return;
+    e.stopPropagation();
   });
 });
 

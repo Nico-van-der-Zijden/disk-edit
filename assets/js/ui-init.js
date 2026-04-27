@@ -248,8 +248,18 @@ const savedTheme = localStorage.getItem('cbm-theme');
 if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
 
 function updateThemeIcon() {
-  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  themeToggle.innerHTML = isDark ? '<i class="fa-solid fa-sun"></i>' : '<i class="fa-solid fa-moon"></i>';
+  const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  themeToggle.innerHTML = theme === 'dark' ? '<i class="fa-solid fa-sun"></i>' : '<i class="fa-solid fa-moon"></i>';
+  // Sync the Options menu check marks too.
+  var darkCheck = document.getElementById('check-theme-dark');
+  var lightCheck = document.getElementById('check-theme-light');
+  if (darkCheck)  darkCheck.innerHTML  = theme === 'dark'  ? '<i class="fa-solid fa-check"></i>' : '';
+  if (lightCheck) lightCheck.innerHTML = theme === 'light' ? '<i class="fa-solid fa-check"></i>' : '';
+}
+function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('cbm-theme', theme);
+  updateThemeIcon();
 }
 updateThemeIcon();
 // Restore check marks from saved settings
@@ -263,8 +273,16 @@ document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i clas
 
 themeToggle.addEventListener('click', () => {
   const current = document.documentElement.getAttribute('data-theme');
-  const next = current === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', next);
-  localStorage.setItem('cbm-theme', next);
-  updateThemeIcon();
+  setTheme(current === 'dark' ? 'light' : 'dark');
+});
+
+// Same setting is reachable from Options → Theme → Dark / Light so
+// users on narrow screens (where the icon is hidden by media query)
+// can still switch. No stopPropagation: the document click handler
+// runs after this and closes the menu, matching every other option.
+document.getElementById('opt-theme-dark').addEventListener('click', function() {
+  setTheme('dark');
+});
+document.getElementById('opt-theme-light').addEventListener('click', function() {
+  setTheme('light');
 });
