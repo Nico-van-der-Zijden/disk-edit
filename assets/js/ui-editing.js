@@ -137,12 +137,20 @@ function startEditing(el) {
 // escHtml is defined in cbm-format.js
 
 // ── Save helpers ──────────────────────────────────────────────────────
+// For a RAMLink tab, the file we save is the whole .rml — if the user
+// edited inside a partition, spliceRamLinkPartitionBack (defined in
+// ui-ramlink.js) lays those changes into ramlinkBuffer first so they
+// land in the downloaded file.
 function getSaveBuffer() {
+  if (ramlinkBuffer) {
+    spliceRamLinkPartitionBack();
+    return ramlinkBuffer;
+  }
   return currentBuffer;
 }
 
 function getSaveFileName() {
-  return currentFileName;
+  return ramlinkFileName || currentFileName;
 }
 
 function downloadD64(buffer, fileName) {
@@ -157,40 +165,48 @@ function downloadD64(buffer, fileName) {
 function updateMenuState() {
   const hasDisk = currentBuffer !== null;
   const tape = isTapeFormat();
+  // RAMLink container partition list — at this level we're looking at
+  // a container, not a filesystem. Disk-edit / file-level operations
+  // don't apply, so they grey out exactly like for tape images.
+  const containerList = isRamlinkListView();
+  const noEdit = tape || containerList;
   document.getElementById('opt-close').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-close-all').classList.toggle('disabled', tabs.length === 0);
   var activeTab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
   document.getElementById('opt-change-partition').classList.toggle('disabled', true); // CMD container support removed
-  document.getElementById('opt-save').classList.toggle('disabled', !hasDisk || !currentFileName || tape);
+  // Save / Save-As stay enabled on the RAMLink list — that's how you
+  // download the whole .rml after editing a partition. Only tape gates
+  // them off (tape images are read-only).
+  document.getElementById('opt-save').classList.toggle('disabled', !hasDisk || !getSaveFileName() || tape);
   document.getElementById('opt-save-as').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-validate').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-show-deleted').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-sort').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-edit-free').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || tape || !hasErrorBytes(currentBuffer));
-  document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || tape || hasGeosSignature(currentBuffer));
-  document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-compact-dir').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-file-chains').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-unzip').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-validate').classList.toggle('disabled', !hasDisk || noEdit);
+  document.getElementById('opt-show-deleted').classList.toggle('disabled', !hasDisk || noEdit);
+  document.getElementById('opt-sort').classList.toggle('disabled', !hasDisk || noEdit);
+  document.getElementById('opt-edit-free').classList.toggle('disabled', !hasDisk || noEdit);
+  document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk || noEdit);
+  document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk || noEdit);
+  document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || noEdit || !hasErrorBytes(currentBuffer));
+  document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || noEdit || hasGeosSignature(currentBuffer));
+  document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || noEdit);
+  document.getElementById('opt-compact-dir').classList.toggle('disabled', !hasDisk || noEdit);
+  document.getElementById('opt-file-chains').classList.toggle('disabled', !hasDisk || noEdit);
+  document.getElementById('opt-unzip').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
-  document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || noEdit);
+  document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-resize-dnp').classList.toggle('disabled', !hasDisk || currentFormat !== DISK_FORMATS.dnp || !!currentPartition);
-  document.getElementById('opt-export-all').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-export-csv').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-export-html-dir').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-export-png-dir').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-export-all').classList.toggle('disabled', !hasDisk || containerList);
+  document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk || containerList);
+  document.getElementById('opt-export-csv').classList.toggle('disabled', !hasDisk || containerList);
+  document.getElementById('opt-export-html-dir').classList.toggle('disabled', !hasDisk || containerList);
+  document.getElementById('opt-export-png-dir').classList.toggle('disabled', !hasDisk || containerList);
   document.getElementById('opt-md5').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-disk-tools').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || noEdit);
+  document.getElementById('opt-disk-tools').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-disk-export').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-find').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-find').classList.toggle('disabled', !hasDisk || containerList);
   document.getElementById('opt-find-tabs').classList.toggle('disabled', tabs.length === 0);
-  document.getElementById('opt-goto-sector').classList.toggle('disabled', !hasDisk || tape);
+  document.getElementById('opt-goto-sector').classList.toggle('disabled', !hasDisk || noEdit);
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -894,6 +910,20 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
     var tracks = parseInt(el.dataset.tracks, 10);
     const formatKey = el.dataset.format;
 
+    // RAMLink: route to openRamLinkAsTab with a freshly-built empty
+    // container so the partition-list view comes up the same way as
+    // when opening a file. Uses a synthetic name "New RAMLink N.rml"
+    // so save-as defaults sensibly.
+    if (formatKey === 'ramlink') {
+      var mib = parseInt(el.dataset.rlMib, 10);
+      if (isNaN(mib) || mib < 1) return;
+      newDiskCount++;
+      var rlBuf = createEmptyRamLink(mib);
+      var rlName = 'New RAMLink ' + newDiskCount + '.rml';
+      await openRamLinkAsTab(rlBuf, rlName);
+      return;
+    }
+
     // DNP: prompt for number of tracks
     if (formatKey === 'dnp') {
       var tracksStr = await showInputModal('Number of tracks (2 - 255)', '255');
@@ -909,6 +939,7 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
     if (!buf) return;
     var fname = null;
 
+    clearRamLinkState();
     currentBuffer = buf;
     currentFileName = fname;
     currentPartition = null;
@@ -1024,6 +1055,7 @@ document.getElementById('opt-close-all').addEventListener('click', async (e) => 
   selectedEntryIndex = -1;
   currentPartition = null;
   tabDirty = false;
+  clearRamLinkState();
   clearUndo();
   showEmptyState();
   renderTabs();
@@ -1060,15 +1092,29 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
-  var ext = currentFormat.ext || '.d64';
+  // For RAMLink tabs, the saved artifact is the whole .rml — pull ext
+  // from the container's format (.rml / .rl), not whatever partition
+  // happens to be open. spliceRamLinkPartitionBack runs inside
+  // getSaveBuffer() so live edits land in the file.
+  var fmtForExt = ramlinkBuffer ? DISK_FORMATS.ramlink : currentFormat;
+  var ext = fmtForExt.ext || '.d64';
+  var extAlts = fmtForExt.extAlternates || [];
+  var allExts = [ext].concat(extAlts);
+  function hasFormatExt(name) {
+    return allExts.some(function(e) { return name.toLowerCase().endsWith(e); });
+  }
   var tab = getActiveTab();
-  var baseName = currentFileName || (tab && tab.name) || 'disk';
-  var defaultName = baseName.endsWith(ext) ? baseName : baseName + ext;
+  var baseName = (ramlinkBuffer ? ramlinkFileName : currentFileName) || (tab && tab.name) || 'disk';
+  var defaultName = hasFormatExt(baseName) ? baseName : baseName + ext;
   const fileName = await showInputModal('Save As', defaultName);
   if (!fileName) return;
-  {
-    currentFileName = fileName.endsWith(ext) ? fileName : fileName + ext;
-    downloadD64(currentBuffer, currentFileName);
+  var finalName = hasFormatExt(fileName) ? fileName : fileName + ext;
+  if (ramlinkBuffer) {
+    ramlinkFileName = finalName;
+    downloadD64(getSaveBuffer(), finalName);
+  } else {
+    currentFileName = finalName;
+    downloadD64(currentBuffer, finalName);
   }
   markClean();
   updateTabName();

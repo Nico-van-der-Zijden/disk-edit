@@ -8,7 +8,7 @@
 
 function showZipArchiveModal(archiveName, entries) {
   return new Promise(function(resolve) {
-    var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp', '.lnx'];
+    var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp', '.lnx', '.rml', '.rl'];
     var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
 
     var disks = [], files = [], others = [];

@@ -164,7 +164,17 @@ function buildEntryIconsHtml(e, data, dirTrack) {
   return icons;
 }
 
+// RAMLink container UI (renderRamLinkPartitionList, enterRamLinkPartition,
+// leaveRamLinkPartition) lives in ui-ramlink.js. renderDisk delegates
+// to it via the early-out below when on the partition-list view.
 function renderDisk(info) {
+  // RAMLink container list view — partitions are rendered in place of
+  // a directory listing. Clicking one slices its bytes and re-enters
+  // renderDisk normally.
+  if (ramlinkPartitions && ramlinkPartitionIdx === -1) {
+    renderRamLinkPartitionList();
+    return;
+  }
   const prevSelected = selectedEntryIndex;
   selectedEntryIndex = -1;
   const content = document.getElementById('content');
@@ -228,8 +238,9 @@ function renderDisk(info) {
       </div>
       <div class="dir-listing">`;
 
-  // Show parent directory link when inside a partition
-  if (currentPartition) {
+  // Show parent directory link when inside a partition (DNP subdir, D81
+  // CBM partition) or inside a RAMLink container partition.
+  if (currentPartition || ramlinkPartitionIdx >= 0) {
     html += `
         <div class="dir-entry dir-parent-row" id="dir-parent">
           <span class="dir-grip"></span>
@@ -412,6 +423,7 @@ function bindDirSelection() {
       if (infoIcon) {
         var infoOff = parseInt(infoIcon.getAttribute('data-offset'), 10);
         selectedEntryIndex = infoOff;
+        selectedEntries = [infoOff];
         entries.forEach(ent => ent.classList.remove('selected'));
         el.classList.add('selected');
         updateEntryMenuState();
@@ -423,6 +435,7 @@ function bindDirSelection() {
       if (geosIcon) {
         var geosOff = parseInt(geosIcon.getAttribute('data-offset'), 10);
         selectedEntryIndex = geosOff;
+        selectedEntries = [geosOff];
         entries.forEach(ent => ent.classList.remove('selected'));
         el.classList.add('selected');
         updateEntryMenuState();
@@ -653,11 +666,18 @@ function bindDirSelection() {
     });
   }
 
-  // Parent directory row — click to go back to root
+  // Parent directory row — click to go back. Inside a DNP subdir / D81
+  // CBM partition this calls leavePartition; inside a RAMLink container
+  // partition it calls leaveRamLinkPartition (which splices any edits
+  // back into the .rml).
   var parentRow = document.getElementById('dir-parent');
   if (parentRow) {
-    parentRow.addEventListener('click', () => leavePartition());
-    parentRow.addEventListener('dblclick', () => leavePartition());
+    var goBack = function() {
+      if (currentPartition) leavePartition();
+      else if (ramlinkPartitionIdx >= 0) leaveRamLinkPartition();
+    };
+    parentRow.addEventListener('click', goBack);
+    parentRow.addEventListener('dblclick', goBack);
   }
 }
 

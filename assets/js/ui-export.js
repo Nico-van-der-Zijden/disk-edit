@@ -834,11 +834,20 @@ fileInput.addEventListener('change', async () => {
 
       // LNX archives: extract into a new D64 tab instead of opening as-is.
       if (/\.lnx$/i.test(fname)) {
+        clearRamLinkState();
         openLnxArchiveAsTab(buf, fname);
         addRecentDisk(fname, buf);
         continue;
       }
 
+      // RAMLink containers: pop the partition picker, open chosen
+      // partition as a tab.
+      if (/\.(rml|rl)$/i.test(fname)) {
+        await openRamLinkAsTab(buf, fname);
+        continue;
+      }
+
+      clearRamLinkState();
       currentBuffer = buf;
       currentFileName = fname;
       currentPartition = null;

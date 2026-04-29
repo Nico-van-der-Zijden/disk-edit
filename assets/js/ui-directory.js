@@ -2,6 +2,11 @@
 // Get ordered list of directory entry offsets from the chain
 // ── Partition-aware parse helper ──────────────────────────────────────
 function parseCurrentDir(buffer) {
+  // RAMLink container, partition-list view: nothing to parse as a disk.
+  // Render path detects this and draws the partition list instead.
+  if (ramlinkPartitions && ramlinkPartitionIdx === -1) {
+    return { entries: [], freeBlocks: 0, diskName: ramlinkFileName || 'RAMLink', diskId: '' };
+  }
   if (currentPartition) {
     if (currentPartition.dnpDir) {
       return parseDnpDirectory(buffer, currentPartition.dnpDirT, currentPartition.dnpDirS,

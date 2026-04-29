@@ -138,8 +138,16 @@ function openRecentDisk(entry) {
   try {
     var bufCopy = entry.bytes.slice(0); // defensive: don't let tab edits mutate the cache
     if (entry.isArchive || /\.lnx$/i.test(entry.name)) {
+      clearRamLinkState();
       openLnxArchiveAsTab(bufCopy, entry.name);
+    } else if (/\.(rml|rl)$/i.test(entry.name)) {
+      // RAMLink containers go through the partition picker the same
+      // way as drag-drop / file-input. Without this, the recent-disk
+      // path opens the raw image as a flat DNP and the picker never
+      // shows.
+      openRamLinkAsTab(bufCopy, entry.name);
     } else {
+      clearRamLinkState();
       currentBuffer = bufCopy;
       currentFileName = entry.name;
       currentPartition = null;

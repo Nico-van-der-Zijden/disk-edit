@@ -141,7 +141,15 @@ function tryShowEntryContextMenu(target, x, y) {
   var dirListing = target.closest('.dir-listing');
   if (!entry && !dirListing) return false;
 
-  if (entry && entry.dataset.offset) {
+  if (entry && entry.dataset.ramlinkPart !== undefined) {
+    // RAMLink partition row — select via data-ramlink-part. Mustn't
+    // clear .selected on the wrong path: the cloned context menu mirrors
+    // the live disabled state, so the row's `.selected` class is what
+    // turns Delete RAMLink Partition on.
+    document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
+    entry.classList.add('selected');
+    updateEntryMenuState();
+  } else if (entry && entry.dataset.offset) {
     var offset = parseInt(entry.dataset.offset, 10);
     if (selectedEntryIndex !== offset) {
       document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
@@ -231,12 +239,37 @@ document.addEventListener('keydown', (e) => {
   var modalOpen = document.getElementById('modal-overlay');
   if (modalOpen && modalOpen.classList.contains('open')) return;
 
+  // Enter on the RAMLink partition list — open the highlighted partition
+  // (mirrors a double-click). Mirrors the click-to-enter row handler.
+  if (e.key === 'Enter' && isRamlinkListView()) {
+    var rlEnterRow = document.querySelector('.dir-entry.selected[data-ramlink-part]');
+    if (rlEnterRow) {
+      e.preventDefault();
+      var rlIdx = parseInt(rlEnterRow.dataset.ramlinkPart, 10);
+      var rlPart = ramlinkPartitions && ramlinkPartitions[rlIdx];
+      if (rlPart && rlPart.type !== 0xFF) enterRamLinkPartition(rlIdx);
+      return;
+    }
+  }
+
   // Enter: edit selected filename
   if (e.key === 'Enter' && selectedEntryIndex >= 0) {
     e.preventDefault();
     const selected = document.querySelector('.dir-entry.selected');
     if (selected) startRenameEntry(selected);
     return;
+  }
+
+  // Delete on the RAMLink partition list — delete the highlighted
+  // partition (route through the menu handler so the confirm dialog
+  // and SYSTEM check stay in one place).
+  if (e.key === 'Delete' && isRamlinkListView()) {
+    var rlSel = document.querySelector('.dir-entry.selected[data-ramlink-part]');
+    if (rlSel) {
+      e.preventDefault();
+      deleteRamLinkPartition();
+      return;
+    }
   }
 
   // Delete: remove selected entry (not for tape formats)
@@ -399,6 +432,27 @@ document.addEventListener('keydown', (e) => {
 
   const dir = e.key === 'ArrowUp' ? -1 : 1;
 
+  // RAMLink container partition list: rows aren't regular dir entries
+  // (no data-offset, no selectedEntryIndex), so the standard arrow
+  // navigation skips them. Walk data-ramlink-part rows here, mirror
+  // the click handler's selection model, and refresh the menu state
+  // so Delete RAMLink Partition flips on as soon as a row is picked.
+  if (isRamlinkListView()) {
+    const rlRows = document.querySelectorAll('.dir-entry[data-ramlink-part]');
+    if (rlRows.length === 0) return;
+    let curIdx = -1;
+    const selRow = document.querySelector('.dir-entry.selected[data-ramlink-part]');
+    if (selRow) rlRows.forEach((r, i) => { if (r === selRow) curIdx = i; });
+    let newIdx;
+    if (curIdx < 0) newIdx = dir === 1 ? 0 : rlRows.length - 1;
+    else newIdx = Math.max(0, Math.min(rlRows.length - 1, curIdx + dir));
+    rlRows.forEach(r => r.classList.remove('selected'));
+    rlRows[newIdx].classList.add('selected');
+    rlRows[newIdx].scrollIntoView({ block: 'nearest' });
+    updateEntryMenuState();
+    return;
+  }
+
   if (e.ctrlKey && selectedEntryIndex >= 0 && !isTapeFormat()) {
     // Ctrl+Arrow: move the selected entry
     moveEntry(dir);
@@ -413,6 +467,11 @@ document.addEventListener('keydown', (e) => {
       allEntries.forEach(el => el.classList.remove('selected'));
       target.classList.add('selected');
       selectedEntryIndex = parseInt(target.dataset.offset, 10);
+      // Keep selectedEntries in sync — handlers like splat / lock /
+      // scratch prefer it over selectedEntryIndex, so a stale array
+      // would make the first keypress hit the previously-clicked row.
+      selectedEntries = [selectedEntryIndex];
+      updateEntryMenuState();
       target.scrollIntoView({ block: 'nearest' });
     } else {
       // Find current index in the DOM list
@@ -425,6 +484,8 @@ document.addEventListener('keydown', (e) => {
         allEntries.forEach(el => el.classList.remove('selected'));
         allEntries[newIdx].classList.add('selected');
         selectedEntryIndex = parseInt(allEntries[newIdx].dataset.offset, 10);
+        selectedEntries = [selectedEntryIndex];
+        updateEntryMenuState();
         allEntries[newIdx].scrollIntoView({ block: 'nearest' });
       }
     }
@@ -437,30 +498,50 @@ function updateEntryMenuState() {
   const multiSelect = selectedEntries.length > 1;
   const inPartition = currentPartition !== null;
   const tape = isTapeFormat();
-  // Single-select only operations (all disabled for tape)
-  document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection || multiSelect || tape);
-  document.getElementById('opt-insert').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
-  document.getElementById('opt-insert-sep').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
-  document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection || multiSelect || tape);
-  document.getElementById('opt-change-ts').classList.toggle('disabled', !hasSelection || multiSelect || tape);
-  document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection || multiSelect);
+  // The RAMLink container partition list isn't a filesystem — file-
+  // level operations (insert, rename, etc.) make no sense, so we treat
+  // it like a tape image for the disabled-state checks.
+  const containerList = isRamlinkListView();
+  const noEdit = tape || containerList;
+  // Single-select only operations (all disabled for tape / container list)
+  document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
+  document.getElementById('opt-insert').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || noEdit);
+  document.getElementById('opt-insert-sep').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || noEdit);
+  document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
+  document.getElementById('opt-change-ts').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
+  document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection || multiSelect || containerList);
   var noNesting = inPartition && !currentFormat.subdirLinked; // D81: no nesting; DNP: nesting allowed
-  document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || noNesting || !currentBuffer || !currentFormat.supportsSubdirs || !canInsertFile() || tape);
-  // Multi-select compatible operations (all disabled for tape except copy/export)
-  document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection || tape);
-  document.getElementById('opt-move-up').classList.toggle('disabled', !hasSelection || tape);
-  document.getElementById('opt-move-down').classList.toggle('disabled', !hasSelection || tape);
-  document.getElementById('opt-align').classList.toggle('disabled', !hasSelection || tape);
-  document.getElementById('opt-recalc-size').classList.toggle('disabled', !hasSelection || tape);
-  document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection || tape);
+  document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || noNesting || !currentBuffer || !currentFormat.supportsSubdirs || !canInsertFile() || noEdit);
+
+  // RAMLink partition management — only meaningful (and only visible)
+  // on the container's partition-list view.
+  var rlNewBtn = document.getElementById('opt-rl-new-partition');
+  var rlDelBtn = document.getElementById('opt-rl-delete-partition');
+  rlNewBtn.style.display = containerList ? '' : 'none';
+  rlDelBtn.style.display = containerList ? '' : 'none';
+  if (containerList) {
+    var listSelEl = document.querySelector('.dir-entry.selected[data-ramlink-part]');
+    var selPartIdx = listSelEl ? parseInt(listSelEl.dataset.ramlinkPart, 10) : -1;
+    var selPart = (selPartIdx >= 0 && ramlinkPartitions) ? ramlinkPartitions[selPartIdx] : null;
+    rlNewBtn.classList.toggle('disabled', !canAddRamLinkPartition());
+    // Can't delete the SYSTEM record — the firmware needs it.
+    rlDelBtn.classList.toggle('disabled', !selPart || selPart.type === 0xFF);
+  }
+  // Multi-select compatible operations (all disabled for tape / container list except copy/export)
+  document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection || noEdit);
+  document.getElementById('opt-move-up').classList.toggle('disabled', !hasSelection || noEdit);
+  document.getElementById('opt-move-down').classList.toggle('disabled', !hasSelection || noEdit);
+  document.getElementById('opt-align').classList.toggle('disabled', !hasSelection || noEdit);
+  document.getElementById('opt-recalc-size').classList.toggle('disabled', !hasSelection || noEdit);
+  document.getElementById('opt-lock').classList.toggle('disabled', !hasSelection || noEdit);
   var isCbmPartition = false;
   if (hasSelection && !tape && currentBuffer) {
     var pData = new Uint8Array(currentBuffer);
     var pTypeIdx = pData[selectedEntryIndex + 2] & 0x07;
     isCbmPartition = (pTypeIdx === 5 || pTypeIdx === 6);
   }
-  document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection || tape || isCbmPartition);
-  document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection || tape || isCbmPartition);
+  document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection || noEdit || isCbmPartition);
+  document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection || noEdit || isCbmPartition);
   var canScratch = false, canUnscratch = false;
   if (hasSelection && !tape && currentBuffer) {
     var uData = new Uint8Array(currentBuffer);
@@ -482,7 +563,7 @@ function updateEntryMenuState() {
   scratchEl.classList.toggle('disabled', canScratch === 'locked');
   unscratchEl.style.display = canUnscratch ? '' : 'none';
   unscratchEl.classList.toggle('disabled', !canUnscratch);
-  document.getElementById('opt-case').classList.toggle('disabled', !hasSelection || tape);
+  document.getElementById('opt-case').classList.toggle('disabled', !hasSelection || noEdit);
   // Disable file types not supported by the current format
   var supportedTypes = currentFormat.fileTypes || [0, 1, 2, 3, 4];
   for (var ti = 0; ti <= 5; ti++) {
@@ -547,15 +628,15 @@ function updateEntryMenuState() {
       }
     }
   }
-  document.getElementById('opt-export').classList.toggle('disabled', !exportEnabled);
-  document.getElementById('opt-export-cvt').classList.toggle('disabled', !geosEnabled || !exportEnabled);
-  document.getElementById('opt-export-rtf').classList.toggle('disabled', !geoWriteEnabled);
-  document.getElementById('opt-export-pdf').classList.toggle('disabled', !geoWriteEnabled);
-  document.getElementById('opt-export-txt-gw').classList.toggle('disabled', !geoWriteEnabled);
-  document.getElementById('opt-save-sep').classList.toggle('disabled', !hasSelection || tape);
-  document.getElementById('opt-export-menu').classList.toggle('disabled', !exportEnabled && !geoWriteEnabled);
-  document.getElementById('opt-copy').classList.toggle('disabled', !copyEnabled);
-  document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !currentBuffer || !canInsertFile() || tape);
+  document.getElementById('opt-export').classList.toggle('disabled', !exportEnabled || containerList);
+  document.getElementById('opt-export-cvt').classList.toggle('disabled', !geosEnabled || !exportEnabled || containerList);
+  document.getElementById('opt-export-rtf').classList.toggle('disabled', !geoWriteEnabled || containerList);
+  document.getElementById('opt-export-pdf').classList.toggle('disabled', !geoWriteEnabled || containerList);
+  document.getElementById('opt-export-txt-gw').classList.toggle('disabled', !geoWriteEnabled || containerList);
+  document.getElementById('opt-save-sep').classList.toggle('disabled', !hasSelection || noEdit);
+  document.getElementById('opt-export-menu').classList.toggle('disabled', (!exportEnabled && !geoWriteEnabled) || containerList);
+  document.getElementById('opt-copy').classList.toggle('disabled', !copyEnabled || containerList);
+  document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !currentBuffer || !canInsertFile() || noEdit);
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);
   document.getElementById('opt-view-gfx').classList.toggle('disabled', !gfxEnabled);
   document.getElementById('opt-view-geowrite').classList.toggle('disabled', !geoWriteEnabled);
@@ -579,9 +660,9 @@ function updateEntryMenuState() {
     }
   }
   document.getElementById('opt-view-tass').classList.toggle('disabled', !isTassCandidate);
-  document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || tape);
-  document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect || tape);
-  document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection || tape);
+  document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || noEdit);
+  document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
+  document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection || noEdit);
   document.getElementById('opt-view-geos').classList.toggle('disabled', !geosEnabled);
   const lockEl = document.getElementById('opt-lock');
   const splatEl = document.getElementById('opt-splat');

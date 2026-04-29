@@ -41,11 +41,13 @@ document.addEventListener('drop', async function(e) {
   var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp'];
   var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
   var archiveExts = ['.lnx'];
-  var diskEntries = [], importEntries = [], archiveEntries = [];
+  var ramlinkExts = ['.rml', '.rl'];
+  var diskEntries = [], importEntries = [], archiveEntries = [], ramlinkEntries = [];
   for (var i = 0; i < entries.length; i++) {
     var lname = entries[i].name.toLowerCase();
     var ext = lname.substring(lname.lastIndexOf('.'));
-    if (diskExts.indexOf(ext) >= 0) diskEntries.push(entries[i]);
+    if (ramlinkExts.indexOf(ext) >= 0) ramlinkEntries.push(entries[i]);
+    else if (diskExts.indexOf(ext) >= 0) diskEntries.push(entries[i]);
     else if (archiveExts.indexOf(ext) >= 0) archiveEntries.push(entries[i]);
     else if (fileExts.indexOf(ext) >= 0) importEntries.push(entries[i]);
   }
@@ -57,6 +59,7 @@ document.addEventListener('drop', async function(e) {
       try {
         var buf = diskEntries[di].buffer;
         var fname = diskEntries[di].name;
+        clearRamLinkState();
         currentBuffer = buf;
         currentFileName = fname;
         currentPartition = null;
@@ -77,11 +80,23 @@ document.addEventListener('drop', async function(e) {
     updateMenuState();
   }
 
+  // RAMLink containers: pop the partition picker for each, open the
+  // chosen partition into a new tab. Sequential because the picker is
+  // modal — one at a time avoids stacked dialogs.
+  for (var ri = 0; ri < ramlinkEntries.length; ri++) {
+    try {
+      await openRamLinkAsTab(ramlinkEntries[ri].buffer, ramlinkEntries[ri].name);
+    } catch (err) {
+      showModal('Error', ['Failed to read RAMLink image ' + ramlinkEntries[ri].name + ': ' + (err && err.message ? err.message : err)]);
+    }
+  }
+
   // Archives (LNX): extract each one to a new D64 tab
   if (archiveEntries.length > 0) {
     saveActiveTab();
     for (var ai = 0; ai < archiveEntries.length; ai++) {
       try {
+        clearRamLinkState();
         openLnxArchiveAsTab(archiveEntries[ai].buffer, archiveEntries[ai].name);
         addRecentDisk(archiveEntries[ai].name, archiveEntries[ai].buffer);
       } catch (err) {
@@ -219,6 +234,9 @@ function showCmdFdPartitionPicker(buffer, fileName, formatName, forceDialog) {
     document.getElementById('modal-overlay').classList.add('open');
   });
 }
+
+// RAMLink container loading + partition management lives in
+// ui-ramlink.js (openRamLinkAsTab, addRamLinkPartition, etc.).
 
 // ── Theme toggle ─────────────────────────────────────────────────────
 const themeToggle = document.getElementById('theme-toggle');

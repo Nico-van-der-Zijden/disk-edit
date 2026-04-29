@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 89 };
+var APP_VERSION = { major: 1, minor: 3, build: 90 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -11,6 +11,40 @@ var selectedEntries = []; // multi-select: array of entryOff values
 var showAddresses = localStorage.getItem('cbm-showAddresses') !== 'false';
 var showTrackSector = localStorage.getItem('cbm-showTrackSector') !== 'false';
 var currentPartition = null; // null = root, or { entryOff, startTrack, partSize, name }
+
+// ── RAMLink container state ─────────────────────────────────────────
+// When the active tab is a .rml/.rl image, we keep the full container
+// buffer here and let the user move between the partition list and any
+// individual partition. currentBuffer / currentFormat reflect whatever
+// view is active: when ramlinkPartitionIdx === -1 we're on the list
+// (currentBuffer = the full container); otherwise currentBuffer is a
+// slice of that partition (DNP / D64 / D81). Edits inside a partition
+// are spliced back into ramlinkBuffer on exit / save.
+var ramlinkBuffer = null;       // full .rml ArrayBuffer or null
+var ramlinkFileName = null;     // original .rml file name
+var ramlinkPartitions = null;   // parsed partition list (from readRamLinkPartitions)
+var ramlinkPartitionIdx = -1;   // -1 = partition-list view, else index into ramlinkPartitions
+
+// True when the active tab is a RAMLink container and we're showing the
+// partition list (not inside any partition). Disk-edit operations don't
+// apply at this level — we're not on a filesystem, we're on a container —
+// so menu state queries this to grey them out.
+function isRamlinkListView() {
+  return !!ramlinkBuffer && ramlinkPartitions && ramlinkPartitionIdx === -1;
+}
+
+// Reset the RAMLink globals back to "no container active". Called from
+// every non-RAMLink load / new-tab path: createTab / loadTab only update
+// per-tab fields, not the globals, so without an explicit reset the
+// previous tab's RAMLink state would leak into a freshly-opened D64
+// (renderDisk would still see ramlinkPartitions and draw the partition
+// list).
+function clearRamLinkState() {
+  ramlinkBuffer = null;
+  ramlinkFileName = null;
+  ramlinkPartitions = null;
+  ramlinkPartitionIdx = -1;
+}
 var clipboard = []; // array of { typeIdx, nameBytes, geosBytes, geosInfoBlock, data, vlirRecords }
                     // data is null for GEOS VLIR files; vlirRecords is null for everything else
 var dirInterleave = 3;   // directory sector interleave
@@ -127,7 +161,11 @@ function createTab(name, buffer, fileName) {
     cmdFdBuffer: null,
     cmdFdFileName: null,
     cmdFdPartOffset: -1,
-    cmdFdPartSize: -1
+    cmdFdPartSize: -1,
+    ramlinkBuffer: null,
+    ramlinkFileName: null,
+    ramlinkPartitions: null,
+    ramlinkPartitionIdx: -1
   };
   tabs.push(tab);
   return tab;
@@ -149,6 +187,10 @@ function saveActiveTab() {
   tab.tapeEntries = parsedT64Entries;
   tab.tapEntries = parsedTAPEntries;
   tab.tapeDir = parsedTapeDir;
+  tab.ramlinkBuffer = ramlinkBuffer;
+  tab.ramlinkFileName = ramlinkFileName;
+  tab.ramlinkPartitions = ramlinkPartitions;
+  tab.ramlinkPartitionIdx = ramlinkPartitionIdx;
 }
 
 function loadTab(tab) {
@@ -164,6 +206,10 @@ function loadTab(tab) {
   parsedT64Entries = tab.tapeEntries || null;
   parsedTAPEntries = tab.tapEntries || null;
   parsedTapeDir = tab.tapeDir || null;
+  ramlinkBuffer = tab.ramlinkBuffer || null;
+  ramlinkFileName = tab.ramlinkFileName || null;
+  ramlinkPartitions = tab.ramlinkPartitions || null;
+  ramlinkPartitionIdx = (typeof tab.ramlinkPartitionIdx === 'number') ? tab.ramlinkPartitionIdx : -1;
   activeTabId = tab.id;
 }
 
@@ -191,6 +237,7 @@ function closeTab(tabId) {
     currentFileName = null;
     selectedEntryIndex = -1;
     currentPartition = null;
+    clearRamLinkState();
     showEmptyState();
     renderTabs();
     updateMenuState();

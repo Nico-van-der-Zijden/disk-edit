@@ -1052,6 +1052,19 @@ var _cmdFdGetBamOmittedSectors = function(track) {
   DISK_FORMATS[k].getBamOmittedSectors = _cmdFdGetBamOmittedSectors;
 });
 
+// CMD RAMLink — image is a raw RAM dump (1–8 MiB typical, up to 64 MiB)
+// laid out internally as a single DNP. We register it as a DNP alias
+// with a distinct name and .rml extension so the editor labels the
+// format correctly and saves with the original suffix; everything else
+// (BAM walk, directory parse, subdir navigation) is plain DNP.
+DISK_FORMATS.ramlink = Object.assign({}, DISK_FORMATS.dnp, {
+  name: 'RAMLink',
+  ext: '.rml',
+  // Both .rml and .rl are seen in the wild — save-as keeps whichever
+  // extension the user opened; only canonical .rml is added if neither.
+  extAlternates: ['.rl'],
+});
+
 // ── Active format ────────────────────────────────────────────────────
 var currentFormat = DISK_FORMATS.d64;
 var currentTracks = 35;
@@ -1284,6 +1297,191 @@ function readCmdFdPartitions(buffer, formatName) {
     });
   }
   return { format: name, spt: fdInfo ? fdInfo.spt : 256, partitions: partitions };
+}
+
+// CMD RAMLink partition table reader.
+//
+// Layout (reverse-engineered from a real RAMLink RAM dump, cross-checked
+// against the RAMLink Manager 3.8 partition listing):
+//
+//  - The system partition is always the last 16 sectors of the image
+//    (16 × 256 = 4096 bytes).
+//  - The partition table sits at *sector 8* of that system partition,
+//    i.e. 2048 bytes from the end of the file. The first 8 sectors of
+//    the system partition hold other bookkeeping (mostly the
+//    distinctive `FF 00 00 FF` filler in fresh dumps).
+//  - The table itself is 16 entries × 32 bytes = 512 bytes; sector 8
+//    holds entries 0–7 and sector 9 holds 8–15 (zero-filled when no
+//    partition is allocated to that slot).
+//
+//  Per-entry byte layout:
+//    0..1   flags (01 01 on the SYSTEM record, 00 00 elsewhere)
+//    2      type code:  0x00 empty/DEL  0x01 NAT (DNP)
+//                       0x02 1541 (D64) 0x04 1581 (D81)
+//                       0xFF SYS (the system partition itself)
+//    3..4   reserved (zeros)
+//    5..20  16-byte name, 0xA0-padded
+//    21..24 partition start as a 32-bit big-endian *byte* address
+//    25..28 reserved (zeros)
+//    29..31 size in 256-byte blocks, 24-bit big-endian
+//
+// The presence of type=0xFF on entry 0 is the signature we use to
+// recognise an actual RAMLink container vs. a flat DNP that happens
+// to wear a .rml extension.
+var RAMLINK_PART_TYPE_NAMES = { 0x01: 'Native', 0x02: '1541', 0x03: '1571', 0x04: '1581', 0xFF: 'System' };
+var RAMLINK_PART_TABLE_OFFSET = 2048; // bytes from end of file
+
+function readRamLinkPartitions(buffer) {
+  if (!buffer || buffer.byteLength < RAMLINK_PART_TABLE_OFFSET + 512) return null;
+  var data = new Uint8Array(buffer);
+  var tableOff = buffer.byteLength - RAMLINK_PART_TABLE_OFFSET;
+  // Signature: SYSTEM record sits at the start of the table, type byte = 0xFF
+  if (data[tableOff + 2] !== 0xFF) return null;
+
+  var partitions = [];
+  for (var i = 0; i < 16; i++) {
+    var off = tableOff + i * 32;
+    if (off + 32 > buffer.byteLength) break;
+    var type = data[off + 2];
+    if (type === 0x00) continue; // empty / DEL slot
+
+    var name = '';
+    for (var ni = 0; ni < 16; ni++) {
+      var ch = data[off + 5 + ni];
+      if (ch === 0xA0 || ch === 0x00) break;
+      name += String.fromCharCode(ch);
+    }
+    var startByte = (data[off + 21] * 0x1000000) + (data[off + 22] << 16) + (data[off + 23] << 8) + data[off + 24];
+    var sizeBlocks = (data[off + 29] << 16) | (data[off + 30] << 8) | data[off + 31];
+    var sizeBytes = sizeBlocks * 256;
+
+    partitions.push({
+      index: i,
+      type: type,
+      typeName: RAMLINK_PART_TYPE_NAMES[type] || 'Unknown',
+      name: name || ('Partition ' + i),
+      startByte: startByte,
+      sizeBytes: sizeBytes,
+      sizeBlocks: sizeBlocks,
+    });
+  }
+  return { format: 'RAMLink', partitions: partitions };
+}
+
+function extractRamLinkPartition(buffer, partition) {
+  var end = partition.startByte + partition.sizeBytes;
+  if (end > buffer.byteLength) end = buffer.byteLength;
+  if (partition.startByte >= end) return null;
+  return buffer.slice(partition.startByte, end);
+}
+
+// First empty 32-byte slot in the partition table; -1 if all 16 are
+// allocated. Used by "New RAMLink Partition" to find where to write
+// the new entry.
+function findRamLinkEmptySlot(buffer) {
+  if (!buffer || buffer.byteLength < RAMLINK_PART_TABLE_OFFSET + 512) return -1;
+  var data = new Uint8Array(buffer);
+  var tableOff = buffer.byteLength - RAMLINK_PART_TABLE_OFFSET;
+  for (var i = 0; i < 16; i++) {
+    if (data[tableOff + i * 32 + 2] === 0x00) return i;
+  }
+  return -1;
+}
+
+// Largest contiguous free byte range available for a new partition,
+// found between existing partitions and the SYSTEM region. Returns
+// { start, size } where start is byte-aligned to a 256-byte block.
+function findRamLinkFreeSpace(buffer, partitions) {
+  if (!buffer) return { start: 0, size: 0 };
+  // SYSTEM partition is always the last 16 sectors (4096 bytes).
+  var systemStart = buffer.byteLength - 16 * 256;
+  var maxEnd = 0;
+  for (var i = 0; i < partitions.length; i++) {
+    var p = partitions[i];
+    if (p.type === 0xFF) continue; // skip SYSTEM record
+    var end = p.startByte + p.sizeBytes;
+    if (end > maxEnd) maxEnd = end;
+  }
+  // Round up to a 256-byte block boundary just in case.
+  if (maxEnd & 0xFF) maxEnd = (maxEnd + 0x100) & ~0xFF;
+  return { start: maxEnd, size: Math.max(0, systemStart - maxEnd) };
+}
+
+// Write a 32-byte partition table entry at the given slot index.
+// `name` is a JS string (will be PETSCII-coerced and 0xA0-padded).
+function writeRamLinkPartitionEntry(buffer, slotIdx, type, name, startByte, sizeBlocks) {
+  var data = new Uint8Array(buffer);
+  var tableOff = buffer.byteLength - RAMLINK_PART_TABLE_OFFSET;
+  var off = tableOff + slotIdx * 32;
+  // Zero the slot first
+  for (var i = 0; i < 32; i++) data[off + i] = 0x00;
+  // Type marker at byte 2
+  data[off + 2] = type;
+  // 16-byte name at offset 5, 0xA0-padded
+  var upper = (name || '').toUpperCase();
+  for (var n = 0; n < 16; n++) {
+    var ch = n < upper.length ? upper.charCodeAt(n) : 0xA0;
+    data[off + 5 + n] = ch;
+  }
+  // 32-bit big-endian start byte address at offset 21
+  data[off + 21] = (startByte >>> 24) & 0xFF;
+  data[off + 22] = (startByte >>> 16) & 0xFF;
+  data[off + 23] = (startByte >>> 8) & 0xFF;
+  data[off + 24] = startByte & 0xFF;
+  // 24-bit big-endian size in blocks at offset 29
+  data[off + 29] = (sizeBlocks >>> 16) & 0xFF;
+  data[off + 30] = (sizeBlocks >>> 8) & 0xFF;
+  data[off + 31] = sizeBlocks & 0xFF;
+}
+
+function clearRamLinkPartitionEntry(buffer, slotIdx) {
+  var data = new Uint8Array(buffer);
+  var tableOff = buffer.byteLength - RAMLINK_PART_TABLE_OFFSET;
+  var off = tableOff + slotIdx * 32;
+  for (var i = 0; i < 32; i++) data[off + i] = 0x00;
+}
+
+// Build a fresh RAMLink container of `sizeMiB` megabytes with only the
+// SYSTEM partition allocated. The user-partition area is left empty;
+// addRamLinkPartition picks slots and bytes from there. Matches the
+// layout we read in readRamLinkPartitions: SYSTEM occupies the last 16
+// sectors (4 KiB), partition table sits at sector 8 of that partition
+// (= file_size − 2048), SYSTEM record carries flags `01 01` + type `FF`.
+function createEmptyRamLink(sizeMiB) {
+  var size = sizeMiB * 1024 * 1024;
+  var buf = new ArrayBuffer(size);
+  var data = new Uint8Array(buf);
+
+  // RAMLink keeps a distinctive `FF 00 00 FF` filler in unused regions
+  // of the system partition (visible in real dumps). Reproduce it for
+  // the system area so the file matches what the firmware writes.
+  for (var i = size - 4096; i < size; i++) {
+    data[i] = (i & 3) === 0 || (i & 3) === 3 ? 0xFF : 0x00;
+  }
+
+  // Write the SYSTEM record at slot 0 of the partition table.
+  var tableOff = size - RAMLINK_PART_TABLE_OFFSET;
+  for (var z = 0; z < 32; z++) data[tableOff + z] = 0x00;
+  data[tableOff + 0] = 0x01; // marker bytes seen on real SYSTEM records
+  data[tableOff + 1] = 0x01;
+  data[tableOff + 2] = 0xFF; // SYS type
+  // Name: "SYSTEM" + 0xA0 padding to 16 bytes
+  var sysName = 'SYSTEM';
+  for (var n = 0; n < 16; n++) {
+    data[tableOff + 5 + n] = n < sysName.length ? sysName.charCodeAt(n) : 0xA0;
+  }
+  // Start byte address = file_size - 4096 (last 16 sectors)
+  var sysStart = size - 4096;
+  data[tableOff + 21] = (sysStart >>> 24) & 0xFF;
+  data[tableOff + 22] = (sysStart >>> 16) & 0xFF;
+  data[tableOff + 23] = (sysStart >>> 8) & 0xFF;
+  data[tableOff + 24] = sysStart & 0xFF;
+  // Size = 16 blocks (24-bit big-endian)
+  data[tableOff + 29] = 0x00;
+  data[tableOff + 30] = 0x00;
+  data[tableOff + 31] = 0x10;
+
+  return buf;
 }
 
 function extractCmdPartition(buffer, partition) {
@@ -2644,6 +2842,15 @@ function parseDisk(buffer) {
   const detected = detectFormat(data.length, buffer);
   currentFormat = detected.format;
   currentTracks = detected.tracks;
+
+  // Flat .rml-as-DNP fallback: when a file ending in .rml/.rl turns
+  // out to be a plain DNP (no RAMLink partition table), label it as
+  // RAMLink so save-as keeps the .rml extension. Skipped inside a real
+  // RAMLink container (ramlinkBuffer set) — there the slice is a
+  // genuine DNP/D64/D81 and shouldn't be relabelled.
+  if (!ramlinkBuffer && currentFormat === DISK_FORMATS.dnp && currentFileName && /\.(rml|rl)$/i.test(currentFileName)) {
+    currentFormat = DISK_FORMATS.ramlink;
+  }
 
   // Reset interleave to format defaults
   if (detected.format.defaultInterleave) {

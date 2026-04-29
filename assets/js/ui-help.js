@@ -194,6 +194,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.90', title: 'CMD RAMLink container support', items: [
+      'Open a .rml/.rl image and the tab body shows the partition list — double-click a partition (Native, 1541, 1571, 1581) to edit it; the back arrow returns to the list',
+      'Edits inside any partition splice back into the .rml on save, so one Save downloads the whole container with every change in place',
+      'New / Delete RAMLink Partition entries in the File menu — emulation modes use their fixed sizes (683 / 1366 / 3200 blocks); Native asks for size in 256-byte blocks',
+      'Disk → New → CMD RAMLink builds a fresh 1/2/4/8/16 MiB container with just the SYSTEM record, ready for partitions',
+      'File-menu items that don\'t apply at the container level (Insert File, Import, Validate, BAM, …) are greyed out while the partition list is shown',
+    ]},
     { ver: '1.3.89', title: 'Open .gz and .zip archives directly', items: [
       'Drop a gzipped disk image (.d64.gz, .d81.gz, …) and it\'s decompressed transparently before opening',
       'Drop a .zip and pick which entries to open: every disk and importable file gets a checkbox (selected by default), then "Open Selected" dispatches them all in one go',

@@ -118,6 +118,15 @@
               <div class="option" data-format="d4m" data-tracks="81">D4M - FD4000 ED</div>
             </div>
           </div>
+          <div class="option has-submenu">CMD RAMLink
+            <div class="submenu">
+              <div class="option" data-format="ramlink" data-rl-mib="1">1 MiB</div>
+              <div class="option" data-format="ramlink" data-rl-mib="2">2 MiB</div>
+              <div class="option" data-format="ramlink" data-rl-mib="4">4 MiB</div>
+              <div class="option" data-format="ramlink" data-rl-mib="8">8 MiB</div>
+              <div class="option" data-format="ramlink" data-rl-mib="16">16 MiB</div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="option" id="opt-open">Open...</div>
@@ -186,6 +195,8 @@
       <div class="option disabled" id="opt-move-up">Move Up</div>
       <div class="option disabled" id="opt-move-down">Move Down</div>
       <div class="option disabled" id="opt-add-partition">Add Directory</div>
+      <div class="option disabled" id="opt-rl-new-partition">New RAMLink Partition</div>
+      <div class="option disabled" id="opt-rl-delete-partition">Delete RAMLink Partition</div>
       <div class="option disabled has-submenu" id="opt-align">Align
         <div class="submenu">
           <div class="option" data-align="left">Align Left</div>
@@ -319,7 +330,7 @@
   <div class="theme-toggle" id="theme-toggle" title="Toggle theme"></div>
 </div>
 
-<input type="file" id="file-input" accept=".d64,.d71,.d81,.d80,.d82,.t64,.tap,.x64,.g64,.d1m,.d2m,.d4m,.dnp,.p00,.s00,.u00,.r00,.lnx,.zip,.gz" multiple>
+<input type="file" id="file-input" accept=".d64,.d71,.d81,.d80,.d82,.t64,.tap,.x64,.g64,.d1m,.d2m,.d4m,.dnp,.p00,.s00,.u00,.r00,.lnx,.zip,.gz,.rml,.rl" multiple>
 
 <div class="tab-bar-wrap" id="tab-bar-wrap">
   <div class="tab-bar" id="tab-bar"></div>
@@ -372,6 +383,7 @@
 <script src="assets/js/ui-modals.js"></script>
 <script src="assets/js/ui-archive-picker.js"></script>
 <script src="assets/js/ui-render.js"></script>
+<script src="assets/js/ui-ramlink.js"></script>
 <script src="assets/js/ui-menus.js"></script>
 <script src="assets/js/ui-editing.js"></script>
 <script src="assets/js/ui-disk-ops.js"></script>
