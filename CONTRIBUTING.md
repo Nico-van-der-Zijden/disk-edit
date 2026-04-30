@@ -23,26 +23,44 @@ That's it. The app is vanilla JavaScript with zero dependencies.
 
 The project uses 2-space indentation, single quotes, and no trailing commas. Configuration is in `.editorconfig` and `.prettierrc`.
 
-- **JavaScript**: Use `var` for new shared utility code in `cbm-format.js`. UI code may use `const`/`let` where the surrounding code already does.
+- **JavaScript**: Use `var` for new shared utility code under `assets/js/format/`. UI code may use `const`/`let` where the surrounding code already does.
 - **CSS**: Use CSS custom properties (`var(--accent)`, `var(--border)`, etc.) defined in `base.css`. Prefer utility classes from `utilities.css` over inline styles.
 - **HTML**: The app is a single `index.html` file. Modal content is built in JavaScript, not as static HTML.
 
 ## Architecture
 
-The codebase is organized as global functions across multiple JS files loaded in order by `index.html`:
+The codebase is organized as global functions across multiple JS files loaded in order by `index.html`. Files are grouped into folders by concern — folders are organizational only; everything still attaches to the global scope (no module system):
+
+```
+assets/js/
+  format/    Disk format parsers and decoders (cbm-format*, cbm-tape, cbm-archive, cbm-editor, restore64-scanners)
+  ui/        UI infrastructure and app shell (modals, menus, directory, fileops, screen, search, export, …)
+  ui/disk/   Disk-level operations (CMD container UI, BAM viewer, compare, GEOS info, lost-files/optimize/MD5/…)
+  ui/viewers/ Per-file-type viewers (graphics, BASIC, geoWrite, REL, VLIR, fileinfo, TASS)
+```
+
+Key files (paths relative to `assets/js/`):
 
 | File | Role |
 |------|------|
-| `cbm-format.js` | Disk format definitions, sector geometry, BAM operations, file reading, shared helpers (`forEachFileSector`, `isVlirFile`, `readFileData`, etc.) |
-| `cbm-editor.js` | Version, app state, undo, BAM integrity, disk validation, disk optimizer |
-| `ui-modals.js` | Modal dialogs (`showModal`, `showChoiceModal`, `showProgressModal`) |
-| `ui-fileops.js` | File export, import, copy/paste, CVT, RTF, PDF, scratch/unscratch |
-| `ui-directory.js` | Directory manipulation, block counting, file addresses |
-| `ui-viewers.js` | Graphics, GEOS, BASIC, REL viewers with export |
-| `ui-disk-ops.js` | BAM viewer, validate, optimize, interleave settings |
-| `ui-search.js` | Search, Go to Sector, recalculate free blocks |
-| `ui-export.js` | Bulk export (ZIP, CSV, HTML, PNG), ZipCode, file chains |
-| `ui-init.js` | Drag and drop, theme toggle, initialization |
+| `format/cbm-format.js` | Disk format table, sector geometry, BAM, file reading, shared helpers (`forEachFileSector`, `isVlirFile`, `readFileData`, …) |
+| `format/cbm-format-petscii.js` | PETSCII ↔ Unicode mapping, screen-code tables |
+| `format/cbm-format-cmd.js` | CMD container parsers (RAMLink, FD2000/4000 D1M/D2M/D4M) |
+| `format/cbm-format-geos.js` | GEOS file types, VLIR records, info-block decoding, bitmap decompression |
+| `format/cbm-editor.js` | Version, app state, undo, BAM integrity, disk validation, disk optimizer |
+| `ui/ui-modals.js` | Modal dialogs (`showModal`, `showChoiceModal`, `showProgressModal`) |
+| `ui/ui-fileops.js` | File export, import, copy/paste, CVT, RTF, PDF, scratch/unscratch |
+| `ui/ui-directory.js` | Directory manipulation, block counting, file addresses |
+| `ui/ui-search.js` | Search, Go to Sector, recalculate free blocks |
+| `ui/ui-export.js` | Bulk export (ZIP, CSV, HTML, PNG), ZipCode, file chains |
+| `ui/ui-init.js` | Drag and drop, theme toggle, initialization |
+| `ui/disk/ui-cmd.js` | CMD container UI (RAMLink, FD2000/4000 partition table) |
+| `ui/disk/ui-disk-bam.js` | BAM viewer modal, error byte viewer |
+| `ui/disk/ui-disk-compare.js` | Compare with… (sector-diff modal) |
+| `ui/disk/ui-disk-tools.js` | Lost files, fill free, optimize, resize DNP, MD5, interleave |
+| `ui/viewers/ui-viewer-graphics.js` | C64/GEOS graphics renderers (24+ formats) |
+| `ui/viewers/ui-viewer-basic.js` | BASIC detokenizer + viewer |
+| `ui/viewers/ui-viewer-geowrite.js` | geoWrite document viewer |
 
 ### Key patterns
 
@@ -63,7 +81,7 @@ The codebase is organized as global functions across multiple JS files loaded in
 
 The undo system uses full-buffer snapshots stored per tab.
 
-- **`pushUndo()`** (`cbm-editor.js`) copies the entire `currentBuffer` onto the tab's `undoStack` (max depth: 20). Called before every destructive operation — directory edits, sector changes, file writes, BAM modifications.
+- **`pushUndo()`** (`format/cbm-editor.js`) copies the entire `currentBuffer` onto the tab's `undoStack` (max depth: 20). Called before every destructive operation — directory edits, sector changes, file writes, BAM modifications.
 - **`popUndo()`** restores the most recent snapshot and re-renders the disk.
 - **`clearUndo()`** empties the stack when a tab is closed.
 
@@ -105,7 +123,7 @@ There are two separate BAM checking systems:
 - Used by `allocateSectors()` to find genuinely free sectors without trusting the BAM
 - Also used by the orphaned chain scanner and recalculate-free
 
-**BAM bit operations** (`cbm-format.js`):
+**BAM bit operations** (`format/cbm-format.js`):
 - `bamMarkSectorUsed()` clears the sector's bit in the BAM bitmap, then calls `bamRecalcFree()` to recount and write the track's free count
 - `bamMarkSectorFree()` sets the bit and recounts
 - Each format defines its own `bamBitMask()` — LSB-first for D64/D71/D81, MSB-first for CMD formats (DNP/D1M/D2M/D4M)
@@ -127,7 +145,7 @@ GEOS files use the VLIR (Variable Length Index Record) structure where the direc
 - `readVLIRRecords()` follows the index and returns data per record (lossy — trims trailing nulls)
 - `readVLIRRecordsForCopy()` preserves the end-marker vs empty-slot distinction for lossless copy/paste
 
-**Viewer dispatch** (`ui-viewers.js`): The GEOS file type byte and info block class name determine which viewer is shown:
+**Viewer dispatch** (`ui/viewers/ui-viewer-graphics.js`): The GEOS file type byte and info block class name determine which viewer is shown:
 
 | Viewer | GEOS Type | Records Used |
 |--------|-----------|--------------|
@@ -143,7 +161,7 @@ GEOS files use the VLIR (Variable Length Index Record) structure where the direc
 
 The build script (`build.ps1` for Windows, `build.sh` for macOS/Linux) creates a single self-contained HTML file:
 
-1. Reads the version from `cbm-editor.js`
+1. Reads the version from `assets/js/format/cbm-editor.js`
 2. Inlines all CSS files as `<style>` tags
 3. Converts font files (.woff2, .ttf) to base64 data URIs in `@font-face` rules
 4. Converts FontAwesome font references to inline base64
@@ -194,9 +212,9 @@ A GEOS test disk is available at `disks/org_geos.D64`.
 2. Create a feature branch (`git checkout -b my-feature`)
 3. Make your changes
 4. Run `npm test` and confirm the suite stays green; add tests for new helpers
-5. Update `APP_VERSION` in `cbm-editor.js` (bump the build number)
-6. Add a user-facing changelog entry in `ui-help.js` (the `changes` array near the top of the changelog handler) — keep it short and plain English; technical detail goes in the commit message
-7. Update Credits & Thanks in `ui-help.js` if you used new external references
+5. Update `APP_VERSION` in `assets/js/format/cbm-editor.js` (bump the build number)
+6. Add a user-facing changelog entry in `assets/js/ui/ui-help.js` (the `changes` array near the top of the changelog handler) — keep it short and plain English; technical detail goes in the commit message
+7. Update Credits & Thanks in `assets/js/ui/ui-help.js` if you used new external references
 8. Update `README.md` if features or supported formats changed
 9. Commit and open a pull request
 

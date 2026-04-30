@@ -157,25 +157,50 @@ assets/
     bam.css             BAM viewer, compact bars, canvas map
     viewers.css         Error bytes, file viewer, separator editor
   js/
-    cbm-format.js       Disk format definitions, BAM operations, GCR decoder
-    cbm-tape.js         TAP tape parser (CBM ROM, Turbotape 250, Novaload)
-    cbm-editor.js       Version, tabs, undo, BAM integrity, disk optimizer
-    cbm-petscii.js      PETSCII character picker
-    ui-modals.js        Modal dialogs and input prompts
-    ui-render.js        Directory rendering, partition navigation
-    ui-menus.js         Context menu, selection, keyboard shortcuts
-    ui-editing.js       Inline editing, save helpers, menu bar, tabs
-    ui-disk-ops.js      BAM viewer, validate, optimize, fill, scan, add directory
-    ui-options.js       Options menu, settings export/import
-    ui-viewers.js       Graphics, GEOS, BASIC, REL viewers
-    ui-tass-viewer.js   Turbo Assembler V5.x source viewer
-    ui-screen.js        PETSCII renderer, hex viewer, sector editor, disassembler
-    ui-search.js        Search and Go to Sector
-    ui-directory.js     Directory manipulation, sort, separators, property editors
-    ui-fileops.js       File export, import, copy/paste, CVT, RTF, PDF
-    ui-export.js        Bulk export (ZIP, CSV, HTML, PNG), ZipCode, name case
-    ui-init.js          Drag and drop, theme toggle, initialization
-    ui-help.js          About, credits, keyboard shortcuts, changelog
+    format/                       Disk format parsers and decoders
+      cbm-format.js               Core: disk format table, sector geometry, BAM, file reading
+      cbm-format-petscii.js       PETSCII ↔ Unicode mapping, screen-code tables
+      cbm-format-gcr.js           G64 GCR decoder
+      cbm-format-cmd.js           CMD container parsers (RAMLink, FD2000/4000 D1M/D2M/D4M)
+      cbm-format-geos.js          GEOS file types, VLIR records, info block, bitmap decompress
+      cbm-format-lnx.js           Lynx (.lnx) archive reader
+      cbm-format-tape.js          T64 tape directory reader
+      cbm-tape.js                 TAP tape parser (CBM ROM, Turbotape 250, Novaload, Cyberload)
+      cbm-archive.js              gzip + ZIP archive readers
+      cbm-editor.js               Version, tabs, undo, BAM integrity, disk optimizer
+      restore64-scanners.js       Packer/cruncher detection (370+ signatures)
+    ui/                           UI infrastructure and app shell
+      cbm-petscii.js              On-screen PETSCII keyboard picker
+      ui-modals.js                Modal dialogs and input prompts
+      ui-archive-picker.js        Archive content picker
+      ui-render.js                Directory rendering, partition navigation
+      ui-menus.js                 Context menu, selection, keyboard shortcuts
+      ui-editing.js               Inline editing, save helpers, menu bar, tabs
+      ui-options.js               Options menu, settings export/import
+      ui-screen.js                PETSCII renderer, hex viewer, sector editor, disassembler
+      ui-search.js                Search and Go to Sector
+      ui-directory.js             Directory manipulation, sort, separators, property editors
+      ui-fileops.js               File export, import, copy/paste, CVT, RTF, PDF
+      ui-export.js                Bulk export (ZIP, CSV, HTML, PNG), ZipCode, name case
+      ui-recent.js                Recent-files list
+      ui-init.js                  Drag and drop, theme toggle, initialization
+      ui-help.js                  About, credits, keyboard shortcuts, changelog
+      ui-mobile-menu.js           Mobile menu wiring
+      disk/                       Disk-level operations
+        ui-cmd.js                 CMD container UI (RAMLink, FD2000/4000 partitions)
+        ui-disk-bam.js            BAM viewer modal, error byte viewer
+        ui-disk-compare.js        Compare with… (sector-diff modal)
+        ui-disk-geos.js           GEOS file info, Convert to GEOS
+        ui-disk-tools.js          Lost files, fill free, optimize, resize DNP, MD5, interleave
+      viewers/                    Per-file-type viewers
+        ui-viewer-fileinfo.js     File info modal + packer detect dispatch
+        ui-viewer-graphics.js     C64/GEOS graphics renderers (24+ formats)
+        ui-viewer-vlir.js         GEOS VLIR record inspector
+        ui-viewer-rel.js          REL file viewer
+        ui-viewer-basic.js        BASIC detokenizer + viewer
+        ui-viewer-geowrite.js     geoWrite document viewer
+        ui-tass-viewer.js         Turbo Assembler V5.x source viewer
+    matomo.js                     Analytics (excluded from dist builds)
   fontawesome/           FontAwesome icons (bundled)
   webfonts/              C64 Pro Mono font + FontAwesome webfonts
 build.ps1               Build script (PowerShell)

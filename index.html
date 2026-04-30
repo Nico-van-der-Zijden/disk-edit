@@ -374,31 +374,50 @@
   </div>
 </div>
 
-<script src="assets/js/cbm-format.js"></script>
-<script src="assets/js/cbm-tape.js"></script>
-<script src="assets/js/cbm-archive.js"></script>
-<script src="assets/js/cbm-petscii.js"></script>
-<script src="assets/js/cbm-editor.js"></script>
-<script src="assets/js/restore64-scanners.js"></script>
-<script src="assets/js/ui-modals.js"></script>
-<script src="assets/js/ui-archive-picker.js"></script>
-<script src="assets/js/ui-render.js"></script>
-<script src="assets/js/ui-cmd.js"></script>
-<script src="assets/js/ui-menus.js"></script>
-<script src="assets/js/ui-editing.js"></script>
-<script src="assets/js/ui-disk-ops.js"></script>
-<script src="assets/js/ui-options.js"></script>
-<script src="assets/js/ui-viewers.js"></script>
-<script src="assets/js/ui-tass-viewer.js"></script>
-<script src="assets/js/ui-screen.js"></script>
-<script src="assets/js/ui-search.js"></script>
-<script src="assets/js/ui-directory.js"></script>
-<script src="assets/js/ui-fileops.js"></script>
-<script src="assets/js/ui-export.js"></script>
-<script src="assets/js/ui-recent.js"></script>
-<script src="assets/js/ui-init.js"></script>
-<script src="assets/js/ui-help.js"></script>
-<script src="assets/js/ui-mobile-menu.js"></script>
+<!-- Disk format parsers and decoders -->
+<script src="assets/js/format/cbm-format-petscii.js"></script>
+<script src="assets/js/format/cbm-format-gcr.js"></script>
+<script src="assets/js/format/cbm-format.js"></script>
+<script src="assets/js/format/cbm-format-cmd.js"></script>
+<script src="assets/js/format/cbm-format-geos.js"></script>
+<script src="assets/js/format/cbm-format-tape.js"></script>
+<script src="assets/js/format/cbm-format-lnx.js"></script>
+<script src="assets/js/format/cbm-tape.js"></script>
+<script src="assets/js/format/cbm-archive.js"></script>
+<script src="assets/js/format/cbm-editor.js"></script>
+<script src="assets/js/format/restore64-scanners.js"></script>
+<!-- UI infrastructure -->
+<script src="assets/js/ui/cbm-petscii.js"></script>
+<script src="assets/js/ui/ui-modals.js"></script>
+<script src="assets/js/ui/ui-archive-picker.js"></script>
+<script src="assets/js/ui/ui-render.js"></script>
+<script src="assets/js/ui/ui-menus.js"></script>
+<script src="assets/js/ui/ui-editing.js"></script>
+<script src="assets/js/ui/ui-options.js"></script>
+<!-- Disk-level operations -->
+<script src="assets/js/ui/disk/ui-cmd.js"></script>
+<script src="assets/js/ui/disk/ui-disk-bam.js"></script>
+<script src="assets/js/ui/disk/ui-disk-compare.js"></script>
+<script src="assets/js/ui/disk/ui-disk-geos.js"></script>
+<script src="assets/js/ui/disk/ui-disk-tools.js"></script>
+<!-- Per-file viewers -->
+<script src="assets/js/ui/viewers/ui-viewer-fileinfo.js"></script>
+<script src="assets/js/ui/viewers/ui-viewer-graphics.js"></script>
+<script src="assets/js/ui/viewers/ui-viewer-vlir.js"></script>
+<script src="assets/js/ui/viewers/ui-viewer-rel.js"></script>
+<script src="assets/js/ui/viewers/ui-viewer-basic.js"></script>
+<script src="assets/js/ui/viewers/ui-viewer-geowrite.js"></script>
+<script src="assets/js/ui/viewers/ui-tass-viewer.js"></script>
+<!-- UI app shell -->
+<script src="assets/js/ui/ui-screen.js"></script>
+<script src="assets/js/ui/ui-search.js"></script>
+<script src="assets/js/ui/ui-directory.js"></script>
+<script src="assets/js/ui/ui-fileops.js"></script>
+<script src="assets/js/ui/ui-export.js"></script>
+<script src="assets/js/ui/ui-recent.js"></script>
+<script src="assets/js/ui/ui-init.js"></script>
+<script src="assets/js/ui/ui-help.js"></script>
+<script src="assets/js/ui/ui-mobile-menu.js"></script>
 
 <!-- Matomo (excluded from dist builds) -->
 <script src="assets/js/matomo.js"></script>

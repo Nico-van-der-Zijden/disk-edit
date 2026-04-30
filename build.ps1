@@ -17,7 +17,7 @@ function FileToDataUri($path, $mime) {
 }
 
 # Read version from cbm-editor.js
-$versionLine = Get-Content (Join-Path $srcDir "assets/js/cbm-editor.js") | Select-String 'major:\s*(\d+).*minor:\s*(\d+).*build:\s*(\d+)'
+$versionLine = Get-Content (Join-Path $srcDir "assets/js/format/cbm-editor.js") | Select-String 'major:\s*(\d+).*minor:\s*(\d+).*build:\s*(\d+)'
 if ($versionLine) {
     $v = $versionLine.Matches[0].Groups
     $version = "$($v[1].Value).$($v[2].Value).$($v[3].Value)"

@@ -38,14 +38,14 @@ font_mime() {
 }
 
 # Read version from cbm-editor.js
-VERSION=$(grep -oP 'major:\s*\K\d+' "$SRCDIR/assets/js/cbm-editor.js" 2>/dev/null || echo "0")
-MINOR=$(grep -oP 'minor:\s*\K\d+' "$SRCDIR/assets/js/cbm-editor.js" 2>/dev/null || echo "0")
-BUILD=$(grep -oP 'build:\s*\K\d+' "$SRCDIR/assets/js/cbm-editor.js" 2>/dev/null || echo "0")
+VERSION=$(grep -oP 'major:\s*\K\d+' "$SRCDIR/assets/js/format/cbm-editor.js" 2>/dev/null || echo "0")
+MINOR=$(grep -oP 'minor:\s*\K\d+' "$SRCDIR/assets/js/format/cbm-editor.js" 2>/dev/null || echo "0")
+BUILD=$(grep -oP 'build:\s*\K\d+' "$SRCDIR/assets/js/format/cbm-editor.js" 2>/dev/null || echo "0")
 # Fallback for macOS (no -P flag in grep)
 if [ "$VERSION" = "0" ] && [ "$MINOR" = "0" ]; then
-  VERSION=$(sed -n 's/.*major:\s*\([0-9]*\).*/\1/p' "$SRCDIR/assets/js/cbm-editor.js" | head -1)
-  MINOR=$(sed -n 's/.*minor:\s*\([0-9]*\).*/\1/p' "$SRCDIR/assets/js/cbm-editor.js" | head -1)
-  BUILD=$(sed -n 's/.*build:\s*\([0-9]*\).*/\1/p' "$SRCDIR/assets/js/cbm-editor.js" | head -1)
+  VERSION=$(sed -n 's/.*major:\s*\([0-9]*\).*/\1/p' "$SRCDIR/assets/js/format/cbm-editor.js" | head -1)
+  MINOR=$(sed -n 's/.*minor:\s*\([0-9]*\).*/\1/p' "$SRCDIR/assets/js/format/cbm-editor.js" | head -1)
+  BUILD=$(sed -n 's/.*build:\s*\([0-9]*\).*/\1/p' "$SRCDIR/assets/js/format/cbm-editor.js" | head -1)
 fi
 FULLVERSION="$VERSION.$MINOR.$BUILD"
 echo -e "\033[36mBuilding CBM Disk Editor v$FULLVERSION...\033[0m"

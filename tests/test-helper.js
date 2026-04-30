@@ -45,11 +45,22 @@ function loadScript(relPath) {
   vm.runInThisContext(src, { filename: relPath });
 }
 
-loadScript('assets/js/cbm-format.js');
-loadScript('assets/js/cbm-editor.js');
-loadScript('assets/js/ui-directory.js');
-loadScript('assets/js/ui-fileops.js');
-loadScript('assets/js/ui-viewers.js');
+loadScript('assets/js/format/cbm-format-petscii.js');
+loadScript('assets/js/format/cbm-format-gcr.js');
+loadScript('assets/js/format/cbm-format.js');
+loadScript('assets/js/format/cbm-format-cmd.js');
+loadScript('assets/js/format/cbm-format-geos.js');
+loadScript('assets/js/format/cbm-format-tape.js');
+loadScript('assets/js/format/cbm-format-lnx.js');
+loadScript('assets/js/format/cbm-editor.js');
+loadScript('assets/js/ui/ui-directory.js');
+loadScript('assets/js/ui/ui-fileops.js');
+loadScript('assets/js/ui/viewers/ui-viewer-fileinfo.js');
+loadScript('assets/js/ui/viewers/ui-viewer-graphics.js');
+loadScript('assets/js/ui/viewers/ui-viewer-vlir.js');
+loadScript('assets/js/ui/viewers/ui-viewer-rel.js');
+loadScript('assets/js/ui/viewers/ui-viewer-basic.js');
+loadScript('assets/js/ui/viewers/ui-viewer-geowrite.js');
 
 // Helper: load a test fixture disk and set globals. Fixtures live in
 // tests/fixtures/ (gitignored — keep local copies separate from disks/,
