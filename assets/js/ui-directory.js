@@ -1038,6 +1038,11 @@ function startRenameEntry(entryEl) {
   showPetsciiPicker(editor, 16);
 
   let reverted = false;
+  // Re-entry guard: cleanup() → hidePetsciiPicker() can move focus, which
+  // fires the editor's own blur handler, which would call commitRename
+  // a second time mid-flight. The second call's renderDisk collides with
+  // the first innerHTML write — crashes with "node no longer a child".
+  let finished = false;
 
   function cleanup() {
     nameSpan.classList.remove('editing');
@@ -1048,7 +1053,8 @@ function startRenameEntry(entryEl) {
   }
 
   function commitRename() {
-    if (reverted) return;
+    if (reverted || finished) return;
+    finished = true;
     const newBytes = editor.getBytes(16, 0xA0);
     let changed = false;
     for (let i = 0; i < 16; i++) {
@@ -1065,6 +1071,8 @@ function startRenameEntry(entryEl) {
   }
 
   function revert() {
+    if (finished) return;
+    finished = true;
     reverted = true;
     cleanup();
     const info = parseCurrentDir(currentBuffer);

@@ -239,15 +239,16 @@ document.addEventListener('keydown', (e) => {
   var modalOpen = document.getElementById('modal-overlay');
   if (modalOpen && modalOpen.classList.contains('open')) return;
 
-  // Enter on the RAMLink partition list — open the highlighted partition
-  // (mirrors a double-click). Mirrors the click-to-enter row handler.
+  // Enter on the RAMLink partition list — start rename on the selected
+  // partition, mirroring how Enter renames a selected D81 subdir entry.
+  // Double-click is what opens the partition (matching subdir UX).
   if (e.key === 'Enter' && isRamlinkListView()) {
-    var rlEnterRow = document.querySelector('.dir-entry.selected[data-ramlink-part]');
-    if (rlEnterRow) {
+    var rlSelRow = document.querySelector('.dir-entry.selected[data-ramlink-part]');
+    if (rlSelRow) {
       e.preventDefault();
-      var rlIdx = parseInt(rlEnterRow.dataset.ramlinkPart, 10);
+      var rlIdx = parseInt(rlSelRow.dataset.ramlinkPart, 10);
       var rlPart = ramlinkPartitions && ramlinkPartitions[rlIdx];
-      if (rlPart && rlPart.type !== 0xFF) enterRamLinkPartition(rlIdx);
+      if (rlPart && rlPart.type !== 0xFF) startRenameEntry(rlSelRow);
       return;
     }
   }
@@ -516,16 +517,20 @@ function updateEntryMenuState() {
   // RAMLink partition management — only meaningful (and only visible)
   // on the container's partition-list view.
   var rlNewBtn = document.getElementById('opt-rl-new-partition');
+  var rlRenBtn = document.getElementById('opt-rl-rename-partition');
   var rlDelBtn = document.getElementById('opt-rl-delete-partition');
   rlNewBtn.style.display = containerList ? '' : 'none';
+  rlRenBtn.style.display = containerList ? '' : 'none';
   rlDelBtn.style.display = containerList ? '' : 'none';
   if (containerList) {
     var listSelEl = document.querySelector('.dir-entry.selected[data-ramlink-part]');
     var selPartIdx = listSelEl ? parseInt(listSelEl.dataset.ramlinkPart, 10) : -1;
     var selPart = (selPartIdx >= 0 && ramlinkPartitions) ? ramlinkPartitions[selPartIdx] : null;
     rlNewBtn.classList.toggle('disabled', !canAddRamLinkPartition());
-    // Can't delete the SYSTEM record — the firmware needs it.
-    rlDelBtn.classList.toggle('disabled', !selPart || selPart.type === 0xFF);
+    // Rename / Delete need a non-SYSTEM partition selected.
+    var canModify = !!selPart && selPart.type !== 0xFF;
+    rlRenBtn.classList.toggle('disabled', !canModify);
+    rlDelBtn.classList.toggle('disabled', !canModify);
   }
   // Multi-select compatible operations (all disabled for tape / container list except copy/export)
   document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection || noEdit);

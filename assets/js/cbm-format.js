@@ -94,6 +94,22 @@ function _cmdReadTrackFree(data, bamOff, track) {
   }
   return free;
 }
+// DNP track 1 has sectors 0-63 reserved for filesystem overhead: boot, header,
+// 32-sector BAM area (covers up to 255 tracks), dir start (S$22), and 29
+// pre-reserved sectors for dir-chain growth. CMD HD's "blocks free" excludes
+// those 64 sectors regardless of bitmap state — so skip the first 8 bitmap
+// bytes (sectors 0-63) when totalling free blocks for the dir track.
+function _dnpReadTrackFree(data, bamOff, track) {
+  var base = this._bamBase(track);
+  if (base < 0 || base + 32 > data.length) return 0;
+  var startByte = (track === this.dirTrack) ? 8 : 0;
+  var free = 0;
+  for (var i = startByte; i < 32; i++) {
+    var b = data[base + i];
+    while (b) { free += b & 1; b >>= 1; }
+  }
+  return free;
+}
 function _cmdReadTrackBitmap(data, bamOff, track) {
   var base = this._bamBase(track);
   if (base < 0 || base + 32 > data.length) return 0;
@@ -756,7 +772,7 @@ const DISK_FORMATS = {
     bamTracksRange(numTracks) { return numTracks; },
     _bamBase: _cmdBamBase,
     isSectorFree: _cmdIsSectorFree,
-    readTrackFree: _cmdReadTrackFree,
+    readTrackFree: _dnpReadTrackFree,
     writeTrackFree: _cmdNoop,
     readTrackBitmap: _cmdReadTrackBitmap,
     writeTrackBitmap: _cmdNoop,
@@ -1338,8 +1354,13 @@ function readRamLinkPartitions(buffer) {
   // Signature: SYSTEM record sits at the start of the table, type byte = 0xFF
   if (data[tableOff + 2] !== 0xFF) return null;
 
+  // 32 slots × 32 bytes = 1024-byte table. Slot 0 is SYSTEM, slots 1-31
+  // are user partitions. Slots 8/16/24 happen to overlap with bytes that
+  // look like sector-chain markers (01 02 / 01 03 / 00 FF) but those bytes
+  // are just incidental: when a user partition is allocated there, the
+  // entry overwrites them and VICE / CMD HD ROM are happy.
   var partitions = [];
-  for (var i = 0; i < 16; i++) {
+  for (var i = 0; i < 32; i++) {
     var off = tableOff + i * 32;
     if (off + 32 > buffer.byteLength) break;
     var type = data[off + 2];
@@ -1375,36 +1396,67 @@ function extractRamLinkPartition(buffer, partition) {
   return buffer.slice(partition.startByte, end);
 }
 
-// First empty 32-byte slot in the partition table; -1 if all 16 are
-// allocated. Used by "New RAMLink Partition" to find where to write
-// the new entry.
+// First empty 32-byte slot in the partition table; -1 if all 31 user
+// slots are allocated. Slot 0 is SYSTEM (always type 0xFF) so the search
+// starts at slot 1.
 function findRamLinkEmptySlot(buffer) {
   if (!buffer || buffer.byteLength < RAMLINK_PART_TABLE_OFFSET + 512) return -1;
   var data = new Uint8Array(buffer);
   var tableOff = buffer.byteLength - RAMLINK_PART_TABLE_OFFSET;
-  for (var i = 0; i < 16; i++) {
+  for (var i = 1; i < 32; i++) {
     if (data[tableOff + i * 32 + 2] === 0x00) return i;
   }
   return -1;
 }
 
-// Largest contiguous free byte range available for a new partition,
-// found between existing partitions and the SYSTEM region. Returns
-// { start, size } where start is byte-aligned to a 256-byte block.
-function findRamLinkFreeSpace(buffer, partitions) {
+// First-fit free byte range for a new partition. Walks the byte map in
+// order, finding the lowest gap between active partitions (and before the
+// SYSTEM region at the tail) that's large enough to fit `requestedBytes`.
+// This mirrors how real RAMLink / CMD HD ROM allocates: a freshly deleted
+// partition's bytes get reused by the next "Make Partition" that fits,
+// rather than always bump-allocating after the highest-used byte.
+//
+// If `requestedBytes` is omitted, returns the biggest gap (kept as a
+// pre-allocation sanity probe — caller can read .size to size-check the
+// container before bothering with the picker).
+//
+// Returns { start, size } with start aligned to a 256-byte block. If no
+// gap fits, returns the biggest available gap so the caller can show a
+// useful "available: N KiB" error.
+function findRamLinkFreeSpace(buffer, partitions, requestedBytes) {
   if (!buffer) return { start: 0, size: 0 };
-  // SYSTEM partition is always the last 16 sectors (4096 bytes).
   var systemStart = buffer.byteLength - 16 * 256;
-  var maxEnd = 0;
+
+  // Sorted [start, end) ranges of every claimed byte: each active
+  // partition entry, plus the SYSTEM region at the tail. Empty / deleted
+  // slots (type 0x00) are skipped — their bytes are free.
+  var ranges = [];
   for (var i = 0; i < partitions.length; i++) {
     var p = partitions[i];
-    if (p.type === 0xFF) continue; // skip SYSTEM record
-    var end = p.startByte + p.sizeBytes;
-    if (end > maxEnd) maxEnd = end;
+    if (p.type === 0xFF || p.type === 0x00) continue;
+    ranges.push({ start: p.startByte, end: p.startByte + p.sizeBytes });
   }
-  // Round up to a 256-byte block boundary just in case.
-  if (maxEnd & 0xFF) maxEnd = (maxEnd + 0x100) & ~0xFF;
-  return { start: maxEnd, size: Math.max(0, systemStart - maxEnd) };
+  ranges.push({ start: systemStart, end: buffer.byteLength });
+  ranges.sort(function(a, b) { return a.start - b.start; });
+
+  var cursor = 0;
+  var biggest = { start: 0, size: 0 };
+  for (var j = 0; j < ranges.length; j++) {
+    var r = ranges[j];
+    if (r.start > cursor) {
+      var gapStart = cursor;
+      if (gapStart & 0xFF) gapStart = (gapStart + 0x100) & ~0xFF;
+      var gapSize = r.start - gapStart;
+      if (gapSize > 0) {
+        if (requestedBytes && gapSize >= requestedBytes) {
+          return { start: gapStart, size: gapSize };
+        }
+        if (gapSize > biggest.size) biggest = { start: gapStart, size: gapSize };
+      }
+    }
+    if (r.end > cursor) cursor = r.end;
+  }
+  return biggest;
 }
 
 // Write a 32-byte partition table entry at the given slot index.
@@ -1434,52 +1486,117 @@ function writeRamLinkPartitionEntry(buffer, slotIdx, type, name, startByte, size
   data[off + 31] = sizeBlocks & 0xFF;
 }
 
+// Match real RAMLink "kill partition": zero only the type byte (+2),
+// leaving the name/start/size bytes as a tombstone. Empty-slot detection
+// elsewhere already keys off type === 0x00, so the residual data is
+// inert; preserving it keeps deleted-partition byte-pattern parity with
+// VICE / a physical RAMLink.
 function clearRamLinkPartitionEntry(buffer, slotIdx) {
   var data = new Uint8Array(buffer);
   var tableOff = buffer.byteLength - RAMLINK_PART_TABLE_OFFSET;
-  var off = tableOff + slotIdx * 32;
-  for (var i = 0; i < 32; i++) data[off + i] = 0x00;
+  data[tableOff + slotIdx * 32 + 2] = 0x00;
 }
 
-// Build a fresh RAMLink container of `sizeMiB` megabytes with only the
-// SYSTEM partition allocated. The user-partition area is left empty;
-// addRamLinkPartition picks slots and bytes from there. Matches the
-// layout we read in readRamLinkPartitions: SYSTEM occupies the last 16
-// sectors (4 KiB), partition table sits at sector 8 of that partition
-// (= file_size − 2048), SYSTEM record carries flags `01 01` + type `FF`.
+
+// Build a fresh RAMLink container of `sizeMiB` megabytes that matches
+// VICE's "empty RAMCard" output. The system partition (last 16 sectors
+// = 4 KiB) carries three things the RAMLink firmware looks for:
+//
+//   • A bookkeeping/signature block at offset +0x500..+0x5FF, ending
+//     with the ASCII string "RAMLINK     " followed by 0xAA × 4. Without
+//     this block VICE treats the container as uninitialised RAM and the
+//     file shows up as empty.
+//   • Chain markers `01 02` / `01 03` / `00 FF` at the start of sectors
+//     9 / 10 / 11 (the partition table itself sits at sector 8).
+//   • The partition table at sector 8: slot 0 = SYSTEM (flags `01 01`,
+//     type 0xFF), slot 1 = default Native partition "RAMLINK  1"
+//     spanning [0, size − 64 KiB).
+//
+// Everything else in the system partition is zeros. The 64 KiB tail
+// (= SYSTEM 16 blocks + 240-block reserved gap) matches VICE; the gap
+// is what RAMLink firmware uses for its own scratch space.
 function createEmptyRamLink(sizeMiB) {
   var size = sizeMiB * 1024 * 1024;
+  var totalBlocks = size / 256;
+  var natBlocks = totalBlocks - 256;
+  var natTracks = natBlocks / 256; // DNP: 256 sectors per track
+  var natBytes = natBlocks * 256;
   var buf = new ArrayBuffer(size);
   var data = new Uint8Array(buf);
 
-  // RAMLink keeps a distinctive `FF 00 00 FF` filler in unused regions
-  // of the system partition (visible in real dumps). Reproduce it for
-  // the system area so the file matches what the firmware writes.
-  for (var i = size - 4096; i < size; i++) {
-    data[i] = (i & 3) === 0 || (i & 3) === 3 ? 0xFF : 0x00;
+  // 1. Default Native partition filesystem at byte 0. createEmptyDisk
+  // touches currentFormat / currentTracks; restore them so the caller's
+  // view isn't disturbed.
+  var savedFmt = currentFormat, savedTracks = currentTracks;
+  var natBuf = createEmptyDisk('dnp', natTracks);
+  currentFormat = savedFmt;
+  currentTracks = savedTracks;
+  var natSrc = new Uint8Array(natBuf);
+  for (var i = 0; i < natSrc.length && i < natBytes; i++) data[i] = natSrc[i];
+  // VICE writes the partition's name into the DNP header too, so the
+  // disk-header line shows "RAMLINK  1" when the firmware mounts it.
+  // Header sits at T1/S1 offset 4 (= file offset 0x104), 16 bytes.
+  var natHeaderName = 'RAMLINK  1';
+  for (var hn = 0; hn < 16; hn++) {
+    data[0x104 + hn] = hn < natHeaderName.length ? natHeaderName.charCodeAt(hn) : 0xA0;
   }
+  // ID bytes — VICE writes "RL" both in the disk header (T1/S1 offset
+  // 0x16) and in the BAM (T1/S2 offset 0x04). createEmptyDisk leaves
+  // both as 0xA0 0xA0, so override after the fact.
+  data[0x116] = 0x52; // T1/S1 ID byte 1: 'R'
+  data[0x117] = 0x4C; // T1/S1 ID byte 2: 'L'
+  data[0x204] = 0x52; // T1/S2 BAM ID byte 1
+  data[0x205] = 0x4C; // T1/S2 BAM ID byte 2
 
-  // Write the SYSTEM record at slot 0 of the partition table.
-  var tableOff = size - RAMLINK_PART_TABLE_OFFSET;
-  for (var z = 0; z < 32; z++) data[tableOff + z] = 0x00;
-  data[tableOff + 0] = 0x01; // marker bytes seen on real SYSTEM records
-  data[tableOff + 1] = 0x01;
-  data[tableOff + 2] = 0xFF; // SYS type
-  // Name: "SYSTEM" + 0xA0 padding to 16 bytes
-  var sysName = 'SYSTEM';
-  for (var n = 0; n < 16; n++) {
-    data[tableOff + 5 + n] = n < sysName.length ? sysName.charCodeAt(n) : 0xA0;
-  }
-  // Start byte address = file_size - 4096 (last 16 sectors)
+  // 2. System partition (last 4 KiB).
   var sysStart = size - 4096;
-  data[tableOff + 21] = (sysStart >>> 24) & 0xFF;
-  data[tableOff + 22] = (sysStart >>> 16) & 0xFF;
-  data[tableOff + 23] = (sysStart >>> 8) & 0xFF;
-  data[tableOff + 24] = sysStart & 0xFF;
-  // Size = 16 blocks (24-bit big-endian)
-  data[tableOff + 29] = 0x00;
-  data[tableOff + 30] = 0x00;
-  data[tableOff + 31] = 0x10;
+
+  // 2a. Firmware bookkeeping block at +0x500..+0x5FF — verbatim from
+  //     VICE's empty 16 MiB output. Most bytes are 0xFF; specific gap
+  //     pairs at 0x534/0x570/0x5A4, the RAMLink ID block at 0x5E0, the
+  //     "RAMLINK     " signature at 0x5F0, then 0xAA × 4 at 0x5FC.
+  // Size-dependent bytes — derived from VICE-formatted samples at 1, 8,
+  // and 16 MiB:
+  //   +0x571 = (sizeMiB << 4) & 0xFF
+  //   +0x5EB = (sizeMiB << 4) & 0xFF        (same encoding as 0x571)
+  //   +0x5EE = ((sizeMiB - 1) << 4) & 0xF0
+  // Everything else in this 256-byte block is constant: a 0x80 marker
+  // at +0x500, 0xFF filler with three `00 00` gap pairs at +0x534,
+  // +0x570, +0x5A4, the RAMLink ID block at +0x5E0, the literal
+  // "RAMLINK     " signature at +0x5F0, and 0xAA × 4 at +0x5FC.
+  var byteSizeMark1 = (sizeMiB << 4) & 0xFF;
+  var byteSizeMark2 = ((sizeMiB - 1) << 4) & 0xF0;
+
+  for (var f = 0; f < 256; f++) data[sysStart + 0x500 + f] = 0xFF;
+  data[sysStart + 0x500] = 0x80;
+  data[sysStart + 0x534] = 0x00; data[sysStart + 0x535] = 0x00;
+  data[sysStart + 0x570] = 0x00; data[sysStart + 0x571] = byteSizeMark1;
+  data[sysStart + 0x5A4] = 0x00; data[sysStart + 0x5A5] = 0x00;
+
+  var rlIdBlock = [0xFF, 0x10, 0x01, 0x01, 0x10, 0xFF, 0xFF, 0xFF,
+                   0x01, 0x00, 0xFF, 0x00, 0xFF, 0xFF, 0x00, 0xFF];
+  rlIdBlock[0x0B] = byteSizeMark1;  // +0x5EB
+  rlIdBlock[0x0E] = byteSizeMark2;  // +0x5EE
+  for (var b = 0; b < 16; b++) data[sysStart + 0x5E0 + b] = rlIdBlock[b];
+  var sig = 'RAMLINK     '; // 7 letters + 5 spaces = 12 bytes
+  for (var s = 0; s < 12; s++) data[sysStart + 0x5F0 + s] = sig.charCodeAt(s);
+  data[sysStart + 0x5FC] = 0xAA;
+  data[sysStart + 0x5FD] = 0xAA;
+  data[sysStart + 0x5FE] = 0xAA;
+  data[sysStart + 0x5FF] = 0xAA;
+
+  // 2b. Chain link bytes at sectors 9/10/11 of the system partition.
+  data[sysStart + 0x900] = 0x01; data[sysStart + 0x901] = 0x02;
+  data[sysStart + 0xA00] = 0x01; data[sysStart + 0xA01] = 0x03;
+  data[sysStart + 0xB00] = 0x00; data[sysStart + 0xB01] = 0xFF;
+
+  // 2c. Partition table at sector 8.
+  writeRamLinkPartitionEntry(buf, 0, 0xFF, 'SYSTEM', sysStart, 16);
+  // SYSTEM record's flag bytes are `01 01` (writeRamLinkPartitionEntry
+  // zeros them; stamp afterwards).
+  data[sysStart + 0x800 + 0] = 0x01;
+  data[sysStart + 0x800 + 1] = 0x01;
+  writeRamLinkPartitionEntry(buf, 1, 0x01, 'RAMLINK  1', 0, natBlocks);
 
   return buf;
 }
@@ -1507,8 +1624,8 @@ function detectFormat(bufferSize, buffer) {
       return { format: DISK_FORMATS.t64, tracks: 0 };
     }
   }
-  // DNP: multiple of 65536, at least 2 tracks, check header signature before size table
-  if (bufferSize >= 131072 && bufferSize % 65536 === 0 && bufferSize <= 16711680 && buffer) {
+  // DNP: multiple of 65536, at least 1 track (RAMLink partitions can be 1-track), check header signature before size table
+  if (bufferSize >= 65536 && bufferSize % 65536 === 0 && bufferSize <= 16711680 && buffer) {
     var dnpData = new Uint8Array(buffer);
     // Header at T1/S1 (offset 256): byte 2 = format type 'H' ($48)
     if (dnpData[258] === 0x48 || dnpData[0x119] === 0x31) {
@@ -2873,11 +2990,15 @@ function parseDisk(buffer) {
   const diskName = readPetsciiString(data, headerOff + fmt.nameOffset, fmt.nameLength);
   const diskId = readPetsciiString(data, headerOff + fmt.idOffset, fmt.idLength, false);
 
-  // Count free blocks from BAM
+  // Count free blocks from BAM. CBM formats (D64/D71/D81) exclude the dir
+  // track from "blocks free" by convention; CMD native formats (DNP/D1M/D2M/
+  // D4M) include it because their bitmap is exhaustive and dir-track sectors
+  // genuinely available for files are reported as free.
   let freeBlocks = 0;
   const bamTracks = fmt.bamTracksRange(currentTracks);
+  const skipDirTrack = !fmt.isSectorFree;
   for (let t = 1; t <= bamTracks; t++) {
-    if (t === fmt.dirTrack) continue;
+    if (skipDirTrack && t === fmt.dirTrack) continue;
     freeBlocks += fmt.readTrackFree(data, bamOffset, t);
   }
 

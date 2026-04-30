@@ -100,6 +100,18 @@ async function openRamLinkAsTab(buffer, fileName) {
 // Each partition is a row with click-to-select / dblclick-to-enter
 // (mirrors how subdirectories work elsewhere).
 function renderRamLinkPartitionList() {
+  // Re-parse on every render — partition-table edits (rename, new,
+  // delete) mutate ramlinkBuffer directly; this picks up the change
+  // without a separate refresh hook.
+  if (ramlinkBuffer) {
+    var fresh = readRamLinkPartitions(ramlinkBuffer);
+    if (fresh) ramlinkPartitions = fresh.partitions;
+  }
+  // Absolute byte offset of slot N's entry in ramlinkBuffer; rows expose
+  // this as `data-offset` so the existing startRenameEntry helper can
+  // read/write the 16-byte name field at +5..+20 unchanged.
+  var tableOff = ramlinkBuffer ? (ramlinkBuffer.byteLength - 2048) : 0;
+
   var content = document.getElementById('content');
   var html = '<div class="disk-panel">' +
     '<div class="disk-header">' +
@@ -112,6 +124,7 @@ function renderRamLinkPartitionList() {
       '<span class="dir-blocks">Size</span>' +
       '<span class="dir-name">Partition</span>' +
       '<span class="dir-type">Type</span>' +
+      '<span class="dir-slot">#</span>' +
       '<span class="dir-ts">Start</span>' +
       '<span class="dir-addr"></span>' +
       '<span class="dir-icons"></span>' +
@@ -124,12 +137,14 @@ function renderRamLinkPartitionList() {
     var canOpen = p.type !== 0xFF; // SYSTEM is shown but not enterable
     if (canOpen) openCount++;
     var startHex = '$' + p.startByte.toString(16).toUpperCase().padStart(8, '0');
+    var entryAbs = tableOff + p.index * 32;
     html +=
-      '<div class="dir-entry' + (canOpen ? '' : ' deleted') + '" data-ramlink-part="' + i + '">' +
+      '<div class="dir-entry' + (canOpen ? '' : ' deleted') + '" data-ramlink-part="' + i + '" data-offset="' + entryAbs + '">' +
         '<span class="dir-grip"></span>' +
         '<span class="dir-blocks">' + p.sizeBlocks + '</span>' +
         '<span class="dir-name">"' + escHtml(p.name) + '"</span>' +
         '<span class="dir-type">' + escHtml(p.typeName) + '</span>' +
+        '<span class="dir-slot">' + p.index + '</span>' +
         '<span class="dir-ts">' + startHex + '</span>' +
         '<span class="dir-addr"></span>' +
         '<span class="dir-icons"></span>' +
@@ -212,6 +227,157 @@ function canAddRamLinkPartition() {
   return findRamLinkEmptySlot(ramlinkBuffer) >= 0;
 }
 
+// Single picker for "New Partition" — table-style form with all four
+// fields (Slot / Type / Size / Name). Resolves with the full descriptor
+// or null on Cancel. Size auto-fills the standard CBM block count when
+// a non-Native type is picked and locks the field; Native unlocks it.
+var RL_TYPE_PRESETS = [
+  { value: 'nat',  label: 'Native (DNP)', size: 256,  fixed: false },
+  { value: '1541', label: '1541',         size: 683,  fixed: true },
+  { value: '1571', label: '1571',         size: 1366, fixed: true },
+  { value: '1581', label: '1581',         size: 3200, fixed: true },
+];
+function showNewPartitionPicker() {
+  return new Promise(function(resolve) {
+    setModalSize(null);
+    document.getElementById('modal-title').textContent = 'New RAMLink Partition';
+    var body = document.getElementById('modal-body');
+    body.innerHTML = '';
+
+    var table = document.createElement('table');
+    table.style.width = '100%';
+    table.style.borderCollapse = 'collapse';
+
+    function row(labelText, content) {
+      var tr = document.createElement('tr');
+      var th = document.createElement('th');
+      th.textContent = labelText;
+      th.style.textAlign = 'left';
+      th.style.padding = '6px 12px 6px 0';
+      th.style.verticalAlign = 'middle';
+      th.style.width = '60px';
+      th.style.fontWeight = 'normal';
+      th.style.opacity = '0.7';
+      tr.appendChild(th);
+      var td = document.createElement('td');
+      td.style.padding = '6px 0';
+      td.appendChild(content);
+      tr.appendChild(td);
+      table.appendChild(tr);
+    }
+
+    // Slot — dropdown of free slot numbers only
+    var occupied = {};
+    for (var pi = 0; pi < ramlinkPartitions.length; pi++) {
+      occupied[ramlinkPartitions[pi].index] = ramlinkPartitions[pi];
+    }
+    var slotSelect = document.createElement('select');
+    slotSelect.className = 'modal-input';
+    for (var s = 1; s <= 31; s++) {
+      if (occupied[s]) continue;
+      var opt = document.createElement('option');
+      opt.value = String(s);
+      opt.textContent = String(s);
+      slotSelect.appendChild(opt);
+    }
+    row('Slot', slotSelect);
+
+    // Type — radio group inline; changes update Size enabled state + value
+    var typeWrap = document.createElement('div');
+    var radios = [];
+    RL_TYPE_PRESETS.forEach(function(t, i) {
+      var lbl = document.createElement('label');
+      lbl.style.marginRight = '14px';
+      lbl.style.cursor = 'pointer';
+      var radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'rl-new-type';
+      radio.value = t.value;
+      radio.style.marginRight = '4px';
+      if (i === 0) radio.checked = true;
+      radio.addEventListener('change', applyType);
+      radios.push(radio);
+      lbl.appendChild(radio);
+      lbl.appendChild(document.createTextNode(t.label));
+      typeWrap.appendChild(lbl);
+    });
+    row('Type', typeWrap);
+
+    // Size — input, default Native (256), disabled when type is fixed
+    var sizeInput = document.createElement('input');
+    sizeInput.type = 'text';
+    sizeInput.className = 'modal-input';
+    sizeInput.value = '256';
+    row('Size', sizeInput);
+
+    // Name — defaults to the type label so a fresh CBM-style name is
+    // pre-filled (NATIVE / 1541 / 1571 / 1581)
+    var nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'modal-input';
+    nameInput.maxLength = 16;
+    nameInput.value = 'NATIVE';
+    row('Name', nameInput);
+
+    body.appendChild(table);
+
+    function currentType() {
+      for (var i = 0; i < radios.length; i++) if (radios[i].checked) return RL_TYPE_PRESETS[i];
+      return RL_TYPE_PRESETS[0];
+    }
+    function applyType() {
+      var t = currentType();
+      sizeInput.value = String(t.size);
+      sizeInput.disabled = t.fixed;
+      sizeInput.style.opacity = t.fixed ? '0.5' : '';
+      // Only refresh the name field if the user hasn't customised it from
+      // the previously-selected default.
+      var prevDefaults = RL_TYPE_PRESETS.map(function(p) {
+        return p.value === 'nat' ? 'NATIVE' : p.value;
+      });
+      if (prevDefaults.indexOf(nameInput.value) >= 0) {
+        nameInput.value = (t.value === 'nat') ? 'NATIVE' : t.value;
+      }
+    }
+
+    var footer = document.querySelector('#modal-overlay .modal-footer');
+    footer.innerHTML = '';
+    var done = false;
+    function ok() {
+      if (done) return;
+      var t = currentType();
+      // Clamp + round size silently — non-Native types are locked to a
+      // valid preset, so this only matters when the user types junk into
+      // the Native field.
+      var size = parseInt(sizeInput.value, 10);
+      if (isNaN(size) || size < 256) size = 256;
+      if (size % 256 !== 0) size = Math.floor(size / 256) * 256;
+      var name = (nameInput.value || '').trim().slice(0, 16) || 'PARTITION';
+      done = true;
+      document.getElementById('modal-overlay').classList.remove('open');
+      resolve({ slot: parseInt(slotSelect.value, 10), type: t.value, size: size, name: name });
+    }
+    function cancel() {
+      if (done) return;
+      done = true;
+      document.getElementById('modal-overlay').classList.remove('open');
+      resolve(null);
+    }
+    var cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.className = 'modal-btn-secondary';
+    cancelBtn.addEventListener('click', cancel);
+    footer.appendChild(cancelBtn);
+    var okBtn = document.createElement('button');
+    okBtn.textContent = 'OK';
+    okBtn.addEventListener('click', ok);
+    footer.appendChild(okBtn);
+
+    document.getElementById('modal-overlay').classList.add('open');
+    slotSelect.focus();
+  });
+}
+
 // createEmptyDisk side-effects currentFormat/currentTracks. We restore
 // them after building the filesystem so the container view's labels stay
 // correct.
@@ -221,7 +387,13 @@ function buildPartitionFilesystem(typeChoice, sizeBlocks) {
   var typeCode;
   if (typeChoice === '1541')      { initBuf = createEmptyDisk('d64', 35); typeCode = 0x02; }
   else if (typeChoice === '1571') { initBuf = createEmptyDisk('d71', 70); typeCode = 0x03; }
-  else if (typeChoice === '1581') { initBuf = createEmptyDisk('d81', 80); typeCode = 0x04; }
+  else if (typeChoice === '1581') {
+    initBuf = createEmptyDisk('d81', 80); typeCode = 0x04;
+    // Real RAMLink writes 0x00 at T40/S0 +0x03 instead of the standard
+    // 0xBB inverted-DOS marker that createEmptyDisk produces. Functionally
+    // inert, but matches a VICE-/RAMLink-formatted partition byte-for-byte.
+    new Uint8Array(initBuf)[0x61803] = 0x00;
+  }
   else                            { initBuf = createEmptyDisk('dnp', sizeBlocks / 256); typeCode = 0x01; }
   currentFormat = savedFmt;
   currentTracks = savedTracks;
@@ -230,53 +402,26 @@ function buildPartitionFilesystem(typeChoice, sizeBlocks) {
 
 async function addRamLinkPartition() {
   if (!isRamlinkListView()) return;
-  var slot = findRamLinkEmptySlot(ramlinkBuffer);
-  if (slot < 0) {
-    showModal('RAMLink', ['No free partition slot — all 16 are allocated.']);
+  if (findRamLinkEmptySlot(ramlinkBuffer) < 0) {
+    showModal('RAMLink', ['No free partition slot — all 31 are allocated.']);
     return;
   }
 
-  var typeChoice = await showChoiceModal('New RAMLink Partition', 'Pick a partition type:', [
-    { label: 'Cancel', value: null, secondary: true },
-    { label: 'Native (DNP)', value: 'nat' },
-    { label: '1541', value: '1541' },
-    { label: '1571', value: '1571' },
-    { label: '1581', value: '1581' },
-  ]);
-  if (!typeChoice) return;
+  var picked = await showNewPartitionPicker();
+  if (!picked) return;
 
-  var name = await showInputModal('Partition Name (max 16 chars)', 'PARTITION');
-  if (name === null) return;
-  name = (name || '').trim().slice(0, 16) || 'PARTITION';
-
-  // Fixed sizes for emulation modes; Native asks the user.
-  var sizeBlocks;
-  if (typeChoice === '1541')      sizeBlocks = 683;  // standard 35-track D64
-  else if (typeChoice === '1571') sizeBlocks = 1366; // standard 70-track D71
-  else if (typeChoice === '1581') sizeBlocks = 3200; // standard D81
-  else {
-    var sizeStr = await showInputModal('Native partition size in 256-byte blocks (multiple of 256)', '256');
-    if (sizeStr === null) return;
-    sizeBlocks = parseInt(sizeStr, 10);
-    if (isNaN(sizeBlocks) || sizeBlocks < 256) {
-      showModal('New Partition', ['Invalid size — must be at least 256 blocks.']);
-      return;
-    }
-    if (sizeBlocks % 256 !== 0) sizeBlocks = Math.floor(sizeBlocks / 256) * 256; // DNP: 1 track = 256 sectors
-  }
-
-  var sizeBytes = sizeBlocks * 256;
-  var free = findRamLinkFreeSpace(ramlinkBuffer, ramlinkPartitions);
+  var sizeBytes = picked.size * 256;
+  var free = findRamLinkFreeSpace(ramlinkBuffer, ramlinkPartitions, sizeBytes);
   if (sizeBytes > free.size) {
     showModal('New Partition', [
       'Not enough free space in the RAMLink container.',
       'Requested: ' + Math.round(sizeBytes / 1024) + ' KiB.',
-      'Available: ' + Math.round(free.size / 1024) + ' KiB.'
+      'Largest free gap: ' + Math.round(free.size / 1024) + ' KiB.'
     ]);
     return;
   }
 
-  var built = buildPartitionFilesystem(typeChoice, sizeBlocks);
+  var built = buildPartitionFilesystem(picked.type, picked.size);
 
   pushUndo();
   // Splice the freshly-initialised filesystem into the .rml at the
@@ -289,9 +434,29 @@ async function addRamLinkPartition() {
   for (var i = 0; i < lim; i++) dst[free.start + i] = src[i];
   for (var z = lim; z < sizeBytes; z++) dst[free.start + z] = 0;
 
-  writeRamLinkPartitionEntry(ramlinkBuffer, slot, built.typeCode, name, free.start, sizeBlocks);
+  writeRamLinkPartitionEntry(ramlinkBuffer, picked.slot, built.typeCode, picked.name, free.start, picked.size);
   ramlinkPartitions = readRamLinkPartitions(ramlinkBuffer).partitions;
   refreshRamLinkView();
+}
+
+// Menu entry just hands off to startRenameEntry on the selected row —
+// the inline PETSCII editor is the same one regular file rename uses,
+// and the partition row's data-offset points at the entry so the
+// 16-byte name field round-trips through ramlinkBuffer correctly.
+function renameRamLinkPartition() {
+  if (!isRamlinkListView()) return;
+  var listSelEl = document.querySelector('.dir-entry.selected[data-ramlink-part]');
+  if (!listSelEl) {
+    showModal('RAMLink', ['Select a partition first.']);
+    return;
+  }
+  var idx = parseInt(listSelEl.dataset.ramlinkPart, 10);
+  var part = ramlinkPartitions[idx];
+  if (!part || part.type === 0xFF) {
+    showModal('RAMLink', ['The SYSTEM partition can\'t be renamed.']);
+    return;
+  }
+  startRenameEntry(listSelEl);
 }
 
 async function deleteRamLinkPartition() {
@@ -328,6 +493,13 @@ document.getElementById('opt-rl-new-partition').addEventListener('click', functi
   closeMenus();
   if (this.classList.contains('disabled')) return;
   addRamLinkPartition();
+});
+
+document.getElementById('opt-rl-rename-partition').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  if (this.classList.contains('disabled')) return;
+  renameRamLinkPartition();
 });
 
 document.getElementById('opt-rl-delete-partition').addEventListener('click', function(e) {

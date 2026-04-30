@@ -194,6 +194,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.91', title: 'RAMLink container fidelity pass', items: [
+      'All 31 partition slots are now read and editable (was capped at 16); DNP and 1541/71/81 partitions report the same "blocks free" as VICE/CMD HD',
+      '"New Partition" is a single form — slot dropdown lists only free slots, with type/size/name in one place; the container view also shows the partition\'s slot number',
+      'Adding a partition reuses gaps from deleted ones like a real RAMLink, deleting leaves the historical entry as a tombstone, and you can rename a partition with Enter or the new menu item',
+    ]},
     { ver: '1.3.90', title: 'CMD RAMLink container support', items: [
       'Open a .rml/.rl image and the tab body shows the partition list — double-click a partition (Native, 1541, 1571, 1581) to edit it; the back arrow returns to the list',
       'Edits inside any partition splice back into the .rml on save, so one Save downloads the whole container with every change in place',
