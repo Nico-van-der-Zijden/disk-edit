@@ -204,7 +204,7 @@ Add a test whenever you add a format-level helper or a bulk operation that has a
 4. **Export**: test PNG, JPG, GIF, SVG export from the graphics viewer
 5. **Cross-browser**: check Chrome, Firefox, Safari, Edge
 
-A GEOS test disk is available at `disks/org_geos.D64`.
+Test fixtures live in `tests/fixtures/` (gitignored — keep your own local copies). The automated suite uses `tests/fixtures/org_geos.D64` for D64/GEOS coverage; scratch disks for ad-hoc checks belong under `disks/`, which is also gitignored and may be wiped at any time.
 
 ## Submitting Changes
 
