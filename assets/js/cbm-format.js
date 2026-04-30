@@ -1552,26 +1552,27 @@ function createEmptyRamLink(sizeMiB) {
   var sysStart = size - 4096;
 
   // 2a. Firmware bookkeeping block at +0x500..+0x5FF — verbatim from
-  //     VICE's empty 16 MiB output. Most bytes are 0xFF; specific gap
-  //     pairs at 0x534/0x570/0x5A4, the RAMLink ID block at 0x5E0, the
-  //     "RAMLINK     " signature at 0x5F0, then 0xAA × 4 at 0x5FC.
+  //     VICE's empty 8/16 MiB output. Most bytes are 0xFF; specific
+  //     `00 00` gap pairs at +0x538, +0x570 (size marker), +0x5A8, the
+  //     RAMLink ID block at +0x5E0, the "RAMLINK     " signature at
+  //     +0x5F0, then 0xAA × 4 at +0x5FC.
   // Size-dependent bytes — derived from VICE-formatted samples at 1, 8,
   // and 16 MiB:
   //   +0x571 = (sizeMiB << 4) & 0xFF
   //   +0x5EB = (sizeMiB << 4) & 0xFF        (same encoding as 0x571)
   //   +0x5EE = ((sizeMiB - 1) << 4) & 0xF0
   // Everything else in this 256-byte block is constant: a 0x80 marker
-  // at +0x500, 0xFF filler with three `00 00` gap pairs at +0x534,
-  // +0x570, +0x5A4, the RAMLink ID block at +0x5E0, the literal
-  // "RAMLINK     " signature at +0x5F0, and 0xAA × 4 at +0x5FC.
+  // at +0x500, 0xFF filler with `00 00` gap pairs at +0x538, +0x570,
+  // +0x5A8, the RAMLink ID block at +0x5E0, the literal "RAMLINK     "
+  // signature at +0x5F0, and 0xAA × 4 at +0x5FC.
   var byteSizeMark1 = (sizeMiB << 4) & 0xFF;
   var byteSizeMark2 = ((sizeMiB - 1) << 4) & 0xF0;
 
   for (var f = 0; f < 256; f++) data[sysStart + 0x500 + f] = 0xFF;
   data[sysStart + 0x500] = 0x80;
-  data[sysStart + 0x534] = 0x00; data[sysStart + 0x535] = 0x00;
+  data[sysStart + 0x538] = 0x00; data[sysStart + 0x539] = 0x00;
   data[sysStart + 0x570] = 0x00; data[sysStart + 0x571] = byteSizeMark1;
-  data[sysStart + 0x5A4] = 0x00; data[sysStart + 0x5A5] = 0x00;
+  data[sysStart + 0x5A8] = 0x00; data[sysStart + 0x5A9] = 0x00;
 
   var rlIdBlock = [0xFF, 0x10, 0x01, 0x01, 0x10, 0xFF, 0xFF, 0xFF,
                    0x01, 0x00, 0xFF, 0x00, 0xFF, 0xFF, 0x00, 0xFF];
@@ -3321,11 +3322,19 @@ function createCmdNativeImage(formatKey, numTracks) {
   data[hdrOff + 0x01] = fmt.dirSector;
   data[hdrOff + 0x02] = fmt.dosVersion;
   for (var i = 0; i < fmt.nameLength; i++) data[hdrOff + fmt.nameOffset + i] = 0xA0;
+  // CBM-standard 0xA0 padding between the name end (0x13) and the ID (0x16),
+  // and between DOS-type end (0x1A) and the trailing zeros (0x1D). Both pairs
+  // are part of every VICE-formatted DNP/CMD-native header; without them the
+  // 0x00 fillers can confuse stricter readers (real CMD ROM, RAMLink mount).
+  data[hdrOff + 0x14] = 0xA0;
+  data[hdrOff + 0x15] = 0xA0;
   data[hdrOff + fmt.idOffset + 0] = 0xA0;
   data[hdrOff + fmt.idOffset + 1] = 0xA0;
   data[hdrOff + fmt.idOffset + 2] = 0xA0;
   data[hdrOff + fmt.idOffset + 3] = fmt.dosType.charCodeAt(0);
   data[hdrOff + fmt.idOffset + 4] = fmt.dosType.charCodeAt(1);
+  data[hdrOff + 0x1B] = 0xA0;
+  data[hdrOff + 0x1C] = 0xA0;
   data[hdrOff + fmt.subdirSelfRef] = fmt.headerTrack;
   data[hdrOff + fmt.subdirSelfRef + 1] = fmt.headerSector;
   data[hdrOff + fmt.subdirParentRef] = 0x00;

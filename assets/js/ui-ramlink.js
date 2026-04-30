@@ -346,12 +346,17 @@ function showNewPartitionPicker() {
     function ok() {
       if (done) return;
       var t = currentType();
-      // Clamp + round size silently — non-Native types are locked to a
-      // valid preset, so this only matters when the user types junk into
-      // the Native field.
+      // Clamp + round size silently. The 256-multiple rule only applies
+      // to Native (DNP allocates whole tracks of 256 sectors) — 1541 /
+      // 1571 / 1581 use fixed CBM block counts (683 / 1366 / 3200) that
+      // aren't multiples of 256, so we trust the preset there.
       var size = parseInt(sizeInput.value, 10);
-      if (isNaN(size) || size < 256) size = 256;
-      if (size % 256 !== 0) size = Math.floor(size / 256) * 256;
+      if (t.fixed) {
+        size = t.size;
+      } else {
+        if (isNaN(size) || size < 256) size = 256;
+        if (size % 256 !== 0) size = Math.floor(size / 256) * 256;
+      }
       var name = (nameInput.value || '').trim().slice(0, 16) || 'PARTITION';
       done = true;
       document.getElementById('modal-overlay').classList.remove('open');
@@ -381,22 +386,56 @@ function showNewPartitionPicker() {
 // createEmptyDisk side-effects currentFormat/currentTracks. We restore
 // them after building the filesystem so the container view's labels stay
 // correct.
-function buildPartitionFilesystem(typeChoice, sizeBlocks) {
+function buildPartitionFilesystem(typeChoice, sizeBlocks, name) {
   var savedFmt = currentFormat, savedTracks = currentTracks;
   var initBuf;
   var typeCode;
-  if (typeChoice === '1541')      { initBuf = createEmptyDisk('d64', 35); typeCode = 0x02; }
-  else if (typeChoice === '1571') { initBuf = createEmptyDisk('d71', 70); typeCode = 0x03; }
+  // Disk-header offset (within partition) where the 16-byte name lives,
+  // plus every offset where a 2-byte ID lives. createEmptyDisk leaves
+  // both name and ID as 0xA0 padding — VICE/CMD ROM read these when
+  // mounting, and an empty name/ID makes the partition look unformatted.
+  var nameOff;
+  var idOffs;
+  if (typeChoice === '1541')      {
+    initBuf = createEmptyDisk('d64', 35); typeCode = 0x02;
+    nameOff = 0x16500 + 0x90;
+    idOffs = [0x16500 + 0xA2];
+  }
+  else if (typeChoice === '1571') {
+    initBuf = createEmptyDisk('d71', 70); typeCode = 0x03;
+    nameOff = 0x16500 + 0x90;
+    idOffs = [0x16500 + 0xA2];
+  }
   else if (typeChoice === '1581') {
     initBuf = createEmptyDisk('d81', 80); typeCode = 0x04;
+    nameOff = 0x61800 + 0x04;
+    idOffs = [0x61800 + 0x16, 0x61900 + 0x04, 0x61A00 + 0x04]; // T40/S0 + BAM1 + BAM2
     // Real RAMLink writes 0x00 at T40/S0 +0x03 instead of the standard
     // 0xBB inverted-DOS marker that createEmptyDisk produces. Functionally
     // inert, but matches a VICE-/RAMLink-formatted partition byte-for-byte.
     new Uint8Array(initBuf)[0x61803] = 0x00;
   }
-  else                            { initBuf = createEmptyDisk('dnp', sizeBlocks / 256); typeCode = 0x01; }
+  else {
+    initBuf = createEmptyDisk('dnp', sizeBlocks / 256); typeCode = 0x01;
+    nameOff = 0x100 + 0x04;
+    idOffs = [0x100 + 0x16, 0x200 + 0x04]; // T1/S1 header + T1/S2 BAM
+  }
   currentFormat = savedFmt;
   currentTracks = savedTracks;
+
+  // Stamp the user-supplied name (uppercased, 0xA0-padded to 16 bytes)
+  // into the partition's filesystem header, then write "RL" at every ID
+  // location. Mirrors how CMD HD ROM names a freshly-formatted partition
+  // during "Make Partition".
+  var view = new Uint8Array(initBuf);
+  var upper = (name || '').toUpperCase();
+  for (var n = 0; n < 16; n++) {
+    view[nameOff + n] = n < upper.length ? upper.charCodeAt(n) : 0xA0;
+  }
+  for (var ii = 0; ii < idOffs.length; ii++) {
+    view[idOffs[ii] + 0] = 0x52; // 'R'
+    view[idOffs[ii] + 1] = 0x4C; // 'L'
+  }
   return { buffer: initBuf, typeCode: typeCode };
 }
 
@@ -421,7 +460,7 @@ async function addRamLinkPartition() {
     return;
   }
 
-  var built = buildPartitionFilesystem(picked.type, picked.size);
+  var built = buildPartitionFilesystem(picked.type, picked.size, picked.name);
 
   pushUndo();
   // Splice the freshly-initialised filesystem into the .rml at the

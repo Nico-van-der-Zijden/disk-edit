@@ -194,6 +194,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.92', title: 'New RAMLink containers VICE recognises', items: [
+      'Fresh containers from "Disk → New → CMD RAMLink" now mount in VICE — earlier the firmware bookkeeping gaps were 4 bytes off so the container looked unformatted',
+      'New partitions added via the picker now stamp the disk name and "RL" ID into the partition\'s own filesystem header (DNP / D64 / D71 / D81), and CMD-native headers carry the missing 0xA0 padding bytes',
+      '1541 / 1571 / 1581 sizes (683 / 1366 / 3200 blocks) are no longer rounded down to multiples of 256 — the picker only applies that rule to Native/DNP',
+    ]},
     { ver: '1.3.91', title: 'RAMLink container fidelity pass', items: [
       'All 31 partition slots are now read and editable (was capped at 16); DNP and 1541/71/81 partitions report the same "blocks free" as VICE/CMD HD',
       '"New Partition" is a single form — slot dropdown lists only free slots, with type/size/name in one place; the container view also shows the partition\'s slot number',
