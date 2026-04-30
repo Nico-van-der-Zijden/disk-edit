@@ -194,6 +194,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.93', title: 'CMD FD2000/FD4000 partition containers', items: [
+      'D1M/D2M/D4M images now open to a partition list like RAMLink — double-click a partition to enter, with Native / 1541 / 1571 / 1581 types via "New Partition"',
+      'Deleting a partition compacts the byte range (later partitions slide down to fill the gap) and adds bump-allocate after the highest partition, matching what the FD2000 ROM and RAM-Tools v1.02 actually do',
+      'Free-block count and load addresses now read correctly inside FD partitions (FD-native uses LBA-encoded T:S in directory entries, separate from physical T:S used elsewhere)',
+    ]},
     { ver: '1.3.92', title: 'New RAMLink containers VICE recognises', items: [
       'Fresh containers from "Disk → New → CMD RAMLink" now mount in VICE — earlier the firmware bookkeeping gaps were 4 bytes off so the container looked unformatted',
       'New partitions added via the picker now stamp the disk name and "RL" ID into the partition\'s own filesystem header (DNP / D64 / D71 / D81), and CMD-native headers carry the missing 0xA0 padding bytes',

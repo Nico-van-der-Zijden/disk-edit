@@ -141,11 +141,11 @@ function tryShowEntryContextMenu(target, x, y) {
   var dirListing = target.closest('.dir-listing');
   if (!entry && !dirListing) return false;
 
-  if (entry && entry.dataset.ramlinkPart !== undefined) {
-    // RAMLink partition row — select via data-ramlink-part. Mustn't
+  if (entry && entry.dataset.cmdcPart !== undefined) {
+    // CMD container partition row — select via data-cmdc-part. Mustn't
     // clear .selected on the wrong path: the cloned context menu mirrors
     // the live disabled state, so the row's `.selected` class is what
-    // turns Delete RAMLink Partition on.
+    // turns Delete Partition on.
     document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
     entry.classList.add('selected');
     updateEntryMenuState();
@@ -239,16 +239,16 @@ document.addEventListener('keydown', (e) => {
   var modalOpen = document.getElementById('modal-overlay');
   if (modalOpen && modalOpen.classList.contains('open')) return;
 
-  // Enter on the RAMLink partition list — start rename on the selected
-  // partition, mirroring how Enter renames a selected D81 subdir entry.
-  // Double-click is what opens the partition (matching subdir UX).
-  if (e.key === 'Enter' && isRamlinkListView()) {
-    var rlSelRow = document.querySelector('.dir-entry.selected[data-ramlink-part]');
-    if (rlSelRow) {
+  // Enter on the CMD container partition list — start rename on the
+  // selected partition, mirroring how Enter renames a selected D81 subdir
+  // entry. Double-click is what opens the partition (matching subdir UX).
+  if (e.key === 'Enter' && isCmdContainerListView()) {
+    var cSelRow = document.querySelector('.dir-entry.selected[data-cmdc-part]');
+    if (cSelRow) {
       e.preventDefault();
-      var rlIdx = parseInt(rlSelRow.dataset.ramlinkPart, 10);
-      var rlPart = ramlinkPartitions && ramlinkPartitions[rlIdx];
-      if (rlPart && rlPart.type !== 0xFF) startRenameEntry(rlSelRow);
+      var cIdx = parseInt(cSelRow.dataset.cmdcPart, 10);
+      var cPart = cmdcPartitions && cmdcPartitions[cIdx];
+      if (cPart && cPart.type !== 0xFF) startRenameEntry(cSelRow);
       return;
     }
   }
@@ -261,14 +261,14 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Delete on the RAMLink partition list — delete the highlighted
+  // Delete on the CMD container partition list — delete the highlighted
   // partition (route through the menu handler so the confirm dialog
   // and SYSTEM check stay in one place).
-  if (e.key === 'Delete' && isRamlinkListView()) {
-    var rlSel = document.querySelector('.dir-entry.selected[data-ramlink-part]');
-    if (rlSel) {
+  if (e.key === 'Delete' && isCmdContainerListView()) {
+    var cDel = document.querySelector('.dir-entry.selected[data-cmdc-part]');
+    if (cDel) {
       e.preventDefault();
-      deleteRamLinkPartition();
+      deleteCmdContainerPartition();
       return;
     }
   }
@@ -433,23 +433,23 @@ document.addEventListener('keydown', (e) => {
 
   const dir = e.key === 'ArrowUp' ? -1 : 1;
 
-  // RAMLink container partition list: rows aren't regular dir entries
+  // CMD container partition list: rows aren't regular dir entries
   // (no data-offset, no selectedEntryIndex), so the standard arrow
-  // navigation skips them. Walk data-ramlink-part rows here, mirror
+  // navigation skips them. Walk data-cmdc-part rows here, mirror
   // the click handler's selection model, and refresh the menu state
-  // so Delete RAMLink Partition flips on as soon as a row is picked.
-  if (isRamlinkListView()) {
-    const rlRows = document.querySelectorAll('.dir-entry[data-ramlink-part]');
-    if (rlRows.length === 0) return;
+  // so Delete Partition flips on as soon as a row is picked.
+  if (isCmdContainerListView()) {
+    const cRows = document.querySelectorAll('.dir-entry[data-cmdc-part]');
+    if (cRows.length === 0) return;
     let curIdx = -1;
-    const selRow = document.querySelector('.dir-entry.selected[data-ramlink-part]');
-    if (selRow) rlRows.forEach((r, i) => { if (r === selRow) curIdx = i; });
+    const selRow = document.querySelector('.dir-entry.selected[data-cmdc-part]');
+    if (selRow) cRows.forEach((r, i) => { if (r === selRow) curIdx = i; });
     let newIdx;
-    if (curIdx < 0) newIdx = dir === 1 ? 0 : rlRows.length - 1;
-    else newIdx = Math.max(0, Math.min(rlRows.length - 1, curIdx + dir));
-    rlRows.forEach(r => r.classList.remove('selected'));
-    rlRows[newIdx].classList.add('selected');
-    rlRows[newIdx].scrollIntoView({ block: 'nearest' });
+    if (curIdx < 0) newIdx = dir === 1 ? 0 : cRows.length - 1;
+    else newIdx = Math.max(0, Math.min(cRows.length - 1, curIdx + dir));
+    cRows.forEach(r => r.classList.remove('selected'));
+    cRows[newIdx].classList.add('selected');
+    cRows[newIdx].scrollIntoView({ block: 'nearest' });
     updateEntryMenuState();
     return;
   }
@@ -499,10 +499,10 @@ function updateEntryMenuState() {
   const multiSelect = selectedEntries.length > 1;
   const inPartition = currentPartition !== null;
   const tape = isTapeFormat();
-  // The RAMLink container partition list isn't a filesystem — file-
+  // The CMD container partition list isn't a filesystem — file-
   // level operations (insert, rename, etc.) make no sense, so we treat
   // it like a tape image for the disabled-state checks.
-  const containerList = isRamlinkListView();
+  const containerList = isCmdContainerListView();
   const noEdit = tape || containerList;
   // Single-select only operations (all disabled for tape / container list)
   document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
@@ -514,23 +514,23 @@ function updateEntryMenuState() {
   var noNesting = inPartition && !currentFormat.subdirLinked; // D81: no nesting; DNP: nesting allowed
   document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || noNesting || !currentBuffer || !currentFormat.supportsSubdirs || !canInsertFile() || noEdit);
 
-  // RAMLink partition management — only meaningful (and only visible)
-  // on the container's partition-list view.
-  var rlNewBtn = document.getElementById('opt-rl-new-partition');
-  var rlRenBtn = document.getElementById('opt-rl-rename-partition');
-  var rlDelBtn = document.getElementById('opt-rl-delete-partition');
-  rlNewBtn.style.display = containerList ? '' : 'none';
-  rlRenBtn.style.display = containerList ? '' : 'none';
-  rlDelBtn.style.display = containerList ? '' : 'none';
+  // CMD container partition management — only meaningful (and only
+  // visible) on the container's partition-list view.
+  var cNewBtn = document.getElementById('opt-cmdc-new-partition');
+  var cRenBtn = document.getElementById('opt-cmdc-rename-partition');
+  var cDelBtn = document.getElementById('opt-cmdc-delete-partition');
+  cNewBtn.style.display = containerList ? '' : 'none';
+  cRenBtn.style.display = containerList ? '' : 'none';
+  cDelBtn.style.display = containerList ? '' : 'none';
   if (containerList) {
-    var listSelEl = document.querySelector('.dir-entry.selected[data-ramlink-part]');
-    var selPartIdx = listSelEl ? parseInt(listSelEl.dataset.ramlinkPart, 10) : -1;
-    var selPart = (selPartIdx >= 0 && ramlinkPartitions) ? ramlinkPartitions[selPartIdx] : null;
-    rlNewBtn.classList.toggle('disabled', !canAddRamLinkPartition());
+    var listSelEl = document.querySelector('.dir-entry.selected[data-cmdc-part]');
+    var selPartIdx = listSelEl ? parseInt(listSelEl.dataset.cmdcPart, 10) : -1;
+    var selPart = (selPartIdx >= 0 && cmdcPartitions) ? cmdcPartitions[selPartIdx] : null;
+    cNewBtn.classList.toggle('disabled', !canAddCmdContainerPartition());
     // Rename / Delete need a non-SYSTEM partition selected.
     var canModify = !!selPart && selPart.type !== 0xFF;
-    rlRenBtn.classList.toggle('disabled', !canModify);
-    rlDelBtn.classList.toggle('disabled', !canModify);
+    cRenBtn.classList.toggle('disabled', !canModify);
+    cDelBtn.classList.toggle('disabled', !canModify);
   }
   // Multi-select compatible operations (all disabled for tape / container list except copy/export)
   document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection || noEdit);

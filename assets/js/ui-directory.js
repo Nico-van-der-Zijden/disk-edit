@@ -2,10 +2,11 @@
 // Get ordered list of directory entry offsets from the chain
 // ── Partition-aware parse helper ──────────────────────────────────────
 function parseCurrentDir(buffer) {
-  // RAMLink container, partition-list view: nothing to parse as a disk.
+  // CMD container, partition-list view: nothing to parse as a disk.
   // Render path detects this and draws the partition list instead.
-  if (ramlinkPartitions && ramlinkPartitionIdx === -1) {
-    return { entries: [], freeBlocks: 0, diskName: ramlinkFileName || 'RAMLink', diskId: '' };
+  if (cmdcPartitions && cmdcPartitionIdx === -1) {
+    var ct = cmdcContainerKey ? CMD_CONTAINERS[cmdcContainerKey] : null;
+    return { entries: [], freeBlocks: 0, diskName: cmdcFileName || (ct ? ct.name : 'Container'), diskId: '' };
   }
   if (currentPartition) {
     if (currentPartition.dnpDir) {
@@ -566,26 +567,27 @@ function getFileAddresses(buffer, entryOff) {
   let s = data[entryOff + 4];
   if (t === 0) return null;
 
-  // Read first sector to get load address (first 2 data bytes for PRG)
+  // File chain follows sectorOffset, which transparently switches to
+  // FD's LBA-encoded T:S (S = 0..255) for D1M/D2M/D4M and physical T:S
+  // for everyone else.
   const firstOff = sectorOffset(t, s);
-  if (firstOff < 0) return null;
+  if (firstOff < 0 || firstOff + 4 > data.length) return null;
 
   // For PRG files, bytes 2-3 of first sector are the load address
   // For other types, there's no standard load address
   const startAddr = data[firstOff + 2] | (data[firstOff + 3] << 8);
 
-  // Follow chain to find total data size
+  // Follow chain to find total data size.
   const visited = new Set();
   let totalBytes = 0;
   let lastUsed = 0;
   while (t !== 0) {
-    if (t < 1 || t > currentTracks) break;
-    if (s < 0 || s >= sectorsPerTrack(t)) break;
+    const off = sectorOffset(t, s);
+    if (off < 0 || off + 2 > data.length) break;
     const key = `${t}:${s}`;
     if (visited.has(key)) break;
     visited.add(key);
 
-    const off = sectorOffset(t, s);
     const nextT = data[off];
     const nextS = data[off + 1];
 

@@ -164,15 +164,15 @@ function buildEntryIconsHtml(e, data, dirTrack) {
   return icons;
 }
 
-// RAMLink container UI (renderRamLinkPartitionList, enterRamLinkPartition,
-// leaveRamLinkPartition) lives in ui-ramlink.js. renderDisk delegates
-// to it via the early-out below when on the partition-list view.
+// CMD container UI (renderCmdContainerPartitionList, enterCmdContainer-
+// Partition, leaveCmdContainerPartition) lives in ui-cmd.js. renderDisk
+// delegates to it via the early-out below when on the partition-list view.
 function renderDisk(info) {
-  // RAMLink container list view — partitions are rendered in place of
-  // a directory listing. Clicking one slices its bytes and re-enters
+  // CMD container list view — partitions are rendered in place of a
+  // directory listing. Clicking one slices its bytes and re-enters
   // renderDisk normally.
-  if (ramlinkPartitions && ramlinkPartitionIdx === -1) {
-    renderRamLinkPartitionList();
+  if (cmdcPartitions && cmdcPartitionIdx === -1) {
+    renderCmdContainerPartitionList();
     return;
   }
   const prevSelected = selectedEntryIndex;
@@ -239,8 +239,8 @@ function renderDisk(info) {
       <div class="dir-listing">`;
 
   // Show parent directory link when inside a partition (DNP subdir, D81
-  // CBM partition) or inside a RAMLink container partition.
-  if (currentPartition || ramlinkPartitionIdx >= 0) {
+  // CBM partition) or inside a CMD container partition.
+  if (currentPartition || cmdcPartitionIdx >= 0) {
     html += `
         <div class="dir-entry dir-parent-row" id="dir-parent">
           <span class="dir-grip"></span>
@@ -667,14 +667,14 @@ function bindDirSelection() {
   }
 
   // Parent directory row — click to go back. Inside a DNP subdir / D81
-  // CBM partition this calls leavePartition; inside a RAMLink container
-  // partition it calls leaveRamLinkPartition (which splices any edits
-  // back into the .rml).
+  // CBM partition this calls leavePartition; inside a CMD container
+  // partition it calls leaveCmdContainerPartition (which splices any
+  // edits back into the container).
   var parentRow = document.getElementById('dir-parent');
   if (parentRow) {
     var goBack = function() {
       if (currentPartition) leavePartition();
-      else if (ramlinkPartitionIdx >= 0) leaveRamLinkPartition();
+      else if (cmdcPartitionIdx >= 0) leaveCmdContainerPartition();
     };
     parentRow.addEventListener('click', goBack);
     parentRow.addEventListener('dblclick', goBack);

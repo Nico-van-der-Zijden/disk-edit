@@ -1,62 +1,71 @@
-// ── CMD RAMLink container UI ──────────────────────────────────────────
+// ── CMD container UI (RAMLink, FD2000/FD4000, future…) ────────────────
 //
-// A .rml/.rl file is a raw RAMLink RAM dump (1–16 MiB). Internally it
-// holds a CMD-style partition table at the end of the buffer plus N
-// sub-partitions (Native/DNP, 1541, 1571, 1581) each formatted as a
-// standalone CBM filesystem. The format-layer helpers in cbm-format.js
-// (readRamLinkPartitions, extractRamLinkPartition, …) handle the byte
-// layout; everything in this file is the user-facing wiring:
+// CMD-style container files (.rml/.rl/.d1m/.d2m/.d4m) hold a partition
+// table plus N sub-partitions (Native/DNP, 1541, 1571, 1581) each
+// formatted as a standalone CBM filesystem. The format-layer helpers
+// in cbm-format.js (readCmdContainerPartitions, …) abstract over the
+// per-type quirks via CMD_CONTAINERS; everything in this file is the
+// user-facing wiring:
 //
-//   * openRamLinkAsTab        — entry point from drop / file-input /
-//                               recent / "New RAMLink" handlers.
-//   * renderRamLinkPartitionList — drawn instead of a directory when
-//                                  ramlinkPartitionIdx === -1.
-//   * enterRamLinkPartition   — slice the chosen partition into
-//                               currentBuffer and re-parse as DNP /
-//                               D64 / D71 / D81.
-//   * leaveRamLinkPartition   — splice edits back into the container
-//                               and return to the partition list.
-//   * addRamLinkPartition / deleteRamLinkPartition — partition-table
-//     management from the File menu.
+//   * openCmdContainerAsTab        — entry point from drop / file-input /
+//                                    recent / "New container" handlers.
+//   * renderCmdContainerPartitionList — drawn instead of a directory when
+//                                       cmdcPartitionIdx === -1.
+//   * enterCmdContainerPartition   — slice the chosen partition into
+//                                    currentBuffer and re-parse as DNP /
+//                                    D64 / D71 / D81.
+//   * leaveCmdContainerPartition   — splice edits back into the container
+//                                    and return to the partition list.
+//   * addCmdContainerPartition / deleteCmdContainerPartition — partition-
+//     table management from the File menu.
 //
-// State globals (ramlinkBuffer, ramlinkPartitions, ramlinkPartitionIdx)
-// live in cbm-editor.js so per-tab serialization is handled there.
+// State globals (cmdcBuffer, cmdcPartitions, cmdcPartitionIdx,
+// cmdcContainerKey) live in cbm-editor.js so per-tab serialization is
+// handled there.
 
-// Splice the (possibly edited) partition slice back into ramlinkBuffer.
-// Used both when leaving the partition view and when saving — the latter
-// keeps changes inside the .rml without forcing the user to navigate
-// out first.
-function spliceRamLinkPartitionBack() {
-  if (!ramlinkBuffer || ramlinkPartitionIdx < 0 || !ramlinkPartitions) return;
-  var part = ramlinkPartitions[ramlinkPartitionIdx];
-  if (!part || !currentBuffer || currentBuffer === ramlinkBuffer) return;
-  var dst = new Uint8Array(ramlinkBuffer);
-  var src = new Uint8Array(currentBuffer);
-  var lim = Math.min(src.length, part.sizeBytes);
-  for (var i = 0; i < lim; i++) dst[part.startByte + i] = src[i];
+// Map a file extension (lowercased, without dot) to a container key in
+// CMD_CONTAINERS. Returns null when the extension isn't a recognised
+// container type.
+function cmdContainerKeyForExt(ext) {
+  if (ext === 'rml' || ext === 'rl') return 'ramlink';
+  if (ext === 'd1m' || ext === 'd2m' || ext === 'd4m') return ext;
+  return null;
 }
 
-// Standard end-of-action refresh: re-render the body, tab strip, and
-// menu states. Called from every container-level mutation so the UI
-// stays in sync.
-function refreshRamLinkView() {
+// Splice the (possibly edited) partition slice back into cmdcBuffer.
+// Used both when leaving the partition view and when saving — the latter
+// keeps changes inside the container without forcing the user to navigate
+// out first.
+function spliceCmdContainerPartitionBack() {
+  if (!cmdcBuffer || cmdcPartitionIdx < 0 || !cmdcPartitions) return;
+  var part = cmdcPartitions[cmdcPartitionIdx];
+  if (!part || !currentBuffer || currentBuffer === cmdcBuffer) return;
+  var src = new Uint8Array(currentBuffer);
+  var lim = Math.min(src.length, part.sizeBytes);
+  new Uint8Array(cmdcBuffer).set(src.subarray(0, lim), part.startByte);
+}
+
+function refreshCmdContainerView() {
   renderDisk(parseCurrentDir(currentBuffer));
   renderTabs();
   updateMenuState();
   updateEntryMenuState();
 }
 
-// ── Open a .rml/.rl file as a tab ────────────────────────────────────
-// Two flavours: a real RAMLink dump (partition table at the end) opens
-// to the partition-list view; a flat DNP someone happened to label .rml
-// falls back to opening as a single DNP, labeled RAMLink so save-as
-// keeps the .rml extension.
-async function openRamLinkAsTab(buffer, fileName) {
-  var info = readRamLinkPartitions(buffer);
+// ── Open a container file as a tab ────────────────────────────────────
+// Two flavours: a real container (signature present) opens to the
+// partition-list view; a flat image without a partition table falls
+// back to opening as a single filesystem of the matching format so
+// save-as keeps the original extension.
+async function openCmdContainerAsTab(buffer, fileName, containerKey) {
+  containerKey = containerKey || cmdContainerKeyForExt((fileName || '').toLowerCase().replace(/.*\./, ''));
+  if (!containerKey || !CMD_CONTAINERS[containerKey]) return;
+
+  var info = readCmdContainerPartitions(buffer, containerKey);
   saveActiveTab();
 
   if (!info) {
-    clearRamLinkState();
+    clearCmdContainerState();
     currentBuffer = buffer;
     currentFileName = fileName;
     currentPartition = null;
@@ -73,15 +82,17 @@ async function openRamLinkAsTab(buffer, fileName) {
     return;
   }
 
-  // Container path: tab body shows the partition list; currentFormat
-  // is the ramlink alias purely so save-as picks the .rml extension.
-  ramlinkBuffer = buffer;
-  ramlinkFileName = fileName;
-  ramlinkPartitions = info.partitions;
-  ramlinkPartitionIdx = -1;
+  // currentFormat is set to the container alias so save-as picks the
+  // right extension; the tab body shows the partition list instead of
+  // a directory while cmdcPartitionIdx === -1.
+  cmdcBuffer = buffer;
+  cmdcFileName = fileName;
+  cmdcPartitions = info.partitions;
+  cmdcPartitionIdx = -1;
+  cmdcContainerKey = containerKey;
   currentBuffer = buffer;
   currentFileName = fileName;
-  currentFormat = DISK_FORMATS.ramlink;
+  currentFormat = DISK_FORMATS[CMD_CONTAINERS[containerKey].formatKey];
   currentTracks = 1; // unused on the list view
   currentPartition = null;
   selectedEntryIndex = -1;
@@ -92,32 +103,46 @@ async function openRamLinkAsTab(buffer, fileName) {
   clearUndo();
   addRecentDisk(fileName, buffer);
 
-  refreshRamLinkView();
+  refreshCmdContainerView();
 }
 
 // ── Partition list view ──────────────────────────────────────────────
-// Drawn in place of a regular directory when ramlinkPartitionIdx === -1.
+// Drawn in place of a regular directory when cmdcPartitionIdx === -1.
 // Each partition is a row with click-to-select / dblclick-to-enter
 // (mirrors how subdirectories work elsewhere).
-function renderRamLinkPartitionList() {
+function renderCmdContainerPartitionList() {
   // Re-parse on every render — partition-table edits (rename, new,
-  // delete) mutate ramlinkBuffer directly; this picks up the change
+  // delete) mutate cmdcBuffer directly; this picks up the change
   // without a separate refresh hook.
-  if (ramlinkBuffer) {
-    var fresh = readRamLinkPartitions(ramlinkBuffer);
-    if (fresh) ramlinkPartitions = fresh.partitions;
+  if (cmdcBuffer && cmdcContainerKey) {
+    var fresh = readCmdContainerPartitions(cmdcBuffer, cmdcContainerKey);
+    if (fresh) cmdcPartitions = fresh.partitions;
   }
-  // Absolute byte offset of slot N's entry in ramlinkBuffer; rows expose
-  // this as `data-offset` so the existing startRenameEntry helper can
+  // Absolute byte offset of slot N's entry; rows expose this as
+  // `data-offset` so the existing startRenameEntry helper can
   // read/write the 16-byte name field at +5..+20 unchanged.
-  var tableOff = ramlinkBuffer ? (ramlinkBuffer.byteLength - 2048) : 0;
+  var ct = cmdcContainerKey ? CMD_CONTAINERS[cmdcContainerKey] : null;
+  var layout = (ct && cmdcBuffer) ? ct.getTableLayout(cmdcBuffer) : null;
+  function entryAbsForSlot(slotIdx) {
+    if (!layout) return 0;
+    var cumulative = 0;
+    for (var li = 0; li < layout.length; li++) {
+      var sec = layout[li];
+      if (slotIdx < cumulative + sec.slots) return sec.off + (slotIdx - cumulative) * 32;
+      cumulative += sec.slots;
+    }
+    return 0;
+  }
+
+  var containerLabel = ct ? ct.name : 'Container';
+  var diskIdLabel = ct && ct.diskIdLabel ? ct.diskIdLabel : containerLabel;
 
   var content = document.getElementById('content');
   var html = '<div class="disk-panel">' +
     '<div class="disk-header">' +
-      '<div class="disk-header-spacer"><i class="fa-solid fa-cube" title="RAMLink container"></i></div>' +
-      '<div class="disk-name">' + escHtml(ramlinkFileName || 'RAMLink') + '</div>' +
-      '<div class="disk-id">RML</div>' +
+      '<div class="disk-header-spacer"><i class="fa-solid fa-cube" title="' + containerLabel + ' container"></i></div>' +
+      '<div class="disk-name">' + escHtml(cmdcFileName || containerLabel) + '</div>' +
+      '<div class="disk-id">' + escHtml(diskIdLabel) + '</div>' +
     '</div>' +
     '<div class="dir-entry dir-header-row">' +
       '<span class="dir-grip"></span>' +
@@ -132,14 +157,14 @@ function renderRamLinkPartitionList() {
     '<div class="dir-listing">';
 
   var openCount = 0;
-  for (var i = 0; i < ramlinkPartitions.length; i++) {
-    var p = ramlinkPartitions[i];
+  for (var i = 0; i < cmdcPartitions.length; i++) {
+    var p = cmdcPartitions[i];
     var canOpen = p.type !== 0xFF; // SYSTEM is shown but not enterable
     if (canOpen) openCount++;
     var startHex = '$' + p.startByte.toString(16).toUpperCase().padStart(8, '0');
-    var entryAbs = tableOff + p.index * 32;
+    var entryAbs = entryAbsForSlot(p.index);
     html +=
-      '<div class="dir-entry' + (canOpen ? '' : ' deleted') + '" data-ramlink-part="' + i + '" data-offset="' + entryAbs + '">' +
+      '<div class="dir-entry' + (canOpen ? '' : ' deleted') + '" data-cmdc-part="' + i + '" data-offset="' + entryAbs + '">' +
         '<span class="dir-grip"></span>' +
         '<span class="dir-blocks">' + p.sizeBlocks + '</span>' +
         '<span class="dir-name">"' + escHtml(p.name) + '"</span>' +
@@ -155,25 +180,25 @@ function renderRamLinkPartitionList() {
     '<div class="dir-footer"><div class="dir-footer-row">' +
       '<span class="dir-footer-blocks">' + openCount + '</span>' +
       '<span class="dir-footer-label">partition(s).</span>' +
-      '<span class="dir-footer-tracks">RAMLink container</span>' +
+      '<span class="dir-footer-tracks">' + escHtml(containerLabel) + ' container</span>' +
     '</div></div>' +
   '</div>';
   content.innerHTML = html;
 
-  content.querySelectorAll('.dir-entry[data-ramlink-part]').forEach(function(row) {
-    var idx = parseInt(row.dataset.ramlinkPart, 10);
-    var part = ramlinkPartitions[idx];
+  content.querySelectorAll('.dir-entry[data-cmdc-part]').forEach(function(row) {
+    var idx = parseInt(row.dataset.cmdcPart, 10);
+    var part = cmdcPartitions[idx];
     var canOpen = part.type !== 0xFF;
     row.addEventListener('click', function() {
-      // Click selects (so Delete RAMLink Partition can target it),
-      // dblclick enters. updateEntryMenuState picks up the new
-      // selection right away.
+      // Click selects (so Delete Partition can target it), dblclick
+      // enters. updateEntryMenuState picks up the new selection right
+      // away.
       content.querySelectorAll('.dir-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
       row.classList.add('selected');
       updateEntryMenuState();
     });
     row.addEventListener('dblclick', function() {
-      if (canOpen) enterRamLinkPartition(idx);
+      if (canOpen) enterCmdContainerPartition(idx);
     });
   });
 
@@ -182,38 +207,46 @@ function renderRamLinkPartitionList() {
   updateEntryMenuState();
 }
 
-function enterRamLinkPartition(idx) {
-  if (!ramlinkBuffer || !ramlinkPartitions) return;
-  var part = ramlinkPartitions[idx];
+function enterCmdContainerPartition(idx) {
+  if (!cmdcBuffer || !cmdcPartitions) return;
+  var part = cmdcPartitions[idx];
   if (!part || part.type === 0xFF) return;
 
-  var slice = extractRamLinkPartition(ramlinkBuffer, part);
+  var slice = extractCmdContainerPartition(cmdcBuffer, part);
   if (!slice) {
-    showModal('RAMLink', ['Failed to extract partition "' + part.name + '"']);
+    showModal('Container', ['Failed to extract partition "' + part.name + '"']);
     return;
   }
 
-  ramlinkPartitionIdx = idx;
+  cmdcPartitionIdx = idx;
   currentBuffer = slice;
   currentPartition = null;
   selectedEntryIndex = -1;
-  parseDisk(currentBuffer);
+  // parseDisk needs a format hint when the slice size doesn't match a
+  // standard disk size (FD Native partitions). Native uses the
+  // container's nativeFormatKey (DNP for RAMLink, parent FD format
+  // otherwise); 1541/1571/1581 use the shared type→format table.
+  var ct = CMD_CONTAINERS[cmdcContainerKey];
+  var hint = part.type === 0x01 ? (ct && ct.nativeFormatKey) : CMD_PART_TYPE_FORMAT[part.type];
+  parseDisk(currentBuffer, hint || null);
   // Reset undo so the partition's edit history is local to that view.
   clearUndo();
-  refreshRamLinkView();
+  refreshCmdContainerView();
 }
 
-function leaveRamLinkPartition() {
-  if (!ramlinkBuffer || ramlinkPartitionIdx < 0 || !ramlinkPartitions) return;
-  spliceRamLinkPartitionBack();
-  ramlinkPartitionIdx = -1;
-  currentBuffer = ramlinkBuffer;
-  currentFormat = DISK_FORMATS.ramlink;
+function leaveCmdContainerPartition() {
+  if (!cmdcBuffer || cmdcPartitionIdx < 0 || !cmdcPartitions) return;
+  spliceCmdContainerPartitionBack();
+  cmdcPartitionIdx = -1;
+  currentBuffer = cmdcBuffer;
+  if (cmdcContainerKey) {
+    currentFormat = DISK_FORMATS[CMD_CONTAINERS[cmdcContainerKey].formatKey];
+  }
   currentTracks = 1;
   currentPartition = null;
   selectedEntryIndex = -1;
   clearUndo();
-  refreshRamLinkView();
+  refreshCmdContainerView();
 }
 
 // ── New / Delete partition (File menu) ────────────────────────────────
@@ -222,16 +255,17 @@ function leaveRamLinkPartition() {
 // type into that range. Delete just zeros the slot — it does NOT zero
 // the partition data, so an "undelete" is just re-adding an entry with
 // the same start/size if you remember them.
-function canAddRamLinkPartition() {
-  if (!isRamlinkListView()) return false;
-  return findRamLinkEmptySlot(ramlinkBuffer) >= 0;
+function canAddCmdContainerPartition() {
+  if (!isCmdContainerListView()) return false;
+  return findCmdContainerEmptySlot(cmdcBuffer, cmdcContainerKey) >= 0;
 }
 
-// Single picker for "New Partition" — table-style form with all four
-// fields (Slot / Type / Size / Name). Resolves with the full descriptor
-// or null on Cancel. Size auto-fills the standard CBM block count when
-// a non-Native type is picked and locks the field; Native unlocks it.
-var RL_TYPE_PRESETS = [
+// "New Partition" picker — table-style form (Slot / Type / Size / Name).
+// Both RAMLink and FD2000/FD4000 support the same four CMD partition
+// types per the BASIC tools (FD-Tools v1.05 / RAM-Tools v1.02 line 52-53).
+// Size auto-fills the standard CBM block count for non-Native types
+// and locks the field; Native is freely sizable.
+var CMDC_TYPE_PRESETS = [
   { value: 'nat',  label: 'Native (DNP)', size: 256,  fixed: false },
   { value: '1541', label: '1541',         size: 683,  fixed: true },
   { value: '1571', label: '1571',         size: 1366, fixed: true },
@@ -240,7 +274,8 @@ var RL_TYPE_PRESETS = [
 function showNewPartitionPicker() {
   return new Promise(function(resolve) {
     setModalSize(null);
-    document.getElementById('modal-title').textContent = 'New RAMLink Partition';
+    var ct = cmdcContainerKey ? CMD_CONTAINERS[cmdcContainerKey] : null;
+    document.getElementById('modal-title').textContent = 'New ' + (ct ? ct.name : '') + ' Partition';
     var body = document.getElementById('modal-body');
     body.innerHTML = '';
 
@@ -268,8 +303,8 @@ function showNewPartitionPicker() {
 
     // Slot — dropdown of free slot numbers only
     var occupied = {};
-    for (var pi = 0; pi < ramlinkPartitions.length; pi++) {
-      occupied[ramlinkPartitions[pi].index] = ramlinkPartitions[pi];
+    for (var pi = 0; pi < cmdcPartitions.length; pi++) {
+      occupied[cmdcPartitions[pi].index] = cmdcPartitions[pi];
     }
     var slotSelect = document.createElement('select');
     slotSelect.className = 'modal-input';
@@ -285,13 +320,13 @@ function showNewPartitionPicker() {
     // Type — radio group inline; changes update Size enabled state + value
     var typeWrap = document.createElement('div');
     var radios = [];
-    RL_TYPE_PRESETS.forEach(function(t, i) {
+    CMDC_TYPE_PRESETS.forEach(function(t, i) {
       var lbl = document.createElement('label');
       lbl.style.marginRight = '14px';
       lbl.style.cursor = 'pointer';
       var radio = document.createElement('input');
       radio.type = 'radio';
-      radio.name = 'rl-new-type';
+      radio.name = 'cmdc-new-type';
       radio.value = t.value;
       radio.style.marginRight = '4px';
       if (i === 0) radio.checked = true;
@@ -322,8 +357,8 @@ function showNewPartitionPicker() {
     body.appendChild(table);
 
     function currentType() {
-      for (var i = 0; i < radios.length; i++) if (radios[i].checked) return RL_TYPE_PRESETS[i];
-      return RL_TYPE_PRESETS[0];
+      for (var i = 0; i < radios.length; i++) if (radios[i].checked) return CMDC_TYPE_PRESETS[i];
+      return CMDC_TYPE_PRESETS[0];
     }
     function applyType() {
       var t = currentType();
@@ -332,7 +367,7 @@ function showNewPartitionPicker() {
       sizeInput.style.opacity = t.fixed ? '0.5' : '';
       // Only refresh the name field if the user hasn't customised it from
       // the previously-selected default.
-      var prevDefaults = RL_TYPE_PRESETS.map(function(p) {
+      var prevDefaults = CMDC_TYPE_PRESETS.map(function(p) {
         return p.value === 'nat' ? 'NATIVE' : p.value;
       });
       if (prevDefaults.indexOf(nameInput.value) >= 0) {
@@ -439,10 +474,10 @@ function buildPartitionFilesystem(typeChoice, sizeBlocks, name) {
   return { buffer: initBuf, typeCode: typeCode };
 }
 
-async function addRamLinkPartition() {
-  if (!isRamlinkListView()) return;
-  if (findRamLinkEmptySlot(ramlinkBuffer) < 0) {
-    showModal('RAMLink', ['No free partition slot — all 31 are allocated.']);
+async function addCmdContainerPartition() {
+  if (!isCmdContainerListView()) return;
+  if (findCmdContainerEmptySlot(cmdcBuffer, cmdcContainerKey) < 0) {
+    showModal('Container', ['No free partition slot — all 31 are allocated.']);
     return;
   }
 
@@ -450,12 +485,12 @@ async function addRamLinkPartition() {
   if (!picked) return;
 
   var sizeBytes = picked.size * 256;
-  var free = findRamLinkFreeSpace(ramlinkBuffer, ramlinkPartitions, sizeBytes);
+  var free = findCmdContainerFreeSpace(cmdcBuffer, cmdcContainerKey, cmdcPartitions);
   if (sizeBytes > free.size) {
     showModal('New Partition', [
-      'Not enough free space in the RAMLink container.',
+      'Not enough free space in the container.',
       'Requested: ' + Math.round(sizeBytes / 1024) + ' KiB.',
-      'Largest free gap: ' + Math.round(free.size / 1024) + ' KiB.'
+      'Available: ' + Math.round(free.size / 1024) + ' KiB.'
     ]);
     return;
   }
@@ -463,52 +498,52 @@ async function addRamLinkPartition() {
   var built = buildPartitionFilesystem(picked.type, picked.size, picked.name);
 
   pushUndo();
-  // Splice the freshly-initialised filesystem into the .rml at the
+  // Splice the freshly-initialised filesystem into the container at the
   // chosen offset; zero any trailing bytes if the FS is shorter than
   // the requested size (defensive — shouldn't happen with current
   // createEmptyDisk).
-  var dst = new Uint8Array(ramlinkBuffer);
+  var dst = new Uint8Array(cmdcBuffer);
   var src = new Uint8Array(built.buffer);
   var lim = Math.min(src.length, sizeBytes);
-  for (var i = 0; i < lim; i++) dst[free.start + i] = src[i];
-  for (var z = lim; z < sizeBytes; z++) dst[free.start + z] = 0;
+  dst.set(src.subarray(0, lim), free.start);
+  if (lim < sizeBytes) dst.fill(0, free.start + lim, free.start + sizeBytes);
 
-  writeRamLinkPartitionEntry(ramlinkBuffer, picked.slot, built.typeCode, picked.name, free.start, picked.size);
-  ramlinkPartitions = readRamLinkPartitions(ramlinkBuffer).partitions;
-  refreshRamLinkView();
+  writeCmdContainerPartitionEntry(cmdcBuffer, cmdcContainerKey, picked.slot, built.typeCode, picked.name, free.start, picked.size);
+  cmdcPartitions = readCmdContainerPartitions(cmdcBuffer, cmdcContainerKey).partitions;
+  refreshCmdContainerView();
 }
 
 // Menu entry just hands off to startRenameEntry on the selected row —
 // the inline PETSCII editor is the same one regular file rename uses,
 // and the partition row's data-offset points at the entry so the
-// 16-byte name field round-trips through ramlinkBuffer correctly.
-function renameRamLinkPartition() {
-  if (!isRamlinkListView()) return;
-  var listSelEl = document.querySelector('.dir-entry.selected[data-ramlink-part]');
+// 16-byte name field round-trips through cmdcBuffer correctly.
+function renameCmdContainerPartition() {
+  if (!isCmdContainerListView()) return;
+  var listSelEl = document.querySelector('.dir-entry.selected[data-cmdc-part]');
   if (!listSelEl) {
-    showModal('RAMLink', ['Select a partition first.']);
+    showModal('Container', ['Select a partition first.']);
     return;
   }
-  var idx = parseInt(listSelEl.dataset.ramlinkPart, 10);
-  var part = ramlinkPartitions[idx];
+  var idx = parseInt(listSelEl.dataset.cmdcPart, 10);
+  var part = cmdcPartitions[idx];
   if (!part || part.type === 0xFF) {
-    showModal('RAMLink', ['The SYSTEM partition can\'t be renamed.']);
+    showModal('Container', ['The SYSTEM partition can\'t be renamed.']);
     return;
   }
   startRenameEntry(listSelEl);
 }
 
-async function deleteRamLinkPartition() {
-  if (!isRamlinkListView()) return;
-  var listSelEl = document.querySelector('.dir-entry.selected[data-ramlink-part]');
+async function deleteCmdContainerPartition() {
+  if (!isCmdContainerListView()) return;
+  var listSelEl = document.querySelector('.dir-entry.selected[data-cmdc-part]');
   if (!listSelEl) {
-    showModal('RAMLink', ['Select a partition first.']);
+    showModal('Container', ['Select a partition first.']);
     return;
   }
-  var idx = parseInt(listSelEl.dataset.ramlinkPart, 10);
-  var part = ramlinkPartitions[idx];
+  var idx = parseInt(listSelEl.dataset.cmdcPart, 10);
+  var part = cmdcPartitions[idx];
   if (!part || part.type === 0xFF) {
-    showModal('RAMLink', ['The SYSTEM partition can\'t be deleted.']);
+    showModal('Container', ['The SYSTEM partition can\'t be deleted.']);
     return;
   }
   var choice = await showChoiceModal(
@@ -522,28 +557,28 @@ async function deleteRamLinkPartition() {
   if (!choice) return;
 
   pushUndo();
-  clearRamLinkPartitionEntry(ramlinkBuffer, part.index);
-  ramlinkPartitions = readRamLinkPartitions(ramlinkBuffer).partitions;
-  refreshRamLinkView();
+  clearCmdContainerPartitionEntry(cmdcBuffer, cmdcContainerKey, part.index);
+  cmdcPartitions = readCmdContainerPartitions(cmdcBuffer, cmdcContainerKey).partitions;
+  refreshCmdContainerView();
 }
 
-document.getElementById('opt-rl-new-partition').addEventListener('click', function(e) {
+document.getElementById('opt-cmdc-new-partition').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
   if (this.classList.contains('disabled')) return;
-  addRamLinkPartition();
+  addCmdContainerPartition();
 });
 
-document.getElementById('opt-rl-rename-partition').addEventListener('click', function(e) {
+document.getElementById('opt-cmdc-rename-partition').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
   if (this.classList.contains('disabled')) return;
-  renameRamLinkPartition();
+  renameCmdContainerPartition();
 });
 
-document.getElementById('opt-rl-delete-partition').addEventListener('click', function(e) {
+document.getElementById('opt-cmdc-delete-partition').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
   if (this.classList.contains('disabled')) return;
-  deleteRamLinkPartition();
+  deleteCmdContainerPartition();
 });

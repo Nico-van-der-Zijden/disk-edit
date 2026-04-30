@@ -38,15 +38,15 @@ document.addEventListener('drop', async function(e) {
   var entries = await expandArchives(files);
   if (entries.length === 0) return;
 
-  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp'];
+  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.dnp'];
   var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
   var archiveExts = ['.lnx'];
-  var ramlinkExts = ['.rml', '.rl'];
-  var diskEntries = [], importEntries = [], archiveEntries = [], ramlinkEntries = [];
+  var cmdcExts = ['.rml', '.rl', '.d1m', '.d2m', '.d4m'];
+  var diskEntries = [], importEntries = [], archiveEntries = [], cmdcEntries = [];
   for (var i = 0; i < entries.length; i++) {
     var lname = entries[i].name.toLowerCase();
     var ext = lname.substring(lname.lastIndexOf('.'));
-    if (ramlinkExts.indexOf(ext) >= 0) ramlinkEntries.push(entries[i]);
+    if (cmdcExts.indexOf(ext) >= 0) cmdcEntries.push(entries[i]);
     else if (diskExts.indexOf(ext) >= 0) diskEntries.push(entries[i]);
     else if (archiveExts.indexOf(ext) >= 0) archiveEntries.push(entries[i]);
     else if (fileExts.indexOf(ext) >= 0) importEntries.push(entries[i]);
@@ -59,7 +59,7 @@ document.addEventListener('drop', async function(e) {
       try {
         var buf = diskEntries[di].buffer;
         var fname = diskEntries[di].name;
-        clearRamLinkState();
+        clearCmdContainerState();
         currentBuffer = buf;
         currentFileName = fname;
         currentPartition = null;
@@ -80,14 +80,14 @@ document.addEventListener('drop', async function(e) {
     updateMenuState();
   }
 
-  // RAMLink containers: pop the partition picker for each, open the
-  // chosen partition into a new tab. Sequential because the picker is
-  // modal — one at a time avoids stacked dialogs.
-  for (var ri = 0; ri < ramlinkEntries.length; ri++) {
+  // CMD containers (RAMLink, FD2000/FD4000): each opens to its partition
+  // list. Sequential because the partition-picker dialogs are modal —
+  // one at a time avoids stacked dialogs.
+  for (var ri = 0; ri < cmdcEntries.length; ri++) {
     try {
-      await openRamLinkAsTab(ramlinkEntries[ri].buffer, ramlinkEntries[ri].name);
+      await openCmdContainerAsTab(cmdcEntries[ri].buffer, cmdcEntries[ri].name);
     } catch (err) {
-      showModal('Error', ['Failed to read RAMLink image ' + ramlinkEntries[ri].name + ': ' + (err && err.message ? err.message : err)]);
+      showModal('Error', ['Failed to read container ' + cmdcEntries[ri].name + ': ' + (err && err.message ? err.message : err)]);
     }
   }
 
@@ -96,7 +96,7 @@ document.addEventListener('drop', async function(e) {
     saveActiveTab();
     for (var ai = 0; ai < archiveEntries.length; ai++) {
       try {
-        clearRamLinkState();
+        clearCmdContainerState();
         openLnxArchiveAsTab(archiveEntries[ai].buffer, archiveEntries[ai].name);
         addRecentDisk(archiveEntries[ai].name, archiveEntries[ai].buffer);
       } catch (err) {
@@ -165,78 +165,8 @@ document.addEventListener('dragstart', function(e) {
   e.dataTransfer.effectAllowed = 'copyMove';
 });
 
-// ── CMD FD Partition Picker ───────────────────────────────────────────
-function showCmdFdPartitionPicker(buffer, fileName, formatName, forceDialog) {
-  return new Promise(function(resolve) {
-    var fdInfo = readCmdFdPartitions(buffer, formatName);
-    if (!fdInfo || fdInfo.partitions.length === 0) {
-      showModal('CMD Image', ['No partitions found in ' + fileName]);
-      resolve(null);
-      return;
-    }
-
-    // If only one non-system partition and not forced, auto-select it
-    var userParts = fdInfo.partitions.filter(function(p) { return p.type !== 5; });
-    if (userParts.length === 1 && !forceDialog) {
-      var part = userParts[0];
-      var extracted = extractCmdPartition(buffer, part);
-      if (extracted) {
-        resolve({ buffer: extracted, name: fileName + ' [' + part.name + ']', partOffset: part.startByte, partSize: part.sizeBytes });
-      } else {
-        showModal('CMD Image', ['Failed to extract partition "' + part.name + '"']);
-        resolve(null);
-      }
-      return;
-    }
-
-    // Show picker modal
-    document.getElementById('modal-title').textContent = fdInfo.format + ' \u2014 ' + fileName;
-    var body = document.getElementById('modal-body');
-    var html = '<div style="margin-bottom:12px;color:var(--text-muted);font-size:12px">' +
-      fdInfo.partitions.length + ' partition(s) found. Select one to open:</div>';
-
-    for (var i = 0; i < fdInfo.partitions.length; i++) {
-      var p = fdInfo.partitions[i];
-      if (p.type === 5) continue; // skip system partition
-      var sizeKB = Math.round(p.sizeBytes / 1024);
-      html += '<div class="search-result" data-pidx="' + i + '" style="cursor:pointer;padding:8px">' +
-        '<b style="color:var(--accent)">' + escHtml(p.name) + '</b>' +
-        ' <span style="color:var(--text-muted)">(' + p.typeName + ', ' + sizeKB + ' KB, ' +
-        p.sizeBlocks + ' blocks)</span></div>';
-    }
-
-    body.innerHTML = html;
-
-    var footer = document.querySelector('#modal-overlay .modal-footer');
-    footer.innerHTML = '<button id="modal-close">Cancel</button>';
-    document.getElementById('modal-close').addEventListener('click', function() {
-      document.getElementById('modal-overlay').classList.remove('open');
-      resolve(null);
-    });
-
-    // Click a partition to open it
-    body.addEventListener('click', function handler(e) {
-      var row = e.target.closest('[data-pidx]');
-      if (!row) return;
-      body.removeEventListener('click', handler);
-      var idx = parseInt(row.getAttribute('data-pidx'), 10);
-      var part = fdInfo.partitions[idx];
-      var extracted = extractCmdPartition(buffer, part);
-      document.getElementById('modal-overlay').classList.remove('open');
-      if (extracted) {
-        resolve({ buffer: extracted, name: fileName + ' [' + part.name + ']', partOffset: part.startByte, partSize: part.sizeBytes });
-      } else {
-        showModal('CMD Image', ['Failed to extract partition "' + part.name + '"']);
-        resolve(null);
-      }
-    });
-
-    document.getElementById('modal-overlay').classList.add('open');
-  });
-}
-
-// RAMLink container loading + partition management lives in
-// ui-ramlink.js (openRamLinkAsTab, addRamLinkPartition, etc.).
+// CMD container loading + partition management lives in
+// ui-cmd.js (openCmdContainerAsTab, addCmdContainerPartition, etc.).
 
 // ── Theme toggle ─────────────────────────────────────────────────────
 const themeToggle = document.getElementById('theme-toggle');

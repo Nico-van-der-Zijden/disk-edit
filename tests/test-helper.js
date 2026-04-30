@@ -51,9 +51,11 @@ loadScript('assets/js/ui-directory.js');
 loadScript('assets/js/ui-fileops.js');
 loadScript('assets/js/ui-viewers.js');
 
-// Helper: load a disk image and set globals
+// Helper: load a test fixture disk and set globals. Fixtures live in
+// tests/fixtures/ (gitignored — keep local copies separate from disks/,
+// which is a scratch dir users clear regularly).
 function loadDisk(filename) {
-  var diskPath = path.join(__dirname, '..', 'disks', filename);
+  var diskPath = path.join(__dirname, 'fixtures', filename);
   var buf = new Uint8Array(fs.readFileSync(diskPath)).buffer;
   global.currentBuffer = buf;
   global.currentPartition = null;

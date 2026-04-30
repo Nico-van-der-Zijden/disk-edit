@@ -137,20 +137,20 @@ function startEditing(el) {
 // escHtml is defined in cbm-format.js
 
 // ── Save helpers ──────────────────────────────────────────────────────
-// For a RAMLink tab, the file we save is the whole .rml — if the user
-// edited inside a partition, spliceRamLinkPartitionBack (defined in
-// ui-ramlink.js) lays those changes into ramlinkBuffer first so they
-// land in the downloaded file.
+// For a CMD container tab, the file we save is the whole container — if
+// the user edited inside a partition, spliceCmdContainerPartitionBack
+// (defined in ui-cmd.js) lays those changes into cmdcBuffer first so
+// they land in the downloaded file.
 function getSaveBuffer() {
-  if (ramlinkBuffer) {
-    spliceRamLinkPartitionBack();
-    return ramlinkBuffer;
+  if (cmdcBuffer) {
+    spliceCmdContainerPartitionBack();
+    return cmdcBuffer;
   }
   return currentBuffer;
 }
 
 function getSaveFileName() {
-  return ramlinkFileName || currentFileName;
+  return cmdcFileName || currentFileName;
 }
 
 function downloadD64(buffer, fileName) {
@@ -165,18 +165,17 @@ function downloadD64(buffer, fileName) {
 function updateMenuState() {
   const hasDisk = currentBuffer !== null;
   const tape = isTapeFormat();
-  // RAMLink container partition list — at this level we're looking at
+  // CMD container partition list — at this level we're looking at
   // a container, not a filesystem. Disk-edit / file-level operations
   // don't apply, so they grey out exactly like for tape images.
-  const containerList = isRamlinkListView();
+  const containerList = isCmdContainerListView();
   const noEdit = tape || containerList;
   document.getElementById('opt-close').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-close-all').classList.toggle('disabled', tabs.length === 0);
   var activeTab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
-  document.getElementById('opt-change-partition').classList.toggle('disabled', true); // CMD container support removed
-  // Save / Save-As stay enabled on the RAMLink list — that's how you
-  // download the whole .rml after editing a partition. Only tape gates
-  // them off (tape images are read-only).
+  // Save / Save-As stay enabled on the container list — that's how you
+  // download the whole container after editing a partition. Only tape
+  // gates them off (tape images are read-only).
   document.getElementById('opt-save').classList.toggle('disabled', !hasDisk || !getSaveFileName() || tape);
   document.getElementById('opt-save-as').classList.toggle('disabled', !hasDisk || tape);
   document.getElementById('opt-validate').classList.toggle('disabled', !hasDisk || noEdit);
@@ -910,17 +909,23 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
     var tracks = parseInt(el.dataset.tracks, 10);
     const formatKey = el.dataset.format;
 
-    // RAMLink: route to openRamLinkAsTab with a freshly-built empty
-    // container so the partition-list view comes up the same way as
-    // when opening a file. Uses a synthetic name "New RAMLink N.rml"
-    // so save-as defaults sensibly.
+    // CMD containers (RAMLink, FD2000/FD4000): route to openCmdContainerAsTab
+    // with a freshly-built empty container so the partition-list view
+    // comes up the same way as when opening a file.
     if (formatKey === 'ramlink') {
       var mib = parseInt(el.dataset.rlMib, 10);
       if (isNaN(mib) || mib < 1) return;
       newDiskCount++;
       var rlBuf = createEmptyRamLink(mib);
       var rlName = 'New RAMLink ' + newDiskCount + '.rml';
-      await openRamLinkAsTab(rlBuf, rlName);
+      await openCmdContainerAsTab(rlBuf, rlName, 'ramlink');
+      return;
+    }
+    if (formatKey === 'd1m' || formatKey === 'd2m' || formatKey === 'd4m') {
+      newDiskCount++;
+      var fdBuf = createEmptyDisk(formatKey, tracks);
+      var fdName = 'New ' + formatKey.toUpperCase() + ' ' + newDiskCount + '.' + formatKey;
+      await openCmdContainerAsTab(fdBuf, fdName, formatKey);
       return;
     }
 
@@ -939,7 +944,7 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
     if (!buf) return;
     var fname = null;
 
-    clearRamLinkState();
+    clearCmdContainerState();
     currentBuffer = buf;
     currentFileName = fname;
     currentPartition = null;
@@ -1055,7 +1060,7 @@ document.getElementById('opt-close-all').addEventListener('click', async (e) => 
   selectedEntryIndex = -1;
   currentPartition = null;
   tabDirty = false;
-  clearRamLinkState();
+  clearCmdContainerState();
   clearUndo();
   showEmptyState();
   renderTabs();
@@ -1071,14 +1076,6 @@ window.addEventListener('beforeunload', function(e) {
   }
 });
 
-document.getElementById('opt-change-partition').addEventListener('click', async (e) => {
-  e.stopPropagation();
-  closeMenus();
-  // CMD container support removed (DHD too large for browser use)
-  renderTabs();
-  updateMenuState();
-});
-
 document.getElementById('opt-save').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || !currentFileName) return;
@@ -1092,11 +1089,16 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
-  // For RAMLink tabs, the saved artifact is the whole .rml — pull ext
-  // from the container's format (.rml / .rl), not whatever partition
-  // happens to be open. spliceRamLinkPartitionBack runs inside
-  // getSaveBuffer() so live edits land in the file.
-  var fmtForExt = ramlinkBuffer ? DISK_FORMATS.ramlink : currentFormat;
+  // For CMD container tabs, the saved artifact is the whole container —
+  // pull ext from the container's format, not whatever partition happens
+  // to be open. spliceCmdContainerPartitionBack runs inside getSaveBuffer()
+  // so live edits land in the file.
+  var fmtForExt;
+  if (cmdcBuffer && cmdcContainerKey) {
+    fmtForExt = DISK_FORMATS[CMD_CONTAINERS[cmdcContainerKey].formatKey];
+  } else {
+    fmtForExt = currentFormat;
+  }
   var ext = fmtForExt.ext || '.d64';
   var extAlts = fmtForExt.extAlternates || [];
   var allExts = [ext].concat(extAlts);
@@ -1104,13 +1106,13 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
     return allExts.some(function(e) { return name.toLowerCase().endsWith(e); });
   }
   var tab = getActiveTab();
-  var baseName = (ramlinkBuffer ? ramlinkFileName : currentFileName) || (tab && tab.name) || 'disk';
+  var baseName = (cmdcBuffer ? cmdcFileName : currentFileName) || (tab && tab.name) || 'disk';
   var defaultName = hasFormatExt(baseName) ? baseName : baseName + ext;
   const fileName = await showInputModal('Save As', defaultName);
   if (!fileName) return;
   var finalName = hasFormatExt(fileName) ? fileName : fileName + ext;
-  if (ramlinkBuffer) {
-    ramlinkFileName = finalName;
+  if (cmdcBuffer) {
+    cmdcFileName = finalName;
     downloadD64(getSaveBuffer(), finalName);
   } else {
     currentFileName = finalName;

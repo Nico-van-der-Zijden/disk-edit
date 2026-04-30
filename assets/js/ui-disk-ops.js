@@ -401,31 +401,34 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     sectorsHtml += '</div>';
   }
 
-  // ── Build optional Partitions panel (D1M/D2M/D4M only) ──
+  // ── Compose final HTML with tabs ──
+  // Optional Partitions panel for D1M/D2M/D4M \u2014 read-only view of the
+  // CMD FD system partition table on the last track. The disk itself
+  // opens as a flat filesystem; this surfaces the table for inspection.
   var partsTabHtml = '', partsPanelHtml = '';
   var fmtKey = (fmt.name || '').toLowerCase();
   if (fmtKey === 'd1m' || fmtKey === 'd2m' || fmtKey === 'd4m') {
     partsTabHtml = '<span class="bam-tab" data-bam-view="partitions">Partitions</span>';
-    var parts = readCmdFdSysPartitions(currentBuffer, fmtKey, currentTracks);
+    var pInfo = readCmdContainerPartitions(currentBuffer, fmtKey);
     var panel;
-    if (!parts) {
+    if (!pInfo) {
       panel = '<div class="bam-partitions-empty" style="padding:12px;color:var(--text-muted)">' +
         'No CMD FD system partition on this disk (magic "CMD FD SERIES" not found on track ' +
         currentTracks + ' sector 5).</div>';
     } else {
       panel = '<table class="bam-partitions" style="width:100%;border-collapse:collapse">' +
         '<thead><tr>' +
+        '<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Slot</th>' +
         '<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Type</th>' +
         '<th style="text-align:left;padding:4px 8px;border-bottom:1px solid var(--border)">Name</th>' +
-        '<th style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--border)">Start block</th>' +
-        '<th style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--border)">Size (blocks)</th>' +
+        '<th style="text-align:right;padding:4px 8px;border-bottom:1px solid var(--border)">Size</th>' +
         '</tr></thead><tbody>';
-      for (var pi = 0; pi < parts.length; pi++) {
-        var p = parts[pi];
+      for (var pi = 0; pi < pInfo.partitions.length; pi++) {
+        var p = pInfo.partitions[pi];
         panel += '<tr>' +
+          '<td style="padding:4px 8px;font-family:monospace">' + p.index + '</td>' +
           '<td style="padding:4px 8px">' + escHtml(p.typeName) + '</td>' +
           '<td style="padding:4px 8px"><b>' + escHtml(p.name) + '</b></td>' +
-          '<td style="padding:4px 8px;text-align:right;font-family:monospace">' + p.startBlock + '</td>' +
           '<td style="padding:4px 8px;text-align:right;font-family:monospace">' + p.sizeBlocks + '</td>' +
           '</tr>';
       }
@@ -435,7 +438,6 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       panel + '</div>';
   }
 
-  // ── Compose final HTML with tabs ──
   var title = 'BAM \u2014 ' + totalFree + ' free, ' + totalUsed + ' used of ' +
     (totalFree + totalUsed) + ' sectors';
   // Wrap in .bam-layout so the tab bar stays pinned and only the active
@@ -448,7 +450,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     '</div>';
 
   if (forceCompact) {
-    // High-SPT: BAM + Track Usage + File Usage + Disk Map (+ Partitions for CMD FD) tabs
+    // High-SPT: BAM + Track Usage + File Usage + Disk Map tabs
     html += '<div class="bam-tabs">' +
       '<span class="bam-tab active" data-bam-view="map">BAM</span>' +
       '<span class="bam-tab" data-bam-view="trackusage">Track Usage</span>' +
@@ -480,7 +482,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     html += partsPanelHtml;
     html += '</div>';
   } else {
-    // Tab switcher — BAM + Track Usage + File Usage + Disk Map (+ Partitions for D1M)
+    // Tab switcher — BAM + Track Usage + File Usage + Disk Map
     html += '<div class="bam-tabs">' +
       '<span class="bam-tab active" data-bam-view="sectors">BAM</span>' +
       '<span class="bam-tab" data-bam-view="trackusage">Track Usage</span>' +

@@ -1,6 +1,7 @@
 dist/*
 !dist/.gitkeep
 disks/
+tests/fixtures/
 ExampleDisks/*
 !ExampleDisks/.gitkeep
 .claude/
