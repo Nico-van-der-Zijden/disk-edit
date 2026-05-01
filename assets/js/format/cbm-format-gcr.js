@@ -364,6 +364,124 @@ function _g64SectorOffset(track, sector) {
   return off + sector * 256;
 }
 
+// ── NIB (raw nibble dump from a 1541) reader ─────────────────────────
+// Reads files produced by nibtools (markusC64/nibtools): "MNIB-1541-RAW"
+// magic, a halftrack table at byte 0x10 (pairs of {halftrack, density}
+// terminated by a zero halftrack), then NIB_TRACK_LENGTH (0x2000) bytes
+// of raw GCR per declared track at offset 0x100. We only support whole
+// tracks — the half-track entries (odd halftrack values) are ignored,
+// since G64 (our internal representation) is whole-track-only too.
+//
+// Returns { d64, layout } in the same shape as decodeG64toD64 so the
+// rest of the editor (sector views, layout modal, save-as-G64) doesn't
+// need to know about NIB at all once the buffer has been parsed.
+function isNibBuffer(data) {
+  if (data.length < 16) return false;
+  // ASCII for "MNIB-1541-RAW"
+  return data[0] === 0x4D && data[1] === 0x4E && data[2] === 0x49 &&
+         data[3] === 0x42 && data[4] === 0x2D && data[5] === 0x31 &&
+         data[6] === 0x35 && data[7] === 0x34 && data[8] === 0x31 &&
+         data[9] === 0x2D && data[10] === 0x52 && data[11] === 0x41 &&
+         data[12] === 0x57;
+}
+
+function parseNibFile(data) {
+  var NIB_TRACK_LENGTH = 0x2000;   // 8192 bytes per track in the .nib payload
+  var DATA_OFFSET = 0x100;          // raw track data starts here
+  var HEADER_TABLE = 0x10;          // halftrack table starts here
+
+  // Walk the halftrack table: 2-byte entries (halftrack, density+flags)
+  // until a zero halftrack terminates. Each entry's index in the table
+  // tells us where its track data lives in the payload.
+  var entries = [];
+  for (var i = 0; i < (DATA_OFFSET - HEADER_TABLE) / 2; i++) {
+    var off = HEADER_TABLE + i * 2;
+    var halftrack = data[off];
+    if (halftrack === 0) break;
+    entries.push({ halftrack: halftrack, density: data[off + 1] & 0x03, tIndex: i });
+  }
+
+  // Index by halftrack so whole tracks (halftrack = track*2) are easy
+  // to look up. Half-tracks (odd halftrack values) are present in the
+  // file when the original disk used them, but we currently can't
+  // represent them — they get dropped on the way into our G64 layout.
+  var byHalftrack = {};
+  entries.forEach(function(e) {
+    var trackOff = DATA_OFFSET + e.tIndex * NIB_TRACK_LENGTH;
+    if (trackOff + NIB_TRACK_LENGTH > data.length) return;
+    byHalftrack[e.halftrack] = data.subarray(trackOff, trackOff + NIB_TRACK_LENGTH);
+  });
+
+  // 1541 sectors-per-track for each zone.
+  var sptFn = function(t) {
+    if (t <= 17) return 21;
+    if (t <= 24) return 19;
+    if (t <= 30) return 18;
+    return 17;
+  };
+
+  // First pass: walk every populated whole track once. nibtools tends
+  // to emit halftrack entries for the full 1..42 range even on a real
+  // 35-track disk (extra entries are unformatted filler), so we can't
+  // trust "track has GCR" as the disk-extent signal. We need "track
+  // had at least one sector decode" — same approach as decodeG64toD64.
+  var perTrack = [];
+  for (var track = 1; track <= 42; track++) {
+    var trackData = byHalftrack[track * 2];
+    var expectedSpt = sptFn(track);
+    perTrack.push({
+      track: track,
+      walk: trackData ? walkGCRTrack(trackData, track, expectedSpt) : null,
+      trackData: trackData || null,
+      expectedSpt: expectedSpt
+    });
+  }
+
+  var realTracks = 0;
+  for (var ri = 0; ri < perTrack.length; ri++) {
+    if (perTrack[ri].walk && perTrack[ri].walk.sectorOrder.length > 0) {
+      realTracks = perTrack[ri].track;
+    }
+  }
+  if (realTracks === 0) realTracks = 35;
+  var numTracks;
+  if (realTracks <= 35)      numTracks = 35;
+  else if (realTracks <= 40) numTracks = 40;
+  else                       numTracks = 42;
+
+  var totalSectors = 0;
+  for (var t = 1; t <= numTracks; t++) totalSectors += sptFn(t);
+  var d64 = new Uint8Array(totalSectors * 256);
+  var layout = [];
+
+  for (var pi = 0; pi < perTrack.length && perTrack[pi].track <= numTracks; pi++) {
+    var pt = perTrack[pi];
+    var w = pt.walk;
+    if (w) {
+      for (var s = 0; s < pt.expectedSpt; s++) {
+        var payload = w.sectorPayloads[s];
+        if (payload) {
+          var d64Off = calcD64Offset(pt.track, s, sptFn);
+          for (var bi = 0; bi < 256; bi++) d64[d64Off + bi] = payload[bi];
+        }
+      }
+    }
+    layout.push({
+      track: pt.track,
+      sectorOrder: w ? w.sectorOrder : [],
+      rawTrackBytes: pt.trackData ? pt.trackData.length : 0,
+      expectedSpt: pt.expectedSpt,
+      unreadableSectors: w ? w.unreadable : [],
+      // Detached copy so the NIB ArrayBuffer can be discarded after
+      // open. Same lifecycle as the rawGCR captured by decodeG64toD64.
+      rawGCR: pt.trackData ? new Uint8Array(pt.trackData) : new Uint8Array(0),
+      sectorDataStart: w ? w.sectorDataStart : {}
+    });
+  }
+
+  return { d64: d64.buffer, layout: layout };
+}
+
 function calcD64Offset(track, sector, sptFn) {
   var off = 0;
   for (var t = 1; t < track; t++) off += sptFn(t) * 256;

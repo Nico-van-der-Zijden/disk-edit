@@ -128,21 +128,25 @@ There are two separate BAM checking systems:
 - `bamMarkSectorFree()` sets the bit and recounts
 - Each format defines its own `bamBitMask()` — LSB-first for D64/D71/D81, MSB-first for CMD formats (DNP/D1M/D2M/D4M)
 
-### GCR Codec (G64 Support)
+### GCR Codec (G64, NIB, NBZ)
 
-G64 images store raw GCR-encoded disk data as the drive head sees it. The codec round-trips: open decodes G64 → D64 (sector payloads), save re-encodes any modified sectors back into the original raw GCR.
+G64, NIB, and NBZ all store the same underlying data — raw GCR-encoded tracks as the drive head sees them. The codec funnels all three into a single `Track[]` layout shape, so the viewers / editors / save flow only know about that one structure.
+
+**G64** is the canonical container: read+write round-trip with copy-protected sectors preserved. **NIB** is nibtools' raw nibble dump — read-only; on open it's converted into the same layout as a G64 and on save we emit a real `.g64`. **NBZ** is the same thing run through nibtools' custom LZ77 — transparently decompressed in `expandArchives` (`ui-archive-picker.js`) before reaching the NIB parser.
 
 **Decode side** (`format/cbm-format-gcr.js`):
 
 1. **`decodeG64toD64(g64)`** reads the G64 header, walks every populated whole track via `walkGCRTrack`, and returns `{ d64: ArrayBuffer, layout: Track[] }`. The output buffer is sized to the disk's real extent (35 / 40 / 42 tracks) by checking which tracks actually decoded sectors, not the header-declared half-track count.
-2. **`walkGCRTrack(trackData, track, expectedSpt)`** scans one revolution for `$FF` sync marks, decodes each sector header, and records the physical sector order plus per-sector data-block start positions. Backed by a doubled buffer so wrap-around sectors decode correctly.
-3. **`decodeGCR5()`** converts 5 GCR bytes to 4 data bytes via a 32-entry lookup table (`GCR_DECODE`). The pattern `01010` (10) decodes to `0` — fixing this single table entry was a long-standing bug that previously made many real-world G64s decode to empty disks.
+2. **`parseNibFile(nib)`** reads the `MNIB-1541-RAW` magic, walks the 2-byte halftrack/density entries from offset `0x10`, then reads each track's 8192-byte raw GCR from offset `0x100 + tIndex × 0x2000`. Same two-pass size-class snap as G64 — needed because nibtools usually emits halftrack entries for the full 1..42 range regardless of disk size. Returns the same `{ d64, layout }` shape so callers can't tell.
+3. **`walkGCRTrack(trackData, track, expectedSpt)`** scans one revolution for `$FF` sync marks, decodes each sector header, and records the physical sector order plus per-sector data-block start positions. Backed by a doubled buffer so wrap-around sectors decode correctly.
+4. **`decodeGCR5()`** converts 5 GCR bytes to 4 data bytes via a 32-entry lookup table (`GCR_DECODE`). The pattern `01010` (10) decodes to `0` — fixing this single table entry was a long-standing bug that previously made many real-world G64s decode to empty disks.
+5. **`decompressNbz(arrayBuffer)`** in `format/cbm-archive.js` is a JS port of `LZ_Uncompress` from nibtools' `lz.c` (Marcus Geelnard, BSD-3). Stream format: byte 0 = marker symbol; subsequent bytes are literal symbols, `[marker, 0]` for an escaped literal marker, or `[marker, length-varint, offset-varint]` for a back-reference. Capped at 2 MB output to fail loudly on a malformed stream.
 
-**Encode side** (saves):
+**Encode side** (saves) — G64 only; NIB and NBZ open as G64 in memory and save as `.g64`:
 
-4. **`encodeGCRSector(payload)`** emits the 325 GCR bytes of a 1541 data block (`$07` + 256 payload + XOR checksum + two pad bytes, encoded in 65 groups of 4→5 via `GCR_ENCODE`).
-5. **`spliceGCRSector(rawGCR, dataStart, payload)`** writes those bytes back into a track's raw GCR at the position the original data block occupied (with wrap-aware modulo).
-6. **`buildG64ForSave(d64Buffer, layout)`** walks every readable sector, splices its current d64 contents back via `spliceGCRSector`, then `encodeG64FromLayout` reconstructs a standard 84-half-track G64 container around the modified track data. Sectors flagged `unreadableSectors` (couldn't be decoded on open) are skipped — their original bytes pass through untouched so custom-GCR copy protection survives the round-trip.
+6. **`encodeGCRSector(payload)`** emits the 325 GCR bytes of a 1541 data block (`$07` + 256 payload + XOR checksum + two pad bytes, encoded in 65 groups of 4→5 via `GCR_ENCODE`).
+7. **`spliceGCRSector(rawGCR, dataStart, payload)`** writes those bytes back into a track's raw GCR at the position the original data block occupied (with wrap-aware modulo).
+8. **`buildG64ForSave(d64Buffer, layout)`** walks every readable sector, splices its current d64 contents back via `spliceGCRSector`, then `encodeG64FromLayout` reconstructs a standard 84-half-track G64 container around the modified track data. Sectors flagged `unreadableSectors` (couldn't be decoded on open) are skipped — their original bytes pass through untouched so custom-GCR copy protection survives the round-trip.
 
 **Layout** (`Track[]`): each entry carries `track`, `sectorOrder` (physical order seen), `rawGCR` (detached copy of the track's GCR bytes), `expectedSpt`, `unreadableSectors`, and `sectorDataStart[sector]` (byte position of each data block in `rawGCR`). The G64 Layout viewer (`ui-disk-tools.js`) reads this for the Sectors and Raw Tracks tabs.
 

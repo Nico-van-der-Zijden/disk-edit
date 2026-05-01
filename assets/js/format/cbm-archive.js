@@ -1,9 +1,14 @@
-// ── Archive readers (gzip + zip) ─────────────────────────────────────
+// ── Archive readers (gzip + zip + nibtools-LZ) ───────────────────────
 // Browser-native gzip via DecompressionStream; minimal hand-rolled ZIP
 // reader (central directory + STORED + DEFLATE) so we don't take on a
 // library dependency. ZIP64 is not supported — the file inputs we care
 // about (collections of disk images, the occasional bundle of PRGs)
 // always fit in classic ZIP.
+//
+// `decompressNbz` is a JS port of `LZ_Uncompress` from nibtools' lz.c
+// (Marcus Geelnard, 2003-2006, BSD 3-clause). NBZ files in the C64
+// scene are NIBs run through that exact LZ77 variant — not gzip, not
+// LZMA — so we have to ship the decoder ourselves.
 
 async function decompressGzip(arrayBuffer) {
   if (typeof DecompressionStream === 'undefined') {
@@ -12,6 +17,68 @@ async function decompressGzip(arrayBuffer) {
   var blob = new Blob([arrayBuffer]);
   var stream = blob.stream().pipeThrough(new DecompressionStream('gzip'));
   return await new Response(stream).arrayBuffer();
+}
+
+// LZ77 stream format (per nibtools' lz.c):
+//   byte 0           = marker symbol (chosen at compress time as a
+//                       byte that's rare in the input)
+//   byte sequence    = literal symbols, OR
+//                      [marker, 0]                 — escaped literal marker
+//                      [marker, len-varint, off-varint] — back-reference
+//   varint           = big-endian, 7 bits per byte, MSB=1 means "another
+//                       byte follows", MSB=0 marks the last byte
+function decompressNbz(arrayBuffer) {
+  var input = new Uint8Array(arrayBuffer);
+  if (input.length < 1) return new Uint8Array(0).buffer;
+
+  var marker = input[0];
+  var inpos = 1;
+  // NIB output sizes top out around 256 + 84*8192 = 688 KB. Allocate 2MB
+  // headroom — fail loudly if a pathological NBZ blows past that.
+  var MAX_OUT = 2 * 1024 * 1024;
+  var out = new Uint8Array(MAX_OUT);
+  var outpos = 0;
+
+  function readVarSize() {
+    var y = 0, b;
+    do {
+      if (inpos >= input.length) throw new Error('NBZ stream truncated mid-varint');
+      b = input[inpos++];
+      y = (y << 7) | (b & 0x7F);
+    } while (b & 0x80);
+    return y;
+  }
+
+  while (inpos < input.length) {
+    var symbol = input[inpos++];
+    if (symbol === marker) {
+      if (inpos >= input.length) throw new Error('NBZ stream truncated after marker');
+      if (input[inpos] === 0) {
+        // Literal occurrence of the marker byte.
+        if (outpos >= MAX_OUT) throw new Error('NBZ output exceeds 2 MB cap');
+        out[outpos++] = marker;
+        inpos++;
+      } else {
+        var length = readVarSize();
+        var offset = readVarSize();
+        if (offset > outpos) throw new Error('NBZ back-reference offset before start of output');
+        if (outpos + length > MAX_OUT) throw new Error('NBZ output exceeds 2 MB cap');
+        // The C reference uses a per-byte loop; we keep that to handle
+        // overlapping copies (length > offset) where each emitted byte
+        // becomes part of the source for later iterations of the same
+        // reference (RLE-style behaviour the LZ77 spec requires).
+        for (var i = 0; i < length; i++) {
+          out[outpos] = out[outpos - offset];
+          outpos++;
+        }
+      }
+    } else {
+      if (outpos >= MAX_OUT) throw new Error('NBZ output exceeds 2 MB cap');
+      out[outpos++] = symbol;
+    }
+  }
+
+  return out.slice(0, outpos).buffer;
 }
 
 // Reads a classic ZIP (PKZIP, no ZIP64) and returns an array of

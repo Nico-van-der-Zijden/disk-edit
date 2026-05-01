@@ -81,6 +81,8 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '&bull; <a href="https://www.zimmers.net/anonftp/pub/cbm/" target="_blank" class="link">Zimmers.net</a> — CBM file archive and GEOS format documentation<br>' +
       '&bull; <a href="https://archive.org/details/JiffyDos_V6_Users_Manual" target="_blank" class="link">JiffyDOS V6 User\'s Manual</a> — sector interleave and fast loader reference<br>' +
       '&bull; <a href="https://www.pagetable.com/?p=1070" target="_blank" class="link">Visualizing a 1541 Floppy Disk</a> by Michael Steil — concentric-ring raw GCR rendering style used in the G64 Layout viewer<br>' +
+      '&bull; <a href="https://github.com/markusC64/nibtools" target="_blank" class="link">nibtools</a> by Pete Rittwage and contributors — NIB file format reference for the .nib reader<br>' +
+      '&bull; LZ77 compressor/decompressor by <a href="http://floe.butterbrot.org/external/lz.txt" target="_blank" class="link">Marcus Geelnard</a> (2003-2006, BSD-3) — algorithm ported to JS for the .nbz reader<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
@@ -195,6 +197,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.101', title: 'NIB / NBZ support', items: [
+      'Open .nib (raw nibble dumps from nibtools) — auto-converted to G64 in memory; saving produces a real GCR-encoded .g64',
+      'Open .nbz (LZ77-compressed NIB) — transparently decompressed before parsing',
+      'Drag-drop error modal now adds a hint when reads fail (extract from inside an archive / hydrate cloud-storage placeholders) — common cause that\'s no longer a mystery',
+    ]},
     { ver: '1.3.100', title: 'Export disk as base64 data URI', items: [
       'New Disk → Export Disk → Show as Base64 Data URI: get a data: URI for the current disk in a modal, with a Copy button — handy for embedding small disks in forum posts or git issues',
     ]},

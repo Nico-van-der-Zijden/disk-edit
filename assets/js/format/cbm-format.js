@@ -1406,6 +1406,25 @@ function parseDisk(buffer, formatHint) {
     currentBuffer = buffer;
     currentG64Layout = g64Result.layout;
   }
+  // NIB / NB2 (raw nibble dumps from a 1541, magic "MNIB-1541-RAW").
+  // We convert into the same { d64 buffer + g64Layout } shape as G64 so
+  // the rest of the editor sees a normal D64 with raw GCR available;
+  // saving the tab will encode it back as a real .g64.
+  else if (isNibBuffer(data)) {
+    var nibResult = parseNibFile(data);
+    buffer = nibResult.d64;
+    data = new Uint8Array(buffer);
+    currentBuffer = buffer;
+    currentG64Layout = nibResult.layout;
+    // We don't write .nib files — flip the working filename to .g64 so
+    // Save / Save As naturally produce a GCR-encoded G64. Tab labels
+    // pick this up via the file-open handlers (which read currentFileName
+    // for the createTab call after parseDisk runs).
+    if (currentFileName) {
+      currentFileName = currentFileName.replace(/\.(nib|nb2)$/i, '.g64');
+      if (!/\.g64$/i.test(currentFileName)) currentFileName += '.g64';
+    }
+  }
 
   // formatHint is used when the buffer is a CMD-container partition slice
   // whose size doesn't match any standard disk format (e.g., an FD Native

@@ -16,6 +16,8 @@ An online, cross-platform alternative to desktop tools like DirMaster, CBMXfer a
 | D80 | 8050 | IEEE-488 drive (77 tracks) |
 | D82 | 8250 | IEEE-488 dual drive (154 tracks) |
 | G64 | 1541 | GCR-encoded disk image (round-trip read/write; copy-protected sectors preserved) |
+| NIB | 1541 | Raw nibble dump from nibtools (read-only; auto-converted to G64 on save) |
+| NBZ | 1541 | LZ77-compressed NIB (read-only; transparently decompressed on open) |
 | X64 | 1541 | Extended D64 with 64-byte header |
 | DNP | CMD | CMD Native Partition (variable size) |
 | D1M | CMD FD-2000 | Double density 3.5" (81 tracks, 40 spt) |

@@ -152,7 +152,8 @@ function openRecentDisk(entry) {
       selectedEntryIndex = -1;
       currentG64Layout = null;
       parseDisk(currentBuffer);
-      var tab = createTab(entry.name, currentBuffer, entry.name);
+      // currentFileName may have been rewritten by parseDisk (e.g. .nib → .g64).
+      var tab = createTab(currentFileName, currentBuffer, currentFileName);
       activeTabId = tab.id;
       tabDirty = false;
       clearUndo();

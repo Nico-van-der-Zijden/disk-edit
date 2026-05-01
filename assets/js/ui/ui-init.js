@@ -38,7 +38,7 @@ document.addEventListener('drop', async function(e) {
   var entries = await expandArchives(files);
   if (entries.length === 0) return;
 
-  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.dnp'];
+  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.dnp', '.nib', '.nb2'];
   var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
   var archiveExts = ['.lnx'];
   var cmdcExts = ['.rml', '.rl', '.d1m', '.d2m', '.d4m'];
@@ -66,7 +66,9 @@ document.addEventListener('drop', async function(e) {
         selectedEntryIndex = -1;
         currentG64Layout = null;
         parseDisk(currentBuffer);
-        var tab = createTab(fname, currentBuffer, fname);
+        // Use currentFileName (post-parseDisk) so a NIB rename to .g64
+        // shows up in the tab title and survives a tab switch.
+        var tab = createTab(currentFileName, currentBuffer, currentFileName);
         activeTabId = tab.id;
         tabDirty = false;
         clearUndo();

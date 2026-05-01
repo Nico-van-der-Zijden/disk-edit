@@ -110,11 +110,24 @@ function pickSoloDisk(entries) {
 // Returns Promise<Array<{name, buffer}>> ready for normal extension-
 // based classification by the caller.
 async function expandArchives(files) {
-  function readBuffer(f) {
-    return new Promise(function(resolve, reject) {
+  // Prefer Blob.arrayBuffer() — FileReader has unreliable error reporting
+  // and can fail silently on some files (large size, network drives,
+  // OneDrive / iCloud placeholders that haven't been hydrated). The
+  // promise-based API on the File object is better supported in modern
+  // browsers and gives a real error message when something goes wrong.
+  async function readBuffer(f) {
+    try {
+      if (typeof f.arrayBuffer === 'function') return await f.arrayBuffer();
+    } catch (err) {
+      throw new Error('Failed to read ' + f.name + ' — ' + (err && err.message ? err.message : err));
+    }
+    return await new Promise(function(resolve, reject) {
       var r = new FileReader();
       r.onload = function() { resolve(r.result); };
-      r.onerror = function() { reject(new Error('Failed to read ' + f.name)); };
+      r.onerror = function() {
+        var underlying = (r.error && r.error.message) ? r.error.message : (r.error && r.error.name) || 'unknown';
+        reject(new Error('Failed to read ' + f.name + ' — ' + underlying));
+      };
       r.readAsArrayBuffer(f);
     });
   }
@@ -128,6 +141,13 @@ async function expandArchives(files) {
         var raw = await readBuffer(f);
         var dec = await decompressGzip(raw);
         out.push({ name: f.name.slice(0, -3), buffer: dec });
+      } else if (lower.endsWith('.nbz')) {
+        // NBZ = nibtools' LZ77-compressed NIB. Decompress in-memory and
+        // hand the resulting NIB to the standard disk-open path with the
+        // original base name (sans .nbz, plus .nib).
+        var rawNbz = await readBuffer(f);
+        var nibBuf = decompressNbz(rawNbz);
+        out.push({ name: f.name.slice(0, -4) + '.nib', buffer: nibBuf });
       } else if (lower.endsWith('.zip')) {
         var rawZip = await readBuffer(f);
         var entries = await parseZip(rawZip);
@@ -144,7 +164,18 @@ async function expandArchives(files) {
         out.push({ name: f.name, buffer: raw2 });
       }
     } catch (err) {
-      showModal('Archive error', ['Failed to process ' + f.name + ': ' + (err && err.message ? err.message : err)]);
+      var msg = (err && err.message) ? err.message : String(err);
+      // Drag-drop straight from a compressed archive (WinRAR, 7-Zip, …)
+      // hands the browser a virtual handle that points inside the
+      // archive rather than a real filesystem path, so reading the
+      // bytes fails. Same story for unhydrated cloud-storage stubs.
+      // Only the user can fix it; surface the workaround in the modal.
+      var hint = /Failed to read|NotReadableError|NotFoundError|network error/i.test(msg)
+        ? 'If you dragged the file straight from an archive (WinRAR / 7-Zip / Bandizip / …) the browser only sees a virtual handle, not a real file. Extract the file first, then drop the extracted copy. Same fix for cloud-storage placeholders (OneDrive / iCloud) — make sure the file is downloaded locally before dropping.'
+        : null;
+      var lines = ['Failed to process ' + f.name + ': ' + msg];
+      if (hint) lines.push('', hint);
+      showModal('Archive error', lines);
     }
   }
   return out;
