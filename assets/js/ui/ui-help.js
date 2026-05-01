@@ -4,39 +4,117 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
   closeMenus();
   document.getElementById('modal-title').textContent = 'About CBM Disk Editor';
   var body = document.getElementById('modal-body');
-  body.innerHTML =
-    '<div style="text-align:center;margin-bottom:16px;font-family:\'C64 Pro Mono\',monospace">' +
+
+  // Original centered title block — C64 Pro Mono, light-blue title,
+  // muted version line, yellow author, the Dutch in-joke at the bottom.
+  var bootHtml =
+    '<div style="text-align:center;margin-bottom:18px;font-family:\'C64 Pro Mono\',monospace">' +
       '<div style="font-size:20px;color:' + C64_COLORS[14] + ';margin-bottom:8px">CBM DISK EDITOR</div>' +
       '<div style="font-size:12px;color:' + C64_COLORS[15] + '">VERSION ' + APP_VERSION_STRING + '</div>' +
       '<div style="font-size:11px;color:' + C64_COLORS[7] + ';margin-top:12px">CODED BY VAI OF SLASH DESIGN</div>' +
       '<div style="font-size:11px;color:' + C64_COLORS[13] + ';margin-top:4px"><i class="fa-solid fa-cannabis"></i> OOK EEN TREKJE? <i class="fa-solid fa-joint"></i></div>' +
-    '</div>' +
-    '<div class="text-base line-tall">' +
-      '<b>Supported formats:</b> D64 (1541), D71 (1571), D81 (1581), D80 (8050), D82 (8250), G64 (GCR), DNP (CMD), D1M/D2M/D4M (CMD FD), X64, T64 (tape), TAP (raw tape), CVT (GEOS)<br>' +
-      '<b>Features:</b><br>' +
-      '&bull; Directory editing: rename, insert, remove, sort, align, lock, splat<br>' +
-      '&bull; Hex sector editor with track/sector navigation and search highlighting<br>' +
-      '&bull; BAM viewer with integrity checking and file ownership display<br>' +
-      '&bull; Search: Find/Find in Tabs with text and hex byte pattern matching<br>' +
-      '&bull; Go to Sector (Ctrl+G): jump to any track/sector<br>' +
-      '&bull; File import/export/copy/paste across disk images<br>' +
-      '&bull; View As: Hex, Disassembly, PETSCII (C64 screen), BASIC (V2/V3.5/V7/Simons\'/FC3), Graphics, geoWrite, REL Records<br>' +
-      '&bull; Graphics: 24+ formats (Koala, Art Studio, Advanced Art Studio, FLI, sprites, charset, Print Shop) with PNG export<br>' +
-      '&bull; GEOS: geoPaint, Photo Scrap, Photo Album, geoWrite, Font viewers<br>' +
-      '&bull; geoWrite document viewer with styled text and inline images<br>' +
-      '&bull; Export: ZIP (all files), CVT, RTF, PDF, CSV, HTML, directory PNG<br>' +
-      '&bull; Packer detection: 370+ signatures<br>' +
-      '&bull; File chains viewer, compact directory, name case operations<br>' +
-      '&bull; Save as separator with custom names<br>' +
-      '&bull; D81 subdirectories (partitions)<br>' +
-      '&bull; Disk optimizer with configurable interleave<br>' +
-      '&bull; Lost file recovery (orphaned sector chain scanning)<br>' +
-      '&bull; Fill free sectors, validate disk, recalculate BAM<br>' +
-      '&bull; Multi-tab interface for working with multiple disks<br>' +
-      '&bull; Drag &amp; drop: disk images, PRG/SEQ/USR/REL/CVT files, export by dragging<br>' +
-      '&bull; 40+ keyboard shortcuts for all major operations<br>' +
-      '&bull; Dark and light themes<br>' +
     '</div>';
+
+  // Format list: grouped by family rather than chipped by R/W. The
+  // round-trip vs read-only distinction is in the note line below the
+  // table — keeps the table itself uncluttered.
+  var formatHtml =
+    '<div class="about-section">' +
+      '<div class="about-h">Supported formats</div>' +
+      '<div class="about-formats">' +
+        '<span class="about-format-cat">Floppy</span>' +
+        '<span class="about-format-list">' +
+          '<b>D64</b> (1541) &middot; ' +
+          '<b>D71</b> (1571) &middot; ' +
+          '<b>D81</b> (1581) &middot; ' +
+          '<b>D80</b> (8050) &middot; ' +
+          '<b>D82</b> (8250) &middot; ' +
+          '<b>G64</b> (GCR raw) &middot; ' +
+          '<b>X64</b>' +
+        '</span>' +
+        '<span class="about-format-cat">CMD</span>' +
+        '<span class="about-format-list">' +
+          '<b>DNP</b> &middot; ' +
+          '<b>D1M</b> / <b>D2M</b> / <b>D4M</b> (FD-2000 / 4000) &middot; ' +
+          '<b>RAMLink</b>' +
+        '</span>' +
+        '<span class="about-format-cat">Tape</span>' +
+        '<span class="about-format-list">' +
+          '<b>T64</b> &middot; ' +
+          '<b>TAP</b> (raw pulses)' +
+        '</span>' +
+        '<span class="about-format-cat">Other</span>' +
+        '<span class="about-format-list">' +
+          '<b>LNX</b> archives &middot; ' +
+          '<b>CVT</b> (GEOS) &middot; ' +
+          '<b>NIB</b> / <b>NBZ</b> (nibtools)' +
+        '</span>' +
+      '</div>' +
+      '<div class="about-format-note">' +
+        'G64 round-trips fully — custom-GCR copy protection survives the save. ' +
+        'NIB / NBZ open read-only and save back as G64. ' +
+        'Tape and archive formats are read-only.' +
+      '</div>' +
+    '</div>';
+
+  // Feature grid — four cards instead of one long bullet list.
+  function card(title, items) {
+    var lis = items.map(function(s) { return '<li>' + s + '</li>'; }).join('');
+    return '<div class="about-card">' +
+      '<div class="about-card-h">' + title + '</div>' +
+      '<ul>' + lis + '</ul>' +
+    '</div>';
+  }
+  var featureHtml =
+    '<div class="about-section">' +
+      '<div class="about-h">Features</div>' +
+      '<div class="about-grid">' +
+        card('Edit', [
+          'Rename, insert, remove, sort, align',
+          'Lock / splat / scratch &amp; restore',
+          'Hex sector editor (T/S nav, search)',
+          'Drag-reorder directory entries',
+          'Custom separators with names',
+          'Disk optimizer + interleave presets',
+        ]) +
+        card('View', [
+          'Hex, Disassembly, PETSCII screen',
+          'BASIC (V2 / V3.5 / V7 / Simons’ / FC3)',
+          'Graphics: 24+ formats (Koala, FLI, sprites, charset, Print Shop…)',
+          'GEOS: geoPaint, Photo Scrap / Album, geoWrite, Font',
+          'TASS V5.x source viewer',
+          'BAM viewer + radial Disk Map + integrity checks',
+          'G64 Layout viewer (sectors + raw GCR rings)',
+        ]) +
+        card('Disk tools', [
+          'Validate, recalculate BAM, fill free',
+          'Lost-file recovery (orphan scanner)',
+          'Compare two disks (file + sector diff)',
+          'Resize DNP, compact directory',
+          'Convert to GEOS format',
+          'MD5 / SHA-256 / CRC32 hash',
+        ]) +
+        card('Export', [
+          'ZIP all files, CVT, RTF, PDF, CSV, HTML',
+          'Directory + Graphics PNG',
+          'Base64 data URI for embedding',
+          'Drag-out file to save (Chrome/Edge)',
+          'GEOS font → native C64 charset',
+          'Packer detection (370+ signatures)',
+        ]) +
+      '</div>' +
+    '</div>';
+
+  // Footer line: meta + ack
+  var footerHtml =
+    '<div class="about-footer">' +
+      'Multi-tab interface, dark + light themes, 40+ keyboard shortcuts. ' +
+      'Runs entirely in the browser — no server, no installer. ' +
+      'See <b>Help → Credits &amp; Thanks</b> for the standing on shoulders.' +
+    '</div>';
+
+  body.innerHTML = bootHtml + formatHtml + featureHtml + footerHtml;
+
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
   document.getElementById('modal-close').addEventListener('click', function() {
@@ -197,6 +275,9 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.102', title: 'About screen refresh', items: [
+      'Help → About kept its C64 Pro Mono title block but replaced the long bullet list with a grouped feature grid (Edit / View / Disk tools / Export) and a tidy per-family format list (Floppy / CMD / Tape / Other) with a one-line note about round-trip vs read-only',
+    ]},
     { ver: '1.3.101', title: 'NIB / NBZ support', items: [
       'Open .nib (raw nibble dumps from nibtools) — auto-converted to G64 in memory; saving produces a real GCR-encoded .g64',
       'Open .nbz (LZ77-compressed NIB) — transparently decompressed before parsing',

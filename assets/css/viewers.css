@@ -567,6 +567,92 @@
   .fchain-summary b { color: var(--text); }
   .fchain-summary-sep { color: var(--border); }
 
+  /* About modal: format chips + feature grid below the centered C64
+     title block. The title block uses inline styles in ui-help.js so
+     all the styling lives next to the content. */
+  .about-section { margin-bottom: 16px; }
+  .about-h {
+    font-size: 11px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+  }
+  /* Two-column grouped format list: category label on the left,
+     comma-separated formats on the right. Repeats per group thanks to
+     CSS grid auto-flow. */
+  .about-formats {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: 16px;
+    row-gap: 6px;
+    align-items: baseline;
+    font-size: 12px;
+    line-height: 1.55;
+    margin-bottom: 8px;
+  }
+  .about-format-cat {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: var(--text-muted);
+    font-weight: bold;
+    padding-top: 2px;
+    white-space: nowrap;
+  }
+  .about-format-list b {
+    color: var(--accent);
+    font-weight: bold;
+  }
+  .about-format-note {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.55;
+  }
+
+  .about-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+  }
+  .about-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px 12px;
+  }
+  .about-card-h {
+    font-size: 11px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  .about-card ul {
+    margin: 0;
+    padding-left: 16px;
+    list-style: disc;
+  }
+  .about-card li {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text);
+    padding: 1px 0;
+  }
+  .about-footer {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.6;
+    text-align: center;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
   /* Base64 data-URI export modal — copy button + selectable textarea. */
   .b64-actions {
     display: flex;
