@@ -82,7 +82,7 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '&bull; <a href="https://archive.org/details/JiffyDos_V6_Users_Manual" target="_blank" class="link">JiffyDOS V6 User\'s Manual</a> — sector interleave and fast loader reference<br>' +
       '&bull; <a href="https://www.pagetable.com/?p=1070" target="_blank" class="link">Visualizing a 1541 Floppy Disk</a> by Michael Steil — concentric-ring raw GCR rendering style used in the G64 Layout viewer<br>' +
       '&bull; <a href="https://github.com/markusC64/nibtools" target="_blank" class="link">nibtools</a> by Pete Rittwage and contributors — NIB file format reference for the .nib reader<br>' +
-      '&bull; LZ77 compressor/decompressor by <a href="http://floe.butterbrot.org/external/lz.txt" target="_blank" class="link">Marcus Geelnard</a> (2003-2006, BSD-3) — algorithm ported to JS for the .nbz reader<br>' +
+      '&bull; LZ77 compressor/decompressor by Marcus Geelnard (2003-2006, BSD-3) — distributed inside <a href="https://github.com/markusC64/nibtools/blob/upstream/lz.c" target="_blank" class="link">nibtools/lz.c</a>; algorithm ported to JS for the .nbz reader<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
