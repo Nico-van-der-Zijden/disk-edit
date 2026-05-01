@@ -128,14 +128,23 @@ There are two separate BAM checking systems:
 - `bamMarkSectorFree()` sets the bit and recounts
 - Each format defines its own `bamBitMask()` — LSB-first for D64/D71/D81, MSB-first for CMD formats (DNP/D1M/D2M/D4M)
 
-### GCR Decoding (G64 Support)
+### GCR Codec (G64 Support)
 
-G64 images store raw GCR-encoded disk data as read by the drive head. The decoder converts this to a standard D64.
+G64 images store raw GCR-encoded disk data as the drive head sees it. The codec round-trips: open decodes G64 → D64 (sector payloads), save re-encodes any modified sectors back into the original raw GCR.
 
-1. **`decodeG64toD64(g64)`** reads the G64 header (half-track count, offset table), then iterates each track calling `extractGCRSector()` for every expected sector
-2. **`extractGCRSector()`** scans for sync marks (consecutive `0xFF` bytes), decodes the sector header (track, sector, checksum), finds the data sync, and decodes 325 GCR bytes into 256 data bytes
-3. **`decodeGCR5()`** converts 5 GCR bytes to 4 data bytes using a 32-entry lookup table (`GCR_DECODE`). Each 5-bit GCR nybble maps to a 4-bit value
-4. Track wrap-around is handled by doubling the track buffer so sectors that span the physical index hole are decoded correctly
+**Decode side** (`format/cbm-format-gcr.js`):
+
+1. **`decodeG64toD64(g64)`** reads the G64 header, walks every populated whole track via `walkGCRTrack`, and returns `{ d64: ArrayBuffer, layout: Track[] }`. The output buffer is sized to the disk's real extent (35 / 40 / 42 tracks) by checking which tracks actually decoded sectors, not the header-declared half-track count.
+2. **`walkGCRTrack(trackData, track, expectedSpt)`** scans one revolution for `$FF` sync marks, decodes each sector header, and records the physical sector order plus per-sector data-block start positions. Backed by a doubled buffer so wrap-around sectors decode correctly.
+3. **`decodeGCR5()`** converts 5 GCR bytes to 4 data bytes via a 32-entry lookup table (`GCR_DECODE`). The pattern `01010` (10) decodes to `0` — fixing this single table entry was a long-standing bug that previously made many real-world G64s decode to empty disks.
+
+**Encode side** (saves):
+
+4. **`encodeGCRSector(payload)`** emits the 325 GCR bytes of a 1541 data block (`$07` + 256 payload + XOR checksum + two pad bytes, encoded in 65 groups of 4→5 via `GCR_ENCODE`).
+5. **`spliceGCRSector(rawGCR, dataStart, payload)`** writes those bytes back into a track's raw GCR at the position the original data block occupied (with wrap-aware modulo).
+6. **`buildG64ForSave(d64Buffer, layout)`** walks every readable sector, splices its current d64 contents back via `spliceGCRSector`, then `encodeG64FromLayout` reconstructs a standard 84-half-track G64 container around the modified track data. Sectors flagged `unreadableSectors` (couldn't be decoded on open) are skipped — their original bytes pass through untouched so custom-GCR copy protection survives the round-trip.
+
+**Layout** (`Track[]`): each entry carries `track`, `sectorOrder` (physical order seen), `rawGCR` (detached copy of the track's GCR bytes), `expectedSpt`, `unreadableSectors`, and `sectorDataStart[sector]` (byte position of each data block in `rawGCR`). The G64 Layout viewer (`ui-disk-tools.js`) reads this for the Sectors and Raw Tracks tabs.
 
 ### GEOS Viewer Architecture
 

@@ -15,7 +15,7 @@ An online, cross-platform alternative to desktop tools like DirMaster, CBMXfer a
 | D81 | 1581 | 3.5" disk (80 tracks, 40 sectors/track) |
 | D80 | 8050 | IEEE-488 drive (77 tracks) |
 | D82 | 8250 | IEEE-488 dual drive (154 tracks) |
-| G64 | 1541 | GCR-encoded disk image (auto-decoded to D64) |
+| G64 | 1541 | GCR-encoded disk image (round-trip read/write; copy-protected sectors preserved) |
 | X64 | 1541 | Extended D64 with 64-byte header |
 | DNP | CMD | CMD Native Partition (variable size) |
 | D1M | CMD FD-2000 | Double density 3.5" (81 tracks, 40 spt) |
@@ -96,6 +96,8 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 - ZipCode decompression (1!–4! file sets)
 - Resize Image (DNP only — grow/shrink the track count, auto-compacts files on shrink)
 - Convert to GEOS Format (adds the GEOS signature to a regular disk)
+- Compare with… side-by-side disk diff (file list + Directory + sector hex)
+- G64 Layout viewer — per-track physical sector order plus a concentric-ring raw-GCR visualization (sync marks, data, gaps colour-coded)
 
 ### CMD Native Support
 - DNP, D1M, D2M, D4M with full read/write
