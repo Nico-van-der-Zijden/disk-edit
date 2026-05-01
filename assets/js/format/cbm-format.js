@@ -1391,11 +1391,20 @@ function parseDisk(buffer, formatHint) {
     currentBuffer = buffer;
   }
 
-  // G64 format: decode GCR to D64 sectors
+  // G64 format: decode GCR to D64 sectors. The decoder also captures the
+  // physical sector order per track (for the G64 Layout viewer) — stash
+  // that on the global currentG64Layout, parallel to currentBuffer.
+  // We only WRITE the layout here, never reset it: parseDisk gets called
+  // again from parseCurrentDir on every dir refresh with the already-
+  // decoded D64 buffer, which would clobber the layout. The file-open
+  // handler is responsible for clearing currentG64Layout when opening a
+  // fresh file, same pattern as clearCmdContainerState.
   if (data.length > 12 && data[0] === 0x47 && data[1] === 0x43 && data[2] === 0x52 && data[3] === 0x2D) {
-    buffer = decodeG64toD64(data);
+    var g64Result = decodeG64toD64(data);
+    buffer = g64Result.d64;
     data = new Uint8Array(buffer);
     currentBuffer = buffer;
+    currentG64Layout = g64Result.layout;
   }
 
   // formatHint is used when the buffer is a CMD-container partition slice

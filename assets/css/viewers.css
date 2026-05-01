@@ -567,6 +567,152 @@
   .fchain-summary b { color: var(--text); }
   .fchain-summary-sep { color: var(--border); }
 
+  /* G64 Layout viewer — physical sector order per track */
+  .g64-layout-wrap {
+    overflow: auto;
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px;
+    max-height: 280px;
+    background: var(--bg);
+  }
+  .g64-track-detail {
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    background: var(--hover);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .g64-track-detail-header { margin-bottom: 6px; }
+  .g64-sector-sequence {
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 12px;
+    word-break: break-word;
+  }
+  .g64-track-table {
+    width: 100%;
+    /* `separate` (with zero spacing) is needed for position:sticky on
+       <th> to render its border at the bottom edge — collapse hides
+       the border once the header sticks. */
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 12px;
+  }
+  .g64-track-table td {
+    padding: 4px 8px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  .g64-track-table th {
+    padding: 6px 8px;
+    text-align: left;
+    color: var(--text-muted);
+    font-weight: normal;
+    font-size: 11px;
+    position: sticky;
+    /* Negative top pulls the sticky band up under the modal-body's 16px
+       padding-top, so once the header reaches the viewport edge nothing
+       can scroll into the visible gap above it. */
+    top: -16px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    z-index: 2;
+  }
+  /* A tall pseudo-element backs the sticky band into the padding region
+     so the bg covers the full strip the header occupies plus the 16px
+     padding-top above it. Without this, scrolled content briefly shows
+     through the padding zone as the header catches the top. */
+  .g64-track-table th::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -16px;
+    height: 16px;
+    background: var(--bg-panel);
+  }
+  .g64-track-table tbody tr {
+    cursor: pointer;
+  }
+  .g64-track-table tbody tr:hover {
+    background: var(--hover);
+  }
+  .g64-track-table tbody tr.selected {
+    background: var(--selected-bg);
+    color: var(--selected-text);
+  }
+  .g64-warn {
+    color: var(--color-warn);
+    font-size: 11px;
+  }
+
+  /* Disk-level "what kind of layout is this" headline + per-class
+     summary chips above the canvas. */
+  .g64-headline {
+    font-weight: bold;
+    color: var(--text);
+  }
+  .g64-chip-row {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+  .g64-help { color: var(--text-muted); font-size: 12px; }
+  .g64-legend {
+    list-style: none;
+    padding: 0;
+    margin: 6px 0 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 4px 24px;
+    font-size: 11px;
+  }
+  /* Each legend row is itself a 2-column sub-grid so the chips line up
+     vertically across rows regardless of their label length. */
+  .g64-legend li {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    align-items: center;
+    gap: 10px;
+  }
+  /* In the legend specifically, force every tag to the same width and
+     center its label so they form a tidy column. The same .g64-tag
+     elements stay tight when rendered inline elsewhere (chip row /
+     table cell) because the rule is scoped to .g64-legend. */
+  .g64-legend .g64-tag {
+    width: 100%;
+    text-align: center;
+    box-sizing: border-box;
+  }
+
+  /* Layout class tags. The four colours track the four buckets the
+     classifier reports — green = standard, blue = unmastered, amber =
+     copy-protected, red = scrambled, grey = empty. Used both as inline
+     chips above the canvas and as the value of the Layout column. */
+  .g64-tag {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: bold;
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+  .g64-tag-standard   { background: var(--color-recover); color: #0a0a0a; }
+  .g64-tag-unmastered { background: var(--accent);        color: var(--selected-text); }
+  .g64-tag-protected  { background: var(--color-warn);    color: #0a0a0a; }
+  .g64-tag-scrambled  { background: var(--color-error);   color: #fff; }
+  .g64-tag-empty      { background: var(--border);        color: var(--text-muted); }
+
+  .g64-track-detail-meta {
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-bottom: 6px;
+  }
+
   .fchain-card {
     border: 1px solid var(--border);
     border-radius: 4px;

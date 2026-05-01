@@ -201,6 +201,7 @@ function updateMenuState() {
   document.getElementById('opt-export-png-dir').classList.toggle('disabled', !hasDisk || containerList);
   document.getElementById('opt-md5').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || noEdit);
+  document.getElementById('opt-g64-layout').classList.toggle('disabled', !currentG64Layout);
   document.getElementById('opt-disk-tools').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-disk-export').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-find').classList.toggle('disabled', !hasDisk || containerList);
@@ -976,6 +977,7 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
     currentFileName = fname;
     currentPartition = null;
     selectedEntryIndex = -1;
+    currentG64Layout = null;
     newDiskCount++;
     var tabName = fname || 'New Disk ' + newDiskCount;
     var tab = createTab(tabName, buf, fname);

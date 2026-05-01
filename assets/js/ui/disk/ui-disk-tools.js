@@ -688,6 +688,276 @@ document.getElementById('opt-md5').addEventListener('click', async function(e) {
   }
 });
 
+// ── Disk menu: G64 Layout viewer ─────────────────────────────────────
+// Shows the physical sector order each track was laid down in, captured
+// by decodeG64toD64 at open time. The menu item is enabled only when the
+// active tab carries a g64Layout (i.e. was opened from a .g64).
+document.getElementById('opt-g64-layout').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  if (!currentG64Layout) return;
+
+  var layout = currentG64Layout;
+  var fmt = currentFormat || DISK_FORMATS.d64;
+
+  // Per-track physical interleave: distance between the first two
+  // sectors in the order, mod expectedSpt. Tracks with zero or one
+  // recovered sector report '—' (no interleave to compute).
+  function computeInterleave(t) {
+    if (t.sectorOrder.length < 2 || t.expectedSpt <= 1) return null;
+    var d = (t.sectorOrder[1] - t.sectorOrder[0] + t.expectedSpt) % t.expectedSpt;
+    return d === 0 ? null : d;
+  }
+
+  // Verify the order is a strict arithmetic step at `interleave` —
+  // standard mastered disks satisfy this for every adjacent pair, copy
+  // protections often don't.
+  function isUniformInterleave(t, interleave) {
+    if (interleave == null) return false;
+    var spt = t.expectedSpt;
+    for (var i = 1; i < t.sectorOrder.length; i++) {
+      var step = (t.sectorOrder[i] - t.sectorOrder[i - 1] + spt) % spt;
+      if (step !== interleave) return false;
+    }
+    return true;
+  }
+
+  // Bucket each track by what its physical layout looks like, so the
+  // table can show plain-English labels instead of raw "12/21 i=1"
+  // strings. The thresholds are chosen so the legend's four colour
+  // bands have intuitive boundaries: green for normal, amber for
+  // copy-protected (some sectors hidden behind custom GCR), red for
+  // scrambled (the loader trampolines through a non-arithmetic order),
+  // grey for empty / undecodable tracks.
+  function classifyTrack(t) {
+    var found = t.sectorOrder.length;
+    var spt = t.expectedSpt;
+    if (spt === 0 || found === 0) {
+      return { kind: 'empty', label: 'No sectors decoded', color: 'g64-tag-empty' };
+    }
+    var iv = computeInterleave(t);
+    var arithmetic = iv != null && isUniformInterleave(t, iv);
+    if (found === spt && arithmetic) {
+      if (iv === 1) return { kind: 'unmastered', label: 'Sequential (interleave 1)', color: 'g64-tag-unmastered' };
+      return { kind: 'standard', label: 'Standard interleave ' + iv, color: 'g64-tag-standard' };
+    }
+    if (found < spt && arithmetic) {
+      var hidden = spt - found;
+      return { kind: 'protected', label: hidden + ' sector' + (hidden === 1 ? '' : 's') + ' hidden (custom GCR)', color: 'g64-tag-protected' };
+    }
+    if (found === spt && !arithmetic) {
+      return { kind: 'scrambled', label: 'Scrambled physical layout', color: 'g64-tag-scrambled' };
+    }
+    return { kind: 'irregular', label: found + '/' + spt + ' sectors, irregular order', color: 'g64-tag-scrambled' };
+  }
+
+  // Disk-level read: roll up the per-track classification into one of
+  // the friendlier story types ("standard mastered disk", "all tracks
+  // copy-protected on track 1 only", etc.). Callers display the head
+  // result; the byKind counts power the per-class chips next to it.
+  var byKind = { standard: 0, unmastered: 0, protected: 0, scrambled: 0, irregular: 0, empty: 0 };
+  var classified = layout.map(function(t) {
+    var c = classifyTrack(t);
+    byKind[c.kind]++;
+    return c;
+  });
+  var totalReadable = layout.length - byKind.empty;
+  var diskHeadline;
+  if (byKind.standard === totalReadable && totalReadable > 0) {
+    var stdIv = computeInterleave(layout.find(function(t, i) { return classified[i].kind === 'standard'; }));
+    diskHeadline = 'Mastered disk, standard interleave ' + stdIv + ' on every track';
+  } else if (byKind.unmastered === totalReadable && totalReadable > 0) {
+    diskHeadline = 'Sequential layout (interleave 1) — likely an unmastered dump or a homebrew disk';
+  } else if (byKind.protected > 0 && byKind.scrambled === 0 && byKind.irregular === 0) {
+    diskHeadline = 'Mastered disk with copy protection: ' + byKind.protected +
+      ' track' + (byKind.protected === 1 ? '' : 's') + ' hide sectors behind custom GCR';
+  } else if (byKind.scrambled > 0 || byKind.irregular > 0) {
+    diskHeadline = 'Heavily protected disk: ' + (byKind.scrambled + byKind.irregular) +
+      ' track' + (byKind.scrambled + byKind.irregular === 1 ? '' : 's') + ' use a non-standard physical layout';
+  } else {
+    diskHeadline = 'Mixed layout — see per-track breakdown below';
+  }
+  var chipsHtml = '<span class="g64-chip-row">';
+  if (byKind.standard)   chipsHtml += '<span class="g64-tag g64-tag-standard">' + byKind.standard + ' standard</span>';
+  if (byKind.unmastered) chipsHtml += '<span class="g64-tag g64-tag-unmastered">' + byKind.unmastered + ' interleave 1</span>';
+  if (byKind.protected)  chipsHtml += '<span class="g64-tag g64-tag-protected">' + byKind.protected + ' copy-protected</span>';
+  if (byKind.scrambled)  chipsHtml += '<span class="g64-tag g64-tag-scrambled">' + byKind.scrambled + ' scrambled</span>';
+  if (byKind.irregular)  chipsHtml += '<span class="g64-tag g64-tag-scrambled">' + byKind.irregular + ' irregular</span>';
+  if (byKind.empty)      chipsHtml += '<span class="g64-tag g64-tag-empty">' + byKind.empty + ' empty</span>';
+  chipsHtml += '</span>';
+
+  // Sector cell layout. We size to the widest track (track 1, 21 sectors
+  // on a standard 1541) so every row aligns column-wise.
+  var maxSpt = 0;
+  layout.forEach(function(t) { if (t.expectedSpt > maxSpt) maxSpt = t.expectedSpt; });
+
+  var cellW = 22, cellH = 18, gap = 2;
+  var stepX = cellW + gap, stepY = cellH + gap;
+  var labelW = 36;
+  var canvasW = labelW + maxSpt * stepX + gap;
+  var canvasH = layout.length * stepY + gap;
+
+  var rowsHtml = '';
+  layout.forEach(function(t, idx) {
+    var iv = computeInterleave(t);
+    var ivText = iv == null ? '—' : String(iv);
+    var c = classified[idx];
+    rowsHtml +=
+      '<tr data-track="' + t.track + '">' +
+        '<td>$' + t.track.toString(16).toUpperCase().padStart(2, '0') + '</td>' +
+        '<td>' + t.sectorOrder.length + '/' + t.expectedSpt + '</td>' +
+        '<td>' + ivText + '</td>' +
+        '<td><span class="g64-tag ' + c.color + '">' + escHtml(c.label) + '</span></td>' +
+        '<td>' + t.rawTrackBytes + ' B</td>' +
+      '</tr>';
+  });
+
+  showModal('G64 Layout', []);
+  setModalSize('xl');
+  var body = document.getElementById('modal-body');
+  body.innerHTML =
+    '<div class="text-base mb-md">' +
+      '<b>' + escHtml(currentFileName || 'unnamed') + '</b> &mdash; ' + layout.length + ' tracks. ' +
+      '<span class="g64-headline">' + escHtml(diskHeadline) + '</span> ' + chipsHtml +
+    '</div>' +
+    '<div class="g64-help text-base mb-md">' +
+      'Each row is one track laid out in physical order — the number in each cell is the sector that ' +
+      'landed at that position. The colour bar on the right tags every track with how its layout reads:' +
+      '<ul class="g64-legend">' +
+        '<li><span class="g64-tag g64-tag-standard">standard</span> a normal arithmetic interleave like the 1541 ROM produces</li>' +
+        '<li><span class="g64-tag g64-tag-unmastered">interleave 1</span> sectors in their natural order — typical for unmastered dumps and homebrew</li>' +
+        '<li><span class="g64-tag g64-tag-protected">copy-protected</span> the order is still arithmetic but some sectors don’t decode (custom GCR hides them from the standard reader)</li>' +
+        '<li><span class="g64-tag g64-tag-scrambled">scrambled</span> the order isn’t arithmetic at all — the loader trampolines through a custom physical layout</li>' +
+      '</ul>' +
+    '</div>' +
+    '<div class="g64-layout-wrap">' +
+      '<canvas id="g64-layout-canvas" width="' + canvasW + '" height="' + canvasH +
+        '" style="display:block;cursor:default"></canvas>' +
+    '</div>' +
+    '<div class="g64-track-detail" id="g64-track-detail">' +
+      '<div class="text-muted text-base">Click a track row in the table or the canvas for its full sector sequence.</div>' +
+    '</div>' +
+    '<table class="g64-track-table">' +
+      '<thead><tr><th>Track</th><th>Sectors</th><th>Interleave</th><th>Layout</th><th>Raw bytes</th></tr></thead>' +
+      '<tbody>' + rowsHtml + '</tbody>' +
+    '</table>';
+
+  var canvas = body.querySelector('#g64-layout-canvas');
+  var ctx = canvas.getContext('2d');
+  var cs = getComputedStyle(document.documentElement);
+  var labelColor = cs.getPropertyValue('--text-muted').trim();
+  var bgColor = cs.getPropertyValue('--bg').trim();
+  var cellBg = cs.getPropertyValue('--bg-panel').trim();
+  var cellAccent = cs.getPropertyValue('--accent').trim();
+  var cellWarn = cs.getPropertyValue('--color-warn').trim();
+  var cellText = cs.getPropertyValue('--text').trim();
+
+  ctx.fillStyle = bgColor;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.font = '10px monospace';
+  ctx.textBaseline = 'middle';
+
+  layout.forEach(function(t, ti) {
+    var y = ti * stepY + gap;
+    ctx.fillStyle = labelColor;
+    ctx.textAlign = 'left';
+    ctx.fillText('$' + t.track.toString(16).toUpperCase().padStart(2, '0'), 2, y + cellH / 2);
+
+    var iv = computeInterleave(t);
+    var uniform = isUniformInterleave(t, iv);
+    for (var i = 0; i < t.sectorOrder.length; i++) {
+      var sec = t.sectorOrder[i];
+      var x = labelW + i * stepX + gap;
+      // Highlight a cell when its position differs from the expected
+      // logical position computed from the track's nominal interleave.
+      var expectedSec = iv != null ? (t.sectorOrder[0] + i * iv) % t.expectedSpt : sec;
+      var off = (sec !== expectedSec);
+      ctx.fillStyle = off ? cellAccent : cellBg;
+      ctx.beginPath();
+      ctx.roundRect(x, y, cellW, cellH, 2);
+      ctx.fill();
+
+      ctx.fillStyle = off ? bgColor : cellText;
+      ctx.textAlign = 'center';
+      ctx.fillText(String(sec), x + cellW / 2, y + cellH / 2);
+    }
+    // Render unread sectors as muted hashed cells past the recovered run.
+    for (var ui = t.sectorOrder.length; ui < t.expectedSpt; ui++) {
+      var ux = labelW + ui * stepX + gap;
+      ctx.fillStyle = cellWarn;
+      ctx.globalAlpha = 0.25;
+      ctx.beginPath();
+      ctx.roundRect(ux, y, cellW, cellH, 2);
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+    }
+  });
+
+  function showTrackDetail(track) {
+    var t = null, idx = -1;
+    for (var i = 0; i < layout.length; i++) {
+      if (layout[i].track === track) { t = layout[i]; idx = i; break; }
+    }
+    var detail = body.querySelector('#g64-track-detail');
+    if (!t) { detail.innerHTML = ''; return; }
+    var iv = computeInterleave(t);
+    var c = classified[idx];
+    var unreadHtml = t.unreadableSectors.length === 0 ? ''
+      : '<div class="g64-warn"><b>Unreadable sectors:</b> ' +
+        t.unreadableSectors.map(function(s){ return s; }).join(', ') +
+        '</div>';
+    detail.innerHTML =
+      '<div class="g64-track-detail-header">' +
+        '<b>Track $' + t.track.toString(16).toUpperCase().padStart(2, '0') + '</b> ' +
+        '<span class="g64-tag ' + c.color + '">' + escHtml(c.label) + '</span>' +
+      '</div>' +
+      '<div class="g64-track-detail-meta">' +
+        t.rawTrackBytes + ' raw GCR bytes, ' +
+        t.sectorOrder.length + ' of ' + t.expectedSpt + ' sectors recovered, ' +
+        'interleave ' + (iv == null ? '—' : iv) +
+      '</div>' +
+      '<div class="text-muted" style="font-size:11px;margin-bottom:4px">Physical sector order:</div>' +
+      '<div class="g64-sector-sequence">' +
+        t.sectorOrder.map(function(s) { return s; }).join(', ') +
+      '</div>' +
+      unreadHtml;
+  }
+
+  body.querySelectorAll('.g64-track-table tbody tr').forEach(function(row) {
+    row.addEventListener('click', function() {
+      body.querySelectorAll('.g64-track-table tbody tr').forEach(function(r) {
+        r.classList.remove('selected');
+      });
+      row.classList.add('selected');
+      showTrackDetail(parseInt(row.getAttribute('data-track'), 10));
+    });
+  });
+
+  canvas.addEventListener('click', function(e) {
+    var rect = canvas.getBoundingClientRect();
+    var y = e.clientY - rect.top;
+    var trackIdx = Math.floor((y - gap * 0.5) / stepY);
+    if (trackIdx < 0 || trackIdx >= layout.length) return;
+    var track = layout[trackIdx].track;
+    showTrackDetail(track);
+    var row = body.querySelector('.g64-track-table tbody tr[data-track="' + track + '"]');
+    if (row) {
+      body.querySelectorAll('.g64-track-table tbody tr').forEach(function(r) {
+        r.classList.remove('selected');
+      });
+      row.classList.add('selected');
+      row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  });
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+});
+
 // ── Disk menu: Set Interleave ────────────────────────────────────────
 document.getElementById('opt-interleave').addEventListener('click', function(e) {
   e.stopPropagation();

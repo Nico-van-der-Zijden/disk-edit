@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 96 };
+var APP_VERSION = { major: 1, minor: 3, build: 97 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -48,6 +48,10 @@ function clearCmdContainerState() {
   cmdcPartitionIdx = -1;
   cmdcContainerKey = null;
 }
+// Per-track physical sector layout captured by decodeG64toD64 when the
+// active tab was opened from a .g64. null on D64/D71/D81 etc. — the G64
+// Layout viewer reads this and is greyed out when null.
+var currentG64Layout = null;
 var clipboard = []; // array of { typeIdx, nameBytes, geosBytes, geosInfoBlock, data, vlirRecords }
                     // data is null for GEOS VLIR files; vlirRecords is null for everything else
 var dirInterleave = 3;   // directory sector interleave
@@ -169,7 +173,8 @@ function createTab(name, buffer, fileName) {
     cmdcFileName: null,
     cmdcPartitions: null,
     cmdcPartitionIdx: -1,
-    cmdcContainerKey: null
+    cmdcContainerKey: null,
+    g64Layout: currentG64Layout
   };
   tabs.push(tab);
   return tab;
@@ -196,6 +201,7 @@ function saveActiveTab() {
   tab.cmdcPartitions = cmdcPartitions;
   tab.cmdcPartitionIdx = cmdcPartitionIdx;
   tab.cmdcContainerKey = cmdcContainerKey;
+  tab.g64Layout = currentG64Layout;
 }
 
 function loadTab(tab) {
@@ -216,6 +222,7 @@ function loadTab(tab) {
   cmdcPartitions = tab.cmdcPartitions || null;
   cmdcPartitionIdx = (typeof tab.cmdcPartitionIdx === 'number') ? tab.cmdcPartitionIdx : -1;
   cmdcContainerKey = tab.cmdcContainerKey || null;
+  currentG64Layout = tab.g64Layout || null;
   activeTabId = tab.id;
 }
 

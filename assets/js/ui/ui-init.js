@@ -64,6 +64,7 @@ document.addEventListener('drop', async function(e) {
         currentFileName = fname;
         currentPartition = null;
         selectedEntryIndex = -1;
+        currentG64Layout = null;
         parseDisk(currentBuffer);
         var tab = createTab(fname, currentBuffer, fname);
         activeTabId = tab.id;

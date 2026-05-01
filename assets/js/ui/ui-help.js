@@ -194,6 +194,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.97', title: 'G64 layout viewer', items: [
+      'New Disk → Disk Tools → G64 Layout… modal shows the physical sector order each track was laid down in, with a plain-English headline like "Mastered disk with copy protection: 4 tracks hide sectors behind custom GCR"',
+      'Tracks are tagged standard / interleave 1 / copy-protected / scrambled — colour-coded so you can scan a copy-protected disk and see which tracks the protection touches',
+      'Click any track for the full physical sector sequence, raw GCR byte size, and the list of sectors the standard reader couldn\'t decode',
+      'Fixed a long-standing bug in the GCR decode table — header bytes containing nybble 0 (the "01010" pattern) were rejected, so any G64 with a $00 in a header position decoded to an empty disk; many real-world files were affected',
+      'G64 size detection now snaps to the real disk extent (35 / 40 / 42) by walking the actual decoded data, not the header-declared half-track count which is almost always 84 regardless of disk size',
+    ]},
     { ver: '1.3.96', title: 'Compare-disks UX pass', items: [
       'File sections (Differ / Only in A / Only in B / Identical) collapse with a click; "Identical" is collapsed by default since it\'s usually the biggest pile',
       'Filter box above the file list — type to narrow the list by filename across all sections; matching sections auto-expand',

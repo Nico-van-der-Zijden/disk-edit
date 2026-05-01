@@ -150,6 +150,7 @@ function openRecentDisk(entry) {
       currentFileName = entry.name;
       currentPartition = null;
       selectedEntryIndex = -1;
+      currentG64Layout = null;
       parseDisk(currentBuffer);
       var tab = createTab(entry.name, currentBuffer, entry.name);
       activeTabId = tab.id;
