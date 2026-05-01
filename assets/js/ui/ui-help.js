@@ -195,6 +195,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.99', title: 'G64 round-trip save', items: [
+      'Saving a .g64 now produces a real GCR-encoded G64 that VICE will mount as a 1541 image — earlier the file was just D64 bytes under a .g64 filename and emulators rejected it',
+      'Modified sectors are re-encoded and spliced back into the original raw GCR; sectors that were unreadable on open keep their original bytes so custom-GCR copy protection survives the round-trip',
+      'Save As defaults to the .g64 extension when the tab came from a .g64 (was suggesting .d64 because the buffer is D64 internally)',
+    ]},
     { ver: '1.3.98', title: 'G64 raw tracks visualization', items: [
       'New "Raw Tracks" tab in the G64 Layout viewer renders the disk as concentric tracks coloured by the underlying GCR bits — sync marks read as red, normal data as green, gap/padding as blue. Inspired by Michael Steil\'s 1541 visualization (credited under Help → Credits & Thanks)',
       'Zoom slider 1×→5× with click-and-drag panning when zoomed in, same feel as the graphics viewer; pixelated rendering keeps bytes crisp at high zoom',

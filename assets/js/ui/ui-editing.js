@@ -141,10 +141,18 @@ function startEditing(el) {
 // the user edited inside a partition, spliceCmdContainerPartitionBack
 // (defined in ui-cmd.js) lays those changes into cmdcBuffer first so
 // they land in the downloaded file.
+//
+// For a tab opened from a .g64, we re-emit a real GCR-encoded G64 by
+// splicing the current D64 sector contents back into each track's raw
+// GCR data (sectors that were unreadable on open are left untouched so
+// custom-GCR copy protection survives the round-trip).
 function getSaveBuffer() {
   if (cmdcBuffer) {
     spliceCmdContainerPartitionBack();
     return cmdcBuffer;
+  }
+  if (currentG64Layout && currentFileName && /\.g64$/i.test(currentFileName)) {
+    return buildG64ForSave(currentBuffer, currentG64Layout);
   }
   return currentBuffer;
 }
@@ -1130,6 +1138,14 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
   }
   var ext = fmtForExt.ext || '.d64';
   var extAlts = fmtForExt.extAlternates || [];
+  // A G64-sourced tab decodes to a D64 buffer internally, but the file
+  // we save is a real GCR-encoded G64 (see getSaveBuffer). Prefer the
+  // .g64 extension in the dialog so the user doesn't get .d64 by default
+  // and end up with .Amazer.G64.d64 confusion.
+  if (currentG64Layout) {
+    ext = '.g64';
+    extAlts = ['.d64'];
+  }
   var allExts = [ext].concat(extAlts);
   function hasFormatExt(name) {
     return allExts.some(function(e) { return name.toLowerCase().endsWith(e); });
@@ -1145,7 +1161,10 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
     downloadD64(getSaveBuffer(), finalName);
   } else {
     currentFileName = finalName;
-    downloadD64(currentBuffer, finalName);
+    // Route through getSaveBuffer so the G64 encoder runs when the tab
+    // was opened from a .g64 (was bypassed in earlier versions and
+    // produced a D64 with a .g64 filename — VICE wouldn't mount it).
+    downloadD64(getSaveBuffer(), finalName);
   }
   markClean();
   updateTabName();
