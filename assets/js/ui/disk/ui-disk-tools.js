@@ -820,27 +820,54 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
       '<b>' + escHtml(currentFileName || 'unnamed') + '</b> &mdash; ' + layout.length + ' tracks. ' +
       '<span class="g64-headline">' + escHtml(diskHeadline) + '</span> ' + chipsHtml +
     '</div>' +
-    '<div class="g64-help text-base mb-md">' +
-      'Each row is one track laid out in physical order — the number in each cell is the sector that ' +
-      'landed at that position. The colour bar on the right tags every track with how its layout reads:' +
-      '<ul class="g64-legend">' +
-        '<li><span class="g64-tag g64-tag-standard">standard</span> a normal arithmetic interleave like the 1541 ROM produces</li>' +
-        '<li><span class="g64-tag g64-tag-unmastered">interleave 1</span> sectors in their natural order — typical for unmastered dumps and homebrew</li>' +
-        '<li><span class="g64-tag g64-tag-protected">copy-protected</span> the order is still arithmetic but some sectors don’t decode (custom GCR hides them from the standard reader)</li>' +
-        '<li><span class="g64-tag g64-tag-scrambled">scrambled</span> the order isn’t arithmetic at all — the loader trampolines through a custom physical layout</li>' +
-      '</ul>' +
+    '<div class="g64-tabs">' +
+      '<span class="g64-tab active" data-g64-view="sectors">Sectors</span>' +
+      '<span class="g64-tab" data-g64-view="raw">Raw Tracks</span>' +
     '</div>' +
-    '<div class="g64-layout-wrap">' +
-      '<canvas id="g64-layout-canvas" width="' + canvasW + '" height="' + canvasH +
-        '" style="display:block;cursor:default"></canvas>' +
+    '<div class="g64-view" data-g64-view="sectors">' +
+      '<div class="g64-help text-base mb-md">' +
+        'Each row is one track laid out in physical order — the number in each cell is the sector that ' +
+        'landed at that position. The colour bar on the right tags every track with how its layout reads:' +
+        '<ul class="g64-legend">' +
+          '<li><span class="g64-tag g64-tag-standard">standard</span> a normal arithmetic interleave like the 1541 ROM produces</li>' +
+          '<li><span class="g64-tag g64-tag-unmastered">interleave 1</span> sectors in their natural order — typical for unmastered dumps and homebrew</li>' +
+          '<li><span class="g64-tag g64-tag-protected">copy-protected</span> the order is still arithmetic but some sectors don’t decode (custom GCR hides them from the standard reader)</li>' +
+          '<li><span class="g64-tag g64-tag-scrambled">scrambled</span> the order isn’t arithmetic at all — the loader trampolines through a custom physical layout</li>' +
+        '</ul>' +
+      '</div>' +
+      '<div class="g64-layout-wrap">' +
+        '<canvas id="g64-layout-canvas" width="' + canvasW + '" height="' + canvasH +
+          '" style="display:block;cursor:default"></canvas>' +
+      '</div>' +
+      '<div class="g64-track-detail" id="g64-track-detail">' +
+        '<div class="text-muted text-base">Click a track row in the table or the canvas for its full sector sequence.</div>' +
+      '</div>' +
+      '<table class="g64-track-table">' +
+        '<thead><tr><th>Track</th><th>Sectors</th><th>Interleave</th><th>Layout</th><th>Raw bytes</th></tr></thead>' +
+        '<tbody>' + rowsHtml + '</tbody>' +
+      '</table>' +
     '</div>' +
-    '<div class="g64-track-detail" id="g64-track-detail">' +
-      '<div class="text-muted text-base">Click a track row in the table or the canvas for its full sector sequence.</div>' +
-    '</div>' +
-    '<table class="g64-track-table">' +
-      '<thead><tr><th>Track</th><th>Sectors</th><th>Interleave</th><th>Layout</th><th>Raw bytes</th></tr></thead>' +
-      '<tbody>' + rowsHtml + '</tbody>' +
-    '</table>';
+    '<div class="g64-view" data-g64-view="raw" style="display:none">' +
+      '<div class="g64-help text-base mb-md">' +
+        'The disk laid out as concentric tracks. Track 1 is the outer ring (where the head starts), track ' +
+        layout.length + ' is the inner ring. Each track plays counter-clockwise from the bottom. Color is ' +
+        'the bit pattern of the raw GCR data:' +
+        '<ul class="g64-legend">' +
+          '<li><span class="g64-tag g64-tag-rawred">red</span> long runs of 1-bits — sync marks (each sector is preceded by two)</li>' +
+          '<li><span class="g64-tag g64-tag-rawgreen">green</span> normal GCR data — header + payload of the sector; brighter green = more 1-bits in that byte</li>' +
+          '<li><span class="g64-tag g64-tag-rawblue">blue</span> long runs of 0-bits — gap or padding between sectors</li>' +
+          '<li><span class="g64-tag g64-tag-empty">grey</span> empty / unformatted track</li>' +
+        '</ul>' +
+      '</div>' +
+      '<div class="g64-raw-toolbar">' +
+        '<span class="color-picker-label">Zoom:</span>' +
+        '<input type="range" min="1" max="5" step="0.5" value="1" id="g64-raw-zoom" class="gfx-zoom-slider">' +
+        '<span class="gfx-zoom-value" id="g64-raw-zoom-value">1x</span>' +
+      '</div>' +
+      '<div class="g64-raw-wrap" id="g64-raw-wrap">' +
+        '<canvas id="g64-raw-canvas" width="640" height="640" class="g64-raw-canvas"></canvas>' +
+      '</div>' +
+    '</div>';
 
   var canvas = body.querySelector('#g64-layout-canvas');
   var ctx = canvas.getContext('2d');
@@ -950,6 +977,27 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
     }
   });
 
+  // Tab switching between Sectors and Raw Tracks. Raw Tracks renders
+  // lazily on first show — full-canvas pixel-fill for 35-42 tracks isn't
+  // cheap and there's no reason to pay for it if the user never opens it.
+  var rawRendered = false;
+  body.querySelectorAll('.g64-tab').forEach(function(tab) {
+    tab.addEventListener('click', function() {
+      body.querySelectorAll('.g64-tab').forEach(function(t) { t.classList.remove('active'); });
+      tab.classList.add('active');
+      var view = tab.getAttribute('data-g64-view');
+      body.querySelectorAll('.g64-view').forEach(function(v) {
+        v.style.display = v.getAttribute('data-g64-view') === view ? '' : 'none';
+      });
+      if (view === 'raw' && !rawRendered) {
+        rawRendered = true;
+        var rawCanvas = body.querySelector('#g64-raw-canvas');
+        renderRawTracksCanvas(rawCanvas, layout);
+        wireRawTracksZoomAndPan(body, rawCanvas);
+      }
+    });
+  });
+
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
   document.getElementById('modal-close').addEventListener('click', function() {
@@ -957,6 +1005,162 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
   });
   document.getElementById('modal-overlay').classList.add('open');
 });
+
+// Render the disk as concentric tracks with each pixel coloured by the
+// bit pattern of the raw GCR byte at that angular position. Track 1 is
+// the outer ring, the last track is the inner ring; each track plays
+// counter-clockwise from the bottom. Sync marks (long $FF runs) show as
+// red, gaps/padding (long $00 runs) as blue, normal GCR data as green
+// shaded by 1-bit count. Style follows Michael Steil's 1541 visual.
+function renderRawTracksCanvas(canvas, layout) {
+  var w = canvas.width, h = canvas.height;
+  var ctx = canvas.getContext('2d');
+  var img = ctx.createImageData(w, h);
+  var px = img.data;
+
+  // Slate-coloured backdrop so empty tracks (no rawGCR) read as part
+  // of the diagram rather than punching through to the modal-body.
+  var bgRGB = [24, 26, 36];
+  for (var i = 0; i < px.length; i += 4) {
+    px[i] = bgRGB[0]; px[i + 1] = bgRGB[1]; px[i + 2] = bgRGB[2]; px[i + 3] = 255;
+  }
+
+  var cx = w / 2, cy = h / 2;
+  var outerR = Math.min(w, h) / 2 - 12;
+  var innerR = outerR * 0.22;
+  var n = layout.length;
+
+  // Pre-compute per-track classification: byte index → category.
+  //   0 = data byte (use popcount green/red)
+  //   1 = mid sync run ($FF inside a long $FF run): pure red
+  //   2 = mid zero run ($00 inside a long $00 run): pure blue
+  // Using >= 4 consecutive bytes as the threshold so a single $FF in
+  // header content doesn't get tagged as sync.
+  function classifyTrackBytes(buf) {
+    var len = buf.length;
+    var cls = new Uint8Array(len);
+    if (len === 0) return cls;
+    // Sync runs (>= 4 consecutive 0xFF)
+    var run = 0;
+    for (var i = 0; i < len; i++) {
+      if (buf[i] === 0xFF) run++; else {
+        if (run >= 4) for (var j = i - run; j < i; j++) cls[j] = 1;
+        run = 0;
+      }
+    }
+    if (run >= 4) for (var k = len - run; k < len; k++) cls[k] = 1;
+    // Zero runs
+    run = 0;
+    for (var ii = 0; ii < len; ii++) {
+      if (buf[ii] === 0x00) run++; else {
+        if (run >= 4) for (var jj = ii - run; jj < ii; jj++) cls[jj] = 2;
+        run = 0;
+      }
+    }
+    if (run >= 4) for (var kk = len - run; kk < len; kk++) cls[kk] = 2;
+    return cls;
+  }
+  var trackClass = layout.map(function(t) { return classifyTrackBytes(t.rawGCR || new Uint8Array(0)); });
+
+  // popcount lookup
+  var popcount = new Uint8Array(256);
+  for (var b = 0; b < 256; b++) {
+    var c = 0, v = b;
+    while (v) { c += v & 1; v >>= 1; }
+    popcount[b] = c;
+  }
+
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      var dx = x - cx, dy = y - cy;
+      var dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < innerR || dist > outerR) continue;
+
+      // Outer ring = track 1, inner ring = last track.
+      var rNorm = (dist - innerR) / (outerR - innerR);
+      var trackIdx = Math.floor((1 - rNorm) * n);
+      if (trackIdx < 0 || trackIdx >= n) continue;
+
+      var t = layout[trackIdx];
+      var rawGCR = t && t.rawGCR;
+      if (!rawGCR || rawGCR.length === 0) continue;
+
+      // Angle: 0 = bottom, counter-clockwise.
+      var ang = Math.atan2(dy, dx);            // -π..π, 0 = right
+      var theta = ang + Math.PI / 2;            // 0 = bottom, CW positive
+      if (theta < 0) theta += 2 * Math.PI;
+      theta = (2 * Math.PI - theta) % (2 * Math.PI); // CCW
+
+      var byteIdx = Math.floor((theta / (2 * Math.PI)) * rawGCR.length);
+      if (byteIdx >= rawGCR.length) byteIdx = rawGCR.length - 1;
+
+      var byte = rawGCR[byteIdx];
+      var cls = trackClass[trackIdx][byteIdx];
+      var r, g, bcol;
+      if (cls === 1) {           // sync run
+        r = 220; g = 60;  bcol = 60;
+      } else if (cls === 2) {    // zero run
+        r = 60;  g = 80;  bcol = 200;
+      } else {                    // data: green shaded by popcount
+        var ones = popcount[byte];
+        // popcount 0..8 → brightness 60..240 with green dominant
+        r = 30 + ones * 12;
+        g = 90 + ones * 18;
+        bcol = 30 + ones * 8;
+      }
+      var off = (y * w + x) * 4;
+      px[off] = r; px[off + 1] = g; px[off + 2] = bcol;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// Hook the Raw Tracks zoom slider + drag-to-pan to the canvas. Mirrors
+// the graphics-viewer pattern: CSS-scale the canvas inside an
+// overflow:auto wrapper, with `image-rendering: pixelated` so the bit
+// blocks stay crisp instead of going blurry at higher zoom.
+function wireRawTracksZoomAndPan(body, canvas) {
+  var slider = body.querySelector('#g64-raw-zoom');
+  var label  = body.querySelector('#g64-raw-zoom-value');
+  var wrap   = body.querySelector('#g64-raw-wrap');
+  if (!slider || !wrap) return;
+
+  function applyZoom(z) {
+    canvas.style.width  = (canvas.width  * z) + 'px';
+    canvas.style.height = (canvas.height * z) + 'px';
+    label.textContent = z + 'x';
+  }
+  applyZoom(1);
+
+  slider.addEventListener('input', function() {
+    applyZoom(parseFloat(slider.value));
+  });
+
+  // Mouse drag-to-pan when zoomed past the wrapper bounds. Touch already
+  // pans natively via overflow:auto.
+  canvas.addEventListener('pointerdown', function(e) {
+    if (e.pointerType !== 'mouse' || e.button !== 0) return;
+    if (wrap.scrollWidth <= wrap.clientWidth && wrap.scrollHeight <= wrap.clientHeight) return;
+    e.preventDefault();
+    canvas.setPointerCapture(e.pointerId);
+    wrap.classList.add('gfx-grabbing');
+    var startX = e.clientX, startY = e.clientY;
+    var startScrollX = wrap.scrollLeft, startScrollY = wrap.scrollTop;
+    function onMove(ev) {
+      wrap.scrollLeft = startScrollX - (ev.clientX - startX);
+      wrap.scrollTop  = startScrollY - (ev.clientY - startY);
+    }
+    function onUp() {
+      canvas.removeEventListener('pointermove',  onMove);
+      canvas.removeEventListener('pointerup',    onUp);
+      canvas.removeEventListener('pointercancel', onUp);
+      wrap.classList.remove('gfx-grabbing');
+    }
+    canvas.addEventListener('pointermove',  onMove);
+    canvas.addEventListener('pointerup',    onUp);
+    canvas.addEventListener('pointercancel', onUp);
+  });
+}
 
 // ── Disk menu: Set Interleave ────────────────────────────────────────
 document.getElementById('opt-interleave').addEventListener('click', function(e) {

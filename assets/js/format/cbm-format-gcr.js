@@ -56,7 +56,10 @@ function decodeG64toD64(g64) {
       track: track,
       walk: walkGCRTrack(trackData, track, expectedSpt),
       trackSize: trackSize,
-      expectedSpt: expectedSpt
+      expectedSpt: expectedSpt,
+      // Detached copy so the raw GCR survives after the original .g64
+      // ArrayBuffer is dropped. Used by the Raw Tracks visualization.
+      rawGCR: new Uint8Array(trackData)
     });
   }
 
@@ -98,7 +101,8 @@ function decodeG64toD64(g64) {
       sectorOrder: w ? w.sectorOrder : [],
       rawTrackBytes: pt.trackSize,
       expectedSpt: pt.expectedSpt,
-      unreadableSectors: w ? w.unreadable : []
+      unreadableSectors: w ? w.unreadable : [],
+      rawGCR: pt.rawGCR || new Uint8Array(0)
     });
   }
 

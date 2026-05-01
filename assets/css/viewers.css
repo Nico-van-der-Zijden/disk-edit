@@ -706,6 +706,63 @@
   .g64-tag-protected  { background: var(--color-warn);    color: #0a0a0a; }
   .g64-tag-scrambled  { background: var(--color-error);   color: #fff; }
   .g64-tag-empty      { background: var(--border);        color: var(--text-muted); }
+  /* Tag swatches for the Raw Tracks legend — match the canvas palette. */
+  .g64-tag-rawred     { background: #dc3c3c; color: #fff; }
+  .g64-tag-rawgreen   { background: #5a9050; color: #0a0a0a; }
+  .g64-tag-rawblue    { background: #4858c8; color: #fff; }
+
+  /* Sectors / Raw Tracks tab strip inside the modal. Mirrors the
+     Compare modal's tab pattern but kept local to .g64- so styling
+     can diverge later without touching Compare. */
+  .g64-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .g64-tab {
+    padding: 6px 14px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    border-radius: 4px 4px 0 0;
+    margin-bottom: -1px;
+    border: 1px solid transparent;
+    border-bottom: none;
+  }
+  .g64-tab:hover {
+    color: var(--text);
+    background: var(--hover);
+  }
+  .g64-tab.active {
+    color: var(--text);
+    background: var(--bg-panel);
+    border-color: var(--border);
+  }
+  .g64-raw-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 12px 0 6px;
+  }
+  .g64-raw-wrap {
+    overflow: auto;
+    max-height: 70vh;
+    margin: 0 0 12px;
+    padding: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    text-align: center;
+  }
+  .g64-raw-canvas {
+    display: inline-block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    cursor: grab;
+  }
+  .g64-raw-wrap.gfx-grabbing .g64-raw-canvas { cursor: grabbing; }
 
   .g64-track-detail-meta {
     color: var(--text-muted);

@@ -80,6 +80,7 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '&bull; <a href="https://csdb.dk/" target="_blank" class="link">CSDb</a> — C64 Scene Database<br>' +
       '&bull; <a href="https://www.zimmers.net/anonftp/pub/cbm/" target="_blank" class="link">Zimmers.net</a> — CBM file archive and GEOS format documentation<br>' +
       '&bull; <a href="https://archive.org/details/JiffyDos_V6_Users_Manual" target="_blank" class="link">JiffyDOS V6 User\'s Manual</a> — sector interleave and fast loader reference<br>' +
+      '&bull; <a href="https://www.pagetable.com/?p=1070" target="_blank" class="link">Visualizing a 1541 Floppy Disk</a> by Michael Steil — concentric-ring raw GCR rendering style used in the G64 Layout viewer<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
@@ -194,6 +195,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.98', title: 'G64 raw tracks visualization', items: [
+      'New "Raw Tracks" tab in the G64 Layout viewer renders the disk as concentric tracks coloured by the underlying GCR bits — sync marks read as red, normal data as green, gap/padding as blue. Inspired by Michael Steil\'s 1541 visualization (credited under Help → Credits & Thanks)',
+      'Zoom slider 1×→5× with click-and-drag panning when zoomed in, same feel as the graphics viewer; pixelated rendering keeps bytes crisp at high zoom',
+    ]},
     { ver: '1.3.97', title: 'G64 layout viewer', items: [
       'New Disk → Disk Tools → G64 Layout… modal shows the physical sector order each track was laid down in, with a plain-English headline like "Mastered disk with copy protection: 4 tracks hide sectors behind custom GCR"',
       'Tracks are tagged standard / interleave 1 / copy-protected / scrambled — colour-coded so you can scan a copy-protected disk and see which tracks the protection touches',
