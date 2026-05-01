@@ -270,14 +270,73 @@
   }
   .cmp-table tr.cmp-section-row td {
     font-weight: bold;
-    padding-top: 12px;
-    padding-bottom: 4px;
+    padding: 6px 8px;
     color: var(--text);
     background: var(--hover);
     border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
   }
-  .cmp-table tr.cmp-section-row:first-child td {
-    padding-top: 4px;
+  .cmp-table tr.cmp-section-row td:hover {
+    background: var(--menu-hover);
+  }
+  /* Chevron rotates 90deg when its tbody collapses to mirror the section state. */
+  .cmp-section-chevron {
+    width: 10px;
+    margin-right: 8px;
+    transition: transform 0.15s;
+    color: var(--text-muted);
+  }
+  .cmp-section-tbody.collapsed .cmp-section-chevron {
+    transform: rotate(-90deg);
+  }
+  .cmp-section-tbody.collapsed .cmp-file-row {
+    display: none;
+  }
+  .cmp-section-count {
+    margin-left: 8px;
+    color: var(--text-muted);
+    font-weight: normal;
+  }
+  /* Sticky column headers — keep the labels visible while the table scrolls
+     inside the modal-body. The cmp-tab-scroll wrapper is the scrolling
+     ancestor so position:sticky anchors against its top edge. */
+  .cmp-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-panel);
+    z-index: 2;
+  }
+  /* Filter box above the files table. */
+  .cmp-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .cmp-filter-icon {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  .cmp-filter-input {
+    flex: 1;
+    max-width: 320px;
+    padding: 4px 8px;
+    font-family: inherit;
+    font-size: 12px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    outline: none;
+  }
+  .cmp-filter-input:focus {
+    border-color: var(--accent);
+  }
+  .cmp-filter-empty {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
   }
   .cmp-table td.cmp-marker, .cmp-marker {
     text-align: center;
@@ -413,6 +472,31 @@
     font-weight: bold;
     margin-bottom: 8px;
     font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .cmp-hex-nav {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 2px 8px;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .cmp-hex-nav:hover:not(:disabled) {
+    border-color: var(--accent);
+    background: var(--hover);
+  }
+  .cmp-hex-nav:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .cmp-hex-pos {
+    margin-left: auto;
+    font-weight: normal;
+    font-size: 11px;
   }
   /* Wraps the standard .hex-editor in a panel so it visually anchors as
      a drill-down beneath the sector map. */

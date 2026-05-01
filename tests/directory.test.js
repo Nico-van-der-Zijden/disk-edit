@@ -452,6 +452,98 @@ describe('changeFileType', () => {
   });
 });
 
+describe('clampInt', () => {
+  it('clamps below min to min', () => {
+    assert.strictEqual(clampInt('-5', 0, 100), 0);
+    assert.strictEqual(clampInt('0', 5, 100), 5);
+  });
+  it('clamps above max to max', () => {
+    assert.strictEqual(clampInt('500', 0, 100), 100);
+  });
+  it('treats NaN as min', () => {
+    assert.strictEqual(clampInt('abc', 0, 100), 0);
+    assert.strictEqual(clampInt('', 5, 100), 5);
+  });
+  it('returns parsed value when in range', () => {
+    assert.strictEqual(clampInt('42', 0, 100), 42);
+  });
+  it('parses leading integer from mixed strings (parseInt behavior)', () => {
+    assert.strictEqual(clampInt('42abc', 0, 100), 42);
+  });
+  it('handles values exactly at min/max boundaries', () => {
+    assert.strictEqual(clampInt('0', 0, 100), 0);
+    assert.strictEqual(clampInt('100', 0, 100), 100);
+  });
+});
+
+describe('isTrackSectorInRange', () => {
+  beforeEach(() => loadDisk('org_geos.D64'));
+
+  it('rejects track 0', () => {
+    assert.strictEqual(isTrackSectorInRange(0, 0, 35), false);
+  });
+  it('rejects track > totalTracks', () => {
+    assert.strictEqual(isTrackSectorInRange(36, 0, 35), false);
+  });
+  it('accepts track 1 sector 0', () => {
+    assert.strictEqual(isTrackSectorInRange(1, 0, 35), true);
+  });
+  it('rejects negative sector', () => {
+    assert.strictEqual(isTrackSectorInRange(1, -1, 35), false);
+  });
+  it('rejects sector >= sectors-per-track', () => {
+    // Track 1 has 21 sectors (0-20)
+    assert.strictEqual(isTrackSectorInRange(1, 21, 35), false);
+    assert.strictEqual(isTrackSectorInRange(1, 20, 35), true);
+  });
+  it('respects per-track sector counts (zone changes)', () => {
+    // Track 18 has 19 sectors (0-18) on a D64
+    assert.strictEqual(isTrackSectorInRange(18, 18, 35), true);
+    assert.strictEqual(isTrackSectorInRange(18, 19, 35), false);
+    // Track 31 has 17 sectors
+    assert.strictEqual(isTrackSectorInRange(31, 16, 35), true);
+    assert.strictEqual(isTrackSectorInRange(31, 17, 35), false);
+  });
+});
+
+describe('filenameBytesDiffer', () => {
+  beforeEach(() => loadDisk('org_geos.D64'));
+
+  it('returns false when newBytes match the existing 16 filename bytes', () => {
+    var data = new Uint8Array(currentBuffer);
+    var offs = getDirSlotOffsets(currentBuffer);
+    var off = offs[0];
+    var same = new Uint8Array(16);
+    for (var i = 0; i < 16; i++) same[i] = data[off + 5 + i];
+    assert.strictEqual(filenameBytesDiffer(currentBuffer, off, same), false);
+  });
+
+  it('returns true when any single byte differs', () => {
+    var data = new Uint8Array(currentBuffer);
+    var offs = getDirSlotOffsets(currentBuffer);
+    var off = offs[0];
+    var changed = new Uint8Array(16);
+    for (var i = 0; i < 16; i++) changed[i] = data[off + 5 + i];
+    changed[7] = (changed[7] + 1) & 0xFF;
+    assert.strictEqual(filenameBytesDiffer(currentBuffer, off, changed), true);
+  });
+
+  it('returns true when all 16 bytes differ', () => {
+    var offs = getDirSlotOffsets(currentBuffer);
+    var off = offs[0];
+    var allDifferent = new Uint8Array(16).fill(0xFF);
+    var data = new Uint8Array(currentBuffer);
+    // Make sure existing bytes aren't all 0xFF (ensure there's a real diff)
+    var anyNon0xFF = false;
+    for (var i = 0; i < 16; i++) {
+      if (data[off + 5 + i] !== 0xFF) { anyNon0xFF = true; break; }
+    }
+    if (anyNon0xFF) {
+      assert.strictEqual(filenameBytesDiffer(currentBuffer, off, allDifferent), true);
+    }
+  });
+});
+
 describe('insertFileEntry', () => {
   beforeEach(() => loadDisk('org_geos.D64'));
 

@@ -710,6 +710,39 @@ function countActualFreeBlocks(buffer) {
   return free;
 }
 
+// ── Pure helpers for the inline editors below ────────────────────────
+// Extracted so the value-parsing / validation logic is unit-testable
+// without a real DOM. The startEdit*/startRename wrappers handle the
+// DOM glue and call these for the actual decisions.
+
+// Parse a numeric input string and clamp it into [min, max]. NaN or
+// values below `min` clamp to `min`; values above `max` clamp to `max`.
+function clampInt(raw, min, max) {
+  var v = parseInt(raw, 10);
+  if (isNaN(v) || v < min) v = min;
+  if (v > max) v = max;
+  return v;
+}
+
+// True when (track, sector) is a real sector address for the current
+// format. Track 1..totalTracks and sector 0..(spt-1).
+function isTrackSectorInRange(t, s, totalTracks) {
+  if (t < 1 || t > totalTracks) return false;
+  if (s < 0 || s >= sectorsPerTrack(t)) return false;
+  return true;
+}
+
+// True when any of the 16 filename bytes at entryOff+5 differs from the
+// matching position in newBytes. Used by the rename committer to decide
+// whether to push an undo snapshot + write the change.
+function filenameBytesDiffer(buffer, entryOff, newBytes) {
+  var data = new Uint8Array(buffer);
+  for (var i = 0; i < 16; i++) {
+    if (newBytes[i] !== data[entryOff + 5 + i]) return true;
+  }
+  return false;
+}
+
 function startEditFreeBlocks(blocksSpan) {
   if (!currentBuffer || !blocksSpan || isTapeFormat()) return;
   if (blocksSpan.querySelector('input')) return;
@@ -740,9 +773,7 @@ function startEditFreeBlocks(blocksSpan) {
 
   function commitEdit() {
     if (reverted) return;
-    let value = parseInt(input.value, 10);
-    if (isNaN(value) || value < 0) value = 0;
-    if (value > getMaxFreeBlocks()) value = getMaxFreeBlocks();
+    var value = clampInt(input.value, 0, getMaxFreeBlocks());
     if (String(value) !== currentValue) {
       pushUndo();
       writeFreeBlocks(currentBuffer, value);
@@ -836,7 +867,7 @@ function startEditTrackSector(entryEl) {
   const trackInput = createHexInput({
     value: curTrack,
     maxBytes: 1,
-    validate: (val) => val >= 0 && val <= currentTracks
+    validate: (val) => val === 0 || (val >= 1 && val <= currentTracks)
   });
 
   const sep = document.createElement('span');
@@ -846,11 +877,7 @@ function startEditTrackSector(entryEl) {
   const sectorInput = createHexInput({
     value: curSector,
     maxBytes: 1,
-    validate: (val) => {
-      const t = trackInput.getValue();
-      if (t < 1 || t > currentTracks) return false;
-      return val >= 0 && val < sectorsPerTrack(t);
-    }
+    validate: (val) => isTrackSectorInRange(trackInput.getValue(), val, currentTracks)
   });
 
   // Re-validate sector when track changes
@@ -967,9 +994,7 @@ function startEditBlockSize(entryEl) {
 
   function commitEdit() {
     if (reverted) return;
-    let value = parseInt(input.value, 10);
-    if (isNaN(value) || value < 0) value = 0;
-    if (value > MAX_BLOCKS) value = MAX_BLOCKS;
+    var value = clampInt(input.value, 0, MAX_BLOCKS);
     if (String(value) !== currentValue) {
       pushUndo();
       writeBlockSize(currentBuffer, entryOff, value);
@@ -1058,11 +1083,7 @@ function startRenameEntry(entryEl) {
     if (reverted || finished) return;
     finished = true;
     const newBytes = editor.getBytes(16, 0xA0);
-    let changed = false;
-    for (let i = 0; i < 16; i++) {
-      if (newBytes[i] !== origBytes[i]) { changed = true; break; }
-    }
-    if (currentBuffer && changed) {
+    if (currentBuffer && filenameBytesDiffer(currentBuffer, entryOff, newBytes)) {
       pushUndo();
       const data = new Uint8Array(currentBuffer);
       for (let i = 0; i < 16; i++) data[entryOff + 5 + i] = newBytes[i];

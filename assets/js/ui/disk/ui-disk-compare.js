@@ -265,14 +265,14 @@ function setupSectorMapCanvas(body, diskA, diskB, sd) {
     if (p.track < 1 || p.track > sd.tracks) return;
     var spt = diskA.formatRef.sectorsPerTrack(p.track);
     if (p.sector < 0 || p.sector >= spt) return;
-    showSectorHexDiff(body, diskA, diskB, p.track, p.sector);
+    showSectorHexDiff(body, diskA, diskB, p.track, p.sector, sd);
   });
 }
 
 // Hex side-by-side: render both A's and B's bytes for a sector with
 // differing bytes highlighted. Computes the sector offset using diskA's
 // format (formats match — checked before this is reachable).
-function showSectorHexDiff(body, diskA, diskB, track, sector) {
+function showSectorHexDiff(body, diskA, diskB, track, sector, sd) {
   var hexPanel = body.querySelector('#cmp-sector-hex');
   if (!hexPanel) return;
 
@@ -295,12 +295,30 @@ function showSectorHexDiff(body, diskA, diskB, track, sector) {
   var diffN = 0;
   for (var i = 0; i < 256; i++) if (dataA[off + i] !== dataB[off + i]) diffN++;
 
+  // Find this sector's index in the diff list so prev/next can step
+  // through every differing sector without going back to the canvas.
+  var diffs = (sd && sd.diffs) || [];
+  var curIdx = -1;
+  for (var di = 0; di < diffs.length; di++) {
+    if (diffs[di].track === track && diffs[di].sector === sector) { curIdx = di; break; }
+  }
+  var hasPrev = curIdx > 0;
+  var hasNext = curIdx >= 0 && curIdx < diffs.length - 1;
+  var posLabel = curIdx >= 0
+    ? '<span class="text-muted cmp-hex-pos">' + (curIdx + 1) + ' / ' + diffs.length + '</span>'
+    : '';
+
   var html =
     '<div class="cmp-sector-hex-header">' +
+      '<button class="cmp-hex-nav" id="cmp-hex-prev" ' + (hasPrev ? '' : 'disabled') +
+        ' title="Previous differing sector"><i class="fa-solid fa-chevron-left"></i></button>' +
+      '<button class="cmp-hex-nav" id="cmp-hex-next" ' + (hasNext ? '' : 'disabled') +
+        ' title="Next differing sector"><i class="fa-solid fa-chevron-right"></i></button>' +
       'T:$' + track.toString(16).toUpperCase().padStart(2, '0') +
       ' S:$' + sector.toString(16).toUpperCase().padStart(2, '0') +
       ' <span class="text-muted">(byte $' + off.toString(16).toUpperCase().padStart(6, '0') +
       ', ' + diffN + ' bytes differ)</span>' +
+      posLabel +
     '</div>';
 
   // Reuse the standard hex-viewer layout (.hex-editor / .hex-row /
@@ -322,6 +340,19 @@ function showSectorHexDiff(body, diskA, diskB, track, sector) {
 
   hexPanel.innerHTML = html;
   hexPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  if (hasPrev) {
+    hexPanel.querySelector('#cmp-hex-prev').addEventListener('click', function() {
+      var p = diffs[curIdx - 1];
+      showSectorHexDiff(body, diskA, diskB, p.track, p.sector, sd);
+    });
+  }
+  if (hasNext) {
+    hexPanel.querySelector('#cmp-hex-next').addEventListener('click', function() {
+      var p = diffs[curIdx + 1];
+      showSectorHexDiff(body, diskA, diskB, p.track, p.sector, sd);
+    });
+  }
 }
 
 // Build one row in the standard hex-viewer layout (offset, 8 hex bytes,
@@ -434,6 +465,14 @@ function showCompareResultModal(diskA, diskB, diff, labelA, labelB) {
     }).join('');
   }
 
+  // Build a flat search-key out of both filenames so the filter box
+  // matches whichever side has a label (file may be only in A or only in B).
+  function fileSearchKey(p) {
+    var a = p.a ? p.a.name : '';
+    var b = p.b ? p.b.name : '';
+    return (a + ' ' + b).toLowerCase();
+  }
+
   function fileRow(p, marker, markerClass) {
     var nameA = p.a ? renderRichName(p.a.richName) : '<span class="text-muted">&mdash;</span>';
     var typeA = p.a ? escHtml(p.a.type) : '';
@@ -443,7 +482,7 @@ function showCompareResultModal(diskA, diskB, diff, labelA, labelB) {
     var blocksB = p.b ? p.b.blocks : '';
     var sizeA = p.a ? p.a.data.length : 0;
     var sizeB = p.b ? p.b.data.length : 0;
-    return '<tr>' +
+    return '<tr class="cmp-file-row" data-search="' + escHtml(fileSearchKey(p)) + '">' +
       '<td class="cmp-marker ' + markerClass + '">' + marker + '</td>' +
       '<td class="cmp-fname">' + nameA + '</td>' +
       '<td>' + typeA + '</td>' +
@@ -455,13 +494,20 @@ function showCompareResultModal(diskA, diskB, diff, labelA, labelB) {
       '</tr>';
   }
 
-  // Single table with all sections so columns line up across groups.
-  // Section labels become full-width header rows inside the same table.
-  function sectionRows(title, count, rows, marker, markerClass) {
+  // Each section is its own <tbody> so we can toggle a `collapsed` class
+  // to hide its file rows while keeping the section header visible.
+  // The Identical group is collapsed by default — usually the biggest
+  // pile and the least interesting after a glance at the count.
+  function sectionTbody(key, title, count, rows, marker, markerClass, collapsedByDefault) {
     if (count === 0) return '';
-    var html = '<tr class="cmp-section-row"><td colspan="8">' +
-      title + '<span class="cmp-section-count">(' + count + ')</span></td></tr>';
+    var collapsed = collapsedByDefault ? ' collapsed' : '';
+    var html = '<tbody class="cmp-section-tbody' + collapsed + '" data-section="' + key + '">' +
+      '<tr class="cmp-section-row" data-section="' + key + '"><td colspan="8">' +
+        '<i class="fa-solid fa-chevron-down cmp-section-chevron"></i>' +
+        title + '<span class="cmp-section-count">(' + count + ')</span>' +
+      '</td></tr>';
     rows.forEach(function(p) { html += fileRow(p, marker, markerClass); });
+    html += '</tbody>';
     return html;
   }
 
@@ -486,6 +532,12 @@ function showCompareResultModal(diskA, diskB, diff, labelA, labelB) {
     filesTabHtml += '<div class="cmp-section-title" style="color:var(--color-recover)">All files identical.</div>';
   }
   filesTabHtml += legendHtml +
+    '<div class="cmp-filter-row">' +
+      '<i class="fa-solid fa-magnifying-glass cmp-filter-icon"></i>' +
+      '<input type="text" class="cmp-filter-input" id="cmp-files-filter" ' +
+        'placeholder="Filter by filename…" autocomplete="off">' +
+      '<span class="cmp-filter-empty" id="cmp-files-filter-empty" style="display:none">no matches</span>' +
+    '</div>' +
     '<table class="cmp-table cmp-table-files">' +
       '<colgroup>' +
         '<col style="width:36px">' +     // marker
@@ -501,12 +553,11 @@ function showCompareResultModal(diskA, diskB, diff, labelA, labelB) {
         '<th></th><th>Name (A)</th><th>Type</th><th style="text-align:right">Blocks</th>' +
         '<th>Name (B)</th><th>Type</th><th style="text-align:right">Blocks</th>' +
         '<th style="text-align:right">&Delta; size</th>' +
-      '</tr></thead><tbody>' +
-        sectionRows('Differ',    nDiff, diff.differ,    ICON_NE,    'cmp-marker-ne') +
-        sectionRows('Only in A', nA,    diff.onlyA,     ICON_ONLYA, 'cmp-marker-only-a') +
-        sectionRows('Only in B', nB,    diff.onlyB,     ICON_ONLYB, 'cmp-marker-only-b') +
-        sectionRows('Identical', nEq,   diff.identical, ICON_EQ,    'cmp-marker-eq') +
-      '</tbody>' +
+      '</tr></thead>' +
+      sectionTbody('differ',    'Differ',    nDiff, diff.differ,    ICON_NE,    'cmp-marker-ne',    false) +
+      sectionTbody('only-a',    'Only in A', nA,    diff.onlyA,     ICON_ONLYA, 'cmp-marker-only-a', false) +
+      sectionTbody('only-b',    'Only in B', nB,    diff.onlyB,     ICON_ONLYB, 'cmp-marker-only-b', false) +
+      sectionTbody('identical', 'Identical', nEq,   diff.identical, ICON_EQ,    'cmp-marker-eq',     true) +
     '</table>';
 
   // Directory tab — side-by-side listing.
@@ -627,6 +678,62 @@ function showCompareResultModal(diskA, diskB, diff, labelA, labelB) {
       if (scroller) scroller.scrollTop = 0;
     });
   });
+
+  // Section collapse/expand: clicking the header row toggles its tbody.
+  body.querySelectorAll('.cmp-section-row').forEach(function(row) {
+    row.addEventListener('click', function() {
+      var tbody = row.parentElement;
+      if (tbody) tbody.classList.toggle('collapsed');
+    });
+  });
+
+  // Summary card → jump to the matching section + force-expand it.
+  var summaryToSection = {
+    'cmp-c-identical': 'identical',
+    'cmp-c-differ':    'differ',
+    'cmp-c-only-a':    'only-a',
+    'cmp-c-only-b':    'only-b'
+  };
+  body.querySelectorAll('.cmp-summary-card').forEach(function(card) {
+    var match = (card.className.match(/cmp-c-[a-z-]+/) || [])[0];
+    var key = match && summaryToSection[match];
+    if (!key) return;
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function() {
+      var tbody = body.querySelector('.cmp-section-tbody[data-section="' + key + '"]');
+      if (!tbody) return;
+      tbody.classList.remove('collapsed');
+      var header = tbody.querySelector('.cmp-section-row');
+      if (header) header.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+
+  // Filter box: hides any file row whose data-search doesn't contain the
+  // typed substring. A section whose visible rows all get filtered out
+  // shows a "(no matches)" muted line in place of its file rows so the
+  // user can see the section still exists.
+  var filterInput = body.querySelector('#cmp-files-filter');
+  var filterEmpty = body.querySelector('#cmp-files-filter-empty');
+  if (filterInput) {
+    filterInput.addEventListener('input', function() {
+      var q = filterInput.value.trim().toLowerCase();
+      var anyVisible = false;
+      body.querySelectorAll('.cmp-section-tbody').forEach(function(tbody) {
+        var rows = tbody.querySelectorAll('.cmp-file-row');
+        var sectionHasMatch = false;
+        rows.forEach(function(r) {
+          var key = r.getAttribute('data-search') || '';
+          var match = !q || key.indexOf(q) !== -1;
+          r.style.display = match ? '' : 'none';
+          if (match) { sectionHasMatch = true; anyVisible = true; }
+        });
+        // While filtering, keep the matching tbody expanded so results are
+        // visible immediately; collapsed sections would hide their hits.
+        if (q) tbody.classList.toggle('collapsed', !sectionHasMatch);
+      });
+      filterEmpty.style.display = (q && !anyVisible) ? '' : 'none';
+    });
+  }
 
   // Render the sector map canvas + wire hover/click.
   if (sectorDiff.compatible && sectorDiff.diffs.length > 0) {

@@ -194,6 +194,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.96', title: 'Compare-disks UX pass', items: [
+      'File sections (Differ / Only in A / Only in B / Identical) collapse with a click; "Identical" is collapsed by default since it\'s usually the biggest pile',
+      'Filter box above the file list — type to narrow the list by filename across all sections; matching sections auto-expand',
+      'Click a summary card (Identical / Differ / Only in A / Only in B) to jump to that section and expand it',
+      'Column headers stay visible while you scroll the file list',
+      'In the sector hex drill-down, ◀ / ▶ buttons step through every differing sector without going back to the canvas, with a "5 / 23" position label',
+    ]},
     { ver: '1.3.95', title: 'Graphics viewer + tab + modal polish', items: [
       'Graphics viewer zoom is now a 1× → 5× slider in 0.5 steps; the canvas scrolls inside its own area and the zoom + color picker stay pinned at the bottom while you scroll',
       'Click and drag inside the image to pan around when zoomed in (touch already panned natively)',
