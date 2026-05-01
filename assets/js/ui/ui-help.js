@@ -195,6 +195,9 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.100', title: 'Export disk as base64 data URI', items: [
+      'New Disk → Export Disk → Show as Base64 Data URI: get a data: URI for the current disk in a modal, with a Copy button — handy for embedding small disks in forum posts or git issues',
+    ]},
     { ver: '1.3.99', title: 'G64 round-trip save', items: [
       'Saving a .g64 now produces a real GCR-encoded G64 that VICE will mount as a 1541 image — earlier the file was just D64 bytes under a .g64 filename and emulators rejected it',
       'Modified sectors are re-encoded and spliced back into the original raw GCR; sectors that were unreadable on open keep their original bytes so custom-GCR copy protection survives the round-trip',

@@ -208,6 +208,7 @@ function updateMenuState() {
   document.getElementById('opt-export-html-dir').classList.toggle('disabled', !hasDisk || containerList);
   document.getElementById('opt-export-png-dir').classList.toggle('disabled', !hasDisk || containerList);
   document.getElementById('opt-md5').classList.toggle('disabled', !hasDisk);
+  document.getElementById('opt-base64').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-g64-layout').classList.toggle('disabled', !currentG64Layout);
   document.getElementById('opt-disk-tools').classList.toggle('disabled', !hasDisk || noEdit);

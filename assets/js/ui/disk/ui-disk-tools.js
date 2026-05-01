@@ -688,6 +688,79 @@ document.getElementById('opt-md5').addEventListener('click', async function(e) {
   }
 });
 
+// ── Disk menu: Show as Base64 Data URI ───────────────────────────────
+// Builds a `data:application/octet-stream;base64,…` string from the
+// disk's save buffer (so G64 tabs export the GCR-encoded G64, not the
+// internal D64) and shows it in a modal with a Copy button. Useful for
+// embedding small disks in forum posts or git issues.
+document.getElementById('opt-base64').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  closeMenus();
+
+  // Convert ArrayBuffer to base64 in 32KB chunks — String.fromCharCode
+  // chokes on million-byte spreads, and a per-byte concat is too slow
+  // for a 174KB D64 (let alone a 333KB G64).
+  function bufferToBase64(buf) {
+    var bytes = new Uint8Array(buf);
+    var chunk = 0x8000;
+    var binary = '';
+    for (var i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, Math.min(i + chunk, bytes.length)));
+    }
+    return btoa(binary);
+  }
+
+  var saveBuf = getSaveBuffer();
+  var name = getSaveFileName() || 'disk';
+  var b64 = bufferToBase64(saveBuf);
+  var dataUri = 'data:application/octet-stream;base64,' + b64;
+  var byteLen = (saveBuf.byteLength !== undefined) ? saveBuf.byteLength : (saveBuf.length || 0);
+
+  document.getElementById('modal-title').textContent = 'Base64 Data URI';
+  var body = document.getElementById('modal-body');
+  body.innerHTML =
+    '<div class="text-base mb-md">' +
+      '<b>File:</b> ' + escHtml(name) + ' &mdash; ' + byteLen + ' bytes &rarr; ' +
+      dataUri.length.toLocaleString() + ' chars base64' +
+    '</div>' +
+    '<div class="b64-actions">' +
+      '<button id="b64-copy" class="modal-btn-secondary"><i class="fa-solid fa-copy"></i> Copy to clipboard</button>' +
+      '<span id="b64-copy-status" class="b64-copy-status"></span>' +
+    '</div>' +
+    '<textarea class="b64-textarea" id="b64-textarea" readonly></textarea>';
+
+  var ta = document.getElementById('b64-textarea');
+  ta.value = dataUri;
+
+  var copyBtn = document.getElementById('b64-copy');
+  var status = document.getElementById('b64-copy-status');
+  copyBtn.addEventListener('click', async function() {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(dataUri);
+      } else {
+        // Fallback for older browsers / non-https origins
+        ta.select();
+        document.execCommand('copy');
+      }
+      status.textContent = '✓ copied';
+      status.className = 'b64-copy-status b64-copy-ok';
+      setTimeout(function() { status.textContent = ''; }, 2500);
+    } catch (err) {
+      status.textContent = 'copy failed — select the text below and use Ctrl+C';
+      status.className = 'b64-copy-status b64-copy-err';
+    }
+  });
+
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="modal-close">OK</button>';
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  document.getElementById('modal-overlay').classList.add('open');
+});
+
 // ── Disk menu: G64 Layout viewer ─────────────────────────────────────
 // Shows the physical sector order each track was laid down in, captured
 // by decodeG64toD64 at open time. The menu item is enabled only when the

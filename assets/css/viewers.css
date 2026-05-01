@@ -567,6 +567,37 @@
   .fchain-summary b { color: var(--text); }
   .fchain-summary-sep { color: var(--border); }
 
+  /* Base64 data-URI export modal — copy button + selectable textarea. */
+  .b64-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .b64-copy-status { font-size: 11px; }
+  .b64-copy-ok  { color: var(--color-recover); }
+  .b64-copy-err { color: var(--color-error); }
+  .b64-textarea {
+    width: 100%;
+    min-height: 200px;
+    max-height: 50vh;
+    padding: 8px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    resize: vertical;
+    word-break: break-all;
+    white-space: pre-wrap;
+  }
+  .b64-textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
   /* G64 Layout viewer — physical sector order per track */
   .g64-layout-wrap {
     overflow: auto;
