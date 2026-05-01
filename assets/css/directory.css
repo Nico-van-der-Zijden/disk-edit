@@ -281,6 +281,22 @@
     white-space: pre;
     font-family: 'C64 Pro Mono', monospace;
   }
+  /* When the rename editor replaces the rendered "FILENAME" string, the
+     surrounding quotes disappear — reserve the 1ch slot on each side so
+     the editor's text sits at the same column the filename used. */
+  .dir-name.editing {
+    padding-left: 1ch;
+    padding-right: 1ch;
+  }
+  /* Drop the editor's own border + padding while inline in .dir-name so
+     glyphs land at the exact original column. The accent ring is kept
+     via box-shadow, which doesn't take up layout space. */
+  .dir-name.editing .name-input {
+    border: none;
+    padding: 0;
+    box-shadow: 0 0 0 1px var(--accent);
+    border-radius: 2px;
+  }
 
   .name-input, .header-input {
     width: 100%;

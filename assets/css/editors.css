@@ -59,25 +59,31 @@
     color: var(--c64-screen-bg);
   }
 
-  /* geoWrite document viewer */
+  /* geoWrite document viewer — light "paper" page with dark ink, the way
+     GEOS rendered the document on screen on a real C64. The modal-body
+     gets the paper background; the doc itself sits in a centered column. */
+  .modal-body:has(.geowrite-doc) {
+    background: #fafafa;
+    color: #1a1a1a;
+  }
   .geowrite-doc {
     font-family: serif;
     font-size: 14px;
     line-height: 1.5;
-    color: var(--c64-geowrite-text);
+    color: #1a1a1a;
     max-width: 640px;
     margin: 0 auto;
   }
   .geowrite-page {
     margin-bottom: 16px;
     padding-bottom: 16px;
-    border-bottom: 1px dashed var(--border);
+    border-bottom: 1px dashed #b0b0b0;
   }
   .geowrite-page:last-child { border-bottom: none; margin-bottom: 0; }
   .geowrite-para { margin: 0 0 4px 0; min-height: 1em; }
   .geowrite-img { margin: 8px 0; image-rendering: pixelated; background: #fff; }
   .geowrite-tab { display: inline-block; min-width: 40px; }
-  .geowrite-pagebreak { text-align: center; color: var(--c64-text-muted); font-size: 11px; margin: 8px 0; }
+  .geowrite-pagebreak { text-align: center; color: #888; font-size: 11px; margin: 8px 0; }
 
   /* REL record viewer */
   .rel-record {

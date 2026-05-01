@@ -1296,7 +1296,7 @@ function showFileGfxViewer(entryOff) {
     'Grey', 'Light Green', 'Light Blue', 'Light Grey'
   ];
 
-  function buildColorPicker(body) {
+  function buildColorPicker(parent, body) {
     if (!needsColorPicker || !colorLabels) return;
     var row = document.createElement('div');
     row.className = 'color-picker-row';
@@ -1346,7 +1346,7 @@ function showFileGfxViewer(entryOff) {
         row.appendChild(group);
       })(colorLabels[li]);
     }
-    body.appendChild(row);
+    parent.appendChild(row);
 
     // Close popups when clicking elsewhere in the modal
     body.addEventListener('click', function() {
@@ -1364,7 +1364,7 @@ function showFileGfxViewer(entryOff) {
     var showSelector = displayMatches.length > 1 || hasMcToggle;
     if (showSelector) {
       var sel = document.createElement('div');
-      sel.className = 'flex-row-wrap mb-md';
+      sel.className = 'flex-row-wrap gfx-format-selector';
 
       if (displayMatches.length > 1) {
         for (var mi = 0; mi < displayMatches.length; mi++) {
@@ -1405,9 +1405,47 @@ function showFileGfxViewer(entryOff) {
     if (!currentZoom) currentZoom = 1;
     canvas.style.width = (canvas.width * currentZoom) + 'px';
     canvas.style.height = (canvas.height * currentZoom) + 'px';
-    body.appendChild(canvas);
 
-    // Zoom dropdown
+    // Canvas wrapper takes the remaining vertical space and scrolls
+    // internally when the zoomed image overflows. The modal frame itself
+    // never scrolls, so the controls bar below stays fixed in place.
+    var canvasWrap = document.createElement('div');
+    canvasWrap.className = 'gfx-canvas-wrap';
+    canvasWrap.appendChild(canvas);
+    body.appendChild(canvasWrap);
+
+    // Mouse drag-to-pan. Touch devices already get pan via the wrapper's
+    // native overflow:auto scrolling — handling pointerType !== 'mouse'
+    // would mean re-implementing momentum scroll, not worth it.
+    canvas.addEventListener('pointerdown', function(e) {
+      if (e.pointerType !== 'mouse' || e.button !== 0) return;
+      var canScrollX = canvasWrap.scrollWidth  > canvasWrap.clientWidth;
+      var canScrollY = canvasWrap.scrollHeight > canvasWrap.clientHeight;
+      if (!canScrollX && !canScrollY) return;
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      canvasWrap.classList.add('gfx-grabbing');
+      var startX = e.clientX, startY = e.clientY;
+      var startScrollX = canvasWrap.scrollLeft, startScrollY = canvasWrap.scrollTop;
+      function onMove(ev) {
+        canvasWrap.scrollLeft = startScrollX - (ev.clientX - startX);
+        canvasWrap.scrollTop  = startScrollY - (ev.clientY - startY);
+      }
+      function onUp() {
+        canvas.removeEventListener('pointermove',  onMove);
+        canvas.removeEventListener('pointerup',    onUp);
+        canvas.removeEventListener('pointercancel', onUp);
+        canvasWrap.classList.remove('gfx-grabbing');
+      }
+      canvas.addEventListener('pointermove',  onMove);
+      canvas.addEventListener('pointerup',    onUp);
+      canvas.addEventListener('pointercancel', onUp);
+    });
+
+    // Pinned controls bar at the bottom of the modal — zoom slider + color picker.
+    var controls = document.createElement('div');
+    controls.className = 'gfx-controls';
+
     var zoomRow = document.createElement('div');
     zoomRow.className = 'gfx-zoom-row';
     var zoomLabel = document.createElement('span');
@@ -1415,44 +1453,31 @@ function showFileGfxViewer(entryOff) {
     zoomLabel.textContent = 'Zoom:';
     zoomRow.appendChild(zoomLabel);
 
-    var zoomGroup = document.createElement('div');
-    zoomGroup.className = 'color-picker-group';
-    var zoomBtn = document.createElement('button');
-    zoomBtn.className = 'color-dropdown-btn';
-    zoomBtn.textContent = currentZoom + 'x';
-    zoomGroup.appendChild(zoomBtn);
+    var zoomSlider = document.createElement('input');
+    zoomSlider.type = 'range';
+    zoomSlider.min = '1';
+    zoomSlider.max = '5';
+    zoomSlider.step = '0.5';
+    zoomSlider.value = String(currentZoom);
+    zoomSlider.className = 'gfx-zoom-slider';
+    zoomRow.appendChild(zoomSlider);
 
-    var zoomPopup = document.createElement('div');
-    zoomPopup.className = 'color-dropdown-popup';
-    for (var zi = 1; zi <= 5; zi++) {
-      (function(z) {
-        var opt = document.createElement('div');
-        opt.className = 'color-dropdown-opt' + (z === currentZoom ? ' active' : '');
-        opt.textContent = z + 'x';
-        opt.addEventListener('click', function(ev) {
-          ev.stopPropagation();
-          currentZoom = z;
-          canvas.style.width = (canvas.width * z) + 'px';
-          canvas.style.height = (canvas.height * z) + 'px';
-          zoomBtn.textContent = z + 'x';
-          zoomPopup.classList.remove('open');
-        });
-        zoomPopup.appendChild(opt);
-      })(zi);
-    }
-    zoomGroup.appendChild(zoomPopup);
+    var zoomValue = document.createElement('span');
+    zoomValue.className = 'gfx-zoom-value';
+    zoomValue.textContent = currentZoom + 'x';
+    zoomRow.appendChild(zoomValue);
 
-    zoomBtn.addEventListener('click', function(ev) {
-      ev.stopPropagation();
-      var wasOpen = zoomPopup.classList.contains('open');
-      body.querySelectorAll('.color-dropdown-popup.open').forEach(function(p) { p.classList.remove('open'); });
-      if (!wasOpen) zoomPopup.classList.add('open');
+    zoomSlider.addEventListener('input', function() {
+      var z = parseFloat(zoomSlider.value);
+      currentZoom = z;
+      canvas.style.width  = (canvas.width  * z) + 'px';
+      canvas.style.height = (canvas.height * z) + 'px';
+      zoomValue.textContent = z + 'x';
     });
 
-    zoomRow.appendChild(zoomGroup);
-    body.appendChild(zoomRow);
-
-    buildColorPicker(body);
+    controls.appendChild(zoomRow);
+    buildColorPicker(controls, body);
+    body.appendChild(controls);
   }
 
   render();

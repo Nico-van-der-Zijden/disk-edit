@@ -535,10 +535,37 @@ function scrollActiveTabIntoView() {
   if (!bar) return;
   var activeEl = bar.querySelector('.tab.active');
   if (!activeEl) return;
-  // scrollIntoView with inline:'nearest' avoids unnecessary scrolling
-  // when the active tab is already visible. Block:'nearest' prevents
-  // vertical scroll of the page on narrow screens.
-  activeEl.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  // Always leave a sliver of the adjacent tab visible after the scroll —
+  // that sliver is the user's cue that more tabs exist on that side. No
+  // peek is reserved on a side where there is no neighbour (active tab
+  // is first/last).
+  var PEEK = 32;
+  var leftPeek  = activeEl.previousElementSibling ? PEEK : 0;
+  var rightPeek = activeEl.nextElementSibling     ? PEEK : 0;
+
+  var tabLeft   = activeEl.offsetLeft;
+  var tabRight  = tabLeft + activeEl.offsetWidth;
+  var viewLeft  = bar.scrollLeft;
+  var viewRight = viewLeft + bar.clientWidth;
+  var insetLeft  = viewLeft  + leftPeek;
+  var insetRight = viewRight - rightPeek;
+
+  // Already comfortably inside the padded inset — nothing to do.
+  if (tabLeft >= insetLeft && tabRight <= insetRight) return;
+
+  var target;
+  if (tabLeft < insetLeft) {
+    target = Math.max(0, tabLeft - leftPeek);
+    // If the strip is too narrow for tab + both peeks, prefer keeping
+    // the right edge of the active tab visible over honouring leftPeek.
+    var minKeepRight = tabRight - bar.clientWidth;
+    if (target < minKeepRight) target = minKeepRight;
+  } else {
+    target = tabRight + rightPeek - bar.clientWidth;
+    if (target > tabLeft) target = tabLeft;
+    if (target < 0) target = 0;
+  }
+  bar.scrollTo({ left: target, behavior: 'smooth' });
 }
 
 (function bindTabBarControls() {

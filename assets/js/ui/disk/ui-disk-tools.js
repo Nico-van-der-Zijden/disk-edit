@@ -674,8 +674,8 @@ document.getElementById('opt-md5').addEventListener('click', async function(e) {
       '<div style="font-size:13px;line-height:2">' +
         '<b>File:</b> ' + escHtml(currentFileName || 'unnamed') + '<br>' +
         '<b>Size:</b> ' + data.length + ' bytes<br>' +
-        '<b>CRC32:</b> <code class="code-tag;user-select:text">' + crc32 + '</code><br>' +
-        '<b>SHA-256:</b> <code class="code-tag" style="font-size:11px;user-select:text;word-break:break-all">' + sha256 + '</code>' +
+        '<b>CRC32:</b> <code class="code-tag">' + crc32 + '</code><br>' +
+        '<b>SHA-256:</b> <code class="code-tag" style="font-size:11px;word-break:break-all">' + sha256 + '</code>' +
       '</div>';
     var footer = document.querySelector('#modal-overlay .modal-footer');
     footer.innerHTML = '<button id="modal-close">OK</button>';

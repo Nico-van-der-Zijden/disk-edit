@@ -37,7 +37,6 @@
     --c64-control: #9A6759;
     --c64-highlight: #B8C76F;
     --c64-sys: #70A4B2;
-    --c64-geowrite-text: #d0d0d0;
   }
 
   [data-theme="light"] {
@@ -82,7 +81,8 @@
     user-select: none;
   }
 
-  .editable, .dir-name.editing, .blocks-input, .name-input, .header-input, .hex-input, .sep-editor-input {
+  .editable, .dir-name.editing, .blocks-input, .name-input, .header-input, .hex-input, .sep-editor-input,
+  .modal-body {
     -webkit-user-select: text;
     user-select: text;
   }

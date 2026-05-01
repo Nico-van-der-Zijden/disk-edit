@@ -194,6 +194,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.95', title: 'Graphics viewer + tab + modal polish', items: [
+      'Graphics viewer zoom is now a 1× → 5× slider in 0.5 steps; the canvas scrolls inside its own area and the zoom + color picker stay pinned at the bottom while you scroll',
+      'Click and drag inside the image to pan around when zoomed in (touch already panned natively)',
+      'geoWrite documents render on a paper-white page with dark ink instead of the dark theme',
+      'Selecting a tab now leaves a sliver of the previous/next tab visible as a cue that more tabs exist',
+      'Modal text (disk hash, geoWrite, validate logs, …) is now selectable so you can copy values out',
+      'Renaming a file no longer shifts the name one column to the left where the surrounding quotes were',
+    ]},
     { ver: '1.3.93', title: 'CMD FD2000/FD4000 partition containers', items: [
       'D1M/D2M/D4M images now open to a partition list like RAMLink — double-click a partition to enter, with Native / 1541 / 1571 / 1581 types via "New Partition"',
       'Deleting a partition compacts the byte range (later partitions slide down to fill the gap) and adds bump-allocate after the highest partition, matching what the FD2000 ROM and RAM-Tools v1.02 actually do',

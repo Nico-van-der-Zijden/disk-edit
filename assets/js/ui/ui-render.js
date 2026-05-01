@@ -2,11 +2,12 @@
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('selectstart', e => {
   const el = e.target.nodeType === 3 ? e.target.parentElement : e.target;
-  if (el && !el.isContentEditable && !el.closest('.editing') && el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') e.preventDefault();
+  if (el && !el.isContentEditable && !el.closest('.editing') && !el.closest('.modal-body') && el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA') e.preventDefault();
 });
 if (navigator.userAgent.includes('Edg')) {
   document.addEventListener('pointerup', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.target.closest && e.target.closest('.modal-body')) return;
     const sel = window.getSelection();
     if (sel && !e.target.isContentEditable && !e.target.closest('.editing')) sel.removeAllRanges();
   });

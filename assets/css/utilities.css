@@ -288,8 +288,53 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-top: 8px;
   }
+
+  .gfx-zoom-slider {
+    flex: 1;
+    max-width: 220px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  .gfx-zoom-value {
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 36px;
+    text-align: right;
+  }
+
+  /* Graphics viewer layout — modal-body becomes a flex column so the
+     canvas wrapper takes the remaining height and scrolls inside itself
+     when the zoomed image overflows. The modal frame never scrolls. */
+  .modal-body:has(.gfx-controls) {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+  }
+  .gfx-format-selector {
+    flex-shrink: 0;
+    padding: 16px 16px 0;
+    margin-bottom: 0;
+  }
+  .gfx-canvas-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 16px;
+  }
+  .gfx-canvas-wrap.gfx-grabbing { cursor: grabbing; user-select: none; }
+  .gfx-controls {
+    flex-shrink: 0;
+    padding: 10px 16px 16px;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .gfx-controls .color-picker-row { margin-top: 0; }
 
   .gfx-canvas {
     display: block;
@@ -297,7 +342,9 @@
     image-rendering: pixelated;
     image-rendering: crisp-edges;
     border: 1px solid var(--border);
+    cursor: grab;
   }
+  .gfx-canvas-wrap.gfx-grabbing .gfx-canvas { cursor: grabbing; }
 
   .hex-editor {
     font-family: 'C64 Pro Mono', "Cascadia Code", "Consolas", monospace;
