@@ -165,6 +165,7 @@ function tryShowEntryContextMenu(target, x, y) {
   } else {
     document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
     selectedEntryIndex = -1;
+    selectedEntries = [];
     updateEntryMenuState();
   }
   showContextMenu(x, y);
