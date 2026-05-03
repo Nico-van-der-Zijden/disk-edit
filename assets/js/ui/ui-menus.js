@@ -151,10 +151,15 @@ function tryShowEntryContextMenu(target, x, y) {
     updateEntryMenuState();
   } else if (entry && entry.dataset.offset) {
     var offset = parseInt(entry.dataset.offset, 10);
-    if (selectedEntryIndex !== offset) {
+    // Right-click on a file outside the current multi-selection retargets
+    // to just that file. Action handlers read `selectedEntries` first, so
+    // updating `selectedEntryIndex` alone would leave them aimed at the
+    // previously-clicked file.
+    if (selectedEntries.indexOf(offset) < 0) {
       document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
       entry.classList.add('selected');
       selectedEntryIndex = offset;
+      selectedEntries = [offset];
       updateEntryMenuState();
     }
   } else {

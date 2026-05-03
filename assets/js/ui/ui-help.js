@@ -275,6 +275,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.105', title: 'Right-click context menu fix', items: [
+      'Right-clicking a file now operates on that file, not the previously-selected one — affects export, copy, delete, lock/unlock, splat/unsplat, geoWrite preview/RTF/PDF, CVT export, and every other entry action',
+      'Right-clicking inside an existing multi-selection still acts on the whole selection',
+    ]},
     { ver: '1.3.104', title: 'TASS source viewer accuracy pass', items: [
       'TASS V5/V6 source files now render close to what TASS itself shows in VICE — full expression support (operators +, -, *, /, >, <, !, &, ., : and parens for grouping), `label+expr` operands like `sta lbl+1`, multi-column comments, label-defs sharing a line with their instruction, `.offs` directive, binary literals (`%01010101`), and char-immediates (`#"X"`)',
       'Many byte-disambiguation fixes for 6502 opcodes that double as comment markers, value bytes, or padding — `cpy #$1e` no longer eats the next instruction, NBSP space in comments doesn\'t merge with following opcodes, `$30 IDX` correctly distinguishes label-def from BMI rel, and SCROLL TEXT-style comments with embedded NBSP / digit runs are preserved',
