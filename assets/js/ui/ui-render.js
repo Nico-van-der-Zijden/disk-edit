@@ -386,6 +386,14 @@ function renderDisk(info) {
     healthEl.classList.remove('health-ok', 'health-warn', 'health-error');
     healthEl.onclick = null;
   }
+
+  // The floating Separators palette (View → Show Separators) mirrors
+  // the current disk's "can insert" state in its enabled/disabled
+  // visuals — refresh after every directory render so opening a tape,
+  // filling the directory, or switching tabs is reflected immediately.
+  if (typeof isSepFloatOpen === 'function' && isSepFloatOpen()) {
+    renderSepFloatBody();
+  }
 }
 
 let activeEditEl = null;

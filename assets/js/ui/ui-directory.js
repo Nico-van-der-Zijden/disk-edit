@@ -1255,7 +1255,7 @@ function showSeparatorEditor() {
     // PETSCII editor (populated after render so reversed bytes round-trip).
     html += '<div class="sep-editor-form">';
     html += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">';
-    html += '<div id="sep-edit-input-host" class="sep-editor-input" style="min-width:18ch"></div>';
+    html += '<div id="sep-edit-input-host"></div>';
     html += '<input type="text" id="sep-edit-name" style="flex:1;padding:4px 8px;background:var(--bg-input);color:var(--text);border:1px solid var(--border);border-radius:3px;font-size:12px;outline:none" value="' +
       (editIdx >= 0 ? escHtml(customSeparators[editIdx].name || '') : '') + '" placeholder="Name (optional)">';
     html += '<button class="sep-editor-btn" id="sep-edit-save">' + (editIdx >= 0 ? 'Update' : 'Add') + '</button>';
@@ -1321,6 +1321,7 @@ function showSeparatorEditor() {
           }
           saveCustomSeparators();
           buildSepSubmenu();
+          if (typeof renderSepFloatBody === 'function') renderSepFloatBody();
           editIdx = -1;
           body.removeEventListener('click', handler);
           body.innerHTML = render();
@@ -1344,6 +1345,7 @@ function showSeparatorEditor() {
         customSeparators.splice(cidx, 1);
         saveCustomSeparators();
         buildSepSubmenu();
+        if (typeof renderSepFloatBody === 'function') renderSepFloatBody();
         editIdx = -1;
         body.removeEventListener('click', handler);
         body.innerHTML = render();
@@ -1397,6 +1399,7 @@ document.getElementById('opt-save-sep').addEventListener('click', async function
   customSeparators.push({ name: name || '', bytes: bytes });
   saveCustomSeparators();
   buildSepSubmenu();
+  if (typeof renderSepFloatBody === 'function') renderSepFloatBody();
   showModal('Save as Separator', ['Separator saved.' + (name ? ' Name: "' + name + '"' : '')]);
 });
 
@@ -1429,6 +1432,164 @@ function insertSeparator(pattern) {
 
 // Build submenu on load and when charset changes
 buildSepSubmenu();
+
+// ── Floating "Show Separators" palette ───────────────────────────────
+// Same draggable-titled-window pattern as the PETSCII charset float.
+// While open, clicking a separator inserts it at the currently selected
+// directory row (subject to the usual canInsertFile() guards).
+var sepFloatPosition = null;
+
+function ensureSepFloatBuilt() {
+  var fl = document.getElementById('sep-float');
+  if (fl) return fl;
+  fl = document.createElement('div');
+  fl.id = 'sep-float';
+  fl.className = 'sep-float';
+  fl.innerHTML =
+    '<div class="sep-float-titlebar">' +
+      '<i class="fa-solid fa-grip-vertical"></i>' +
+      '<span class="sep-float-label">Separators</span>' +
+      '<button class="sep-float-close" title="Close" aria-label="Close">&times;</button>' +
+    '</div>' +
+    '<div class="sep-float-body"></div>';
+  document.body.appendChild(fl);
+
+  var titleBar = fl.querySelector('.sep-float-titlebar');
+  bindFloatDrag(fl, titleBar, function(x, y) {
+    sepFloatPosition = { left: x, top: y };
+  });
+
+  fl.querySelector('.sep-float-close').addEventListener('click', function(e) {
+    e.stopPropagation();
+    hideSepFloat();
+  });
+
+  fl.querySelector('.sep-float-body').addEventListener('click', function(e) {
+    var item = e.target.closest('.sep-float-item');
+    if (!item || item.classList.contains('disabled')) return;
+    var idx = parseInt(item.getAttribute('data-sep-idx'), 10);
+    var all = getAllSeparators();
+    if (isNaN(idx) || idx < 0 || idx >= all.length) return;
+    insertSeparator(all[idx]);
+    // Re-render so the disabled state updates if this insert filled the dir.
+    renderSepFloatBody();
+  });
+
+  return fl;
+}
+
+function renderSepFloatBody() {
+  var fl = document.getElementById('sep-float');
+  if (!fl) return;
+  var body = fl.querySelector('.sep-float-body');
+  var all = getAllSeparators();
+  var canInsert = !!currentBuffer && !isTapeFormat() && canInsertFile();
+
+  var html = '';
+  for (var i = 0; i < all.length; i++) {
+    html += sepFloatItem(i, all[i], canInsert);
+  }
+  if (!canInsert) {
+    var why = !currentBuffer ? 'Open an editable disk to insert separators.'
+      : isTapeFormat() ? 'Tape images are read-only.'
+      : 'Directory is full — no room for another entry.';
+    html += '<div class="sep-float-hint">' + escHtml(why) + '</div>';
+  }
+  body.innerHTML = html;
+
+  // Re-fit after content changes — when the body grew (new separator
+  // saved while the float sat near the bottom of the viewport), this
+  // both caps the body height to the visible space and slides the
+  // float up if it would otherwise hang off-screen.
+  fitSepFloat();
+}
+
+// Keep the float fully on-screen and scrollable. Caps the body's
+// max-height to "available space below the titlebar within the
+// viewport" — that's why the user gets a scrollbar instead of content
+// hanging off the bottom — and slides the whole float up if it's
+// already positioned where the new content wouldn't fit.
+function fitSepFloat() {
+  var fl = document.getElementById('sep-float');
+  if (!fl || !fl.classList.contains('open')) return;
+  var body = fl.querySelector('.sep-float-body');
+  if (!body) return;
+  var MARGIN = 8;
+  // Reset the inline cap so we measure the natural height first.
+  body.style.maxHeight = '';
+  var rect = fl.getBoundingClientRect();
+  var titleBar = fl.querySelector('.sep-float-titlebar');
+  var titleH = titleBar ? titleBar.getBoundingClientRect().height : 0;
+
+  var top = rect.top;
+  var maxBodyH = window.innerHeight - top - titleH - MARGIN;
+  // If the float is positioned so low that nothing fits, lift it.
+  if (maxBodyH < 80) {
+    top = Math.max(MARGIN, window.innerHeight - titleH - 80 - MARGIN);
+    fl.style.top = top + 'px';
+    fl.style.transform = '';
+    sepFloatPosition = { left: rect.left, top: top };
+    maxBodyH = window.innerHeight - top - titleH - MARGIN;
+  }
+  body.style.maxHeight = Math.max(80, maxBodyH) + 'px';
+}
+
+function sepFloatItem(idx, sep, canInsert) {
+  var name = sep.name ? '<span class="sep-float-name">' + escHtml(sep.name) + '</span>' : '';
+  var cls = 'sep-float-item' + (canInsert ? '' : ' disabled');
+  return '<div class="' + cls + '" data-sep-idx="' + idx + '" title="' + escHtml(sep.name || '') + '">' +
+    '<span class="sep-float-preview">' + sepBytesToPreview(sep.bytes) + '</span>' +
+    name +
+  '</div>';
+}
+
+function showSepFloat() {
+  var fl = ensureSepFloatBuilt();
+  if (sepFloatPosition) {
+    fl.style.left = sepFloatPosition.left + 'px';
+    fl.style.top = sepFloatPosition.top + 'px';
+    fl.style.transform = '';
+  } else {
+    fl.style.left = '50%';
+    fl.style.top = '50%';
+    fl.style.transform = 'translate(-50%, -50%)';
+  }
+  if (typeof modalZCounter !== 'undefined') fl.style.zIndex = modalZCounter + 5;
+  fl.classList.add('open');
+  // renderSepFloatBody calls fitSepFloat at the end, which needs the
+  // float to already be visible (and positioned) so getBoundingClientRect
+  // reports correct numbers. Hence the order: open first, then render.
+  renderSepFloatBody();
+  var check = document.getElementById('check-separators');
+  if (check) check.classList.add('checked');
+}
+
+function hideSepFloat() {
+  var fl = document.getElementById('sep-float');
+  if (fl) fl.classList.remove('open');
+  var check = document.getElementById('check-separators');
+  if (check) check.classList.remove('checked');
+}
+
+function isSepFloatOpen() {
+  var fl = document.getElementById('sep-float');
+  return !!(fl && fl.classList.contains('open'));
+}
+
+document.getElementById('opt-show-separators').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  if (isSepFloatOpen()) hideSepFloat();
+  else showSepFloat();
+});
+
+// Re-fit the float on viewport changes so its body cap stays correct
+// when the window is resized (or the address bar collapses on mobile).
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('resize', function() {
+    if (isSepFloatOpen()) fitSepFloat();
+  });
+}
 
 document.getElementById('sep-submenu').addEventListener('click', function(e) {
   e.stopPropagation();

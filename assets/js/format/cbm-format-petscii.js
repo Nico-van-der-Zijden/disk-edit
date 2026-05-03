@@ -78,6 +78,14 @@ function setCharsetMode(mode) {
   localStorage.setItem('cbm-charsetMode', mode);
   PETSCII_MAP = buildPetsciiMap(mode);
   SCREENCODE_MAP = buildScreencodeMap(mode);
+  // Tell anyone showing PETSCII glyphs (modals, viewers, the picker) to
+  // re-render with the new map. The directory listing is refreshed by
+  // the menu/click handler that triggered this change; modal content
+  // listens via the slot in ui-modals.js (modalCharsetRedraw).
+  if (typeof document !== 'undefined' && typeof document.dispatchEvent === 'function' &&
+      typeof CustomEvent === 'function') {
+    document.dispatchEvent(new CustomEvent('cbm-charsetchange', { detail: { mode: mode } }));
+  }
 }
 
 /** @param {number} byte @returns {string} PUA character */

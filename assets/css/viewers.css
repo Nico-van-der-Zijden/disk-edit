@@ -79,13 +79,23 @@
   .sep-editor-input {
     font-family: 'C64 Pro Mono', monospace;
     font-size: 14px;
-    width: 100%;
+    line-height: 1;
+    /* Lock the field to exactly the same shape as a 16-char filename
+       slot in the directory listing — width 16ch, height one PETSCII
+       row — so it doesn't grow horizontally or vertically as the user
+       types. content-box keeps `width: 16ch` measuring the inside,
+       padding/border add the visible chrome on top. */
+    width: 16ch;
+    height: 1em;
+    box-sizing: content-box;
     background: var(--bg);
     border: 1px solid var(--accent);
     border-radius: 3px;
-    padding: 4px 8px;
+    padding: 4px 6px;
     color: var(--text);
     outline: none;
+    overflow: hidden;
+    white-space: nowrap;
   }
 
   .hex-nav-field {

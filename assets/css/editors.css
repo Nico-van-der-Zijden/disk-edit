@@ -28,6 +28,29 @@
     border-radius: 4px;
   }
 
+  /* TASS source viewer: matches a real C64 screen — 40 chars wide × 23 rows
+     visible (the editor reserves the bottom 2 lines for the status bar).
+     C64 Pro Mono has square 8×8 cells, so at any font-size char width = font
+     -size, i.e. 1 char ≈ 1em. `ch` would be wrong here — the font's '0'
+     advance metric doesn't track the actual cell width. Vertical scrolling
+     when sources exceed 23 lines; lines never wrap (TASS itself can't put
+     content past col 39 anyway, so anything wider is a parse mistake). */
+  .basic-listing.tass-screen {
+    /* 40 cols of source + 12px×2 horizontal padding + ~16px reserved for
+       the vertical scrollbar so it doesn't eat into the rightmost column
+       when the source is longer than 23 rows. */
+    width: calc(40em + 24px + 16px);
+    height: calc(23 * 1.6em + 20px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex: none;
+    align-self: center;
+  }
+  .basic-listing.tass-screen .basic-line {
+    white-space: pre;
+    word-break: normal;
+  }
+
   /* Viewer modals: scroll the listing/editor area, not the whole modal body
      — this keeps any controls above the listing (e.g. the BASIC dialect
      selector) in view as the user scrolls through the source. */

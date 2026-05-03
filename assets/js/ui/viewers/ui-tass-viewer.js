@@ -102,21 +102,31 @@ function tassParseLabels(data) {
   }
   function isLabelByte(b) { return isLabelChar(b) || isLabelTerm(b); }
 
-  // Anchor: first run of at least 32 consecutive label-bytes that contains a
-  // high-bit terminator. That's well into the label table and avoids matching
-  // short label-like bursts that can appear in data areas.
+  // Anchor: pick the LONGEST run of label-format bytes that contains a
+  // high-bit terminator and meets a minimum length. Threshold is small
+  // (3) to tolerate test files with one tiny label like "CNT" + $B0.
+  // Larger runs in real source files easily beat any short false-positive
+  // burst elsewhere because we track the longest match.
   var anchor = -1;
+  var anchorLen = 0;
   var runStart = -1, runLen = 0, runHasTerm = false;
+  function consider(start, len, hasTerm) {
+    if (len >= 3 && hasTerm && len > anchorLen) {
+      anchor = start;
+      anchorLen = len;
+    }
+  }
   for (var i = 0; i < data.length; i++) {
     if (isLabelByte(data[i])) {
       if (runLen === 0) { runStart = i; runHasTerm = false; }
       runLen++;
       if (isLabelTerm(data[i])) runHasTerm = true;
-      if (runLen >= 32 && runHasTerm) { anchor = runStart; break; }
     } else {
+      consider(runStart, runLen, runHasTerm);
       runLen = 0;
     }
   }
+  consider(runStart, runLen, runHasTerm);
   if (anchor < 0) return { labels: labels, start: data.length };
 
   // From the anchor to end of file, parse label-format tokens. Skip any byte
@@ -132,7 +142,19 @@ function tassParseLabels(data) {
            (b >= 0xDB && b <= 0xDE) || (b >= 0xE0 && b <= 0xFA);
   }
 
+  // Some files (like SPD 03 on `sources 03.d64`) have a stale 1-byte
+  // leading character before the first real label, leftover from an
+  // earlier edit. Detect this when the byte at `anchor` matches the byte
+  // at `anchor+2` AND `anchor+3` is a bit-7-set label terminator: that's
+  // the "X Y X term" pattern (e.g. "RIRQ"). Skip the leading byte so the
+  // first label parses correctly (= "IRQ" per VICE).
   var p = anchor;
+  if (anchor + 3 < data.length &&
+      isLabelChar(data[anchor]) &&
+      data[anchor] === data[anchor + 2] &&
+      isLabelTerm(data[anchor + 3])) {
+    p = anchor + 1;
+  }
   var gap = 0;
   while (p < data.length && gap < 64) {
     var b = data[p];
@@ -161,105 +183,247 @@ function tassParseLabels(data) {
   return { labels: labels, start: anchor };
 }
 
+// TASS operand-prefix bytes — the discrete set of byte values that introduce
+// an operand value in source storage. T.ASS itself looks up bytes against an
+// internal table; we mirror that.
+//
+// Confirmed via test 3 (`disks/tass test.d64`): `$22` introduces a literal-
+// leading expression, `$2C` is binary value, `$2E` is char/string (works in
+// abs mode too, not just imm), and operators are encoded as $40+(idx-4) per
+// the 16-entry operator-character table at $BB13 in T.ASS V6.4. The full set
+// of operator codes maps to BB13 indices 4-15:
+//   $40 '+' add        $41 '-' subtract    $42 '*' multiply   $43 '/' divide
+//   $44 '>' high byte  $45 '<' low byte    $46 '!' decimal    $47 '&' AND
+//   $48 '.' OR         $49 ':' EOR         $4A '(' open paren $4B ')' close paren
+// Note the unusual syntax: `&` is bitwise AND, `.` is bitwise OR, `:` is
+// EOR (XOR). The display preserves source characters; semantics are TASS's.
+var TASS_OPERATORS = {
+  0x40:'+', 0x41:'-', 0x42:'*', 0x43:'/',
+  0x44:'>', 0x45:'<', 0x46:'!', 0x47:'&',
+  0x48:'.', 0x49:':', 0x4A:'(', 0x4B:')'
+};
+
+// Value-introducing prefix bytes. `lblIdx` flags those that reference a label
+// index (caller validates against labels.length).
+var TASS_OPERAND_PFX = {
+  0x22: true,  // expression with literal-leading byte ($22 LIT [OP RHS...])
+  0x28: true,  // hex byte ($XX)
+  0x29: true,  // hex word ($XXXX)
+  0x2A: true,  // decimal byte
+  0x2C: true,  // binary byte (%nnnnnnnn)
+  0x2D: true,  // current PC (*)
+  0x2E: true,  // char/string ("X")
+  0x30: { lblIdx: true },   // label-with-expression
+  0x38: { lblIdx: true },   // label-ref low page
+  0x39: { lblIdx: true, lblPage: 1 } // label-ref high page
+};
+
+// Decode a single TASS "primary" value at `pos`: a value-prefix + value bytes,
+// or a unary operator + primary, or a parenthesized sub-expression.
+// Returns { text, n }.
+function tassDecodePrimary(data, pos, end, labels) {
+  if (pos >= end) return { text: '?', n: 0 };
+  var pfx = data[pos];
+  // Open paren: parse the inner expression, expect $4B or $5B close.
+  if (pfx === 0x4A) {
+    var inner = tassDecodeValue(data, pos + 1, end, labels);
+    var after = pos + 1 + inner.n;
+    var nClose = (after < end && (data[after] === 0x4B || data[after] === 0x5B)) ? 1 : 0;
+    return { text: '(' + inner.text + ')', n: 1 + inner.n + nClose };
+  }
+  // Unary operator (>, <, !, etc.): operator byte then sub-primary. Skip
+  // close-paren bytes ($4B/$5B) since they're not unary.
+  if (TASS_OPERATORS[pfx] && pfx !== 0x4B && pfx !== 0x5B) {
+    var sub = tassDecodePrimary(data, pos + 1, end, labels);
+    return { text: TASS_OPERATORS[pfx] + sub.text, n: 1 + sub.n };
+  }
+  // Value prefixes
+  if (pfx === 0x22) { return { text: (data[pos+1]||0).toString(), n: 2 }; }
+  if (pfx === 0x28) { return { text: '$' + (data[pos+1]||0).toString(16).padStart(2,'0'), n: 2 }; }
+  if (pfx === 0x29) {
+    var lo = data[pos+1]||0, hi = data[pos+2]||0;
+    return { text: '$' + ((hi<<8)|lo).toString(16).padStart(4,'0'), n: 3 };
+  }
+  if (pfx === 0x2A) { return { text: (data[pos+1]||0).toString(), n: 2 }; }
+  if (pfx === 0x2C) { return { text: '%' + (data[pos+1]||0).toString(2).padStart(8,'0'), n: 2 }; }
+  if (pfx === 0x2D) { return { text: '*', n: 1 }; }
+  if (pfx === 0x2E) {
+    var c = (data[pos+1]||0) & 0x7F;
+    if (c >= 0x20 && c <= 0x7E) return { text: '"' + String.fromCharCode(c) + '"', n: 2 };
+    return { text: '$' + ((data[pos+1]||0)).toString(16).padStart(2,'0'), n: 2 };
+  }
+  if (pfx === 0x30) {
+    var lidx = data[pos+1]||0;
+    return { text: labels[lidx] || ('?lbl' + lidx), n: 2 };
+  }
+  if (pfx === 0x38 || pfx === 0x39) {
+    var idx = (pfx - 0x38) * 256 + (data[pos+1]||0);
+    return { text: labels[idx] || ('?lbl' + idx), n: 2 };
+  }
+  return { text: '?$' + pfx.toString(16), n: 1 };
+}
+
+// Decode a TASS expression: primary + chain of (binary-op + primary).
+// Returns { text, n }. Stops at non-operator bytes, paren markers (which
+// belong to primaries, not the binary-op chain), or end of buffer.
+//
+// CRITICAL: only chain binary operators when we're in an EXPRESSION
+// context — introduced by $22 (literal-leading-expression), $30 (label-
+// with-expression), $4A (open paren), or a leading unary operator. After
+// a plain value-prefix ($28 hex, $29 word, $2A decimal, etc.), the value
+// is standalone — any operator-looking byte that follows should be the
+// start of a NEW instruction, not chained as a binary op. Without this
+// guard, `sta $d015` ($8D $29 $15 $D0) followed by `eor #$01` ($49 $28
+// $01) gets parsed as `sta $d015:$01` because $49 doubles as the `:`
+// operator, eating the EOR instruction.
+function tassDecodeValue(data, pos, end, labels) {
+  var result = tassDecodePrimary(data, pos, end, labels);
+  var firstByte = data[pos];
+  var inExpression = firstByte === 0x22 || firstByte === 0x30 ||
+                     firstByte === 0x4A ||
+                     (TASS_OPERATORS[firstByte] && firstByte !== 0x4B && firstByte !== 0x5B);
+  if (!inExpression) return result;
+  while (true) {
+    var nextPos = pos + result.n;
+    if (nextPos >= end) break;
+    var op = data[nextPos];
+    if (op === 0x4A || op === 0x4B || op === 0x5B) break;
+    if (!TASS_OPERATORS[op]) break;
+    var rhs = tassDecodePrimary(data, nextPos + 1, end, labels);
+    result = {
+      text: result.text + TASS_OPERATORS[op] + rhs.text,
+      n: result.n + 1 + rhs.n
+    };
+  }
+  return result;
+}
+
+// Decide whether `data[pos]` looks like the start of a valid TASS opcode
+// THAT TAKES AN OPERAND with a recognizable prefix byte. Used to
+// disambiguate $80-$A7 bytes (comment markers vs LDX/LDY/STA/STY/STX
+// opcodes) and to find break points inside comment text.
+//
+// 0-operand opcodes ('none'/'acc') return false: those have no prefix to
+// disambiguate against, and bytes like $38 SEC / $88 DEY / $D8 CLD are
+// common ASCII digits/letters in comment text. The main opcode-decode
+// branch handles real implied opcodes directly.
+//
+// For prefixes that double as ASCII text in comments ($38/$39 = '8'/'9',
+// $44/$45 = 'D'/'E', $30 = '0'), we additionally require the referenced
+// label index to be in range — TASS source files are valid, so byte
+// sequences that would imply out-of-range labels can't really be opcodes.
+function tassIsValidOpcodeStart(data, opPos, end, labels) {
+  if (opPos >= end) return false;
+  var op = TASS_OPCODES[data[opPos]];
+  if (!op) return false;
+  var mode = op[1];
+  if (mode === 'none' || mode === 'acc') return false;
+  if (opPos + 1 >= end) return false;
+  // Skip past any unary operators ($40-$49 except parens) AND open-parens
+  // ($4A) to find the actual value prefix. Common cases:
+  //   `lda #>label`  = $A9 $44 $38 IDX  (unary > then label-ref)
+  //   `lda (1+2)`    = $AD $4A $22 ... (open paren then literal)
+  var probePos = opPos + 1;
+  while (probePos < end) {
+    var pb = data[probePos];
+    if (pb === 0x4A) { probePos++; continue; }                // open paren
+    if (TASS_OPERATORS[pb] && pb !== 0x4B && pb !== 0x5B) {   // unary op (not close)
+      probePos++; continue;
+    }
+    break;
+  }
+  if (probePos >= end) return false;
+  var pfxByte = data[probePos];
+  var pfxInfo = TASS_OPERAND_PFX[pfxByte];
+  if (!pfxInfo) return false;
+  // $22 is the literal-leading-expression prefix; bare `$22 LIT` without a
+  // following operator wouldn't be emitted by TASS (it'd use $2A decimal
+  // instead). When we see $22 not followed by an operator, this isn't a
+  // real opcode operand — likely a label idx that happens to be $22.
+  if (pfxByte === 0x22) {
+    if (probePos + 2 >= end) return false;
+    return TASS_OPERATORS[data[probePos + 2]] !== undefined;
+  }
+  if (pfxInfo === true) return true;
+  if (pfxInfo.lblIdx) {
+    if (probePos + 1 >= end) return false;
+    var page = pfxInfo.lblPage || 0;
+    return (page * 256 + data[probePos + 1]) < labels.length;
+  }
+  return true;
+}
+
 function tassDecodeOperand(data, pos, opInfo, labels) {
   var mode = opInfo[1];
   if (mode === 'none' || mode === 'acc') return { text: '', n: 0 };
   if (pos >= data.length) return { text: '', n: 0 };
-  var pfx = data[pos];
-  var lo, hi, v, idx;
-  if (mode === 'imm') {
-    if (pfx === 0x28) { v = data[pos + 1] || 0; return { text: '#$' + v.toString(16).padStart(2,'0'), n: 2 }; }
-    if (pfx === 0x2A) { v = data[pos + 1] || 0; return { text: '#' + v.toString(), n: 2 }; }
-    if (pfx === 0x2E) {
-      // Character-literal immediate: `#"X"`. Render the value as a quoted char
-      // if printable, otherwise as hex.
-      v = data[pos + 1] || 0;
-      if (v >= 0x20 && v <= 0x7E) return { text: '#"' + String.fromCharCode(v) + '"', n: 2 };
-      return { text: '#$' + v.toString(16).padStart(2,'0'), n: 2 };
-    }
-    if (pfx === 0x38 || pfx === 0x39) {
-      idx = (pfx - 0x38) * 256 + data[pos + 1];
-      return { text: '#' + (labels[idx] || '?lbl' + idx), n: 2 };
-    }
-    // $44 = '>' (high byte of expression), $45 = '<' (low byte). Both take a
-    // label-ref ($38 NN or $39 NN) as the argument.
-    if ((pfx === 0x44 || pfx === 0x45) && (data[pos + 1] === 0x38 || data[pos + 1] === 0x39)) {
-      var lblPg = data[pos + 1] - 0x38;
-      idx = lblPg * 256 + data[pos + 2];
-      var lblName = labels[idx] || ('?lbl' + idx);
-      return { text: '#' + (pfx === 0x44 ? '>' : '<') + lblName, n: 3 };
-    }
-    return { text: '#?$' + pfx.toString(16), n: 1 };
-  }
-  if (mode === 'abs' || mode === 'abs-x' || mode === 'abs-y' || mode === 'iny' ||
-      mode === 'ind' || mode === 'zp' || mode === 'zpx' || mode === 'zpy' || mode === 'izx') {
-    var val = '', n = 1;
-    // $2D alone (not followed by an operand) = "*" (current PC). Seen after
-    // jmp/jsr/branches as `jmp *` (infinite loop at current address).
-    if (pfx === 0x2D) { return { text: '*', n: 1 }; }
-    if (pfx === 0x28) { val = '$' + (data[pos + 1] || 0).toString(16).padStart(2,'0'); n = 2; }
-    else if (pfx === 0x29) { lo = data[pos + 1] || 0; hi = data[pos + 2] || 0; val = '$' + ((hi << 8) | lo).toString(16).padStart(4,'0'); n = 3; }
-    else if (pfx === 0x38 || pfx === 0x39) { idx = (pfx - 0x38) * 256 + data[pos + 1]; val = labels[idx] || ('?lbl' + idx); n = 2; }
-    else if (pfx === 0x2A) { val = (data[pos + 1] || 0).toString(); n = 2; }
-    else if (pfx === 0x30) {
-      // label-with-expression: $30 LBL [$40 $2A/$28/$29 VALUE]  →  "label+N"
-      idx = data[pos + 1];
-      val = labels[idx] || ('?lbl' + idx);
-      n = 2;
-      var op3 = data[pos + 2];
-      if (op3 === 0x40) {
-        var vpfx = data[pos + 3];
-        if (vpfx === 0x2A) { val += '+' + (data[pos + 4] || 0).toString(); n = 5; }
-        else if (vpfx === 0x28) { val += '+$' + (data[pos + 4] || 0).toString(16).padStart(2,'0'); n = 5; }
-        else if (vpfx === 0x29) { val += '+$' + (((data[pos + 5] || 0) << 8) | (data[pos + 4] || 0)).toString(16).padStart(4,'0'); n = 6; }
-        else { val += '+?'; n = 3; }
-      }
-    }
-    else { val = '?$' + pfx.toString(16); n = 1; }
-    if (mode === 'abs-x' || mode === 'zpx') val += ',x';
-    else if (mode === 'abs-y' || mode === 'zpy') val += ',y';
-    else if (mode === 'iny') val = '(' + val + '),y';
-    else if (mode === 'izx') val = '(' + val + ',x)';
-    else if (mode === 'ind') val = '(' + val + ')';
-    return { text: val, n: n };
-  }
-  if (mode === 'rel') {
-    if (pfx === 0x38 || pfx === 0x39) { idx = (pfx - 0x38) * 256 + data[pos + 1]; return { text: labels[idx] || ('?lbl' + idx), n: 2 }; }
-    if (pfx === 0x28) { return { text: '$' + (data[pos + 1] || 0).toString(16).padStart(2,'0'), n: 2 }; }
-    return { text: '?', n: 1 };
-  }
-  return { text: '?', n: 0 };
+  var v = tassDecodeValue(data, pos, data.length, labels);
+  if (mode === 'imm') return { text: '#' + v.text, n: v.n };
+  if (mode === 'rel') return v; // branches: just the target
+  // abs / abs-x / abs-y / iny / ind / zp / zpx / zpy / izx — value with suffix
+  var val = v.text;
+  if (mode === 'abs-x' || mode === 'zpx') val += ',x';
+  else if (mode === 'abs-y' || mode === 'zpy') val += ',y';
+  else if (mode === 'iny') val = '(' + val + '),y';
+  else if (mode === 'izx') val = '(' + val + ',x)';
+  else if (mode === 'ind') val = '(' + val + ')';
+  return { text: val, n: v.n };
 }
 
 function tassTokenizeBlock(data, start, end, labels) {
   var lines = [];
-  var cur = { label: null, instr: null, operand: null, comment: null, isData: false };
+  var cur = { label: null, instr: null, operand: null, comment: null, commentCol: -1, isData: false };
   var unknownRun = [];
   function flushData() {
     if (unknownRun.length === 0) return;
     var parts = [];
     for (var k = 0; k < unknownRun.length; k++) parts.push('$' + unknownRun[k].toString(16).padStart(2, '0'));
-    lines.push({ label: null, instr: '.byte', operand: parts.join(','), comment: null, isData: true });
+    lines.push({ label: null, instr: '.byte', operand: parts.join(','), comment: null, commentCol: -1, isData: true });
     unknownRun = [];
   }
   function flush() {
     flushData();
     if (cur.label || cur.instr || cur.comment) lines.push(cur);
-    cur = { label: null, instr: null, operand: null, comment: null, isData: false };
+    cur = { label: null, instr: null, operand: null, comment: null, commentCol: -1, isData: false };
   }
   var i = start;
   while (i < end) {
     var b = data[i];
-    // Comment markers: $93-$97 are all `;` variants (different column
-    // alignment in TASS's editor). $94/$95/$96/$97 also happen to be valid
-    // 6502 opcodes (STY/STA/STX zpx/zpy etc.), so only treat as a comment if
-    // the next byte is NOT a TASS operand prefix.
-    if (b >= 0x93 && b <= 0x97 && !(
-      (b === 0x94 || b === 0x95 || b === 0x96) && i + 1 < end &&
-      (data[i + 1] === 0x28 || data[i + 1] === 0x29 || data[i + 1] === 0x2A ||
-       data[i + 1] === 0x38 || data[i + 1] === 0x39)
-    )) {
+    // Comment markers: TASS encodes `;` with one byte per editor column —
+    // $80 = column 0, $81 = column 1, …, $A7 = column 39. The range tops
+    // out at the C64's 40-column screen width; bytes from $A8 upward are
+    // unambiguously real opcodes (LDA #/LDX zp/etc.). Within $80-$A7,
+    // many bytes are also valid 6502 opcodes (STY/STA/STX/LDY/LDA/LDX
+    // …), so disambiguate by the next byte: if this byte is an opcode
+    // that takes an operand AND the next byte is a valid TASS operand
+    // prefix, treat as the opcode. Otherwise, it's a comment marker.
+    //
+    // EXCEPTION: $88 (DEY), $8A (TXA), $98 (TYA), $9A (TXS) are 0-operand
+    // opcodes that fall in this range. Without explicit handling they'd
+    // ALWAYS be treated as comment markers (cols 8/10/24/26) since they
+    // have no operand prefix to validate against. In real TASS source
+    // these bytes are virtually never comment markers — programmers
+    // place comments at col 0, col 9 (right after label), or trailing
+    // (col 18+/32). Treat them as their implied opcode unconditionally.
+    var commentCol = -1;
+    if (b >= 0x80 && b <= 0xA7 &&
+        b !== 0x88 && b !== 0x8A && b !== 0x98 && b !== 0x9A &&
+        !tassIsValidOpcodeStart(data, i, end, labels)) {
+      commentCol = b - 0x80;
+    }
+    if (commentCol >= 0) {
       flushData();
+      // Decide whether this comment belongs on the current line (trailing)
+      // or starts a new line. A `;` at column N can only be on the same
+      // row as the existing label/instr if N is past where that content
+      // ends; otherwise the editor cursor would have had to overwrite
+      // existing text — TASS never stores that, so it's a new row.
+      if (cur.label || cur.instr) {
+        var curEnd = (cur.label ? 9 : 9);
+        if (cur.instr) curEnd += cur.instr.length;
+        if (cur.operand) curEnd += 1 + cur.operand.length;
+        if (commentCol < curEnd) flush();
+      }
       i++;
       var text = '';
       // Read comment text until we hit a byte that clearly starts a new
@@ -274,19 +438,67 @@ function tassTokenizeBlock(data, start, end, labels) {
         if (b >= 0xC1 && b <= 0xDA) return String.fromCharCode(b - 0x80).toLowerCase();
         return null;
       }
+      // A comment occupies the row from `;` to col 39 (the C64 screen edge),
+      // so its body is at most (40 - commentCol - 1) chars wide. This stops
+      // a col-0 rule line from absorbing the next instruction byte (e.g.
+      // $60 RTS = '`' backtick) after exactly the screen-width worth of
+      // content has been read.
+      var maxCommentLen = 40 - commentCol - 1;
       while (i < end) {
+        if (text.length >= maxCommentLen) break;
         var c = data[i];
-        if (c === 0x80) break;
+        // $A0 inside comment text is usually the PETSCII shifted-space
+        // (NBSP) — but it's ALSO LDY-imm opcode. Disambiguate the same way
+        // as the outer $80-$A7 check: if it's followed by a valid TASS
+        // operand prefix, it's a real instruction starting after the
+        // comment, so break. Otherwise treat as space and continue. This
+        // stops `sta ($ae),y ;NAME(NBSP)$A0 $28 $00` (= `ldy #$00`) from
+        // appending " (" to the previous comment.
+        if (c === 0xA0) {
+          if (tassIsValidOpcodeStart(data, i, end, labels)) break;
+          text += ' '; i++; continue;
+        }
+        // A new comment marker ($80-$A7, with the same opcode-disambiguation
+        // as the outer loop) ends this comment so the next one can start.
+        if (c >= 0x80 && c <= 0xA7 &&
+            c !== 0x88 && c !== 0x8A && c !== 0x98 && c !== 0x9A &&
+            !tassIsValidOpcodeStart(data, i, end, labels)) break;
         // $2D is literal '-' in comments (before opcode check: $2D=AND abs
         // is a valid 6502 opcode, but inside a comment '-' is overwhelmingly
         // more likely).
         if (c === 0x2D) { text += '-'; i++; continue; }
-        // An opcode that takes an operand followed by a valid TASS operand
-        // prefix unambiguously starts the next instruction.
-        var op = TASS_OPCODES[c];
-        if (op && op[1] !== 'none' && op[1] !== 'acc' && i + 1 < end) {
-          var nx = data[i + 1];
-          if (nx === 0x28 || nx === 0x29 || nx === 0x2A || nx === 0x38 || nx === 0x39) break;
+        // An opcode + valid TASS operand prefix may be a real instruction
+        // boundary, but in COMMENT text many printable-ASCII bytes
+        // ($20=JSR, $4C=JMP, $20-$7E broadly) double as letters/punctuation.
+        // For those we only break if the operand value bytes contain a
+        // non-printable byte — real instruction operands usually do
+        // (high bytes of $XXYY addresses are typically >$7E), pure text
+        // never does. Opcodes outside $20-$7E (e.g. $A9 LDA #, $D0 BNE)
+        // can't be confused with text and break unconditionally.
+        if (tassIsValidOpcodeStart(data, i, end, labels)) {
+          var opByte = c;
+          var shouldBreak = opByte < 0x20 || opByte > 0x7E;
+          if (!shouldBreak) {
+            var pfx = data[i + 1];
+            // Label-ref prefix ($38/$39) is a strong "real instruction"
+            // signal — `jsr label`/`jmp label`/`bne label` etc. The idx
+            // can be any printable byte ($30-$7E), so the printable-
+            // operand heuristic alone misses these. Always break.
+            if (pfx === 0x38 || pfx === 0x39) {
+              shouldBreak = true;
+            } else {
+              var operandLen = (pfx === 0x29) ? 2 : 1;
+              for (var ob = 0; ob < operandLen && i + 2 + ob < end; ob++) {
+                var bv = data[i + 2 + ob];
+                // $80-$BF is the comment-marker range — if it appears at
+                // an operand-byte position, it's more likely the next
+                // line's marker than a real instruction operand.
+                if (bv >= 0x80 && bv <= 0xBF) continue;
+                if (bv < 0x20 || bv > 0x7E) { shouldBreak = true; break; }
+              }
+            }
+          }
+          if (shouldBreak) break;
         }
         // Directive markers at the start of a line.
         if (c === 0x02 && i + 1 < end) {
@@ -308,18 +520,22 @@ function tassTokenizeBlock(data, start, end, labels) {
           var onx = data[i + 1];
           if (onx === 0x28 || onx === 0x29) break;
         }
-        // Label-def marker `$30 NN` or `$31 NN` — treat as line-start only if
-        // the byte AFTER the label index is a directive marker or $80. Avoid
-        // matching on opcodes here because ASCII digits like "dc01$8D" could
-        // collide (and $8D won't appear inside a comment, so a non-printable
-        // byte breaks the comment naturally on its own).
+        // Label-def `$30 NN` followed by a real new instruction → break, the
+        // label-def starts a new source line. Example MINER 02:
+        //   `;MARK/UNMARK BOMBS` + $30 $68 + $20 $38 $69 (skip0: jsr rout3)
+        // would read "MARK/UNMARK BOMBS0h 8i" if we kept consuming.
+        // The check at i+2 (byte after IDX) must look like a TASS opcode
+        // start — that's what tells us label-def vs digit-text. We also
+        // require IDX itself to be NOT a digit ($30-$39): runs like
+        // "$1000" in comment text are bytes $31 $30 $30 $30 where IDX=$30
+        // is a literal '0', not a label index. Only break when IDX is a
+        // non-digit label-char (uppercase letters, etc.).
         if ((c === 0x30 || c === 0x31) && i + 2 < end) {
           var lbNN = data[i + 1];
-          var lbIdx = (c - 0x30) * 256 + lbNN;
-          if (lbIdx < labels.length) {
-            var after = data[i + 2];
-            if (after === 0x02 || after === 0x03 || after === 0x04 ||
-                after === 0x05 || after === 0x06 || after === 0x80) break;
+          if (lbNN < 0x30 || lbNN > 0x39) {
+            var lbIdx = (c - 0x30) * 256 + lbNN;
+            if (lbIdx < labels.length &&
+                tassIsValidOpcodeStart(data, i + 2, end, labels)) break;
           }
         }
         var letter = petsciiToLetter(c);
@@ -327,15 +543,45 @@ function tassTokenizeBlock(data, start, end, labels) {
         break;
       }
       cur.comment = text.replace(/\s+$/, '');
+      // commentCol = column the editor placed `;` at; the renderer pads
+      // up to that column when there's a preceding label/instr, or just
+      // anchors the comment there for whole-line comments.
+      cur.commentCol = commentCol;
       flush();
       continue;
     }
     // $30 NN = label def (idx NN). $31 NN = high-page label def (idx 256+NN).
-    // Generalized as $(30+page) NN for label indexes in [page*256, page*256+256).
+    // $30/$31 are ALSO 6502 opcodes (BMI rel / AND iny). The opcode is only a
+    // realistic interpretation when the operand is a label-ref ($38/$39) with
+    // a valid index OR `*` (current PC) — real TASS source virtually never
+    // uses branches with literal byte/decimal/binary targets, so when the
+    // prefix is a value-introducer ($28/$29/$2A/$2C/$2E etc.) prefer the
+    // label-def interpretation. Examples:
+    //   SPD 03 0x2E1 `$30 $38 $CD` — `bmi` target idx 205 > 64 → cmp2:
+    //   SPD 03 0x4F7 `$30 $38 $07` — `bmi` target idx 7 in range → bmi next0
+    //   PLASMA   `$30 $2C $03`     — would be `bmi %00000011` literal → cnt3:
     if ((b === 0x30 || b === 0x31) && i + 1 < end) {
       var page = b - 0x30;
-      var lidx = page * 256 + data[i + 1];
-      if (lidx < labels.length) {
+      var nextLB = data[i + 1];
+      var opcodeValidHere = false;
+      if (nextLB === 0x38 || nextLB === 0x39) {
+        var brTarget = (nextLB - 0x38) * 256 + (i + 2 < end ? data[i + 2] : 256);
+        opcodeValidHere = brTarget < labels.length;
+        // Additional check: if the byte at i+3 (just after the supposed
+        // BMI's target-idx byte) is a TASS operand prefix, then i+2 is
+        // really the start of a new instruction needing that prefix —
+        // meaning $30 $38 was a label-def, not BMI. Example from VIEW 06:
+        //   `$30 $38 $A9 $28 $00` → label-def loop1 + `lda #$00`
+        // (not `bmi jsrr` + `plp` + `brk` which makes no programming sense).
+        if (opcodeValidHere && i + 3 < end && TASS_OPERAND_PFX[data[i + 3]]) {
+          opcodeValidHere = false;
+        }
+      } else if (nextLB === 0x2D) {
+        // `bmi *` / `and ($..),y` with current-PC operand
+        opcodeValidHere = true;
+      }
+      var lidx = page * 256 + nextLB;
+      if (!opcodeValidHere && lidx < labels.length) {
         flushData();
         if (cur.instr || cur.comment) flush();
         cur.label = labels[lidx];
@@ -404,20 +650,21 @@ function tassTokenizeBlock(data, start, end, labels) {
     // $38 label ref (treated as word when emitted under .word).
     if ((b === 0x03 || b === 0x04) && i + 1 < end) {
       var bpfx = data[i + 1];
-      var pfxOk = bpfx === 0x28 || bpfx === 0x29 || bpfx === 0x2A || bpfx === 0x38;
-      if (pfxOk) {
+      if (TASS_OPERAND_PFX[bpfx]) {
         flushData();
         if (cur.instr) flush();
         cur.instr = b === 0x04 ? '.word' : '.byte';
         var bvals = [];
         i++;
-        while (i < end) {
-          var bp = data[i];
-          if (bp === 0x28) { bvals.push('$' + (data[i + 1] || 0).toString(16).padStart(2,'0')); i += 2; }
-          else if (bp === 0x29) { bvals.push('$' + (((data[i + 2] || 0) << 8) | (data[i + 1] || 0)).toString(16).padStart(4,'0')); i += 3; }
-          else if (bp === 0x2A) { bvals.push((data[i + 1] || 0).toString()); i += 2; }
-          else if (bp === 0x38 || bp === 0x39) { var lix = (bp - 0x38) * 256 + data[i + 1]; bvals.push(labels[lix] || ('?lbl' + lix)); i += 2; }
-          else break;
+        while (i < end && TASS_OPERAND_PFX[data[i]]) {
+          // $30 IDX is ALSO the label-def line-start marker. Allow it inside
+          // a .byte/.word value list only when an expression operator follows
+          // ($30 IDX OP RHS = `label+N`). Bare `$30 IDX` is a new line, stop.
+          if (data[i] === 0x30 && i + 2 < end && !TASS_OPERATORS[data[i + 2]]) break;
+          var v = tassDecodeValue(data, i, end, labels);
+          if (v.n === 0) break;
+          bvals.push(v.text);
+          i += v.n;
         }
         cur.operand = bvals.join(',');
         // Intentionally do NOT flush here: a trailing comment ($93/$94) or a
@@ -440,97 +687,19 @@ function tassTokenizeBlock(data, start, end, labels) {
         continue;
       }
     }
-    if (b === 0x80) {
-      // Block boundary: flush any in-progress line and skip past the $80.
-      // We emit synthetic separator tokens lazily based on block content
-      // (see "pure-padding" check below), not automatically per boundary.
+    // `.offs` directive: byte $01 followed by a value (verified via test 3
+    // `$01 $29 $00 $10` = `.offs $1000`).
+    if (b === 0x01 && i + 1 < end && TASS_OPERAND_PFX[data[i + 1]]) {
       flushData();
-      if (cur.label || cur.instr || cur.comment) flush();
-      i++;
-      // Look ahead to the next $80 and classify the block.
-      var look = i;
-      while (look < end && data[look] !== 0x80) look++;
-      // Classify the block: is it a "pure comment line" (no code/directive
-      // bytes) or does it contain instructions?
-      //
-      // A whole-line comment in TASS is just a block of text/decoration
-      // without any opcode or directive marker. The `;` prefix we show
-      // is TASS's comment-marker convention — it's NOT stored in the
-      // bytes. Whatever is in the bytes renders literally after `;`.
-      //
-      // Note: $20 (JSR), $38 (label-ref prefix), etc. are printable ASCII
-      // AND valid code bytes. Distinguish by looking for opcode+operand-prefix
-      // sequences, directive markers, and comment markers — if any of those
-      // are present, the block is code.
-      var hasCode = false;
-      var renderable = 0;
-      for (var ti2 = i; ti2 < look; ti2++) {
-        var bb = data[ti2];
-        if (bb === 0x00) continue;
-        // Strong code indicators — bytes / patterns that are unambiguous:
-        //   * High-bit opcode ($80+) that takes an operand, followed by a
-        //     valid TASS operand prefix. These bytes are outside printable
-        //     ASCII, so they can't appear in comment text.
-        //   * `$20 $38/$39` = `jsr label` (JSR + label-ref prefix). $20 alone
-        //     is ASCII space, so we require the following $38/$39.
-        //   * `$4C $29/$38/$39/$2D` = `jmp $XXXX/label/*`. $4C is ASCII 'L'
-        //     but these specific next bytes are unlikely in text.
-        //   * Directive markers $02/$03/$04/$06 followed by a valid prefix.
-        //   * Inline comment markers $93-$97.
-        if (bb >= 0x80 && TASS_OPCODES[bb] && ti2 + 1 < look) {
-          var mode0 = TASS_OPCODES[bb][1];
-          var next0 = data[ti2 + 1];
-          if (mode0 !== 'none' && mode0 !== 'acc' &&
-              (next0 === 0x28 || next0 === 0x29 || next0 === 0x2A ||
-               next0 === 0x38 || next0 === 0x39 || next0 === 0x2D ||
-               next0 === 0x44 || next0 === 0x45 || next0 === 0x30 ||
-               (next0 === 0x2E && mode0 === 'imm'))) {
-            hasCode = true; break;
-          }
-        }
-        if (bb === 0x20 && ti2 + 1 < look && (data[ti2 + 1] === 0x38 || data[ti2 + 1] === 0x39 || data[ti2 + 1] === 0x29)) {
-          hasCode = true; break;
-        }
-        if (bb === 0x4C && ti2 + 1 < look) {
-          var jn = data[ti2 + 1];
-          if (jn === 0x29 || jn === 0x38 || jn === 0x39 || jn === 0x2D) {
-            hasCode = true; break;
-          }
-        }
-        if ((bb === 0x02 || bb === 0x03 || bb === 0x04 || bb === 0x06) && ti2 + 1 < look) {
-          var dnx0 = data[ti2 + 1];
-          if (dnx0 === 0x28 || dnx0 === 0x29 || dnx0 === 0x2A || dnx0 === 0x38 || dnx0 === 0x39 ||
-              (bb === 0x02 && dnx0 > 0 && dnx0 <= 64)) {
-            hasCode = true; break;
-          }
-        }
-        if (bb >= 0x93 && bb <= 0x97) { hasCode = true; break; }
-        // Otherwise check if byte is a plausible comment character.
-        var isCommentChar = (bb >= 0x20 && bb <= 0x7E) || bb === 0xA0 ||
-                            (bb >= 0xC1 && bb <= 0xDA) || bb === 0xC0;
-        if (isCommentChar) { renderable++; continue; }
-        hasCode = true;
-        break;
-      }
-      if (!hasCode && renderable >= 1) {
-        // Whole-line comment. Render each byte through the PETSCII PUA map
-        // so the C64 Pro font picks the correct glyph. $00 is skipped
-        // (pure padding, never typed).
-        var cmtStr = '';
-        for (var ri = i; ri < look; ri++) {
-          var rb = data[ri];
-          if (rb === 0x00) continue;
-          cmtStr += petsciiToAscii(rb);
-        }
-        if (cmtStr.length >= 1) {
-          lines.push({ label: null, instr: null, operand: null, comment: cmtStr, isTextBlock: true });
-          i = look;
-          continue;
-        }
-      }
-      // Code/data block — fall through to normal tokenizer.
+      if (cur.instr || cur.comment) flush();
+      var v = tassDecodeValue(data, i + 1, end, labels);
+      cur.instr = '.offs';
+      cur.operand = v.text;
+      i += 1 + v.n;
+      flush();
       continue;
     }
+    // ($80 is now handled above in the unified comment-marker block.)
     // $C0, $00, $2D = padding / horizontal-rule filler — skip. ($2D is
     // ambiguous: it's also ASCII '-', but treating it as padding loses '-' in
     // text comments — a small readability trade-off to avoid false `and *`
@@ -539,7 +708,13 @@ function tassTokenizeBlock(data, start, end, labels) {
     // synthetic SEP so it renders as `;---` in the output.
     // A long run of padding/decoration bytes in the middle of a block is a
     // user-drawn rule line. Emit the actual character sequence as a comment.
-    if (b === 0xC0 || b === 0x00 || b === 0x2D || b === 0x3D || b === 0x5F) {
+    // $C0 is also the CPY-imm opcode. Only treat as padding when it's part
+    // of a RUN (next byte is also $C0). A solo $C0 is `cpy` and falls
+    // through to opcode handling. Other padding bytes ($00/$2D/$3D/$5F)
+    // start padding handling unconditionally.
+    var isPad = (b === 0x00 || b === 0x2D || b === 0x3D || b === 0x5F) ||
+                (b === 0xC0 && i + 1 < end && data[i + 1] === 0xC0);
+    if (isPad) {
       var pStart0 = i;
       while (i < end && (data[i] === 0xC0 || data[i] === 0x00 || data[i] === 0x2D || data[i] === 0x3D || data[i] === 0x5F)) i++;
       if (i - pStart0 >= 30) {
@@ -559,26 +734,12 @@ function tassTokenizeBlock(data, start, end, labels) {
       var op = TASS_OPCODES[b];
       var mode = op[1];
       // For opcodes that take an operand, verify the following byte is a real
-      // TASS operand prefix ($28/$29/$2A/$30/$38). If not, this byte is almost
-      // certainly a data byte that happens to land on a valid opcode value.
+      // TASS operand prefix. tassIsValidOpcodeStart looks up the prefix in the
+      // shared TASS_OPERAND_PFX table (and skips past unary operators). If not
+      // valid, this byte is almost certainly a data byte that happens to land
+      // on a valid opcode value.
       if (mode !== 'none' && mode !== 'acc') {
-        var nextB = i + 1 < end ? data[i + 1] : 0;
-        var validPfx = false;
-        if (nextB === 0x28 || nextB === 0x29 || nextB === 0x2A || nextB === 0x38 || nextB === 0x39) validPfx = true;
-        else if (nextB === 0x2E && mode === 'imm') validPfx = true;
-        // $30 = label-ref with expression ($30 LBL $40 PFX VAL). Only valid in
-        // abs-like modes. Also requires the following byte to be a label index.
-        else if (nextB === 0x30 && (mode === 'abs' || mode === 'abs-x' || mode === 'abs-y' ||
-                                    mode === 'zp' || mode === 'zpx' || mode === 'zpy')) {
-          // Label index must be valid
-          if (i + 2 < end && data[i + 2] < labels.length) validPfx = true;
-        }
-        // $2D = '*' (current PC), only in abs-like modes (jmp/jsr/branches).
-        else if (nextB === 0x2D && (mode === 'abs' || mode === 'rel' || mode === 'ind')) validPfx = true;
-        // $44/$45 = '>'/'<' operators, only in imm mode, followed by $38 LBL.
-        else if ((nextB === 0x44 || nextB === 0x45) && mode === 'imm' &&
-                 i + 2 < end && data[i + 2] === 0x38) validPfx = true;
-        if (!validPfx) {
+        if (!tassIsValidOpcodeStart(data, i, end, labels)) {
           if (cur.instr || cur.comment) flush();
           unknownRun.push(b);
           i++;
@@ -605,31 +766,44 @@ function tassTokenizeBlock(data, start, end, labels) {
 }
 
 function tassRenderLineHtml(line) {
-  // Column layout matches TASS's on-screen format:
+  // TASS's on-screen format:
   //   col  0-8: label name (padded with spaces)
   //   col   9+: mnemonic
   //   col  14+: operand
-  //   col  25+: trailing comment (`;comment`)
+  //   `;comment`: at the column the editor placed it — captured in
+  //              line.commentCol from the marker byte ($80 + col). We
+  //              fall back to 23 (the typical trailing-comment column)
+  //              for older code paths that don't set commentCol.
   var html = '';
+  // Track absolute column written so the comment can land at its real
+  // target (line.commentCol is a 0-based absolute column).
+  var col = 0;
   if (line.label) {
     var pad = Math.max(1, 9 - line.label.length);
     html += '<span class="basic-keyword">' + escHtml(line.label) + '</span>' + ' '.repeat(pad);
-  } else {
+    col = line.label.length + pad;
+  } else if (line.instr) {
+    // Indent to col 9 only when there's an instruction. Comment-only lines
+    // anchor on commentCol and emit their own leading spaces below — the
+    // 9-space mnemonic indent would push col-0 ";---" rule lines to col 10.
     html += '         ';
+    col = 9;
   }
-  var instrLen = 0;
   if (line.instr) {
     html += '<span class="basic-keyword">' + escHtml(line.instr) + '</span>';
-    instrLen += line.instr.length;
+    col += line.instr.length;
     if (line.operand) {
       // operandHtml carries pre-built HTML (e.g. `.text` strings with
       // reversed-char spans); operand stays as plain text for length math.
       html += ' ' + (line.operandHtml || escHtml(line.operand));
-      instrLen += 1 + line.operand.length;
+      col += 1 + line.operand.length;
     }
   }
   if (line.comment) {
-    var gap = Math.max(1, 16 - instrLen);
+    var target = (line.commentCol >= 0) ? line.commentCol : 32;
+    // Need at least one space between content and the `;`. If the
+    // operand pushed us past the target column, just use one space.
+    var gap = Math.max((col === 0 || col === 9 ? 0 : 1), target - col);
     html += ' '.repeat(gap) + '<span class="text-muted">;' + escHtml(line.comment) + '</span>';
   }
   return html;
@@ -658,36 +832,52 @@ function showFileTassViewer(entryOff) {
   var labels = labelRes.labels;
   var labelsStart = labelRes.start;
 
-  // Source body starts at $0100 in the PRG payload (after 16-byte header +
-  // editor-state bytes $10-$FF). Find the first $80 at or after that offset —
-  // that's the top-of-source marker.
-  var srcStart = 0x100;
-  while (srcStart < payload.length && payload[srcStart] !== 0x80) srcStart++;
+  // Source body starts at file offset $0100 (after the 2-byte load address
+  // + 14-byte header through the magic + 240 bytes of editor state). In
+  // payload coordinates (load address stripped) that's $00FE. The body
+  // starts directly with content — no leading marker is required (some
+  // files begin with a column-0 comment $80, others with an instruction
+  // or directive). We tokenize from $00FE unconditionally.
+  var srcStart = 0xFE;
 
-  // TASS marks the end of the source body with a sentinel:
-  //   $06 $29 <addr-lo> <addr-hi> <any> $54 $55 $52 $42 $4F $04
-  // The `$06 $29 XX YY` encodes the leading `*= $YYXX` origin directive, and
-  // `$54..$4F $04` = "TURBO" + $04 marks the handoff from user source to
-  // TASS-appended metadata (assembled output, sprite data, etc.). Find the
-  // first occurrence at or after srcStart and treat that as the true source end.
+  // TASS marks the end of the source body with the "TURBO" signature.
+  // Two shapes seen in real files:
+  //   long  : $06 $29 <addr-lo> <addr-hi> <any> $54 $55 $52 $42 $4F $04
+  //   short : <any> $54 $55 $52 $42 $4F …    (no `*= $XXXX` directive)
+  // The `$06 $29 LO HI` form encodes a leading `*= $HILO` origin
+  // directive that we surface as the first display line. The short
+  // form appears when the source has no origin directive (e.g., a
+  // pure-comment file). Either way, "TURBO" marks the handoff from
+  // user source to TASS metadata (assembled output, sprite data, …).
+  var tassSentinelStart = -1;
   var tassSentinelEnd = -1;
   var tassOrigin = -1;
-  for (var ss = srcStart; ss < payload.length - 10; ss++) {
-    if (payload[ss] === 0x06 && payload[ss + 1] === 0x29 &&
-        payload[ss + 5] === 0x54 && payload[ss + 6] === 0x55 &&
-        payload[ss + 7] === 0x52 && payload[ss + 8] === 0x42 &&
-        payload[ss + 9] === 0x4F && payload[ss + 10] === 0x04) {
-      tassOrigin = payload[ss + 2] | (payload[ss + 3] << 8);
-      tassSentinelEnd = ss + 11;
+  for (var ss = srcStart; ss < payload.length - 5; ss++) {
+    if (payload[ss] === 0x54 && payload[ss + 1] === 0x55 &&
+        payload[ss + 2] === 0x52 && payload[ss + 3] === 0x42 &&
+        payload[ss + 4] === 0x4F) {
+      tassSentinelEnd = ss + 5;
+      // Long form? Check for `$06 $29 LO HI <any>` 5 bytes earlier.
+      if (ss >= srcStart + 5 && payload[ss - 5] === 0x06 && payload[ss - 4] === 0x29) {
+        tassOrigin = payload[ss - 3] | (payload[ss - 2] << 8);
+        tassSentinelStart = ss - 5;
+      } else {
+        // Short form: trim back through the immediately-preceding byte
+        // (typically $FF) so it doesn't get treated as source content.
+        tassSentinelStart = ss > srcStart && payload[ss - 1] === 0xFF ? ss - 1 : ss;
+      }
       break;
     }
   }
 
-  // Source body end: if we found the TURBO sentinel, stop at the $06 byte
-  // (so the sentinel itself is excluded from block parsing). Otherwise fall
-  // back to the start of the label table.
-  var srcEnd = tassSentinelEnd > 0 ? (tassSentinelEnd - 11) : labelsStart;
-  while (srcEnd > srcStart && payload[srcEnd - 1] === 0) srcEnd--;
+  // Source body end: stop right before the sentinel preamble. Falls
+  // back to the label-table start when no sentinel is found.
+  // NOTE: don't trim trailing $00 bytes — a $00 just before the sentinel
+  // is often the operand byte of the last instruction (e.g. `bit base0`
+  // where label "base0" is idx 0 → $00 is a legitimate operand byte, not
+  // padding). The TURBO sentinel detection already gives us the precise
+  // end of source content.
+  var srcEnd = tassSentinelStart > 0 ? tassSentinelStart : labelsStart;
 
   // NOTE: $80 is a block separator BUT can also appear as the low byte of an
   // absolute address (e.g. `sta $0580` = $8D $29 $80 $05). Pre-splitting on
@@ -695,7 +885,7 @@ function showFileTassViewer(entryOff) {
   // source as one stream — $80 is only a separator when encountered at an
   // instruction boundary (not mid-operand).
 
-  var html = '<div class="basic-listing">';
+  var html = '<div class="basic-listing tass-screen">';
   if (srcStart >= payload.length) {
     html += '<div class="basic-line">Could not locate source body (no $80 separator found).</div>';
   }
@@ -706,11 +896,10 @@ function showFileTassViewer(entryOff) {
     html += '<div class="basic-line">         <span class="basic-keyword">*=</span> $' + tassOrigin.toString(16).padStart(4, '0') + '</div>';
   }
 
-  // Tokenize the entire source body as one stream (skipping the initial $80
-  // marker). Separator tokens are emitted inside the tokenizer only at true
-  // instruction boundaries, so $80 bytes embedded in operands don't cause
-  // false block splits.
-  var allLines = tassTokenizeBlock(payload, srcStart + 1, srcEnd, labels);
+  // Tokenize the entire source body as one stream. $80-$BF bytes are
+  // comment markers (column = byte - $80), disambiguated against opcodes
+  // by checking the following byte for a valid TASS operand prefix.
+  var allLines = tassTokenizeBlock(payload, srcStart, srcEnd, labels);
 
   // Pure-ASCII run collapsing: a sequence of .byte lines whose bytes are all
   // printable ASCII and which is bookended by separators represents a user
@@ -803,5 +992,5 @@ function showFileTassViewer(entryOff) {
 
   var titleText = 'Turbo Assembler \u2014 "' + name + '" (' + labels.length + ' labels, ' + totalLines + ' lines)';
   if (result.error) titleText += ' \u2014 ' + result.error;
-  showViewerModal(titleText, html);
+  showViewerModal(titleText, html, 'lg');
 }

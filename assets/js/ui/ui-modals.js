@@ -1,6 +1,18 @@
 // ── Modal z-index stacking ────────────────────────────────────────────
 var modalZCounter = 200;
 
+// Charset-toggle re-render hook for modals. Modals that show PETSCII
+// glyphs assign their own render function to this slot when they open;
+// the slot is auto-cleared when the modal closes (see the observer
+// below) so the wrong modal's render isn't called after a close+reopen.
+var modalCharsetRedraw = null;
+
+document.addEventListener('cbm-charsetchange', function() {
+  if (typeof modalCharsetRedraw === 'function') {
+    try { modalCharsetRedraw(); } catch (_) { /* swallow — modal may be closing */ }
+  }
+});
+
 // Auto-manage z-index stacking when modals open/close
 document.addEventListener('DOMContentLoaded', function() {
   var overlays = document.querySelectorAll('.modal-overlay');
@@ -16,6 +28,11 @@ document.addEventListener('DOMContentLoaded', function() {
         el.querySelectorAll('.modal-body').forEach(function(body) {
           body.scrollTop = 0;
         });
+      } else {
+        // Modal just closed — drop any registered charset-redraw so a
+        // future modal that doesn't set one doesn't accidentally fire
+        // the previous modal's render.
+        modalCharsetRedraw = null;
       }
     });
   });

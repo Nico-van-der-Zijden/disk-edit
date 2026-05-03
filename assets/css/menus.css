@@ -69,7 +69,9 @@
     border-radius: 3px;
     padding: 4px 0;
     min-width: 160px;
-    z-index: 100;
+    /* Sit above the floating PETSCII / Separators palettes (z-index 250)
+       so the menus aren't hidden behind them when open. */
+    z-index: 300;
     box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
 
@@ -113,6 +115,9 @@
     border-radius: 3px;
     padding: 4px 0;
     min-width: 180px;
+    /* Same stacking lift as the parent dropdown so submenus sit above
+       the floating PETSCII / Separators palettes. */
+    z-index: 310;
     box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
 

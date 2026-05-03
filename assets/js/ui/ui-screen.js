@@ -202,33 +202,42 @@ function showFileHexViewer(entryOff) {
   }
   var totalBytes = payload.length;
 
-  var html = '<div class="hex-editor">';
-  var rows = Math.ceil(totalBytes / 8) || 1;
-  for (var row = 0; row < rows; row++) {
-    var rowOff = row * 8;
-    var addr = (baseAddr + rowOff) & 0xFFFF;
-    html += '<div class="hex-row"><span class="hex-offset">' + addr.toString(16).toUpperCase().padStart(4, '0') + '</span><span class="hex-bytes">';
-    for (var col = 0; col < 8; col++) {
-      var idx = rowOff + col;
-      html += idx < totalBytes ? '<span class="hex-byte">' + payload[idx].toString(16).toUpperCase().padStart(2, '0') + '</span>' : '<span class="hex-byte" style="opacity:0.2">--</span>';
-    }
-    html += '</span><span class="hex-separator"></span><span class="hex-ascii">';
-    for (var col2 = 0; col2 < 8; col2++) {
-      var idx2 = rowOff + col2;
-      if (idx2 < totalBytes) {
-        var sc = SCREENCODE_MAP[payload[idx2]];
-        html += '<span class="hex-char' + (sc.reversed ? ' petscii-rev' : '') + '">' + escHtml(sc.char) + '</span>';
-      } else {
-        html += '<span class="hex-char" style="opacity:0.2">.</span>';
+  // Body-builder runs fresh each time it's called so SCREENCODE_MAP
+  // changes (Ctrl+Shift charset toggle) flow into the PETSCII column
+  // when modalCharsetRedraw refires render below.
+  function buildHtml() {
+    var html = '<div class="hex-editor">';
+    var rows = Math.ceil(totalBytes / 8) || 1;
+    for (var row = 0; row < rows; row++) {
+      var rowOff = row * 8;
+      var addr = (baseAddr + rowOff) & 0xFFFF;
+      html += '<div class="hex-row"><span class="hex-offset">' + addr.toString(16).toUpperCase().padStart(4, '0') + '</span><span class="hex-bytes">';
+      for (var col = 0; col < 8; col++) {
+        var idx = rowOff + col;
+        html += idx < totalBytes ? '<span class="hex-byte">' + payload[idx].toString(16).toUpperCase().padStart(2, '0') + '</span>' : '<span class="hex-byte" style="opacity:0.2">--</span>';
       }
+      html += '</span><span class="hex-separator"></span><span class="hex-ascii">';
+      for (var col2 = 0; col2 < 8; col2++) {
+        var idx2 = rowOff + col2;
+        if (idx2 < totalBytes) {
+          var sc = SCREENCODE_MAP[payload[idx2]];
+          html += '<span class="hex-char' + (sc.reversed ? ' petscii-rev' : '') + '">' + escHtml(sc.char) + '</span>';
+        } else {
+          html += '<span class="hex-char" style="opacity:0.2">.</span>';
+        }
+      }
+      html += '</span></div>';
     }
-    html += '</span></div>';
+    html += '</div>';
+    return html;
   }
-  html += '</div>';
 
   var titleText = 'Hex View \u2014 "' + name + '" (' + totalBytes + ' bytes' + (isPrg ? ', load $' + baseAddr.toString(16).toUpperCase().padStart(4, '0') : '') + ')';
   if (result.error) titleText += ' \u2014 ' + result.error;
-  showViewerModal(titleText, html);
+  showViewerModal(titleText, buildHtml());
+  modalCharsetRedraw = function() {
+    document.getElementById('modal-body').innerHTML = buildHtml();
+  };
 }
 
 function showFileDisasmViewer(entryOff) {
@@ -432,6 +441,21 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
 
   var body = document.getElementById('modal-body');
   body.innerHTML = html;
+
+  // Repaint just the PETSCII (.hex-char) cells when the user toggles
+  // charset — leaves the hex byte cells (which may have an in-progress
+  // edit) untouched. modalCharsetRedraw is auto-cleared on modal close.
+  modalCharsetRedraw = function() {
+    var b = document.getElementById('modal-body');
+    if (!b) return;
+    b.querySelectorAll('.hex-char[data-idx]').forEach(function(cell) {
+      var idx = parseInt(cell.getAttribute('data-idx'), 10);
+      if (!isNaN(idx) && idx >= 0 && idx < 256) {
+        cell.textContent = PETSCII_MAP[working[idx]];
+      }
+    });
+  };
+
   var footer = document.querySelector('#modal-overlay .modal-footer');
   var origFooter = footer.innerHTML;
   var origFooterClass = footer.className;

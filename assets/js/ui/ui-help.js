@@ -275,6 +275,15 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.104', title: 'TASS source viewer accuracy pass', items: [
+      'TASS V5/V6 source files now render close to what TASS itself shows in VICE — full expression support (operators +, -, *, /, >, <, !, &, ., : and parens for grouping), `label+expr` operands like `sta lbl+1`, multi-column comments, label-defs sharing a line with their instruction, `.offs` directive, binary literals (`%01010101`), and char-immediates (`#"X"`)',
+      'Many byte-disambiguation fixes for 6502 opcodes that double as comment markers, value bytes, or padding — `cpy #$1e` no longer eats the next instruction, NBSP space in comments doesn\'t merge with following opcodes, `$30 IDX` correctly distinguishes label-def from BMI rel, and SCROLL TEXT-style comments with embedded NBSP / digit runs are preserved',
+      'Modal sized to a real C64 screen: 40 chars wide × 23 rows visible, vertical scrollbar reserves its own space so column 39 stays fully readable',
+    ]},
+    { ver: '1.3.103', title: 'Separators palette + charset-toggle modal redraws', items: [
+      'New "Show Separators" floating palette (Disk → Show Separators…) — same draggable-titled-window style as the PETSCII charset float; click a separator while a directory row is selected to insert it there',
+      'Toggling the charset (uppercase ↔ lowercase) now re-renders open modals that show PETSCII glyphs (sector editor, viewers) so what you see always matches the current toggle',
+    ]},
     { ver: '1.3.102', title: 'About screen refresh', items: [
       'Help → About kept its C64 Pro Mono title block but replaced the long bullet list with a grouped feature grid (Edit / View / Disk tools / Export) and a tidy per-family format list (Floppy / CMD / Tape / Other) with a one-line note about round-trip vs read-only',
     ]},

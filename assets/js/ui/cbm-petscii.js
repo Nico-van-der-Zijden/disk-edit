@@ -514,7 +514,9 @@ function ensureFloatBuilt() {
   var titleBar = fl.querySelector('.petscii-float-titlebar');
   var body = fl.querySelector('.petscii-float-body');
 
-  bindFloatDrag(fl, titleBar);
+  bindFloatDrag(fl, titleBar, function(x, y) {
+    floatPosition = { left: x, top: y };
+  });
 
   // Same pickerClicking bracket as the compact picker, so the editor's
   // blur handler doesn't commit the edit while the user clicks a cell.
@@ -542,9 +544,17 @@ function ensureFloatBuilt() {
   return fl;
 }
 
-function bindFloatDrag(fl, handle) {
+// Reusable drag helper for floating titled windows. `onPosChange(x, y)`
+// fires after each move so callers can persist the position in their
+// own state (the PETSCII float keeps it in floatPosition; the
+// separator float in ui-directory has its own variable).
+function bindFloatDrag(fl, handle, onPosChange) {
   handle.addEventListener('pointerdown', function(e) {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // Don't start a drag if the pointer landed on a control inside the
+    // titlebar (close buttons, etc.) — capturing the pointer here would
+    // block the button's click event.
+    if (e.target && e.target.closest('button')) return;
     e.preventDefault();
 
     // First-drag normalization: convert the centered transform to inline
@@ -572,7 +582,7 @@ function bindFloatDrag(fl, handle) {
       ny = Math.max(0, Math.min(window.innerHeight - height, ny));
       fl.style.left = nx + 'px';
       fl.style.top = ny + 'px';
-      floatPosition = { left: nx, top: ny };
+      if (typeof onPosChange === 'function') onPosChange(nx, ny);
     }
     function onUp() {
       handle.classList.remove('dragging');
