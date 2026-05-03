@@ -6,6 +6,44 @@ function closeContextMenu() {
   contextMenu.innerHTML = '';
 }
 
+// Hide disabled options in the cloned context menu, plus submenu parents
+// whose entire submenu is dead, plus any separators that become orphaned
+// (leading, trailing, or adjacent) once their neighbours are gone.
+function hideDisabledContextItems() {
+  contextMenu.querySelectorAll('.option.disabled').forEach(function(el) {
+    el.style.display = 'none';
+  });
+  contextMenu.querySelectorAll('.has-submenu').forEach(function(parent) {
+    if (parent.style.display === 'none') return;
+    var sub = parent.querySelector(':scope > .submenu');
+    if (!sub) return;
+    var hasLive = false;
+    sub.querySelectorAll(':scope > .option').forEach(function(c) {
+      if (c.classList.contains('disabled')) return;
+      if (c.style.display === 'none') return;
+      hasLive = true;
+    });
+    if (!hasLive) parent.style.display = 'none';
+  });
+  var visible = Array.from(contextMenu.children).filter(function(c) {
+    return c.style.display !== 'none';
+  });
+  while (visible.length && visible[0].classList.contains('separator')) {
+    visible[0].style.display = 'none';
+    visible.shift();
+  }
+  while (visible.length && visible[visible.length - 1].classList.contains('separator')) {
+    visible[visible.length - 1].style.display = 'none';
+    visible.pop();
+  }
+  for (var i = visible.length - 1; i > 0; i--) {
+    if (visible[i].classList.contains('separator') &&
+        visible[i - 1].classList.contains('separator')) {
+      visible[i].style.display = 'none';
+    }
+  }
+}
+
 function showContextMenu(x, y) {
   // Close top menubar if open
   closeMenus();
@@ -39,18 +77,27 @@ function showContextMenu(x, y) {
     }
   });
 
+  // Hide disabled clones: a popup menu only shows what can be actioned right
+  // now. The persistent menubar still grays disabled items for discovery.
+  hideDisabledContextItems();
+
   // Bind submenu open/close via mouseenter/mouseleave (more reliable than
   // CSS :hover). Plus a click handler so taps work on touch devices —
   // mouseenter doesn't fire reliably on touch and the bare tap would
   // otherwise bubble out and close the context menu before the submenu
   // appears.
   function openContextSubmenu(item) {
-    contextMenu.querySelectorAll('.has-submenu.submenu-open').forEach(function(el) {
-      if (el !== item) el.classList.remove('submenu-open');
-    });
+    // Only close direct siblings — closing all open submenus would also
+    // close ancestors when the user drills into a nested has-submenu.
+    var parent = item.parentElement;
+    if (parent) {
+      parent.querySelectorAll(':scope > .has-submenu.submenu-open').forEach(function(el) {
+        if (el !== item) el.classList.remove('submenu-open');
+      });
+    }
     if (!item.classList.contains('disabled')) {
       item.classList.add('submenu-open');
-      var sub = item.querySelector('.submenu');
+      var sub = item.querySelector(':scope > .submenu');
       if (sub) adjustSubmenu(sub);
     }
   }
@@ -63,10 +110,13 @@ function showContextMenu(x, y) {
     });
     item.addEventListener('click', function(e) {
       if (item.classList.contains('disabled')) return;
-      // Don't swallow clicks that originate inside the .submenu — they
-      // need to bubble up to the delegated #context-menu handler so the
-      // original action fires. Only the header itself toggles the submenu.
-      if (e.target.closest('.submenu')) return;
+      // Clicks inside this item's OWN submenu need to bubble to the
+      // delegated handler so the action fires; only the header toggles.
+      // (Checking any ancestor .submenu would break nested has-submenu —
+      // a click on a nested header is technically inside its parent's
+      // submenu, but should still open its own.)
+      var ownSub = item.querySelector(':scope > .submenu');
+      if (ownSub && ownSub.contains(e.target)) return;
       e.stopPropagation();
       openContextSubmenu(item);
     });

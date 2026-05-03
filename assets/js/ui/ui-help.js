@@ -275,6 +275,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.106', title: 'Tidier File menu and right-click', items: [
+      'Right-click context menu hides options that aren\'t actionable right now instead of greying them out — typically less than half the entries are live for any given file, so the popup is much shorter',
+      'Separator handling unified into a single File → Separator submenu (Insert ▸ / Save Current as New / Edit List…) — replaces the old "Insert Separator", "Save as Separator", and Edit menu\'s "Edit Separators" entries',
+    ]},
     { ver: '1.3.105', title: 'Right-click context menu fix', items: [
       'Right-clicking a file now operates on that file, not the previously-selected one — affects export, copy, delete, lock/unlock, splat/unsplat, geoWrite preview/RTF/PDF, CVT export, and every other entry action',
       'Right-clicking inside an existing multi-selection still acts on the whole selection',

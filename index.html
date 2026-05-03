@@ -187,8 +187,14 @@
     <div class="menu-dropdown">
       <div class="option disabled" id="opt-rename">Rename</div>
       <div class="option disabled" id="opt-insert">Insert File</div>
-      <div class="option disabled has-submenu" id="opt-insert-sep">Insert Separator
-        <div class="submenu" id="sep-submenu"></div>
+      <div class="option has-submenu" id="opt-separator">Separator
+        <div class="submenu">
+          <div class="option disabled has-submenu" id="opt-insert-sep">Insert
+            <div class="submenu" id="sep-submenu"></div>
+          </div>
+          <div class="option disabled" id="opt-save-sep">Save Current as New</div>
+          <div class="option" id="opt-edit-separators">Edit List&hellip;</div>
+        </div>
       </div>
       <div class="option disabled" id="opt-copy">Copy File</div>
       <div class="option disabled" id="opt-paste">Paste File</div>
@@ -247,7 +253,6 @@
         </div>
       </div>
       <div class="separator"></div>
-      <div class="option disabled" id="opt-save-sep">Save as Separator</div>
       <div class="option disabled has-submenu" id="opt-export-menu">Export
         <div class="submenu">
           <div class="option disabled" id="opt-export">Export File</div>
@@ -265,8 +270,6 @@
     Edit
     <div class="menu-dropdown">
       <div class="option disabled" id="opt-undo">Undo</div>
-      <div class="separator"></div>
-      <div class="option" id="opt-edit-separators">Edit Separators</div>
       <div class="separator"></div>
       <div class="option disabled" id="opt-edit-sector">Edit Current Sector</div>
       <div class="option disabled" id="opt-edit-file-sector">Edit File Sector</div>
