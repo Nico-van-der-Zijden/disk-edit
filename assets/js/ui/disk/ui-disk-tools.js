@@ -190,6 +190,26 @@ document.getElementById('opt-show-ts').addEventListener('click', (e) => {
   }
 });
 
+// ── Hex Coloring picker ────────────────────────────────────────────
+// Each sub-option carries data-hex-coloring; click flips the active
+// scheme on every open .hex-editor (no rebuild — the data-coloring
+// attribute alone toggles which CSS rules match).
+function refreshHexColoringChecks() {
+  var ids = { none: 'check-hex-none', hexyl: 'check-hex-hexyl', rgb: 'check-hex-rgb', nybble: 'check-hex-nybble' };
+  Object.keys(ids).forEach(function(k) {
+    var el = document.getElementById(ids[k]);
+    if (el) el.innerHTML = (hexColoring === k) ? '<i class="fa-solid fa-check"></i>' : '';
+  });
+}
+document.querySelectorAll('#opt-hex-coloring [data-hex-coloring]').forEach(function(opt) {
+  opt.addEventListener('click', function(e) {
+    e.stopPropagation();
+    closeMenus();
+    setHexColoring(opt.getAttribute('data-hex-coloring'));
+    refreshHexColoringChecks();
+  });
+});
+
 
 // ── Disk menu: Fill Free Sectors ─────────────────────────────────────
 document.getElementById('opt-fill-free').addEventListener('click', function(e) {

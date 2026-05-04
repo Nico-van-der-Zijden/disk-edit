@@ -180,6 +180,29 @@ function showFilePetsciiViewer(entryOff) {
   document.getElementById('modal-overlay').classList.add('open');
 }
 
+// ── Per-byte CSS classes for the Hex Coloring schemes ────────────────
+// Every .hex-byte / .hex-char cell carries one hexyl class (hb-h-…) and
+// one nybble class (hb-n-…). Which scheme actually paints colour is
+// decided by the data-coloring attribute on the parent .hex-editor; with
+// data-coloring="none" no rule matches and the cell uses the default
+// .hex-byte colour. The xcd-rgb scheme uses [data-byte] instead.
+function byteClasses(b) {
+  var h;
+  if (b === 0x00) h = 'hb-h-null';
+  else if (b === 0x20 || b === 0xA0) h = 'hb-h-ws';
+  else if (b <= 0x1F || (b >= 0x80 && b <= 0x9F)) h = 'hb-h-ctrl';
+  else if (b <= 0x7F) h = 'hb-h-print';
+  else h = 'hb-h-high';
+  var n = b === 0x00 ? 'hb-n-00'
+        : b === 0xFF ? 'hb-n-ff'
+        : 'hb-n-' + (b >> 4).toString(16);
+  return h + ' ' + n;
+}
+
+function byteHex(b) {
+  return b.toString(16).toUpperCase().padStart(2, '0');
+}
+
 // ── File hex viewer (read-only) ───────────────────────────────────────
 function showFileHexViewer(entryOff) {
   if (!currentBuffer) return;
@@ -206,7 +229,7 @@ function showFileHexViewer(entryOff) {
   // changes (Ctrl+Shift charset toggle) flow into the PETSCII column
   // when modalCharsetRedraw refires render below.
   function buildHtml() {
-    var html = '<div class="hex-editor">';
+    var html = '<div class="hex-editor" data-coloring="' + hexColoring + '">';
     var rows = Math.ceil(totalBytes / 8) || 1;
     for (var row = 0; row < rows; row++) {
       var rowOff = row * 8;
@@ -214,14 +237,21 @@ function showFileHexViewer(entryOff) {
       html += '<div class="hex-row"><span class="hex-offset">' + addr.toString(16).toUpperCase().padStart(4, '0') + '</span><span class="hex-bytes">';
       for (var col = 0; col < 8; col++) {
         var idx = rowOff + col;
-        html += idx < totalBytes ? '<span class="hex-byte">' + payload[idx].toString(16).toUpperCase().padStart(2, '0') + '</span>' : '<span class="hex-byte" style="opacity:0.2">--</span>';
+        if (idx < totalBytes) {
+          var bv = payload[idx];
+          var bvHex = byteHex(bv);
+          html += '<span class="hex-byte ' + byteClasses(bv) + '" data-byte="' + bvHex + '">' + bvHex + '</span>';
+        } else {
+          html += '<span class="hex-byte" style="opacity:0.2">--</span>';
+        }
       }
       html += '</span><span class="hex-separator"></span><span class="hex-ascii">';
       for (var col2 = 0; col2 < 8; col2++) {
         var idx2 = rowOff + col2;
         if (idx2 < totalBytes) {
-          var sc = SCREENCODE_MAP[payload[idx2]];
-          html += '<span class="hex-char' + (sc.reversed ? ' petscii-rev' : '') + '">' + escHtml(sc.char) + '</span>';
+          var bv2 = payload[idx2];
+          var sc = SCREENCODE_MAP[bv2];
+          html += '<span class="hex-char ' + byteClasses(bv2) + (sc.reversed ? ' petscii-rev' : '') + '" data-byte="' + byteHex(bv2) + '">' + escHtml(sc.char) + '</span>';
         } else {
           html += '<span class="hex-char" style="opacity:0.2">.</span>';
         }
@@ -395,7 +425,7 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     }
   }
 
-  var html = '<div class="hex-editor">';
+  var html = '<div class="hex-editor" data-coloring="' + hexColoring + '">';
   for (var row = 0; row < 32; row++) {
     var rowOff = row * 8;
     html += '<div class="hex-row">';
@@ -404,16 +434,17 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     for (var col = 0; col < 8; col++) {
       var idx = rowOff + col;
       var b = working[idx];
+      var bHex = byteHex(b);
       var hl = hlSet[idx] ? ' hex-highlight' : '';
-      html += '<span class="hex-byte' + hl + '" data-idx="' + idx + '" data-row="' + row + '">' +
-        b.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+      html += '<span class="hex-byte ' + byteClasses(b) + hl + '" data-byte="' + bHex + '" data-idx="' + idx + '" data-row="' + row + '">' + bHex + '</span>';
     }
     html += '</span>';
     html += '<span class="hex-separator"></span>';
     html += '<span class="hex-ascii">';
     for (var col2 = 0; col2 < 8; col2++) {
       var idx2 = rowOff + col2;
-      html += '<span class="hex-char" data-idx="' + idx2 + '">' + escHtml(PETSCII_MAP[working[idx2]]) + '</span>';
+      var b2 = working[idx2];
+      html += '<span class="hex-char ' + byteClasses(b2) + '" data-byte="' + byteHex(b2) + '" data-idx="' + idx2 + '">' + escHtml(PETSCII_MAP[b2]) + '</span>';
     }
     html += '</span>';
     html += '</div>';
@@ -603,13 +634,31 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
 
   function updateByte(idx, val) {
     working[idx] = val;
+    var hex = byteHex(val);
     var byteEl = body.querySelector('.hex-byte[data-idx="' + idx + '"]');
     var charEl = body.querySelector('.hex-char[data-idx="' + idx + '"]');
     if (byteEl) {
-      byteEl.textContent = val.toString(16).toUpperCase().padStart(2, '0');
+      byteEl.textContent = hex;
       byteEl.classList.toggle('modified', val !== original[idx]);
+      applyByteClasses(byteEl, val);
+      byteEl.setAttribute('data-byte', hex);
     }
-    if (charEl) charEl.innerHTML = escHtml(PETSCII_MAP[val]);
+    if (charEl) {
+      charEl.innerHTML = escHtml(PETSCII_MAP[val]);
+      applyByteClasses(charEl, val);
+      charEl.setAttribute('data-byte', hex);
+    }
+  }
+  // Replace any existing hb-h-* / hb-n-* on the cell with classes that
+  // match the new byte value. Keeps everything else (modified, editing,
+  // hex-highlight, petscii-rev) intact.
+  function applyByteClasses(el, val) {
+    var stale = [];
+    el.classList.forEach(function(c) {
+      if (c.indexOf('hb-h-') === 0 || c.indexOf('hb-n-') === 0) stale.push(c);
+    });
+    stale.forEach(function(c) { el.classList.remove(c); });
+    byteClasses(val).split(' ').forEach(function(c) { el.classList.add(c); });
   }
 
   function startEdit(idx) {

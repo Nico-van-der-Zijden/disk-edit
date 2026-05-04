@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 106 };
+var APP_VERSION = { major: 1, minor: 3, build: 107 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -10,6 +10,43 @@ var selectedEntryIndex = -1;
 var selectedEntries = []; // multi-select: array of entryOff values
 var showAddresses = localStorage.getItem('cbm-showAddresses') !== 'false';
 var showTrackSector = localStorage.getItem('cbm-showTrackSector') !== 'false';
+var hexColoring = localStorage.getItem('cbm-hexColoring') || 'none'; // none | hexyl | rgb | nybble
+function setHexColoring(name) {
+  hexColoring = name;
+  localStorage.setItem('cbm-hexColoring', name);
+  document.querySelectorAll('.hex-editor').forEach(function(el) {
+    el.setAttribute('data-coloring', name);
+  });
+}
+// Inject 256 per-byte rules for the xcd-rgb scheme. Done in JS so the
+// static CSS file stays readable. Each byte gets one hue (i/256 * 360),
+// brighter L on dark theme, darker on light. Bytes $80-$FF (which the
+// hex viewer always renders with .petscii-rev — see buildScreencodeMap)
+// also get a background-flip rule that uses the same hue, matching the
+// hexyl/nybble overrides in hex-coloring.css.
+(function injectHexColoringRgbRules() {
+  if (typeof document === 'undefined' || !document.head) return;
+  if (document.getElementById('hex-coloring-rgb')) return;
+  var dark = '', light = '';
+  for (var i = 0; i < 256; i++) {
+    var hex = i.toString(16).toUpperCase().padStart(2, '0');
+    var hue = (i / 256 * 360).toFixed(1);
+    var darkColor  = 'oklch(75% 0.18 ' + hue + ')';
+    var lightColor = 'oklch(55% 0.18 ' + hue + ')';
+    dark  += '.hex-editor[data-coloring="rgb"] [data-byte="' + hex + '"]{color:' + darkColor + ';}';
+    light += '[data-theme="light"] .hex-editor[data-coloring="rgb"] [data-byte="' + hex + '"]{color:' + lightColor + ';}';
+    if (i >= 0x80) {
+      // Shared `color: var(--bg)` for all reversed cells lives in
+      // hex-coloring.css; only background needs the per-byte override.
+      dark  += '.hex-editor[data-coloring="rgb"] .hex-char.petscii-rev[data-byte="' + hex + '"]{background:' + darkColor + ' !important;}';
+      light += '[data-theme="light"] .hex-editor[data-coloring="rgb"] .hex-char.petscii-rev[data-byte="' + hex + '"]{background:' + lightColor + ' !important;}';
+    }
+  }
+  var style = document.createElement('style');
+  style.id = 'hex-coloring-rgb';
+  style.textContent = dark + light;
+  document.head.appendChild(style);
+})();
 var currentPartition = null; // null = root, or { entryOff, startTrack, partSize, name }
 
 // ── CMD container state (RAMLink, D1M/D2M/D4M, …) ───────────────────

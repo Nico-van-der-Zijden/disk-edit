@@ -69,7 +69,7 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 - LYNX (.lnx) archive extraction: drop an archive and every file lands on a fresh D64 tab; CVT-containing archives unpack to a GEOS-formatted disk with proper VLIR structure
 
 ### Viewers
-- **Hex**: Full sector editor with track/sector navigation
+- **Hex**: Full sector editor with track/sector navigation, optional per-byte coloring (hexyl, xcd-rgb, Nybble) inspired by simonomi.dev
 - **BASIC**: V2, V3.5, V7, Simons' BASIC, Final Cartridge III
 - **PETSCII**: C64 screen rendering with color codes
 - **Disassembly**: 6502/6510 with illegal opcodes
@@ -160,6 +160,7 @@ assets/
     utilities.css       Utility classes, form elements, code tags
     bam.css             BAM viewer, compact bars, canvas map
     viewers.css         Error bytes, file viewer, separator editor
+    hex-coloring.css    Per-byte coloring schemes for hex viewer / sector editor
   js/
     format/                       Disk format parsers and decoders
       cbm-format.js               Core: disk format table, sector geometry, BAM, file reading

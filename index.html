@@ -59,6 +59,7 @@
 <link rel="stylesheet" href="assets/css/utilities.css">
 <link rel="stylesheet" href="assets/css/bam.css">
 <link rel="stylesheet" href="assets/css/viewers.css">
+<link rel="stylesheet" href="assets/css/hex-coloring.css">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='2' width='56' height='60' rx='4' fill='%231a1a2e' stroke='%23666' stroke-width='2'/%3E%3Crect x='20' y='2' width='24' height='16' rx='2' fill='%23999'/%3E%3Crect x='26' y='4' width='12' height='12' rx='1' fill='%231a1a2e'/%3E%3Ccircle cx='32' cy='35' r='13' fill='none' stroke='%23555' stroke-width='1.5'/%3E%3Ccircle cx='32' cy='35' r='5' fill='%23666'/%3E%3Crect x='8' y='50' width='48' height='10' rx='2' fill='%23e8e8e8'/%3E%3Cline x1='12' y1='53' x2='40' y2='53' stroke='%234a6fa5' stroke-width='1.5'/%3E%3Cline x1='12' y1='56' x2='32' y2='56' stroke='%234a6fa5' stroke-width='1.5'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -306,6 +307,14 @@
         <div class="submenu">
           <div class="option" id="opt-theme-dark"><span class="check" id="check-theme-dark"></span>Dark</div>
           <div class="option" id="opt-theme-light"><span class="check" id="check-theme-light"></span>Light</div>
+        </div>
+      </div>
+      <div class="option has-submenu" id="opt-hex-coloring">Hex Coloring
+        <div class="submenu">
+          <div class="option" data-hex-coloring="none"><span class="check" id="check-hex-none"></span>None</div>
+          <div class="option" data-hex-coloring="hexyl"><span class="check" id="check-hex-hexyl"></span>hexyl</div>
+          <div class="option" data-hex-coloring="rgb"><span class="check" id="check-hex-rgb"></span>xcd-rgb</div>
+          <div class="option" data-hex-coloring="nybble"><span class="check" id="check-hex-nybble"></span>Nybble</div>
         </div>
       </div>
       <div class="separator"></div>

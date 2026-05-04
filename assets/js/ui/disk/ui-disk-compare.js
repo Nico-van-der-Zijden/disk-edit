@@ -326,7 +326,7 @@ function showSectorHexDiff(body, diskA, diskB, track, sector, sd) {
   // so the look matches the file Hex View. Each row of 8 bytes is shown
   // twice — once for A, once for B — with differing bytes highlighted
   // via .cmp-hex-diff on the byte cell and the matching ASCII char.
-  html += '<div class="hex-editor cmp-hex-editor">';
+  html += '<div class="hex-editor cmp-hex-editor" data-coloring="' + hexColoring + '">';
   for (var row = 0; row < 32; row++) {
     var rowOff = row * 8;
     var diffBits = [];
@@ -365,10 +365,12 @@ function renderHexRow(side, data, sectorOff, rowOff, diffBits) {
     var b = data[idx];
     var diff = diffBits[col];
     var sc = SCREENCODE_MAP[b];
-    var byteCls = 'hex-byte' + (diff ? ' cmp-hex-diff' : '');
-    var charCls = 'hex-char' + (sc.reversed ? ' petscii-rev' : '') + (diff ? ' cmp-hex-diff' : '');
-    bytesHtml += '<span class="' + byteCls + '">' + b.toString(16).toUpperCase().padStart(2, '0') + '</span>';
-    asciiHtml += '<span class="' + charCls + '">' + escHtml(sc.char) + '</span>';
+    var bc = byteClasses(b);
+    var bHex = byteHex(b);
+    var byteCls = 'hex-byte ' + bc + (diff ? ' cmp-hex-diff' : '');
+    var charCls = 'hex-char ' + bc + (sc.reversed ? ' petscii-rev' : '') + (diff ? ' cmp-hex-diff' : '');
+    bytesHtml += '<span class="' + byteCls + '" data-byte="' + bHex + '">' + bHex + '</span>';
+    asciiHtml += '<span class="' + charCls + '" data-byte="' + bHex + '">' + escHtml(sc.char) + '</span>';
   }
   return '<div class="hex-row cmp-hex-row">' +
     '<span class="cmp-hex-side">' + side + '</span>' +

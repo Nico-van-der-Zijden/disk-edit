@@ -1,0 +1,156 @@
+/* ── Hex Coloring schemes ─────────────────────────────────────────────
+   Per-byte coloring for the hex viewer, sector editor, and disk-compare
+   view. Schemes are gated on the .hex-editor[data-coloring="X"] parent
+   attribute set by setHexColoring() (cbm-editor.js). When the attribute
+   is absent or "none", no rule matches and the cell uses the default
+   .hex-byte colour from utilities.css.
+
+   Cells emit one hexyl class (hb-h-…) and one nybble class (hb-n-…),
+   plus data-byte="XX" for the rgb scheme. See byteClasses() in
+   ui-screen.js for the bucketing.
+   ──────────────────────────────────────────────────────────────────── */
+
+/* Variables. :root holds dark-theme values (the default); the light
+   override only changes the things that actually differ — the hexyl
+   palette, $00/$FF, and --hb-l (the OKLCH lightness shared by every
+   nybble colour). The 16 nybble vars themselves declare their hue
+   once and pick up the active --hb-l at use time. */
+:root {
+  --hb-l:     75%;
+  --hb-null:  #808080;
+  --hb-ff:    #ffffff;
+  --hb-ws:    #6db4ff;
+  --hb-print: #5dd39e;
+  --hb-ctrl:  #d68aff;
+  --hb-high:  #f0a050;
+  --hb-n-0: oklch(var(--hb-l) 0.18  20);
+  --hb-n-1: oklch(var(--hb-l) 0.18  45);
+  --hb-n-2: oklch(var(--hb-l) 0.18  75);
+  --hb-n-3: oklch(var(--hb-l) 0.18 105);
+  --hb-n-4: oklch(var(--hb-l) 0.18 135);
+  --hb-n-5: oklch(var(--hb-l) 0.18 160);
+  --hb-n-6: oklch(var(--hb-l) 0.18 190);
+  --hb-n-7: oklch(var(--hb-l) 0.18 220);
+  --hb-n-8: oklch(var(--hb-l) 0.18 250);
+  --hb-n-9: oklch(var(--hb-l) 0.18 280);
+  --hb-n-a: oklch(var(--hb-l) 0.18 305);
+  --hb-n-b: oklch(var(--hb-l) 0.18 330);
+  --hb-n-c: oklch(var(--hb-l) 0.18 355);
+  --hb-n-d: oklch(var(--hb-l) 0.18  10);
+  --hb-n-e: oklch(var(--hb-l) 0.18  60);
+  --hb-n-f: oklch(var(--hb-l) 0.18 120);
+}
+
+[data-theme="light"] {
+  --hb-l:     55%;
+  --hb-null:  #707070;
+  --hb-ff:    #000000;
+  --hb-ws:    #2a5b9b;
+  --hb-print: #2a8055;
+  --hb-ctrl:  #8a3eb8;
+  --hb-high:  #a85a10;
+}
+
+/* ── hexyl (PETSCII categories) ────────────────────────────────────── */
+.hex-editor[data-coloring="hexyl"] .hex-byte.hb-h-null,
+.hex-editor[data-coloring="hexyl"] .hex-char.hb-h-null  { color: var(--hb-null); }
+.hex-editor[data-coloring="hexyl"] .hex-byte.hb-h-ws,
+.hex-editor[data-coloring="hexyl"] .hex-char.hb-h-ws    { color: var(--hb-ws); }
+.hex-editor[data-coloring="hexyl"] .hex-byte.hb-h-print,
+.hex-editor[data-coloring="hexyl"] .hex-char.hb-h-print { color: var(--hb-print); }
+.hex-editor[data-coloring="hexyl"] .hex-byte.hb-h-ctrl,
+.hex-editor[data-coloring="hexyl"] .hex-char.hb-h-ctrl  { color: var(--hb-ctrl); }
+.hex-editor[data-coloring="hexyl"] .hex-byte.hb-h-high,
+.hex-editor[data-coloring="hexyl"] .hex-char.hb-h-high  { color: var(--hb-high); }
+
+/* ── Nybble (author's 18-group scheme) ─────────────────────────────── */
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-0,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-0 { color: var(--hb-n-0); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-1,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-1 { color: var(--hb-n-1); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-2,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-2 { color: var(--hb-n-2); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-3,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-3 { color: var(--hb-n-3); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-4,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-4 { color: var(--hb-n-4); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-5,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-5 { color: var(--hb-n-5); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-6,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-6 { color: var(--hb-n-6); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-7,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-7 { color: var(--hb-n-7); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-8,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-8 { color: var(--hb-n-8); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-9,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-9 { color: var(--hb-n-9); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-a,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-a { color: var(--hb-n-a); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-b,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-b { color: var(--hb-n-b); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-c,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-c { color: var(--hb-n-c); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-d,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-d { color: var(--hb-n-d); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-e,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-e { color: var(--hb-n-e); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-f,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-f { color: var(--hb-n-f); }
+/* 00 and FF override the generic 0/F rules — must come AFTER. */
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-00,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-00 { color: var(--hb-null); }
+.hex-editor[data-coloring="nybble"] .hex-byte.hb-n-ff,
+.hex-editor[data-coloring="nybble"] .hex-char.hb-n-ff { color: var(--hb-ff); }
+
+/* ── xcd-rgb ──
+   The 256 per-byte rules are injected at runtime by
+   injectHexColoringRgbRules() in cbm-editor.js so we don't repeat 256
+   nearly-identical lines here. They follow the same .hex-editor[
+   data-coloring="rgb"] [data-byte="XX"] { color: oklch(...) } shape. */
+
+/* ── Petscii-rev clash handling ───────────────────────────────────────
+   In the hex viewer, every byte $80-$FF gets .petscii-rev (the right-
+   column glyph is drawn reversed because that's how a C64 monitor
+   prints high screen codes — see buildScreencodeMap). With colouring
+   active we want those cells to keep the inverted look but using the
+   active scheme's hue as the background, not var(--accent).
+
+   One explicit rule per scheme and per bucket that can hold a $80+
+   byte. `currentColor` does not work here because we also set
+   color:var(--bg) on the same element, which would make background
+   and foreground resolve to the same value. The rgb scheme's 128
+   reversed-byte rules are emitted alongside the regular rgb rules in
+   injectHexColoringRgbRules() (cbm-editor.js). */
+
+/* Shared foreground for any reversed cell under any active scheme.
+   !important wins over the default .hex-ascii .petscii-rev rule
+   (utilities.css) regardless of cascade order, so bucket rules below
+   only need to override `background`. */
+.hex-editor[data-coloring="hexyl"]  .hex-char.petscii-rev,
+.hex-editor[data-coloring="nybble"] .hex-char.petscii-rev,
+.hex-editor[data-coloring="rgb"]    .hex-char.petscii-rev {
+  color: var(--bg) !important;
+}
+
+/* hexyl — buckets that include any byte $80-$FF */
+.hex-editor[data-coloring="hexyl"] .hex-char.petscii-rev.hb-h-ctrl { background: var(--hb-ctrl) !important; }
+.hex-editor[data-coloring="hexyl"] .hex-char.petscii-rev.hb-h-ws   { background: var(--hb-ws)   !important; }
+.hex-editor[data-coloring="hexyl"] .hex-char.petscii-rev.hb-h-high { background: var(--hb-high) !important; }
+
+/* nybble — leading nybble 8..F (every byte in those buckets is $80+) */
+.hex-editor[data-coloring="nybble"] .hex-char.petscii-rev.hb-n-8 { background: var(--hb-n-8) !important; }
+.hex-editor[data-coloring="nybble"] .hex-char.petscii-rev.hb-n-9 { background: var(--hb-n-9) !important; }
+.hex-editor[data-coloring="nybble"] .hex-char.petscii-rev.hb-n-a { background: var(--hb-n-a) !important; }
+.hex-editor[data-coloring="nybble"] .hex-char.petscii-rev.hb-n-b { background: var(--hb-n-b) !important; }
+.hex-editor[data-coloring="nybble"] .hex-char.petscii-rev.hb-n-c { background: var(--hb-n-c) !important; }
+.hex-editor[data-coloring="nybble"] .hex-char.petscii-rev.hb-n-d { background: var(--hb-n-d) !important; }
+.hex-editor[data-coloring="nybble"] .hex-char.petscii-rev.hb-n-e { background: var(--hb-n-e) !important; }
+.hex-editor[data-coloring="nybble"] .hex-char.petscii-rev.hb-n-f { background: var(--hb-n-f) !important; }
+/* $FF — must come AFTER hb-n-f. */
+.hex-editor[data-coloring="nybble"] .hex-char.petscii-rev.hb-n-ff { background: var(--hb-ff) !important; }
+
+/* The .modified marker in the sector editor wins over scheme colour —
+   keep it visible by giving it higher specificity. */
+.hex-editor[data-coloring] .hex-byte.modified { color: var(--color-dir); }
+
+/* Diff highlight in compare view stays — uses background, not color. */

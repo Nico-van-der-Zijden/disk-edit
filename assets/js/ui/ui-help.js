@@ -161,6 +161,7 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '&bull; <a href="https://www.pagetable.com/?p=1070" target="_blank" class="link">Visualizing a 1541 Floppy Disk</a> by Michael Steil — concentric-ring raw GCR rendering style used in the G64 Layout viewer<br>' +
       '&bull; <a href="https://github.com/markusC64/nibtools" target="_blank" class="link">nibtools</a> by Pete Rittwage and contributors — NIB file format reference for the .nib reader<br>' +
       '&bull; LZ77 compressor/decompressor by Marcus Geelnard (2003-2006, BSD-3) — distributed inside <a href="https://github.com/markusC64/nibtools/blob/upstream/lz.c" target="_blank" class="link">nibtools/lz.c</a>; algorithm ported to JS for the .nbz reader<br>' +
+      '&bull; <a href="https://simonomi.dev/blog/color-code-your-bytes/" target="_blank" class="link">Color-code your bytes</a> by simonomi — schemes (hexyl, xcd-rgb, nybble) for the optional Hex Coloring picker<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
@@ -275,6 +276,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.107', title: 'Hex Coloring picker', items: [
+      'New Options → Hex Coloring submenu adds optional per-byte coloring to the hex viewer, sector editor, and side-by-side compare view. Choices: None (default), hexyl (5 buckets — null/whitespace/printable/control/high), xcd-rgb (full 256-hue rainbow), Nybble (one colour per leading nibble, $00 and $FF dedicated)',
+      'Both the hex column and the PETSCII column get the active scheme\'s colour. Bytes $80-$FF still render reversed in the PETSCII column — the inverted background now uses the scheme hue instead of the accent color so the two columns stay visually paired',
+      'Active scheme persists in localStorage and is included in the Export Settings dump; switching schemes recolours every open hex modal instantly with no rebuild',
+      'Schemes inspired by simonomi.dev — see Help → Credits & Thanks',
+    ]},
     { ver: '1.3.106', title: 'Tidier File menu and right-click', items: [
       'Right-click context menu hides options that aren\'t actionable right now instead of greying them out — typically less than half the entries are live for any given file, so the popup is much shorter',
       'Separator handling unified into a single File → Separator submenu (Insert ▸ / Save Current as New / Edit List…) — replaces the old "Insert Separator", "Save as Separator", and Edit menu\'s "Edit Separators" entries',
