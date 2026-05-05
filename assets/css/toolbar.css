@@ -1,0 +1,69 @@
+/* ── Toolbar ─────────────────────────────────────────────────────────
+   Thin icon strip under the menubar. Each button delegates to its
+   target menu item via data-cmd, so disabled state is mirrored from
+   the menu (refreshToolbarState in ui-toolbar.js). Hidden when
+   `toolbar` body class is absent (Options → Show Toolbar). */
+
+  .toolbar {
+    display: none;
+    align-items: center;
+    background: var(--bg-menu);
+    border-bottom: 1px solid var(--border);
+    padding: 4px 6px;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  body.toolbar-on .toolbar {
+    display: flex;
+  }
+
+  .toolbar-group {
+    display: flex;
+    gap: 2px;
+  }
+
+  .toolbar-sep {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    margin: 0 4px;
+    flex-shrink: 0;
+  }
+
+  .toolbar-btn {
+    width: 28px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 13px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .toolbar-btn:hover:not(.disabled) {
+    background: var(--menu-hover);
+    border-color: var(--border);
+  }
+
+  .toolbar-btn:active:not(.disabled) {
+    background: var(--hover-edit);
+  }
+
+  .toolbar-btn.disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+
+  /* Hide on the same breakpoint that hides the desktop menu items —
+     the mobile hamburger covers the same actions. */
+  @media (max-width: 720px) {
+    .toolbar {
+      display: none !important;
+    }
+  }

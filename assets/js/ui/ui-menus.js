@@ -773,5 +773,6 @@ function updateEntryMenuState() {
       footerTs.textContent = '';
     }
   }
+  if (typeof refreshToolbarState === 'function') refreshToolbarState();
 }
 

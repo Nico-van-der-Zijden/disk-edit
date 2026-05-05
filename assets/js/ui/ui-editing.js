@@ -216,6 +216,7 @@ function updateMenuState() {
   document.getElementById('opt-find').classList.toggle('disabled', !hasDisk || containerList);
   document.getElementById('opt-find-tabs').classList.toggle('disabled', tabs.length === 0);
   document.getElementById('opt-goto-sector').classList.toggle('disabled', !hasDisk || noEdit);
+  if (typeof refreshToolbarState === 'function') refreshToolbarState();
 }
 
 // ── Menu logic ────────────────────────────────────────────────────────
@@ -1176,13 +1177,23 @@ document.getElementById('opt-validate').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
-  pushUndo();
+  // Snapshot first, push undo only if validate actually changes a byte.
+  // Calling pushUndo() unconditionally would mark a clean disk dirty
+  // even when validate had nothing to fix.
+  var pre = currentBuffer.slice(0);
   var log;
   if (currentPartition && !currentPartition.dnpDir) {
     log = validatePartition(currentBuffer, currentPartition.startTrack, currentPartition.partSize);
   } else {
     log = validateDisk(currentBuffer);
   }
+  var preArr = new Uint8Array(pre);
+  var postArr = new Uint8Array(currentBuffer);
+  var changed = preArr.length !== postArr.length;
+  for (var i = 0; !changed && i < preArr.length; i++) {
+    if (preArr[i] !== postArr[i]) changed = true;
+  }
+  if (changed) pushUndo(pre);
   const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
   showModal('Validate', log);

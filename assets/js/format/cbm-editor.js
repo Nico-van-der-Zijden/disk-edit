@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 107 };
+var APP_VERSION = { major: 1, minor: 3, build: 108 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -149,9 +149,17 @@ var MAX_UNDO = 20;
 var tabDirty = false;
 var cleanStackLength = 0;
 
-function pushUndo() {
-  if (!currentBuffer) return;
-  undoStack.push(currentBuffer.slice(0));
+function pushUndo(snapshot) {
+  // Callers that already hold a pre-change snapshot (e.g. validate,
+  // which may turn out to be a no-op and only wants to commit if a
+  // byte actually changed) pass it in. Default: take a fresh copy of
+  // the current buffer.
+  if (snapshot) {
+    undoStack.push(snapshot);
+  } else {
+    if (!currentBuffer) return;
+    undoStack.push(currentBuffer.slice(0));
+  }
   if (undoStack.length > MAX_UNDO) {
     undoStack.shift();
     if (cleanStackLength > 0) cleanStackLength--;

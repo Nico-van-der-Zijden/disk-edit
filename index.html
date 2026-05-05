@@ -60,6 +60,7 @@
 <link rel="stylesheet" href="assets/css/bam.css">
 <link rel="stylesheet" href="assets/css/viewers.css">
 <link rel="stylesheet" href="assets/css/hex-coloring.css">
+<link rel="stylesheet" href="assets/css/toolbar.css">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='2' width='56' height='60' rx='4' fill='%231a1a2e' stroke='%23666' stroke-width='2'/%3E%3Crect x='20' y='2' width='24' height='16' rx='2' fill='%23999'/%3E%3Crect x='26' y='4' width='12' height='12' rx='1' fill='%231a1a2e'/%3E%3Ccircle cx='32' cy='35' r='13' fill='none' stroke='%23555' stroke-width='1.5'/%3E%3Ccircle cx='32' cy='35' r='5' fill='%23666'/%3E%3Crect x='8' y='50' width='48' height='10' rx='2' fill='%23e8e8e8'/%3E%3Cline x1='12' y1='53' x2='40' y2='53' stroke='%234a6fa5' stroke-width='1.5'/%3E%3Cline x1='12' y1='56' x2='32' y2='56' stroke='%234a6fa5' stroke-width='1.5'/%3E%3C/svg%3E">
 </head>
 <body>
@@ -317,6 +318,7 @@
           <div class="option" data-hex-coloring="nybble"><span class="check" id="check-hex-nybble"></span>Nybble</div>
         </div>
       </div>
+      <div class="option" id="opt-show-toolbar"><span class="check" id="check-toolbar"></span>Show Toolbar</div>
       <div class="separator"></div>
       <div class="option" id="opt-unsafe-chars"><span class="check" id="check-unsafe"></span>Allow Unsafe Characters</div>
       <div class="option" id="opt-picker-all"><span class="check" id="check-picker-all"></span>Show All Characters by Default</div>
@@ -347,6 +349,32 @@
 </div>
 
 <input type="file" id="file-input" accept=".d64,.d71,.d81,.d80,.d82,.t64,.tap,.x64,.g64,.d1m,.d2m,.d4m,.dnp,.nib,.nb2,.nbz,.p00,.s00,.u00,.r00,.lnx,.zip,.gz,.rml,.rl" multiple>
+
+<div class="toolbar" id="toolbar">
+  <div class="toolbar-group">
+    <button class="toolbar-btn" type="button" data-cmd="opt-open" title="Open... (Ctrl+Alt+O)"><i class="fa-solid fa-folder-open"></i></button>
+    <button class="toolbar-btn" type="button" data-cmd="opt-save" title="Save (Ctrl+Alt+S)"><i class="fa-solid fa-floppy-disk"></i></button>
+    <button class="toolbar-btn" type="button" data-cmd="opt-close" title="Close tab (Ctrl+Alt+W)"><i class="fa-solid fa-xmark"></i></button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group">
+    <button class="toolbar-btn" type="button" data-cmd="opt-undo" title="Undo (Ctrl+Z)"><i class="fa-solid fa-rotate-left"></i></button>
+    <button class="toolbar-btn" type="button" data-cmd="opt-insert" title="Insert File (Ctrl+Shift+I)"><i class="fa-solid fa-file-import"></i></button>
+    <button class="toolbar-btn" type="button" data-cmd="opt-copy" title="Copy File (Ctrl+C)"><i class="fa-solid fa-copy"></i></button>
+    <button class="toolbar-btn" type="button" data-cmd="opt-paste" title="Paste File (Ctrl+V)"><i class="fa-solid fa-paste"></i></button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group">
+    <button class="toolbar-btn" type="button" data-cmd="opt-view-bam" title="View BAM (Ctrl+Shift+B)"><i class="fa-solid fa-chart-pie"></i></button>
+    <button class="toolbar-btn" type="button" data-cmd="opt-show-separators" title="Show Separators"><i class="fa-solid fa-grip-lines"></i></button>
+    <button class="toolbar-btn" type="button" data-cmd="opt-find" title="Find... (Ctrl+F)"><i class="fa-solid fa-magnifying-glass"></i></button>
+  </div>
+  <div class="toolbar-sep"></div>
+  <div class="toolbar-group">
+    <button class="toolbar-btn" type="button" data-cmd="opt-validate" title="Validate Disk (Ctrl+Alt+V)"><i class="fa-solid fa-circle-check"></i></button>
+    <button class="toolbar-btn" type="button" data-cmd="opt-compare" title="Compare with another disk..."><i class="fa-solid fa-code-compare"></i></button>
+  </div>
+</div>
 
 <div class="tab-bar-wrap" id="tab-bar-wrap">
   <div class="tab-bar" id="tab-bar"></div>
@@ -431,6 +459,7 @@
 <script src="assets/js/ui/ui-fileops.js"></script>
 <script src="assets/js/ui/ui-export.js"></script>
 <script src="assets/js/ui/ui-recent.js"></script>
+<script src="assets/js/ui/ui-toolbar.js"></script>
 <script src="assets/js/ui/ui-init.js"></script>
 <script src="assets/js/ui/ui-help.js"></script>
 <script src="assets/js/ui/ui-mobile-menu.js"></script>

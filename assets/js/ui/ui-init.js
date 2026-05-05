@@ -200,6 +200,9 @@ document.getElementById('check-unsafe').innerHTML = allowUnsafeChars ? '<i class
 document.getElementById('check-picker-all').innerHTML = pickerDefaultAll ? '<i class="fa-solid fa-check"></i>' : '';
 document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i class="fa-solid fa-check"></i>' : '';
 refreshHexColoringChecks();
+document.getElementById('check-toolbar').innerHTML = toolbarVisible ? '<i class="fa-solid fa-check"></i>' : '';
+applyToolbarVisibility();
+refreshToolbarState();
 
 themeToggle.addEventListener('click', () => {
   const current = document.documentElement.getAttribute('data-theme');

@@ -32,6 +32,15 @@ document.getElementById('opt-picker-stick').addEventListener('click', (e) => {
   document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i class="fa-solid fa-check"></i>' : '';
 });
 
+document.getElementById('opt-show-toolbar').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeMenus();
+  toolbarVisible = !toolbarVisible;
+  localStorage.setItem('cbm-toolbar', toolbarVisible);
+  document.getElementById('check-toolbar').innerHTML = toolbarVisible ? '<i class="fa-solid fa-check"></i>' : '';
+  applyToolbarVisibility();
+});
+
 // ── Export/Import Settings ────────────────────────────────────────────
 document.getElementById('opt-export-settings').addEventListener('click', function(e) {
   e.stopPropagation();

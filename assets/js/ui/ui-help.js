@@ -276,6 +276,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.108', title: 'Toolbar + Validate-dirty fix', items: [
+      'New icon toolbar under the menubar — single-click access to Open / Save / Close, Undo / Insert / Copy / Paste, View BAM / Show Separators / Find, and Validate / Compare. Toggle via Options → Show Toolbar (persisted)',
+      'Toolbar buttons delegate to their menu items, so disabled state, dynamic labels, and right-click behavior stay in one place. Auto-hidden on viewports under 720px (mobile uses the hamburger menu)',
+      'Validate no longer marks a clean disk as dirty when it finds nothing to fix — undo entry and dirty flag are only committed if validate actually changed a byte',
+    ]},
     { ver: '1.3.107', title: 'Hex Coloring picker', items: [
       'New Options → Hex Coloring submenu adds optional per-byte coloring to the hex viewer, sector editor, and side-by-side compare view. Choices: None (default), hexyl (5 buckets — null/whitespace/printable/control/high), xcd-rgb (full 256-hue rainbow), Nybble (one colour per leading nibble, $00 and $FF dedicated)',
       'Both the hex column and the PETSCII column get the active scheme\'s colour. Bytes $80-$FF still render reversed in the PETSCII column — the inverted background now uses the scheme hue instead of the accent color so the two columns stay visually paired',
