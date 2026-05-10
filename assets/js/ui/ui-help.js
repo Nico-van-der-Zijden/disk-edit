@@ -276,6 +276,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.109', title: 'TASS viewer accuracy pass + scroll preserved on charset toggle', items: [
+      'TASS source viewer matches VICE in many more files: byte-literal-leading expressions ($20/$21 prefixes), `rol/ror/asl/lsr a` accumulator-mode display, `cmp #"<ctrl>"` char-immediates with inverse glyphs for control codes, hex-literal context inside comments (so `;$d018` no longer cuts at `;$d`), and back-to-back `jsr label ;comment` blocks (rendered as separate lines instead of bleeding into each other)',
+      'Files whose label table has stale leading bytes (terminator-only, "X Y X" patterns, two leading digits) now resolve indices correctly — no more shifted/wrong label names in references',
+      'TASS files with magic byte $0A at offset $0E (instead of $09) are now recognised as TASS source',
+      'Scroll position is preserved when toggling uppercase/lowercase mode while a viewer modal is open',
+    ]},
     { ver: '1.3.108', title: 'Toolbar + Validate-dirty fix', items: [
       'New icon toolbar under the menubar — single-click access to Open / Save / Close, Undo / Insert / Copy / Paste, View BAM / Show Separators / Find, and Validate / Compare. Toggle via Options → Show Toolbar (persisted)',
       'Toolbar buttons delegate to their menu items, so disabled state, dynamic labels, and right-click behavior stay in one place. Auto-hidden on viewports under 720px (mobile uses the hamburger menu)',

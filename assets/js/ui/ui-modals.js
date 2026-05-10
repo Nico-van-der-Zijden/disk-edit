@@ -8,9 +8,24 @@ var modalZCounter = 200;
 var modalCharsetRedraw = null;
 
 document.addEventListener('cbm-charsetchange', function() {
-  if (typeof modalCharsetRedraw === 'function') {
-    try { modalCharsetRedraw(); } catch (_) { /* swallow — modal may be closing */ }
+  if (typeof modalCharsetRedraw !== 'function') return;
+  // Preserve scroll across the redraw — viewers typically rebuild
+  // modal-body innerHTML wholesale, which resets scrollTop. The TASS
+  // and hex viewers scroll on an inner element (`.basic-listing` /
+  // `.hex-editor`, see editors.css `:has` rules); other viewers scroll
+  // on modal-body itself. Find whichever element currently shows scroll
+  // before the redraw, then restore on the matching post-redraw node.
+  var body = document.getElementById('modal-body');
+  function findScroller(root) {
+    if (!root) return null;
+    var inner = root.querySelector('.basic-listing, .hex-editor');
+    return inner || root;
   }
+  var prev = findScroller(body);
+  var prevScroll = prev ? prev.scrollTop : 0;
+  try { modalCharsetRedraw(); } catch (_) { /* swallow — modal may be closing */ }
+  var next = findScroller(body);
+  if (next) next.scrollTop = prevScroll;
 });
 
 // Auto-manage z-index stacking when modals open/close

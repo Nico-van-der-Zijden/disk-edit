@@ -705,9 +705,11 @@ function updateEntryMenuState() {
   document.getElementById('opt-view-vlir').classList.toggle('disabled', !isVlir);
   var isRel = hasSelection && !tape && edata && (edata[selectedEntryIndex + 2] & 0x07) === 4;
   document.getElementById('opt-view-rel').classList.toggle('disabled', !isRel);
-  // TASS: only enable when the file actually carries the $09 $FF magic at
-  // payload offset $0C-$0D (= sector bytes $10-$11 in the first data sector).
-  // Skip the check entirely on tape and on non-PRG types.
+  // TASS: only enable when the file actually carries the magic at payload
+  // offset $0C-$0D (= sector bytes $10-$11 in the first data sector).
+  // The high byte is always $FF; the low byte varies ($09 in most files,
+  // $0A in T.A. INTRO 01 — looks like an editor counter). Mirrors the
+  // check in `isTassSource` (ui-tass-viewer.js). Skip on tape / non-PRG.
   var isTassCandidate = false;
   if (hasSelection && !tape && edata && (edata[selectedEntryIndex + 2] & 0x87) === 0x82) {
     var tt = edata[selectedEntryIndex + 3];
@@ -715,7 +717,7 @@ function updateEntryMenuState() {
     if (tt > 0) {
       var tassFoff = sectorOffset(tt, ts);
       if (tassFoff >= 0 && tassFoff + 0x12 <= edata.length &&
-          edata[tassFoff + 0x10] === 0x09 && edata[tassFoff + 0x11] === 0xFF) {
+          edata[tassFoff + 0x11] === 0xFF && edata[tassFoff + 0x10] < 0x20) {
         isTassCandidate = true;
       }
     }
