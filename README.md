@@ -23,6 +23,7 @@ An online, cross-platform alternative to desktop tools like DirMaster, CBMXfer a
 | D1M | CMD FD-2000 | Double density 3.5" (81 tracks, 40 spt) |
 | D2M | CMD FD-2000 | High density 3.5" (81 tracks, 80 spt) |
 | D4M | CMD FD-4000 | Extra density 3.5" (81 tracks, 160 spt) |
+| RML / RL | CMD RAMLink | Container of up to 31 partitions (Native, 1541, 1571, 1581) |
 | T64 | Tape | Tape archive container (read-only) |
 | TAP | Tape | Raw tape pulse data (read-only) |
 | CVT | GEOS | GEOS Convert file format |
@@ -46,6 +47,7 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 | D2M | 1,658,880 | 1,665,360 | |
 | D4M | 3,317,760 | 3,330,720 | |
 | DNP | n × 65,536 | — | Header byte `$48` at offset 258 |
+| RML / RL | 1/2/4/8/16 MiB | — | CMD RAMLink container — opens to a partition list |
 | G64 | Variable | — | Magic: `GCR-1541` at offset 0 |
 | X64 | Variable | — | Magic: `C1541` at offset 0 |
 | T64 | Variable | — | Magic: `C64` at offset 0 |
@@ -107,6 +109,7 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 - Shared BAM across subdirectories
 - System partition on the last track (D1M/D2M/D4M)
 - DNP track resize with auto-compaction (Disk → Disk Tools → Resize Image…)
+- RAMLink (.rml / .rl) and FD-2000/FD-4000 containers open to a partition list — double-click a partition to enter; add / delete / rename partitions with byte-exact compatibility against VICE and the original CMD ROMs
 
 ### Other
 - Multi-tab interface for working with multiple disks, with unsaved-changes warnings on close / reload / Close All
@@ -217,6 +220,8 @@ tests/                  Automated test suite (Node.js built-in runner)
   petscii.test.js       PETSCII / PUA conversion
   dnp.test.js           DNP format, resize, high-track owners
   lnx.test.js           LNX archive parser
+  directory.test.js     Directory editing helpers (insert/remove/sort/rename)
+  graphics.test.js      Graphics format round-trips (12 bitmap layouts)
 dist/                   Build output (ignored)
 ExampleDisks/           Example disk images for testing
 ```
@@ -229,7 +234,7 @@ The repo ships with a small Node-based test suite (zero runtime dependencies —
 npm test
 ```
 
-Covers sector geometry, BAM operations, PETSCII conversion, GEOS VLIR helpers, DNP format + resize, and LNX archive parsing.
+Covers sector geometry, BAM operations, PETSCII conversion, GEOS VLIR helpers, DNP format + resize, LNX archive parsing, directory-editing helpers, and graphics format round-trips.
 
 ## Credits
 

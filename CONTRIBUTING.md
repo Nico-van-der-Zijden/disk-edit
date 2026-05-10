@@ -61,6 +61,7 @@ Key files (paths relative to `assets/js/`):
 | `ui/viewers/ui-viewer-graphics.js` | C64/GEOS graphics renderers (24+ formats) |
 | `ui/viewers/ui-viewer-basic.js` | BASIC detokenizer + viewer |
 | `ui/viewers/ui-viewer-geowrite.js` | geoWrite document viewer |
+| `ui/viewers/ui-tass-viewer.js` | Turbo Assembler V5/V6 source viewer |
 
 ### Key patterns
 
@@ -200,6 +201,8 @@ Uses the `node:test` runner that's built into Node — no dependencies. The file
 | `petscii.test.js` | PETSCII → PUA / ASCII, `readPetsciiString`, hex helpers |
 | `dnp.test.js` | DNP create/resize, `findDnpHighTrackOwners`, CMD BAM helpers |
 | `lnx.test.js` | LYNX archive parser variants |
+| `directory.test.js` | Directory editing helpers (insert/remove/sort/swap/align/changeType, clampInt, isTrackSectorInRange) |
+| `graphics.test.js` | Graphics-parser round-trip across 12 bitmap layouts |
 
 Run with:
 
