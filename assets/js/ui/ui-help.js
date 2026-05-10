@@ -276,21 +276,17 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
-    { ver: '1.3.109', title: 'TASS viewer accuracy pass + scroll preserved on charset toggle', items: [
-      'TASS source viewer matches VICE in many more files: byte-literal-leading expressions ($20/$21 prefixes), `rol/ror/asl/lsr a` accumulator-mode display, `cmp #"<ctrl>"` char-immediates with inverse glyphs for control codes, hex-literal context inside comments (so `;$d018` no longer cuts at `;$d`), and back-to-back `jsr label ;comment` blocks (rendered as separate lines instead of bleeding into each other)',
-      'Files whose label table has stale leading bytes (terminator-only, "X Y X" patterns, two leading digits) now resolve indices correctly — no more shifted/wrong label names in references',
-      'TASS files with magic byte $0A at offset $0E (instead of $09) are now recognised as TASS source',
+    { ver: '1.3.109', title: 'Turbo Assembler viewer improvements', items: [
+      'Wide accuracy pass against more V5/V6 source files — comments, expressions, and label references match what VICE shows in many cases that previously misdecoded; one extra magic-byte variant ($0A at offset $0E) is now recognised',
       'Scroll position is preserved when toggling uppercase/lowercase mode while a viewer modal is open',
     ]},
     { ver: '1.3.108', title: 'Toolbar + Validate-dirty fix', items: [
-      'New icon toolbar under the menubar — single-click access to Open / Save / Close, Undo / Insert / Copy / Paste, View BAM / Show Separators / Find, and Validate / Compare. Toggle via Options → Show Toolbar (persisted)',
-      'Toolbar buttons delegate to their menu items, so disabled state, dynamic labels, and right-click behavior stay in one place. Auto-hidden on viewports under 720px (mobile uses the hamburger menu)',
-      'Validate no longer marks a clean disk as dirty when it finds nothing to fix — undo entry and dirty flag are only committed if validate actually changed a byte',
+      'New icon toolbar under the menubar — single-click access to Open / Save / Close, Undo / Insert / Copy / Paste, View BAM / Show Separators / Find, and Validate / Compare. Toggle via Options → Show Toolbar (persisted); auto-hidden on phones',
+      'Validate no longer marks a clean disk as dirty when it finds nothing to fix',
     ]},
     { ver: '1.3.107', title: 'Hex Coloring picker', items: [
-      'New Options → Hex Coloring submenu adds optional per-byte coloring to the hex viewer, sector editor, and side-by-side compare view. Choices: None (default), hexyl (5 buckets — null/whitespace/printable/control/high), xcd-rgb (full 256-hue rainbow), Nybble (one colour per leading nibble, $00 and $FF dedicated)',
-      'Both the hex column and the PETSCII column get the active scheme\'s colour. Bytes $80-$FF still render reversed in the PETSCII column — the inverted background now uses the scheme hue instead of the accent color so the two columns stay visually paired',
-      'Active scheme persists in localStorage and is included in the Export Settings dump; switching schemes recolours every open hex modal instantly with no rebuild',
+      'New Options → Hex Coloring submenu adds optional per-byte coloring to the hex viewer, sector editor, and side-by-side compare. Choices: None (default), hexyl (null/whitespace/printable/control/high), xcd-rgb (full 256-hue rainbow), Nybble (one colour per leading nibble)',
+      'Both the hex and PETSCII columns get the scheme\'s colour; reversed bytes ($80-$FF) keep the scheme hue. Switching schemes recolours every open hex modal instantly; the choice is persisted and included in Export Settings',
       'Schemes inspired by simonomi.dev — see Help → Credits & Thanks',
     ]},
     { ver: '1.3.106', title: 'Tidier File menu and right-click', items: [
@@ -301,10 +297,9 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
       'Right-clicking a file now operates on that file, not the previously-selected one — affects export, copy, delete, lock/unlock, splat/unsplat, geoWrite preview/RTF/PDF, CVT export, and every other entry action',
       'Right-clicking inside an existing multi-selection still acts on the whole selection',
     ]},
-    { ver: '1.3.104', title: 'TASS source viewer accuracy pass', items: [
-      'TASS V5/V6 source files now render close to what TASS itself shows in VICE — full expression support (operators +, -, *, /, >, <, !, &, ., : and parens for grouping), `label+expr` operands like `sta lbl+1`, multi-column comments, label-defs sharing a line with their instruction, `.offs` directive, binary literals (`%01010101`), and char-immediates (`#"X"`)',
-      'Many byte-disambiguation fixes for 6502 opcodes that double as comment markers, value bytes, or padding — `cpy #$1e` no longer eats the next instruction, NBSP space in comments doesn\'t merge with following opcodes, `$30 IDX` correctly distinguishes label-def from BMI rel, and SCROLL TEXT-style comments with embedded NBSP / digit runs are preserved',
-      'Modal sized to a real C64 screen: 40 chars wide × 23 rows visible, vertical scrollbar reserves its own space so column 39 stays fully readable',
+    { ver: '1.3.104', title: 'Turbo Assembler viewer accuracy pass', items: [
+      'V5/V6 source files now render close to what TASS itself shows in VICE — full expression support (operators +, -, *, /, >, <, !, &, ., : and parens), `label+expr` operands, multi-column comments, label-defs sharing a line with their instruction, `.offs` directive, binary literals, char-immediates, and many byte-disambiguation fixes for opcodes that double as comment text',
+      'Modal sized to a real C64 screen: 40 chars wide × 23 rows visible',
     ]},
     { ver: '1.3.103', title: 'Separators palette + charset-toggle modal redraws', items: [
       'New "Show Separators" floating palette (Disk → Show Separators…) — same draggable-titled-window style as the PETSCII charset float; click a separator while a directory row is selected to insert it there',
@@ -322,9 +317,9 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
       'New Disk → Export Disk → Show as Base64 Data URI: get a data: URI for the current disk in a modal, with a Copy button — handy for embedding small disks in forum posts or git issues',
     ]},
     { ver: '1.3.99', title: 'G64 round-trip save', items: [
-      'Saving a .g64 now produces a real GCR-encoded G64 that VICE will mount as a 1541 image — earlier the file was just D64 bytes under a .g64 filename and emulators rejected it',
-      'Modified sectors are re-encoded and spliced back into the original raw GCR; sectors that were unreadable on open keep their original bytes so custom-GCR copy protection survives the round-trip',
-      'Save As defaults to the .g64 extension when the tab came from a .g64 (was suggesting .d64 because the buffer is D64 internally)',
+      'Saving a .g64 now produces a real GCR-encoded G64 that VICE will mount as a 1541 image — earlier the file was just D64 bytes under a .g64 extension and emulators rejected it',
+      'Sectors that were unreadable on open keep their original bytes so custom-GCR copy protection survives the round-trip',
+      'Save As defaults to .g64 when the tab came from a .g64 (was suggesting .d64)',
     ]},
     { ver: '1.3.98', title: 'G64 raw tracks visualization', items: [
       'New "Raw Tracks" tab in the G64 Layout viewer renders the disk as concentric tracks coloured by the underlying GCR bits — sync marks read as red, normal data as green, gap/padding as blue. Inspired by Michael Steil\'s 1541 visualization (credited under Help → Credits & Thanks)',
@@ -332,10 +327,8 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
     ]},
     { ver: '1.3.97', title: 'G64 layout viewer', items: [
       'New Disk → Disk Tools → G64 Layout… modal shows the physical sector order each track was laid down in, with a plain-English headline like "Mastered disk with copy protection: 4 tracks hide sectors behind custom GCR"',
-      'Tracks are tagged standard / interleave 1 / copy-protected / scrambled — colour-coded so you can scan a copy-protected disk and see which tracks the protection touches',
-      'Click any track for the full physical sector sequence, raw GCR byte size, and the list of sectors the standard reader couldn\'t decode',
-      'Fixed a long-standing bug in the GCR decode table — header bytes containing nybble 0 (the "01010" pattern) were rejected, so any G64 with a $00 in a header position decoded to an empty disk; many real-world files were affected',
-      'G64 size detection now snaps to the real disk extent (35 / 40 / 42) by walking the actual decoded data, not the header-declared half-track count which is almost always 84 regardless of disk size',
+      'Tracks are tagged standard / interleave 1 / copy-protected / scrambled — colour-coded so you can scan a copy-protected disk and see which tracks the protection touches; click a track for its full physical sector sequence and the list of sectors the standard reader couldn\'t decode',
+      'Fixed a long-standing GCR decode bug — header bytes containing nybble 0 were rejected, so any G64 with a $00 in a header position decoded to an empty disk. G64 size detection now snaps to the real disk extent (35 / 40 / 42) instead of trusting the header-declared half-track count',
     ]},
     { ver: '1.3.96', title: 'Compare-disks UX pass', items: [
       'File sections (Differ / Only in A / Only in B / Identical) collapse with a click; "Identical" is collapsed by default since it\'s usually the biggest pile',
@@ -354,13 +347,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
     ]},
     { ver: '1.3.93', title: 'CMD FD2000/FD4000 partition containers', items: [
       'D1M/D2M/D4M images now open to a partition list like RAMLink — double-click a partition to enter, with Native / 1541 / 1571 / 1581 types via "New Partition"',
-      'Deleting a partition compacts the byte range (later partitions slide down to fill the gap) and adds bump-allocate after the highest partition, matching what the FD2000 ROM and RAM-Tools v1.02 actually do',
-      'Free-block count and load addresses now read correctly inside FD partitions (FD-native uses LBA-encoded T:S in directory entries, separate from physical T:S used elsewhere)',
+      'Adding and deleting partitions matches what the FD2000 ROM and RAM-Tools v1.02 actually do; free-block count and load addresses inside FD partitions read correctly',
     ]},
     { ver: '1.3.92', title: 'New RAMLink containers VICE recognises', items: [
       'Fresh containers from "Disk → New → CMD RAMLink" now mount in VICE — earlier the firmware bookkeeping gaps were 4 bytes off so the container looked unformatted',
-      'New partitions added via the picker now stamp the disk name and "RL" ID into the partition\'s own filesystem header (DNP / D64 / D71 / D81), and CMD-native headers carry the missing 0xA0 padding bytes',
-      '1541 / 1571 / 1581 sizes (683 / 1366 / 3200 blocks) are no longer rounded down to multiples of 256 — the picker only applies that rule to Native/DNP',
+      'New partitions stamp the disk name and "RL" ID into the partition\'s filesystem header; 1541 / 1571 / 1581 sizes (683 / 1366 / 3200 blocks) are no longer rounded down',
     ]},
     { ver: '1.3.91', title: 'RAMLink container fidelity pass', items: [
       'All 31 partition slots are now read and editable (was capped at 16); DNP and 1541/71/81 partitions report the same "blocks free" as VICE/CMD HD',
@@ -439,27 +430,22 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
       'View \u2192 Turbo Assembler is only enabled for actual TASS source files',
       'Arrow / Page / Home / End scroll inside the open viewer; the BASIC dialect picker stays in view while the listing scrolls',
     ]},
-    { ver: '1.3.77', title: 'TASS viewer: separators mirror source bytes', items: [
-      'Synthetic rule lines now use the same rule character and length as the source: a block of 28 `$2D` bytes renders as `;` + 28 `-`, a block of 39 `$C0` bytes renders as `;` + 39 `─`',
-      'Previously all synthetic rules were hard-coded to 39 hyphens',
+    { ver: '1.3.77', title: 'Turbo Assembler viewer: separators mirror source bytes', items: [
+      'Synthetic rule lines now use the same rule character and length as the source instead of the previously hard-coded 39 hyphens',
     ]},
-    { ver: '1.3.76', title: 'TASS viewer: cleaner separator lines', items: [
-      'Synthetic separator rows render as `;---` (matching the TASS style) instead of the Unicode box-drawing rule',
-      'No more duplicate separators: a `;-----` user line next to the synthetic one is detected and only one is emitted',
-      'Mid-block rule runs (30+ padding bytes inside a mixed code/fill block) now emit a `;---` too, catching cases that fell through before',
-      'Char 11 decoded line count now matches TASS within 4 lines',
+    { ver: '1.3.76', title: 'Turbo Assembler viewer: cleaner separator lines', items: [
+      'Synthetic separator rows render in TASS style (`;---`) instead of the Unicode box-drawing rule, with no duplicates when a user-typed `;-----` already sits next to one',
+      'Mid-block rule runs (30+ padding bytes inside a mixed code/fill block) now emit a `;---` too; decoded line count now tracks TASS within 4 lines on heavy sources',
     ]},
-    { ver: '1.3.75', title: 'TASS viewer: resolves label refs past embedded credits', items: [
-      'Preserves index alignment for dummy/empty label slots (the high-bit filler bytes TASS leaves around embedded credits text in the label table), so branches and jsrs past the credits block now resolve to the right name',
-      'Example: `t.a. char 11` now decodes `bne nk36 / jmp buff1` instead of `bne buff1 / jmp tada`',
+    { ver: '1.3.75', title: 'Turbo Assembler viewer: resolves label refs past embedded credits', items: [
+      'Branches and JSRs that point past an embedded credits/comment block in the label table now resolve to the right name instead of an unrelated nearby label',
     ]},
-    { ver: '1.3.74', title: 'TASS viewer: handles larger source files', items: [
-      'Label-table parser now finds labels past embedded screen-code comment blocks (e.g. credits text stored between real label entries) and recognises 1-char labels stored as a lone terminator byte (`D` = `$C4`)',
-      'Fixes 400+ label files like `t.a. char 11` where most labels showed as `?lblN` before',
+    { ver: '1.3.74', title: 'Turbo Assembler viewer: handles larger source files', items: [
+      'Label-table parser now finds labels past embedded screen-code comment blocks and recognises 1-char labels — sources with 400+ labels that used to be mostly `?lblN` now decode correctly',
     ]},
     { ver: '1.3.73', title: 'Turbo Assembler source viewer', items: [
-      'Decodes TASS V5.x source files into readable listing: labels, comments, .byte/.word/.text, *= origin, label+offset, #&lt;label / #&gt;label, jmp *',
-      'Auto-detected via the $09 $FF magic \u2014 the View \u2192 TASS option is available on any closed PRG that carries the signature',
+      'New: View \u2192 Turbo Assembler decodes TASS V5.x source files into a readable listing \u2014 labels, comments, .byte/.word/.text, *= origin, label+offset, #&lt;label / #&gt;label, jmp *',
+      'Auto-detected from the source magic; the menu option is available on any closed PRG that carries the signature',
       'Best-effort: unknown bytes fall back to compact .byte runs; some unusual constructs may still misparse',
     ]},
     { ver: '1.3.72', title: 'GEOS font \u2192 C64 charset export: correct layout', items: [

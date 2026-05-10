@@ -1578,6 +1578,7 @@ function isSepFloatOpen() {
 
 document.getElementById('opt-show-separators').addEventListener('click', function(e) {
   e.stopPropagation();
+  if (this.classList.contains('disabled')) return;
   closeMenus();
   if (isSepFloatOpen()) hideSepFloat();
   else showSepFloat();

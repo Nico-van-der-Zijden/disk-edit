@@ -1,10 +1,4 @@
 // ── ZIP archive picker modal ─────────────────────────────────────────
-// Lists the entries of an opened ZIP. Each actionable entry gets a
-// checkbox (selected by default); the user reviews / unselects, then
-// hits "Open Selected" to dispatch them all in one go. Downstream
-// classification by extension decides whether each chosen entry is
-// opened in a new tab or imported into the current disk — the picker
-// itself doesn't care.
 
 function showZipArchiveModal(archiveName, entries) {
   return new Promise(function(resolve) {

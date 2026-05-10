@@ -216,6 +216,9 @@ function updateMenuState() {
   document.getElementById('opt-find').classList.toggle('disabled', !hasDisk || containerList);
   document.getElementById('opt-find-tabs').classList.toggle('disabled', tabs.length === 0);
   document.getElementById('opt-goto-sector').classList.toggle('disabled', !hasDisk || noEdit);
+  var sepDisabled = !hasDisk || noEdit;
+  document.getElementById('opt-show-separators').classList.toggle('disabled', sepDisabled);
+  if (sepDisabled && typeof isSepFloatOpen === 'function' && isSepFloatOpen()) hideSepFloat();
   if (typeof refreshToolbarState === 'function') refreshToolbarState();
 }
 
