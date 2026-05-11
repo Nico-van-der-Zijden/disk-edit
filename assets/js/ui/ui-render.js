@@ -362,12 +362,18 @@ function renderDisk(info) {
   if (healthEl && currentBuffer && !currentPartition) {
     var integrity = checkBAMIntegrity(currentBuffer);
     var bamIssues = integrity.bamErrors.length > 0 || integrity.allocMismatch > 0;
+    var bamOrphans = integrity.orphanCount > 0;
     var diskErrors = hasErrorBytes(currentBuffer);
-    healthEl.classList.remove('health-ok', 'health-warn', 'health-error');
+    healthEl.classList.remove('health-ok', 'health-orphan', 'health-warn', 'health-error');
     if (bamIssues) {
       healthEl.textContent = '\u25CF';
       healthEl.classList.add('health-error');
       healthEl.title = 'BAM issues detected — click to view BAM';
+      healthEl.onclick = function() { document.getElementById('opt-view-bam').click(); };
+    } else if (bamOrphans) {
+      healthEl.textContent = '●';
+      healthEl.classList.add('health-orphan');
+      healthEl.title = integrity.orphanCount + ' sector(s) marked used but not owned by any file — click to view BAM';
       healthEl.onclick = function() { document.getElementById('opt-view-bam').click(); };
     } else if (diskErrors) {
       healthEl.textContent = '\u25CF';
@@ -383,7 +389,7 @@ function renderDisk(info) {
     }
   } else if (healthEl) {
     healthEl.textContent = '';
-    healthEl.classList.remove('health-ok', 'health-warn', 'health-error');
+    healthEl.classList.remove('health-ok', 'health-orphan', 'health-warn', 'health-error');
     healthEl.onclick = null;
   }
 

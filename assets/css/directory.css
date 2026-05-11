@@ -517,8 +517,9 @@
   }
 
   .dir-footer-health.health-ok { color: var(--c64-string); }
-  .dir-footer-health.health-warn { color: var(--c64-highlight); }
-  .dir-footer-health.health-error { color: var(--c64-control); }
+  .dir-footer-health.health-orphan { color: var(--color-orphan); }
+  .dir-footer-health.health-warn { color: var(--color-warn); }
+  .dir-footer-health.health-error { color: var(--color-error); }
 
   .dir-entry.deleted {
     opacity: 0.5;

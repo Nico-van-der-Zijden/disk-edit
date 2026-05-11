@@ -172,6 +172,7 @@ function downloadD64(buffer, fileName) {
 
 function updateMenuState() {
   const hasDisk = currentBuffer !== null;
+  document.body.classList.toggle('has-disk', hasDisk);
   const tape = isTapeFormat();
   // CMD container partition list — at this level we're looking at
   // a container, not a filesystem. Disk-edit / file-level operations

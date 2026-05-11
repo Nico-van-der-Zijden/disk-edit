@@ -40,8 +40,8 @@ document.addEventListener('DOMContentLoaded', function() {
         el.style.zIndex = modalZCounter;
         // Always open modals at the top — scroll position should not persist
         // between open/close cycles.
-        el.querySelectorAll('.modal-body').forEach(function(body) {
-          body.scrollTop = 0;
+        el.querySelectorAll('.modal-body, .modal-body .basic-listing, .modal-body .hex-editor').forEach(function(scroller) {
+          scroller.scrollTop = 0;
         });
       } else {
         // Modal just closed — drop any registered charset-redraw so a
