@@ -96,7 +96,7 @@ document.getElementById('opt-compact-dir').addEventListener('click', function(e)
 });
 
 // ── Decompress ZipCode ───────────────────────────────────────────────
-document.getElementById('opt-unzip').addEventListener('click', function(e) {
+document.getElementById('opt-unzip').addEventListener('click', async function(e) {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
@@ -143,10 +143,14 @@ document.getElementById('opt-unzip').addEventListener('click', function(e) {
     return;
   }
 
-  // If multiple sets, use the first one (could add a chooser later)
   var set = completeSets[0];
   if (completeSets.length > 1) {
-    // TODO: let user pick which set
+    var buttons = completeSets.map(function(s) { return { label: s.name, value: s.name }; });
+    buttons.push({ label: 'Cancel', value: null, secondary: true });
+    var pick = await showChoiceModal('Decompress ZipCode',
+      completeSets.length + ' ZipCode sets found. Pick one:', buttons);
+    if (!pick) return;
+    set = completeSets.find(function(s) { return s.name === pick; }) || completeSets[0];
   }
 
   // Read all 4 files

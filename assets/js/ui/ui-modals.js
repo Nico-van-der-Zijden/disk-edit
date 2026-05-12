@@ -207,6 +207,11 @@ document.getElementById('modal-overlay').addEventListener('click', (e) => {
   }
 });
 
+document.getElementById('modal-close-x').addEventListener('click', () => {
+  hidePetsciiPicker();
+  document.getElementById('modal-overlay').classList.remove('open');
+});
+
 // Ctrl+Shift toggles charset (like Commodore+Shift on C64)
 // Fires on keyup only if no other key was pressed while both modifiers were held,
 // so Ctrl+Shift+< and Ctrl+Shift+* shortcuts work without triggering the toggle.
@@ -399,6 +404,10 @@ document.getElementById('input-modal-cancel').addEventListener('click', () => {
 
 document.getElementById('input-modal-overlay').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeInputModal(null);
+});
+
+document.getElementById('input-modal-close-x').addEventListener('click', () => {
+  closeInputModal(null);
 });
 
 document.getElementById('input-modal-field').addEventListener('keydown', (e) => {
