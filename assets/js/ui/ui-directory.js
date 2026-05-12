@@ -789,7 +789,7 @@ function startEditFreeBlocks(blocksSpan) {
   }
 
   input.addEventListener('blur', () => {
-    if (pickerClicking) { input.focus(); input.selectionStart = input.selectionEnd = input._lastCursorPos || 0; return; }
+    if (petsciiPicker.clicking) { input.focus(); input.selectionStart = input.selectionEnd = input._lastCursorPos || 0; return; }
     commitEdit();
   });
   input.addEventListener('keydown', (ev) => {
@@ -930,7 +930,7 @@ function startEditTrackSector(entryEl) {
 
   function onBlur(e) {
     // Don't commit if focus moved to the other input in the group
-    if (pickerClicking) return;
+    if (petsciiPicker.clicking) return;
     setTimeout(() => {
       if (reverted) return;
       if (!group.contains(document.activeElement)) {
@@ -1010,7 +1010,7 @@ function startEditBlockSize(entryEl) {
   }
 
   input.addEventListener('blur', () => {
-    if (pickerClicking) { input.focus(); input.selectionStart = input.selectionEnd = input._lastCursorPos || 0; return; }
+    if (petsciiPicker.clicking) { input.focus(); input.selectionStart = input.selectionEnd = input._lastCursorPos || 0; return; }
     commitEdit();
   });
   input.addEventListener('keydown', (ev) => {
@@ -1103,7 +1103,7 @@ function startRenameEntry(entryEl) {
   }
 
   editor.addEventListener('blur', () => {
-    if (pickerClicking) { editor.focus(); editor._setCaret(editor._lastCursorPos || 0); return; }
+    if (petsciiPicker.clicking) { editor.focus(); editor._setCaret(editor._lastCursorPos || 0); return; }
     commitRename();
   });
   editor.addEventListener('keydown', (ev) => {
@@ -1283,7 +1283,7 @@ function showSeparatorEditor() {
     });
     host.appendChild(editor);
     editor.addEventListener('focus', function() { showPetsciiPicker(editor, 16); });
-    editor.addEventListener('blur', function() { if (!pickerClicking) hidePetsciiPicker(); });
+    editor.addEventListener('blur', function() { if (!petsciiPicker.clicking) hidePetsciiPicker(); });
     return editor;
   }
 

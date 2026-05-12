@@ -2,13 +2,13 @@
 
 function showZipArchiveModal(archiveName, entries) {
   return new Promise(function(resolve) {
-    var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp', '.lnx', '.rml', '.rl'];
-    var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
+    const diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp', '.lnx', '.rml', '.rl'];
+    const fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
 
-    var disks = [], files = [], others = [];
+    const disks = [], files = [], others = [];
     entries.forEach(function(e) {
-      var n = e.name.toLowerCase();
-      var ext = n.substring(n.lastIndexOf('.'));
+      const n = e.name.toLowerCase();
+      const ext = n.substring(n.lastIndexOf('.'));
       if (diskExts.indexOf(ext) >= 0) disks.push(e);
       else if (fileExts.indexOf(ext) >= 0) files.push(e);
       else others.push(e);
@@ -16,12 +16,12 @@ function showZipArchiveModal(archiveName, entries) {
 
     setModalSize('md');
     document.getElementById('modal-title').textContent = 'ZIP archive: ' + archiveName;
-    var body = document.getElementById('modal-body');
+    const body = document.getElementById('modal-body');
     body.innerHTML = '';
 
     // checkbox → entry, populated as we render. "Open Selected" walks
     // this to collect the user's choices without re-querying the DOM.
-    var checkboxes = [];
+    const checkboxes = [];
 
     function done(picked) {
       document.getElementById('modal-overlay').classList.remove('open');
@@ -29,7 +29,7 @@ function showZipArchiveModal(archiveName, entries) {
     }
 
     if (disks.length === 0 && files.length === 0) {
-      var empty = document.createElement('div');
+      const empty = document.createElement('div');
       empty.textContent = 'No supported files in this archive.';
       body.appendChild(empty);
     } else {
@@ -37,8 +37,8 @@ function showZipArchiveModal(archiveName, entries) {
         appendArchivePickerSection(body, 'Disk images', disks, false, checkboxes);
       }
       if (files.length > 0) {
-        var canImport = !!currentBuffer;
-        var fileTitle = canImport ? 'Files' : 'Files (no disk open — import disabled)';
+        const canImport = !!currentBuffer;
+        const fileTitle = canImport ? 'Files' : 'Files (no disk open — import disabled)';
         appendArchivePickerSection(body, fileTitle, files, !canImport, checkboxes);
       }
       if (others.length > 0) {
@@ -46,19 +46,19 @@ function showZipArchiveModal(archiveName, entries) {
       }
     }
 
-    var footer = document.querySelector('#modal-overlay .modal-footer');
+    const footer = document.querySelector('#modal-overlay .modal-footer');
     footer.innerHTML = '';
 
-    var closeBtn = document.createElement('button');
+    const closeBtn = document.createElement('button');
     closeBtn.textContent = 'Close';
     closeBtn.className = 'modal-btn-secondary';
     closeBtn.addEventListener('click', function() { done([]); });
     footer.appendChild(closeBtn);
 
-    var openBtn = document.createElement('button');
+    const openBtn = document.createElement('button');
     openBtn.textContent = 'Open Selected';
     openBtn.addEventListener('click', function() {
-      var picked = [];
+      const picked = [];
       for (var i = 0; i < checkboxes.length; i++) {
         if (checkboxes[i].cb.checked) picked.push(checkboxes[i].entry);
       }

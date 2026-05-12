@@ -1,12 +1,35 @@
 // ── PETSCII Keyboard Picker ───────────────────────────────────────────
 // Provides an on-screen C64 keyboard for inserting PETSCII characters.
 
-var pickerTarget = null;
-var pickerClicking = false;
-var pickerModifier = 'normal'; // 'normal', 'shift', 'cbm', 'all'
-var pickerReverse = false;
-var pickerDefaultAll = localStorage.getItem('cbm-pickerAll') === 'true';
-var pickerStick = localStorage.getItem('cbm-pickerStick') === 'true';
+// Shared picker state. Accessed cross-file from ui-options.js, ui-init.js,
+// ui-directory.js, ui-editing.js, ui-search.js, and ui-disk-tools.js — the
+// app has no module system so this is the only namespacing we get.
+var petsciiPicker = {
+  target: null,
+  clicking: false,
+  modifier: 'normal', // 'normal', 'shift', 'cbm', 'all'
+  reverse: false,
+  defaultAll: localStorage.getItem('cbm-pickerAll') === 'true',
+  stick: localStorage.getItem('cbm-pickerStick') === 'true'
+};
+
+// PETSCII byte ranges that render reversed (white-on-text vs text-on-background)
+const PETSCII_REV_LO_START = 0x00, PETSCII_REV_LO_END = 0x1F;
+const PETSCII_REV_HI_START = 0x80, PETSCII_REV_HI_END = 0x9F;
+// Picker's RVS button toggles the "normal" $40-$5F range to its reversed
+// $00-$1F counterpart, and the shifted $C0-$DF range to $80-$9F.
+const PETSCII_NORM_RANGE_START = 0x40, PETSCII_NORM_RANGE_END = 0x5F;
+const PETSCII_SHIFTED_RANGE_START = 0xC0, PETSCII_SHIFTED_RANGE_END = 0xDF;
+// Letters in the unshifted/shifted PETSCII charsets (keyboard-typed letter
+// mapping; "A"=$41 unshifted, $C1 shifted)
+const PETSCII_UC_LETTER_START = 0x41, PETSCII_UC_LETTER_END = 0x5A;
+const PETSCII_LC_LETTER_START = 0x61, PETSCII_LC_LETTER_END = 0x7A;
+const PETSCII_SHIFTED_LETTER_START = 0xC1;
+
+function isPetsciiReversed(code) {
+  return (code >= PETSCII_REV_LO_START && code <= PETSCII_REV_LO_END) ||
+         (code >= PETSCII_REV_HI_START && code <= PETSCII_REV_HI_END);
+}
 
 // C64 keyboard layout: [label, normal, shift, cbm] per key
 const KB_ROWS = [
@@ -36,7 +59,7 @@ function buildAllGridHtml() {
       var code = row * 16 + col;
       var isSafe = SAFE_PETSCII.has(code);
       var disabled = !isSafe && !allowUnsafeChars;
-      var isReversed = (code >= 0x00 && code <= 0x1F) || (code >= 0x80 && code <= 0x9F);
+      var isReversed = isPetsciiReversed(code);
       var ch = PETSCII_MAP[code];
       var title = '$' + code.toString(16).toUpperCase().padStart(2, '0');
       html += '<div class="petscii-key' +
@@ -53,13 +76,13 @@ function buildAllGridHtml() {
 function renderPicker() {
   const el = document.getElementById('petscii-picker');
   let html = '<div class="petscii-modifiers">';
-  html += '<div class="petscii-mod' + (pickerModifier === 'shift' ? ' active' : '') + '" data-mod="shift">SHIFT</div>';
-  html += '<div class="petscii-mod' + (pickerModifier === 'cbm' ? ' active' : '') + '" data-mod="cbm">CBM</div>';
-  html += '<div class="petscii-mod' + (pickerReverse ? ' active' : '') + '" data-mod="rev">RVS</div>';
-  html += '<div class="petscii-mod' + (pickerModifier === 'all' ? ' active' : '') + '" data-mod="all">ALL</div>';
+  html += '<div class="petscii-mod' + (petsciiPicker.modifier === 'shift' ? ' active' : '') + '" data-mod="shift">SHIFT</div>';
+  html += '<div class="petscii-mod' + (petsciiPicker.modifier === 'cbm' ? ' active' : '') + '" data-mod="cbm">CBM</div>';
+  html += '<div class="petscii-mod' + (petsciiPicker.reverse ? ' active' : '') + '" data-mod="rev">RVS</div>';
+  html += '<div class="petscii-mod' + (petsciiPicker.modifier === 'all' ? ' active' : '') + '" data-mod="all">ALL</div>';
   html += '</div>';
 
-  if (pickerModifier === 'all') {
+  if (petsciiPicker.modifier === 'all') {
     // Legacy in-place 16x16 grid — unreachable in normal flow now that the
     // ALL button switches to the floating window, but kept as a backup.
     html += buildAllGridHtml();
@@ -72,24 +95,24 @@ function renderPicker() {
         var entry = rowData[k];
         var label = entry[0], normal = entry[1], shift = entry[2], cbm = entry[3];
         var code;
-        if (pickerModifier === 'shift') code = shift;
-        else if (pickerModifier === 'cbm') code = cbm;
+        if (petsciiPicker.modifier === 'shift') code = shift;
+        else if (petsciiPicker.modifier === 'cbm') code = cbm;
         else code = normal;
 
         if (code === -1) {
           html += '<div class="petscii-key empty"></div>';
         } else {
           var actualCode = code;
-          if (pickerReverse) {
-            if (code >= 0x40 && code <= 0x5F) actualCode = code - 0x40;
-            else if (code >= 0xC0 && code <= 0xDF) actualCode = code - 0xC0 + 0x80;
+          if (petsciiPicker.reverse) {
+            if (code >= PETSCII_NORM_RANGE_START && code <= PETSCII_NORM_RANGE_END) actualCode = code - PETSCII_NORM_RANGE_START;
+            else if (code >= PETSCII_SHIFTED_RANGE_START && code <= PETSCII_SHIFTED_RANGE_END) actualCode = code - PETSCII_SHIFTED_RANGE_START + PETSCII_REV_HI_START;
           }
           var isSafe = SAFE_PETSCII.has(actualCode);
           var disabled = !isSafe && !allowUnsafeChars;
           var ch = PETSCII_MAP[code];
           var title = label + ' $' + code.toString(16).toUpperCase().padStart(2, '0');
           html += '<div class="petscii-key' +
-            (pickerReverse ? ' rev-char' : '') +
+            (petsciiPicker.reverse ? ' rev-char' : '') +
             (disabled ? ' disabled' : (!isSafe ? ' unsafe' : '')) +
             '" data-code="' + code + '" title="' + title + '">' + escHtml(ch) + '</div>';
         }
@@ -109,12 +132,12 @@ function initPicker() {
   // mousedown: prevent blur on the editing input
   el.addEventListener('mousedown', function(e) {
     e.preventDefault();
-    pickerClicking = true;
+    petsciiPicker.clicking = true;
   });
 
   // mouseup: clear the flag after a delay so blur handlers see it as true
   el.addEventListener('mouseup', function() {
-    setTimeout(function() { pickerClicking = false; }, 200);
+    setTimeout(function() { petsciiPicker.clicking = false; }, 200);
   });
 
   // click: handle all interactions
@@ -133,36 +156,36 @@ function initPicker() {
       var m = mod.getAttribute('data-mod');
       if (m === 'all') {
         // ALL switches over to the floating 16x16 window. Tear down the
-        // compact picker (incl. sticky-modal flip) but keep pickerTarget
+        // compact picker (incl. sticky-modal flip) but keep petsciiPicker.target
         // — the float reuses it.
         hideCompactPicker();
-        showPetsciiFloat(pickerTarget);
+        showPetsciiFloat(petsciiPicker.target);
         return;
       }
       if (m === 'rev') {
-        pickerReverse = !pickerReverse;
+        petsciiPicker.reverse = !petsciiPicker.reverse;
       } else {
-        pickerModifier = (pickerModifier === m) ? 'normal' : m;
+        petsciiPicker.modifier = (petsciiPicker.modifier === m) ? 'normal' : m;
       }
       renderPicker();
-      if (pickerTarget) pickerTarget.focus();
+      if (petsciiPicker.target) petsciiPicker.target.focus();
       return;
     }
 
     // Character key?
     var key = t.closest('.petscii-key');
-    if (!key || !pickerTarget || key.classList.contains('empty') || key.classList.contains('disabled')) return;
+    if (!key || !petsciiPicker.target || key.classList.contains('empty') || key.classList.contains('disabled')) return;
     var code = parseInt(key.getAttribute('data-code'), 10);
     if (isNaN(code) || code < 0) return;
 
     var actualCode = code;
-    if (pickerReverse) {
-      if (code >= 0x40 && code <= 0x5F) actualCode = code - 0x40;
-      else if (code >= 0xC0 && code <= 0xDF) actualCode = code - 0xC0 + 0x80;
+    if (petsciiPicker.reverse) {
+      if (code >= PETSCII_NORM_RANGE_START && code <= PETSCII_NORM_RANGE_END) actualCode = code - PETSCII_NORM_RANGE_START;
+      else if (code >= PETSCII_SHIFTED_RANGE_START && code <= PETSCII_SHIFTED_RANGE_END) actualCode = code - PETSCII_SHIFTED_RANGE_START + PETSCII_REV_HI_START;
     }
 
     var ch = PETSCII_MAP[actualCode];
-    insertCharAtCursor(pickerTarget, ch, actualCode);
+    insertCharAtCursor(petsciiPicker.target, ch, actualCode);
   });
 
   renderPicker();
@@ -235,7 +258,7 @@ function createPetsciiEditor(opts) {
     var html = '';
     for (var i = 0; i < shadowLen; i++) {
       var b = shadow[i];
-      var rev = (b <= 0x1F) || (b >= 0x80 && b <= 0x9F);
+      var rev = isPetsciiReversed(b);
       var ch = escHtml(petsciiToAscii(b));
       html += '<span class="pe-char' + (rev ? ' pe-rev' : '') + '">' + ch + '</span>';
     }
@@ -360,8 +383,8 @@ function createPetsciiEditor(opts) {
 
     var code = e.key.charCodeAt(0);
     var petscii = -1;
-    if (code >= 0x41 && code <= 0x5A) petscii = code - 0x41 + 0xC1;      // shifted letter → $C1-$DA
-    else if (code >= 0x61 && code <= 0x7A) petscii = code - 0x61 + 0x41; // lowercase letter → $41-$5A
+    if (code >= PETSCII_UC_LETTER_START && code <= PETSCII_UC_LETTER_END) petscii = code - PETSCII_UC_LETTER_START + PETSCII_SHIFTED_LETTER_START;     // shifted letter → $C1-$DA
+    else if (code >= PETSCII_LC_LETTER_START && code <= PETSCII_LC_LETTER_END) petscii = code - PETSCII_LC_LETTER_START + PETSCII_UC_LETTER_START;     // lowercase letter → $41-$5A
     else {
       var mapped = UNICODE_TO_PETSCII.get(e.key);
       if (mapped !== undefined) petscii = mapped;
@@ -411,13 +434,13 @@ var pickerSavedScrollY = 0;
 // event, re-entering positionPicker and re-scrolling — infinite smooth-scroll
 // loop that also pins the page at the picker's bottom.
 function positionPicker(isInitial) {
-  if (!pickerTarget) return;
+  if (!petsciiPicker.target) return;
   var el = document.getElementById('petscii-picker');
-  var rect = pickerTarget.getBoundingClientRect();
+  var rect = petsciiPicker.target.getBoundingClientRect();
 
-  var inModal = !!pickerTarget.closest('.modal-overlay');
+  var inModal = !!petsciiPicker.target.closest('.modal-overlay');
 
-  if (pickerStick && !inModal) {
+  if (petsciiPicker.stick && !inModal) {
     // Sticky on the main page: input scrolls with the page, so place the
     // picker at a document-Y = rect.bottom + scrollY. When the page scrolls,
     // both rect.bottom and scrollY shift by the same amount in opposite
@@ -442,7 +465,7 @@ function positionPicker(isInitial) {
         }
       }
     });
-  } else if (pickerStick && inModal) {
+  } else if (petsciiPicker.stick && inModal) {
     // Sticky inside a modal: same absolute+scrollY math as the main-page
     // case. We also flip the modal overlay to position:absolute (via a body
     // class toggled by showPetsciiPicker) so the modal scrolls with the
@@ -518,14 +541,14 @@ function ensureFloatBuilt() {
     floatPosition = { left: x, top: y };
   });
 
-  // Same pickerClicking bracket as the compact picker, so the editor's
+  // Same petsciiPicker.clicking bracket as the compact picker, so the editor's
   // blur handler doesn't commit the edit while the user clicks a cell.
   body.addEventListener('mousedown', function(e) {
     e.preventDefault();
-    pickerClicking = true;
+    petsciiPicker.clicking = true;
   });
   body.addEventListener('mouseup', function() {
-    setTimeout(function() { pickerClicking = false; }, 200);
+    setTimeout(function() { petsciiPicker.clicking = false; }, 200);
   });
   body.addEventListener('click', function(e) {
     e.preventDefault();
@@ -534,11 +557,11 @@ function ensureFloatBuilt() {
     if (t.nodeType === 3) t = t.parentElement;
     if (!t) return;
     var key = t.closest('.petscii-key');
-    if (!key || !pickerTarget || key.classList.contains('empty') || key.classList.contains('disabled')) return;
+    if (!key || !petsciiPicker.target || key.classList.contains('empty') || key.classList.contains('disabled')) return;
     var code = parseInt(key.getAttribute('data-code'), 10);
     if (isNaN(code) || code < 0) return;
     var ch = PETSCII_MAP[code];
-    insertCharAtCursor(pickerTarget, ch, code);
+    insertCharAtCursor(petsciiPicker.target, ch, code);
   });
 
   return fl;
@@ -598,7 +621,7 @@ function bindFloatDrag(fl, handle, onPosChange) {
 }
 
 function showPetsciiFloat(targetEl) {
-  pickerTarget = targetEl;
+  petsciiPicker.target = targetEl;
   var fl = ensureFloatBuilt();
   fl.querySelector('.petscii-float-body').innerHTML = buildAllGridHtml();
 
@@ -624,17 +647,17 @@ function hidePetsciiFloat() {
 }
 
 function showPetsciiPicker(targetEl, maxLen) {
-  pickerTarget = targetEl;
+  petsciiPicker.target = targetEl;
   // Show-all-by-default skips the compact picker entirely and brings up
   // the floating window — the docked picker is reserved for the C64
   // keyboard layout.
-  if (pickerDefaultAll) {
+  if (petsciiPicker.defaultAll) {
     showPetsciiFloat(targetEl);
     return;
   }
   var el = document.getElementById('petscii-picker');
-  pickerModifier = 'normal';
-  pickerReverse = false;
+  petsciiPicker.modifier = 'normal';
+  petsciiPicker.reverse = false;
   renderPicker();
   el.classList.add('open');
   // Always appear above any open modal
@@ -643,7 +666,7 @@ function showPetsciiPicker(targetEl, maxLen) {
   // page can be scrolled to reveal the picker (modal scrolls with it). Save
   // and reset page scroll first so the modal doesn't jump off-screen when
   // the overlay leaves viewport-relative positioning.
-  var hostModalOverlay = (pickerStick && targetEl.closest) ? targetEl.closest('.modal-overlay') : null;
+  var hostModalOverlay = (petsciiPicker.stick && targetEl.closest) ? targetEl.closest('.modal-overlay') : null;
   if (hostModalOverlay) {
     pickerSavedScrollY = window.scrollY;
     document.body.classList.add('sticky-picker-in-modal');
@@ -666,7 +689,7 @@ function showPetsciiPicker(targetEl, maxLen) {
   // Scroll events don't bubble, so register in the capture phase on document —
   // that fires for scrolls on #content, .modal-body, or any future scroll
   // container without having to locate the right ancestor.
-  if (pickerStick) {
+  if (petsciiPicker.stick) {
     if (pickerScrollHandler) {
       document.removeEventListener('scroll', pickerScrollHandler, true);
     }
@@ -686,7 +709,7 @@ function showPetsciiPicker(targetEl, maxLen) {
 }
 
 // Tear down only the compact picker (and its sticky-modal side effects).
-// Caller decides whether to clear pickerTarget — the ALL→float transition
+// Caller decides whether to clear petsciiPicker.target — the ALL→float transition
 // keeps the same target alive.
 function hideCompactPicker() {
   document.getElementById('petscii-picker').classList.remove('open');
@@ -706,7 +729,7 @@ function hideCompactPicker() {
 function hidePetsciiPicker() {
   hideCompactPicker();
   hidePetsciiFloat();
-  pickerTarget = null;
+  petsciiPicker.target = null;
 }
 
 // Old name compatibility

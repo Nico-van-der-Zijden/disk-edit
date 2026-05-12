@@ -121,11 +121,11 @@ document.getElementById('opt-unzip').addEventListener('click', async function(e)
 
   // Find complete sets (all 4 files present)
   var completeSets = [];
-  for (var sn in sets) {
+  Object.keys(sets).forEach(function(sn) {
     if (sets[sn]['1'] && sets[sn]['2'] && sets[sn]['3'] && sets[sn]['4']) {
       completeSets.push({ name: sn, offsets: sets[sn] });
     }
-  }
+  });
 
   if (completeSets.length === 0) {
     // Show what we found

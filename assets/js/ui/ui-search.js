@@ -339,7 +339,7 @@ function showSearchModal(title, allTabs) {
     showPetsciiPicker(input, 255);
   });
   input.addEventListener('blur', function() {
-    if (!pickerClicking) hidePetsciiPicker();
+    if (!petsciiPicker.clicking) hidePetsciiPicker();
   });
 
   var footer = document.querySelector('#modal-overlay .modal-footer');

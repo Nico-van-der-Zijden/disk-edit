@@ -477,20 +477,20 @@ function geoWriteToPdf(entryOff) {
   // Assign font resource names
   var fontResNames = {};
   var fontResIdx = 0;
-  for (var fv in fontVariants) {
+  Object.keys(fontVariants).forEach(function(fv) {
     fontResNames[fv] = 'F' + fontResIdx;
     fontResIdx++;
-  }
+  });
 
   // Create font objects
   var fontObjIds = {};
-  for (var fv2 in fontVariants) {
-    var fObjId = addObj('<< /Type /Font /Subtype /Type1 /BaseFont /' + fv2 + ' /Encoding /WinAnsiEncoding >>');
-    fontObjIds[fv2] = fObjId;
-  }
+  Object.keys(fontVariants).forEach(function(fv) {
+    var fObjId = addObj('<< /Type /Font /Subtype /Type1 /BaseFont /' + fv + ' /Encoding /WinAnsiEncoding >>');
+    fontObjIds[fv] = fObjId;
+  });
 
   // Create image XObjects
-  for (var imgRec in doc.images) {
+  Object.keys(doc.images).forEach(function(imgRec) {
     var img = doc.images[imgRec];
     // Decode PNG to raw pixels for PDF (use canvas)
     var tmpC = document.createElement('canvas');
@@ -518,7 +518,7 @@ function geoWriteToPdf(entryOff) {
       '/Length ' + imgStream.length + ' /Filter /ASCIIHexDecode >>\nstream\n' +
       imgStream + '>\nendstream');
     imgObjIds[imgRec] = imgObjId;
-  }
+  });
 
   // Build page content streams
   var pageObjIds = [];
@@ -659,13 +659,13 @@ function geoWriteToPdf(entryOff) {
 
     // Build resource dictionary for this page
     var fontRes = '';
-    for (var fr in fontResNames) {
+    Object.keys(fontResNames).forEach(function(fr) {
       fontRes += '/' + fontResNames[fr] + ' ' + fontObjIds[fr] + ' 0 R ';
-    }
+    });
     var imgRes = '';
-    for (var ir in imgObjIds) {
+    Object.keys(imgObjIds).forEach(function(ir) {
       imgRes += '/Im' + ir + ' ' + imgObjIds[ir] + ' 0 R ';
-    }
+    });
 
     var contentId = addObj('<< /Length ' + stream.length + ' >>\nstream\n' + stream + 'endstream');
     contentObjIds.push(contentId);
@@ -1000,10 +1000,10 @@ function buildTrueAllocationMap(buffer) {
   } else {
     // Root or linked subdir: mark all protected sectors (BAM, header, system)
     var sysTracks = fmt.getSkipTracks();
-    for (var st2 in sysTracks) {
+    Object.keys(sysTracks).forEach(function(st2) {
       var ps = fmt.getProtectedSectors(parseInt(st2));
       for (var psi = 0; psi < ps.length; psi++) allocated[st2 + ':' + ps[psi]] = true;
-    }
+    });
     // Also mark protected sectors on non-skip tracks (e.g. D1M/D2M/D4M system partition on track 26)
     for (var et = 1; et <= currentTracks; et++) {
       if (sysTracks[et]) continue; // already handled above

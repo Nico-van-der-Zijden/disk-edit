@@ -125,7 +125,7 @@ function startEditing(el) {
   }
 
   editor.addEventListener('blur', () => {
-    if (pickerClicking) { editor.focus(); editor._setCaret(editor._lastCursorPos || 0); return; }
+    if (petsciiPicker.clicking) { editor.focus(); editor._setCaret(editor._lastCursorPos || 0); return; }
     commitEdit();
   });
   editor.addEventListener('keydown', (e) => {

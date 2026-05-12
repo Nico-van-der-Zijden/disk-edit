@@ -163,7 +163,7 @@ document.getElementById('opt-charset-mode').addEventListener('click', (e) => {
     var info = parseCurrentDir(currentBuffer);
     renderDisk(info);
   }
-  if (pickerTarget) renderPicker();
+  if (petsciiPicker.target) renderPicker();
 });
 
 document.getElementById('opt-show-addr').addEventListener('click', (e) => {

@@ -7,7 +7,7 @@ document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
   allowUnsafeChars = !allowUnsafeChars;
   localStorage.setItem('cbm-allowUnsafe', allowUnsafeChars);
   document.getElementById('check-unsafe').innerHTML = allowUnsafeChars ? '<i class="fa-solid fa-check"></i>' : '';
-  if (pickerTarget) renderPicker();
+  if (petsciiPicker.target) renderPicker();
   // The floating charset window has its own DOM — refresh its grid too
   // so disabled/unsafe cell classes stay in sync with the toggle.
   var fl = document.getElementById('petscii-float');
@@ -19,17 +19,17 @@ document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
 document.getElementById('opt-picker-all').addEventListener('click', (e) => {
   e.stopPropagation();
   closeMenus();
-  pickerDefaultAll = !pickerDefaultAll;
-  localStorage.setItem('cbm-pickerAll', pickerDefaultAll);
-  document.getElementById('check-picker-all').innerHTML = pickerDefaultAll ? '<i class="fa-solid fa-check"></i>' : '';
+  petsciiPicker.defaultAll = !petsciiPicker.defaultAll;
+  localStorage.setItem('cbm-pickerAll', petsciiPicker.defaultAll);
+  document.getElementById('check-picker-all').innerHTML = petsciiPicker.defaultAll ? '<i class="fa-solid fa-check"></i>' : '';
 });
 
 document.getElementById('opt-picker-stick').addEventListener('click', (e) => {
   e.stopPropagation();
   closeMenus();
-  pickerStick = !pickerStick;
-  localStorage.setItem('cbm-pickerStick', pickerStick);
-  document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i class="fa-solid fa-check"></i>' : '';
+  petsciiPicker.stick = !petsciiPicker.stick;
+  localStorage.setItem('cbm-pickerStick', petsciiPicker.stick);
+  document.getElementById('check-picker-stick').innerHTML = petsciiPicker.stick ? '<i class="fa-solid fa-check"></i>' : '';
 });
 
 document.getElementById('opt-show-toolbar').addEventListener('click', (e) => {
@@ -111,8 +111,8 @@ document.getElementById('opt-import-settings').addEventListener('click', functio
           // Settings file: { "cbm-key": "value", ... }
           var settingsCount = 0;
           var sepCount = 0;
-          for (var key in parsed) {
-            if (key.indexOf('cbm-') !== 0) continue;
+          Object.keys(parsed).forEach(function(key) {
+            if (key.indexOf('cbm-') !== 0) return;
             if (key === 'cbm-customSeparators') {
               // Embedded separators in settings file
               try {
@@ -134,7 +134,7 @@ document.getElementById('opt-import-settings').addEventListener('click', functio
               localStorage.setItem(key, parsed[key]);
               settingsCount++;
             }
-          }
+          });
           if (settingsCount > 0) results.push(settingsCount + ' setting(s) imported.');
           if (sepCount > 0) results.push(sepCount + ' separator(s) imported.');
         }

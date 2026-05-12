@@ -38,10 +38,10 @@ document.addEventListener('drop', async function(e) {
   var entries = await expandArchives(files);
   if (entries.length === 0) return;
 
-  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.dnp', '.nib', '.nb2'];
-  var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
-  var archiveExts = ['.lnx'];
-  var cmdcExts = ['.rml', '.rl', '.d1m', '.d2m', '.d4m'];
+  const diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.dnp', '.nib', '.nb2'];
+  const fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
+  const archiveExts = ['.lnx'];
+  const cmdcExts = ['.rml', '.rl', '.d1m', '.d2m', '.d4m'];
   var diskEntries = [], importEntries = [], archiveEntries = [], cmdcEntries = [];
   for (var i = 0; i < entries.length; i++) {
     var lname = entries[i].name.toLowerCase();
@@ -197,8 +197,8 @@ document.getElementById('check-addr').innerHTML = showAddresses ? '<i class="fa-
 document.getElementById('check-ts').innerHTML = showTrackSector ? '<i class="fa-solid fa-check"></i>' : '';
 document.getElementById('opt-charset-mode').textContent = charsetMode === 'lowercase' ? 'Switch to Uppercase' : 'Switch to Lowercase';
 document.getElementById('check-unsafe').innerHTML = allowUnsafeChars ? '<i class="fa-solid fa-check"></i>' : '';
-document.getElementById('check-picker-all').innerHTML = pickerDefaultAll ? '<i class="fa-solid fa-check"></i>' : '';
-document.getElementById('check-picker-stick').innerHTML = pickerStick ? '<i class="fa-solid fa-check"></i>' : '';
+document.getElementById('check-picker-all').innerHTML = petsciiPicker.defaultAll ? '<i class="fa-solid fa-check"></i>' : '';
+document.getElementById('check-picker-stick').innerHTML = petsciiPicker.stick ? '<i class="fa-solid fa-check"></i>' : '';
 refreshHexColoringChecks();
 document.getElementById('check-toolbar').innerHTML = toolbarVisible ? '<i class="fa-solid fa-check"></i>' : '';
 applyToolbarVisibility();
