@@ -47,10 +47,13 @@ Key files (paths relative to `assets/js/`):
 | `format/cbm-format-petscii.js` | PETSCII ↔ Unicode mapping, screen-code tables |
 | `format/cbm-format-cmd.js` | CMD container parsers (RAMLink, FD2000/4000 D1M/D2M/D4M) |
 | `format/cbm-format-geos.js` | GEOS file types, VLIR records, info-block decoding, bitmap decompression |
+| `format/cbm-sector-allocator.js` | Real-drive sector allocation: `buildTrueAllocationMap`, `allocateSectors` (used across cbm-editor, ui-directory, ui-fileops, ui-disk-tools) |
 | `format/cbm-editor.js` | Version, app state, undo, BAM integrity, disk validation, disk optimizer |
 | `ui/ui-modals.js` | Modal dialogs (`showModal`, `showChoiceModal`, `showProgressModal`) |
-| `ui/ui-fileops.js` | File export, import, copy/paste, CVT, RTF, PDF, scratch/unscratch |
+| `ui/ui-fileops.js` | File import, copy/paste, raw + CVT export, scratch/unscratch |
+| `ui/ui-export-geowrite.js` | geoWrite document export to RTF, PDF, plain text (~600 lines of self-contained PDF/RTF generation) |
 | `ui/ui-directory.js` | Directory manipulation, block counting, file addresses |
+| `ui/ui-directory-separators.js` | Insert Separator feature: default + custom patterns, editor modal, floating palette |
 | `ui/ui-search.js` | Search, Go to Sector, recalculate free blocks |
 | `ui/ui-export.js` | Bulk export (ZIP, CSV, HTML, PNG), ZipCode, file chains |
 | `ui/ui-init.js` | Drag and drop, theme toggle, initialization |

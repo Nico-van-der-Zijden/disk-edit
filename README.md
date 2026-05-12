@@ -171,6 +171,7 @@ assets/
       cbm-format-gcr.js           G64 GCR decoder
       cbm-format-cmd.js           CMD container parsers (RAMLink, FD2000/4000 D1M/D2M/D4M)
       cbm-format-geos.js          GEOS file types, VLIR records, info block, bitmap decompress
+      cbm-sector-allocator.js     Real-drive sector allocation (buildTrueAllocationMap, allocateSectors)
       cbm-format-lnx.js           Lynx (.lnx) archive reader
       cbm-format-tape.js          T64 tape directory reader
       cbm-tape.js                 TAP tape parser (CBM ROM, Turbotape 250, Novaload, Cyberload)
@@ -187,8 +188,10 @@ assets/
       ui-options.js               Options menu, settings export/import
       ui-screen.js                PETSCII renderer, hex viewer, sector editor, disassembler
       ui-search.js                Search and Go to Sector
-      ui-directory.js             Directory manipulation, sort, separators, property editors
-      ui-fileops.js               File export, import, copy/paste, CVT, RTF, PDF
+      ui-directory.js             Directory manipulation, sort, property editors
+      ui-directory-separators.js  Insert Separator: default + custom patterns, editor, floating palette
+      ui-fileops.js               File import, copy/paste, raw + CVT export, scratch/unscratch
+      ui-export-geowrite.js       geoWrite export to RTF, PDF, plain text
       ui-export.js                Bulk export (ZIP, CSV, HTML, PNG), ZipCode, name case
       ui-recent.js                Recent-files list
       ui-init.js                  Drag and drop, theme toggle, initialization
