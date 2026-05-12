@@ -50,6 +50,7 @@ loadScript('assets/js/format/cbm-format-gcr.js');
 loadScript('assets/js/format/cbm-format.js');
 loadScript('assets/js/format/cbm-format-cmd.js');
 loadScript('assets/js/format/cbm-format-geos.js');
+loadScript('assets/js/format/cbm-sector-allocator.js');
 loadScript('assets/js/format/cbm-format-tape.js');
 loadScript('assets/js/format/cbm-format-lnx.js');
 loadScript('assets/js/format/cbm-editor.js');
