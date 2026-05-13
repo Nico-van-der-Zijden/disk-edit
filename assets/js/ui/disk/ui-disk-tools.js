@@ -1382,9 +1382,17 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
     data[entryOff + 30] = 2; // 2 blocks (header + dir)
     data[entryOff + 31] = 0;
 
-    // Store parent entry reference in header
-    data[hdrOff + fmt.subdirParentEntry] = entryOff >> 8;
-    data[hdrOff + fmt.subdirParentEntry + 1] = entryOff & 0xFF;
+    // Store parent dir-entry reference per D2M-DNP.TXT (rev 1.3):
+    //   +$24/$25 = T/S of the parent dir block holding our entry
+    //   +$26    = entry index within that block (0..7)
+    // For DNP / D1M / D2M / D4M, sectorOffset uses LBA encoding
+    // ((T-1)*256 + S)*256, so the inverse for any in-range entryOff is:
+    var parentDirT = (entryOff >>> 16) + 1;
+    var parentDirS = (entryOff >>> 8) & 0xFF;
+    var parentIdx = (entryOff >>> 5) & 0x07;
+    data[hdrOff + fmt.subdirParentEntry] = parentDirT;
+    data[hdrOff + fmt.subdirParentEntry + 1] = parentDirS;
+    data[hdrOff + fmt.subdirParentEntry + 2] = parentIdx;
 
     var info = parseCurrentDir(currentBuffer);
     renderDisk(info);
@@ -1399,12 +1407,14 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
   if (!name) return;
   name = name.toUpperCase().substring(0, 16);
 
-  // Ask for desired blocks free (minimum 80 = 2 data tracks + 1 system track)
-  var blocksStr = await showInputModal('Blocks Free (min 80, multiples of 40)', '80');
+  // D81.TXT lines 430-437: sub-directory partitions must be a minimum of
+  // 120 sectors (3 tracks). Below that, real 1581 firmware would refuse
+  // to mount the area as a sub-directory.
+  var blocksStr = await showInputModal('Blocks Free (min 120, multiples of 40)', '120');
   if (!blocksStr) return;
   var desiredBlocks = parseInt(blocksStr, 10);
-  if (isNaN(desiredBlocks) || desiredBlocks < 80) {
-    showModal('Add Directory Error', ['Minimum is 80 blocks (2 data tracks).']);
+  if (isNaN(desiredBlocks) || desiredBlocks < 120) {
+    showModal('Add Directory Error', ['Minimum is 120 blocks (3 tracks).']);
     return;
   }
   // Round up to next multiple of sectors-per-track

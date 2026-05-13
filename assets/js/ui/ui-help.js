@@ -150,7 +150,7 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '<br>' +
       '<b>Technical references:</b><br>' +
       '&bull; <a href="https://vice-emu.sourceforge.io/vice_17.html" target="_blank" class="link">VICE Manual</a> — disk image format documentation<br>' +
-      '&bull; <a href="https://ist.uwaterloo.ca/~schepers/formats.html" target="_blank" class="link">Peter Schepers</a> — D64, D71, D81, D80, D82, D2M-DNP format specifications<br>' +
+      '&bull; <a href="https://ist.uwaterloo.ca/~schepers/formats.html" target="_blank" class="link">Peter Schepers</a> — D64, D71, D81, D80, D82, D2M-DNP, GEOS, and C128 auto-boot format specifications<br>' +
       '&bull; <a href="https://www.oxyron.de/html/opcodes02.html" target="_blank" class="link">Oxyron 6502 Opcode Table</a> — illegal opcode reference<br>' +
       '&bull; <a href="https://c64-wiki.com/" target="_blank" class="link">C64-Wiki</a> — Commodore 64 technical reference<br>' +
       '&bull; <a href="https://sta.c64.org/" target="_blank" class="link">STA\'s C64 pages</a> — disk format details<br>' +
@@ -276,6 +276,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.110', title: 'Disk-format spec audit pass', items: [
+      'BAM view banner now flags format-specific quirks when present: soft write-protect (BAM +$02 mismatch), 40-track speeder-DOS extended BAM (SpeedDOS / DolphinDOS), C128 auto-boot signature, and 1581 auto-boot loader flag. New Disk → Restore DOS Version Byte action clears the soft-WP byte on D64 / D71 / D81 / D80 / D82',
+      'GEOS Info modal now shows Author and "Created by app" fields (when present in the INFO block). USR-typed GEOS VLIR files — like the ones on geoMagazine disks — are now correctly recognised as GEOS so the info dialog and load-address fields work for them',
+      'New Disk → View GEOS Border Sector dialog for the rarely-used cross-disk drag-and-drop area (header +$AB/$AC pointer on GEOS-formatted disks)',
+      'D81 CBM partition creation now enforces the spec’s 3-track / 120-block minimum (was 80). 40-track speeder-DOS D64s render tracks 36-40 in the BAM view at the right offset for the detected variant. D80 / D82 file and directory interleave default to 1 (per the IEEE-488 whole-track buffering)',
+      'Fixes: opening a Native partition from a D2M / D4M no longer mis-detects as D81 once you double-click in; a fresh D1M / D2M / D4M no longer reports thousands of phantom "orphan" sectors in the BAM integrity check; sub-directory entries on DNP-style disks now correctly bump their parent block count when the directory grows',
+    ]},
     { ver: '1.3.109', title: 'Turbo Assembler viewer improvements', items: [
       'Wide accuracy pass against more V5/V6 source files — comments, expressions, and label references match what VICE shows in many cases that previously misdecoded; one extra magic-byte variant ($0A at offset $0E) is now recognised',
       'Scroll position is preserved when toggling uppercase/lowercase mode while a viewer modal is open',

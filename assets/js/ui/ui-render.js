@@ -383,8 +383,16 @@ function renderDisk(info) {
     } else {
       healthEl.textContent = '\u25CF';
       healthEl.classList.add('health-ok');
-      var extBam = detectExtendedBAM(currentBuffer);
-      healthEl.title = 'Disk OK' + (extBam ? ' (' + extBam + ' extended BAM)' : '') + ' — click to view BAM';
+      var extBam = getSpeederVariant(currentBuffer);
+      var swp = isSoftWriteProtected(currentBuffer);
+      var c128Boot = hasC128BootSignature(currentBuffer);
+      var d81Boot = hasD81AutoBootLoader(currentBuffer);
+      var bits = ['Disk OK'];
+      if (extBam) bits.push(extBam + ' extended BAM');
+      if (swp !== null) bits.push('soft write-protected (DOS version $' + hex8(swp) + ')');
+      if (c128Boot) bits.push('C128 auto-boot disk');
+      if (d81Boot) bits.push('1581 auto-boot loader flag set');
+      healthEl.title = bits.join(' — ') + ' — click to view BAM';
       healthEl.onclick = function() { document.getElementById('opt-view-bam').click(); };
     }
   } else if (healthEl) {

@@ -194,6 +194,8 @@ function updateMenuState() {
   document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || noEdit || !hasErrorBytes(currentBuffer));
   document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || noEdit || hasGeosSignature(currentBuffer));
+  document.getElementById('opt-view-border').classList.toggle('disabled', !hasDisk || !hasGeosSignature(currentBuffer));
+  document.getElementById('opt-restore-dos-version').classList.toggle('disabled', !hasDisk || noEdit || isSoftWriteProtected(currentBuffer) === null);
   document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-compact-dir').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-file-chains').classList.toggle('disabled', !hasDisk || noEdit);
@@ -479,7 +481,7 @@ function renderTabs() {
     var t = tabs[i];
     var cls = 'tab';
     if (t.id === activeTabId) cls += ' active';
-    var isTape = t.format === DISK_FORMATS.t64 || t.format === DISK_FORMATS.tap;
+    var isTape = !!(t.format && t.format.isTape);
     if (isTape) cls += ' tab-tape';
     if (t.dirty) cls += ' tab-dirty';
     // Tape images (T64/TAP) are read-only — the TAPE badge alone marks
@@ -615,7 +617,7 @@ function openTabListDropdown(anchor) {
   var html = '';
   for (var i = 0; i < tabs.length; i++) {
     var t = tabs[i];
-    var isTape = t.format === DISK_FORMATS.t64 || t.format === DISK_FORMATS.tap;
+    var isTape = !!(t.format && t.format.isTape);
     var cls = 'tab-list-dropdown-item' + (t.id === activeTabId ? ' active' : '') +
       (t.dirty ? ' tab-dirty' : '');
     var label = (isTape

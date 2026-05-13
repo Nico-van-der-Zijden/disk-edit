@@ -31,6 +31,29 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     bamWarnings += '</ul>';
   }
 
+  // Informational notes about format-specific spec features detected in
+  // the current image (D64.TXT / D71.TXT / D81.TXT). Flags, not errors.
+  var swp = isSoftWriteProtected(currentBuffer);
+  var speeder = getSpeederVariant(currentBuffer);
+  var c128Boot = hasC128BootSignature(currentBuffer);
+  var d81Boot = hasD81AutoBootLoader(currentBuffer);
+  if (swp !== null || speeder || c128Boot || d81Boot) {
+    bamWarnings += '<ul class="bam-warnings">';
+    if (swp !== null) {
+      bamWarnings += '<li><i class="fa-solid fa-lock"></i> Soft write-protect</li>';
+    }
+    if (speeder) {
+      bamWarnings += '<li><i class="fa-solid fa-bolt"></i> 40-track extended BAM detected</li>';
+    }
+    if (c128Boot) {
+      bamWarnings += '<li><i class="fa-solid fa-power-off"></i> C128 auto-boot signature</li>';
+    }
+    if (d81Boot) {
+      bamWarnings += '<li><i class="fa-solid fa-rocket"></i> 1581 auto-boot loader flag set</li>';
+    }
+    bamWarnings += '</ul>';
+  }
+
   // Find max sectors for header
   var maxSpt = 0;
   for (var t = 1; t <= bamTracks; t++) {
@@ -215,7 +238,12 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   // opens as a flat filesystem; this surfaces the table for inspection.
   var partsTabHtml = '', partsPanelHtml = '';
   var fmtKey = (fmt.name || '').toLowerCase();
-  if (fmtKey === 'd1m' || fmtKey === 'd2m' || fmtKey === 'd4m') {
+  // Only show the Partitions tab when we're viewing the whole container,
+  // not a slice we've entered (cmdcPartitionIdx >= 0). Inside a slice
+  // currentBuffer is the partition data, not the original image, so the
+  // signature check on T81/S5 would always miss.
+  var atContainerTopLevel = (typeof cmdcPartitionIdx === 'undefined' || cmdcPartitionIdx === -1);
+  if (atContainerTopLevel && (fmtKey === 'd1m' || fmtKey === 'd2m' || fmtKey === 'd4m')) {
     partsTabHtml = '<span class="bam-tab" data-bam-view="partitions">Partitions</span>';
     var pInfo = readCmdContainerPartitions(currentBuffer, fmtKey);
     var panel;
@@ -449,9 +477,9 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       pushUndo();
       var d = new Uint8Array(currentBuffer);
       var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
-      var base2 = (fmt.isSectorFree) ? fmt._bamBase(mt4) : getBamBitmapBase(mt4, bOff);
+      var base2 = fmt.getBamBitmapBase(bOff, mt4);
       d[base2 + (ms4 >> 3)] ^= fmt.bamBitMask(ms4);
-      if (typeof fmt.writeTrackFree === 'function' && !fmt.isSectorFree) bamRecalcFree(d, mt4, bOff);
+      if (fmt.hasBamFreeCounts) bamRecalcFree(d, mt4, bOff);
       document.getElementById('modal-overlay').classList.remove('open');
       document.getElementById('opt-view-bam').click();
     });
@@ -616,11 +644,11 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     pushUndo();
     var d = new Uint8Array(currentBuffer);
     var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
-    var base = (fmt._bamBase) ? fmt._bamBase(bt) : getBamBitmapBase(bt, bOff);
+    var base = fmt.getBamBitmapBase(bOff, bt);
     var byteIdx = bs >> 3;
     var bitMask = fmt.bamBitMask(bs);
     d[base + byteIdx] ^= bitMask;
-    if (typeof fmt.writeTrackFree === 'function' && !fmt._bamBase) bamRecalcFree(d, bt, bOff);
+    if (fmt.hasBamFreeCounts) bamRecalcFree(d, bt, bOff);
 
     // Refresh BAM view
     document.getElementById('modal-overlay').classList.remove('open');

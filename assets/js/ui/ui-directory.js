@@ -15,7 +15,17 @@ function parseCurrentDir(buffer) {
     }
     return parsePartition(buffer, currentPartition.startTrack, currentPartition.partSize);
   }
-  return parseDisk(buffer);
+  // Inside a CMD container partition slice: preserve the format set by
+  // enterCmdContainerPartition. detectFormat would otherwise misidentify
+  // slices whose size coincides with a standard format (e.g. a 819200-byte
+  // Native partition reading as D81).
+  var hint = null;
+  if (cmdcPartitions && cmdcPartitionIdx >= 0 && currentFormat) {
+    for (var key in DISK_FORMATS) {
+      if (DISK_FORMATS[key] === currentFormat) { hint = key; break; }
+    }
+  }
+  return parseDisk(buffer, hint);
 }
 
 // ── Partition-aware directory helpers ──────────────────────────────────
@@ -453,6 +463,30 @@ function insertFileEntry() {
 
   // Mark sector as used in BAM
   bamMarkSectorUsed(data, dirTrk, newSector, bamOff);
+
+  // DNP subdir: bump the parent entry's block count by 1. Spec D2M-DNP.TXT
+  // §directory header bytes 24-26: track/sector + index of the entry for
+  // this subdir in its parent directory. The size field at +$1E/+$1F counts
+  // header + dir-chain blocks only; growing the chain must keep it in sync.
+  if (currentFormat.subdirLinked && currentPartition && currentPartition.dnpDir
+      && currentPartition.dnpHeaderT) {
+    var hdrOff = sectorOffset(currentPartition.dnpHeaderT, currentPartition.dnpHeaderS);
+    if (hdrOff >= 0) {
+      var pe = currentFormat.subdirParentEntry;
+      var pT = data[hdrOff + pe];
+      var pS = data[hdrOff + pe + 1];
+      var pIdx = data[hdrOff + pe + 2];
+      if (pT !== 0) {
+        var pDirOff = sectorOffset(pT, pS);
+        if (pDirOff >= 0) {
+          var pEntry = pDirOff + pIdx * 32;
+          var sz = (data[pEntry + 0x1E] | (data[pEntry + 0x1F] << 8)) + 1;
+          data[pEntry + 0x1E] = sz & 0xFF;
+          data[pEntry + 0x1F] = (sz >>> 8) & 0xFF;
+        }
+      }
+    }
+  }
 
   return newOff;
 }

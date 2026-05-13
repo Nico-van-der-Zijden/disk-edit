@@ -12,7 +12,7 @@ function showVlirInspector(entryOff) {
   var fmt = currentFormat;
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim() || '<unnamed>';
   var geos = readGeosInfo(currentBuffer, entryOff);
-  var infoBlock = (geos.infoTrack > 0) ? readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector) : null;
+  var infoBlock = geos.hasInfoBlock ? readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector) : null;
 
   var indexT = data[entryOff + 3];
   var indexS = data[entryOff + 4];

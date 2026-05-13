@@ -20,10 +20,12 @@ document.getElementById('opt-view-geos').addEventListener('click', function(e) {
   if (geos.date) lines.push('Date: ' + geos.date);
 
   // Try to read the info block
-  if (geos.infoTrack > 0) {
+  if (geos.hasInfoBlock) {
     var infoBlock = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
     if (infoBlock) {
       if (infoBlock.className) lines.push('Class: ' + infoBlock.className);
+      if (infoBlock.author) lines.push('Author: ' + infoBlock.author);
+      if (infoBlock.createdBy) lines.push('Created by: ' + infoBlock.createdBy);
       lines.push('Load: $' + hex16(infoBlock.loadAddr) +
         ' End: $' + hex16(infoBlock.endAddr) +
         ' Init: $' + hex16(infoBlock.initAddr));
@@ -106,5 +108,89 @@ document.getElementById('opt-convert-geos').addEventListener('click', function(e
   writeGeosSignature(currentBuffer);
   updateMenuState();
   showModal('Convert to GEOS', ['Disk has been marked as GEOS format.']);
+});
+
+// ── Restore DOS Version byte ─────────────────────────────────────────
+// D64.TXT / D71.TXT / D81.TXT: BAM +$02 != format's dosVersion and != $00
+// triggers "soft write protect" (error 73 "DOS Version"). Restoring it
+// to the format's expected byte makes the disk writable on a real drive.
+// Format expected bytes: D64/D71 = $41 'A', D81 = $44 'D'.
+document.getElementById('opt-restore-dos-version').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer) return;
+  var current = isSoftWriteProtected(currentBuffer);
+  if (current === null) return;
+  closeMenus();
+  pushUndo();
+  var data = new Uint8Array(currentBuffer);
+  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  var target = currentFormat.dosVersion;
+  data[bamOff + 0x02] = target;
+  updateMenuState();
+  parseCurrentDir(currentBuffer);
+  showModal('Restore DOS Version', [
+    'BAM +$02 changed from $' + hex8(current) + ' to $' + hex8(target) +
+      ' ("' + String.fromCharCode(target) + '").',
+    'The disk is no longer soft write-protected.'
+  ]);
+});
+
+// ── View GEOS Border Sector ──────────────────────────────────────────
+// Per GEOS.TXT rev 1.4 §"Border Sector": BAM header +$AB/$AC points to
+// a 1-sector mini-directory (8 entries max) GEOS uses for cross-disk
+// drag-and-drop file staging. Most archived disks have the pointer
+// zeroed; populated borders are rare but the data exists on real disks.
+document.getElementById('opt-view-border').addEventListener('click', function(e) {
+  e.stopPropagation();
+  if (!currentBuffer || !hasGeosSignature(currentBuffer)) return;
+  closeMenus();
+
+  var ref = readGeosBorderRef(currentBuffer);
+  if (!ref) {
+    showModal('GEOS Border Sector', [
+      'This disk has no GEOS border sector allocated (header +$AB/$AC = $00/$00).',
+      '',
+      'The border sector is used by GEOS for cross-disk drag-and-drop file staging. ' +
+      'A freshly-formatted GEOS disk starts with no border allocated.'
+    ]);
+    return;
+  }
+
+  var entries = readGeosBorderEntries(currentBuffer);
+  if (entries.length === 0) {
+    showModal('GEOS Border Sector', [
+      'Border sector at T:$' + hex8(ref.track) + ' S:$' + hex8(ref.sector) + ' is empty.'
+    ]);
+    return;
+  }
+
+  var data = new Uint8Array(currentBuffer);
+  var html = '<div class="text-md mb-md">Border sector at T:$' + hex8(ref.track) +
+    ' S:$' + hex8(ref.sector) + ' — ' + entries.length + ' entries</div>';
+  html += '<table class="geos-info-table">';
+  html += '<tr><th>Type</th><th>Name</th><th>T/S</th><th>Blocks</th><th>GEOS class</th></tr>';
+  for (var i = 0; i < entries.length; i++) {
+    var ent = entries[i];
+    var name = petsciiToReadable(readPetsciiString(data, ent.entryOff + 5, 16)).trim() || '<unnamed>';
+    var typeStr = FILE_TYPES[ent.typeIdx] || '?';
+    if (!ent.closed) typeStr = '*' + typeStr;
+    if (ent.locked) typeStr += '<';
+    var geos = readGeosInfo(currentBuffer, ent.entryOff);
+    var klass = '';
+    if (geos.hasInfoBlock) {
+      var ib = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
+      if (ib && ib.className) klass = ib.className;
+    }
+    html += '<tr>' +
+      '<td>' + escHtml(typeStr) + '</td>' +
+      '<td><b>' + escHtml(name) + '</b></td>' +
+      '<td>$' + hex8(ent.track) + '/$' + hex8(ent.sector) + '</td>' +
+      '<td>' + ent.blocks + '</td>' +
+      '<td>' + escHtml(klass) + '</td>' +
+      '</tr>';
+  }
+  html += '</table>';
+  showModal('GEOS Border Sector', []);
+  document.getElementById('modal-body').innerHTML = html;
 });
 

@@ -205,6 +205,8 @@ const DISK_FORMATS = {
     fileTypes: [0, 1, 2, 3, 4],  // DEL, SEQ, PRG, USR, REL
     defaultInterleave: 10,
     hasBamFreeCounts: true,
+    hasSoftWriteProtect: true, // BAM +$02 (DOS version) gates writes — see isSoftWriteProtected
+    supportsSpeederBam: true, // 40-track speeder DOSs (SpeedDOS/DolphinDOS) — see getSpeederVariant
     interleavePresets: [
       { value: 10, label: '1541 Standard', desc: 'Interleave 10 \u2014 stock CBM DOS, compatible with everything' },
       { value: 6, label: '1541 JiffyDOS', desc: 'Interleave 6 \u2014 optimized for JiffyDOS ROM, also faster on stock hardware' },
@@ -224,20 +226,26 @@ const DISK_FORMATS = {
       if (t <= 30) return 18;
       return 17;
     },
-    // BAM: 4 bytes per track (free count + 3 bitmap bytes), tracks 1-35
-    bamTracksRange(numTracks) { return Math.min(numTracks, 35); },
+    // BAM: 4 bytes per track (free count + 3 bitmap bytes), tracks 1-35.
+    // On 40-track disks, tracks 36-40 use a speeder-DOS extended BAM at
+    // a variant-dependent offset — see getSpeederVariant / _d64BamEntry.
+    bamTracksRange(numTracks) {
+      if (numTracks <= 35) return numTracks;
+      return (currentBuffer && getSpeederVariant(currentBuffer)) ? numTracks : 35;
+    },
+    getBamBitmapBase(bamOff, track) { return _d64BamEntry(bamOff, track) + 1; },
     readTrackFree(data, bamOff, track) {
-      return data[bamOff + 4 * track];
+      return data[_d64BamEntry(bamOff, track)];
     },
     writeTrackFree(data, bamOff, track, free) {
-      data[bamOff + 4 * track] = free;
+      data[_d64BamEntry(bamOff, track)] = free;
     },
     readTrackBitmap(data, bamOff, track) {
-      const base = bamOff + 4 * track;
+      const base = _d64BamEntry(bamOff, track);
       return data[base + 1] | (data[base + 2] << 8) | (data[base + 3] << 16);
     },
     writeTrackBitmap(data, bamOff, track, bm) {
-      const base = bamOff + 4 * track;
+      const base = _d64BamEntry(bamOff, track);
       data[base + 1] = bm & 0xFF;
       data[base + 2] = (bm >> 8) & 0xFF;
       data[base + 3] = (bm >> 16) & 0xFF;
@@ -310,6 +318,7 @@ const DISK_FORMATS = {
     fileTypes: [0, 1, 2, 3, 4],  // DEL, SEQ, PRG, USR, REL
     defaultInterleave: 6,
     hasBamFreeCounts: true,
+    hasSoftWriteProtect: true, // BAM +$02 (DOS version) gates writes — see isSoftWriteProtected
     interleavePresets: [
       { value: 6, label: '1571 Standard', desc: 'Interleave 6 \u2014 stock 1571 DOS, native double-sided mode' },
       { value: 5, label: '1571 Optimized', desc: 'Interleave 5 \u2014 slightly faster with burst transfer' },
@@ -335,6 +344,13 @@ const DISK_FORMATS = {
     // Side 2 free counts: at T18/S0 bytes $DD-$FF (1 byte per track, tracks 36-70)
     // Side 2 bitmaps: at T53/S0 bytes $00-$68 (3 bytes per track, tracks 36-70)
     bamTracksRange(numTracks) { return Math.min(numTracks, 70); },
+    getBamBitmapBase(bamOff, track) {
+      // Primary BAM (tracks 1-35): 4 bytes/track (free count + 3 bitmap)
+      // Secondary BAM at T53/S0 (tracks 36-70): 3 bitmap bytes, no leading
+      // free-count byte (free counts for that half live in the primary BAM header).
+      if (track <= 35) return bamOff + 4 * track + 1;
+      return this._bam2Off(bamOff) + (track - 36) * 3;
+    },
     readTrackFree(data, bamOff, track) {
       if (track <= 35) {
         return data[bamOff + 4 * track];
@@ -474,7 +490,11 @@ const DISK_FORMATS = {
     partitionBamEntrySize: 6, // bytes per track in partition BAM
     partitionDirSector: 3,    // directory starts at sector 3 in partitions
     defaultInterleave: 1,
+    dirInterleave: 1,         // D81.TXT: dir uses interleave 1, not 3
+
     hasBamFreeCounts: true,
+    hasSoftWriteProtect: true, // BAM +$02 (DOS version) gates writes — see isSoftWriteProtected
+    hasAutoBootFlag: true,    // BAM +$07 = 1581 auto-boot loader flag — see hasD81AutoBootLoader
     interleavePresets: [
       { value: 1, label: '1581 Standard', desc: 'Interleave 1 \u2014 stock 1581 burst mode, maximum speed' },
       { value: 2, label: '1581 Compatible', desc: 'Interleave 2 \u2014 safer for slower interfaces or emulators' },
@@ -500,6 +520,7 @@ const DISK_FORMATS = {
         return bamOff + 256 + 0x10 + (track - 41) * 6;
       }
     },
+    getBamBitmapBase(bamOff, track) { return this._bamBase(bamOff, track) + 1; },
     readTrackFree(data, bamOff, track) {
       return data[this._bamBase(bamOff, track)];
     },
@@ -606,15 +627,17 @@ const DISK_FORMATS = {
     entrySize: 32,
     doubleSidedFlag: 0x00,
     fileTypes: [0, 1, 2, 3, 4],
-    defaultInterleave: 6,
+    defaultInterleave: 1,
+    dirInterleave: 1, // D80-D82.TXT line 130: files AND directory use interleave 1
     hasBamFreeCounts: true,
+    hasSoftWriteProtect: true, // BAM +$02 (DOS version) gates writes — see isSoftWriteProtected
     interleavePresets: [
-      { value: 6, label: '8050/8250 Standard', desc: 'Interleave 6 \u2014 stock CBM DOS for IEEE-488 drives' },
-      { value: 5, label: '8050/8250 Optimized', desc: 'Interleave 5 \u2014 tighter timing, faster loading' },
+      { value: 1, label: '8050/8250 Standard', desc: 'Interleave 1 \u2014 stock CBM DOS for IEEE-488 drives (8050/8250 buffer whole tracks)' },
     ],
     interleaveDefault: 0,
     sizes: [
       { tracks: 77, bytes: 533248, label: '77 Tracks' },
+      { tracks: 77, bytes: 535331, label: '77 Tracks + Errors' }, // 533248 + 2083 error bytes
     ],
     sectorsPerTrack(t) {
       var st = t <= 77 ? t : t - 77;
@@ -632,6 +655,7 @@ const DISK_FORMATS = {
       // BAM2 is at T38/S3 = bamOff + 3*256 (sector offset within same track)
       return bamOff + 3 * 256 + 0x06 + (track - 51) * 5;
     },
+    getBamBitmapBase(bamOff, track) { return this._bamEntryBase(bamOff, track) + 1; },
     readTrackFree(data, bamOff, track) { return data[this._bamEntryBase(bamOff, track)]; },
     writeTrackFree(data, bamOff, track, free) { data[this._bamEntryBase(bamOff, track)] = free; },
     readTrackBitmap(data, bamOff, track) {
@@ -709,15 +733,17 @@ const DISK_FORMATS = {
     entrySize: 32,
     doubleSidedFlag: 0x00,
     fileTypes: [0, 1, 2, 3, 4],
-    defaultInterleave: 6,
+    defaultInterleave: 1,
+    dirInterleave: 1, // D80-D82.TXT line 130: files AND directory use interleave 1
     hasBamFreeCounts: true,
+    hasSoftWriteProtect: true, // BAM +$02 (DOS version) gates writes — see isSoftWriteProtected
     interleavePresets: [
-      { value: 6, label: '8050/8250 Standard', desc: 'Interleave 6 \u2014 stock CBM DOS for IEEE-488 drives' },
-      { value: 5, label: '8050/8250 Optimized', desc: 'Interleave 5 \u2014 tighter timing, faster loading' },
+      { value: 1, label: '8050/8250 Standard', desc: 'Interleave 1 \u2014 stock CBM DOS for IEEE-488 drives (8050/8250 buffer whole tracks)' },
     ],
     interleaveDefault: 0,
     sizes: [
       { tracks: 154, bytes: 1066496, label: '154 Tracks' },
+      { tracks: 154, bytes: 1070662, label: '154 Tracks + Errors' }, // 1066496 + 4166 error bytes
     ],
     sectorsPerTrack(t) {
       var st = t <= 77 ? t : t - 77;
@@ -736,6 +762,7 @@ const DISK_FORMATS = {
       else { sector = 9; idx = track - 151; }
       return bamOff + sector * 256 + 0x06 + idx * 5;
     },
+    getBamBitmapBase(bamOff, track) { return this._bamEntryBase(bamOff, track) + 1; },
     readTrackFree(data, bamOff, track) { return data[this._bamEntryBase(bamOff, track)]; },
     writeTrackFree(data, bamOff, track, free) { data[this._bamEntryBase(bamOff, track)] = free; },
     readTrackBitmap(data, bamOff, track) {
@@ -822,6 +849,7 @@ const DISK_FORMATS = {
     subdirParentRef: 0x22, // header offset: parent header T/S (2 bytes)
     subdirParentEntry: 0x24, // header offset: parent dir entry ref (2 bytes)
     defaultInterleave: 1,
+    dirInterleave: 1,        // CMD native: whole-track buffering, no skip
     hasBamFreeCounts: false,
     interleavePresets: [
       { value: 1, label: 'CMD Native', desc: 'Interleave 1 \u2014 CMD HD/FD native mode' },
@@ -868,6 +896,7 @@ const DISK_FORMATS = {
     subdirParentRef: 0x22,
     subdirParentEntry: 0x24,
     defaultInterleave: 1,
+    dirInterleave: 1,
     hasBamFreeCounts: false,
     interleavePresets: [
       { value: 1, label: 'FD-2000 Standard', desc: 'Interleave 1 \u2014 CMD FD-2000 native mode' },
@@ -917,6 +946,7 @@ const DISK_FORMATS = {
     subdirParentRef: 0x22,
     subdirParentEntry: 0x24,
     defaultInterleave: 1,
+    dirInterleave: 1,
     hasBamFreeCounts: false,
     interleavePresets: [
       { value: 1, label: 'FD-2000 Standard', desc: 'Interleave 1 \u2014 CMD FD-2000 native mode' },
@@ -966,6 +996,7 @@ const DISK_FORMATS = {
     subdirParentRef: 0x22,
     subdirParentEntry: 0x24,
     defaultInterleave: 1,
+    dirInterleave: 1,
     hasBamFreeCounts: false,
     interleavePresets: [
       { value: 1, label: 'FD-4000 Standard', desc: 'Interleave 1 \u2014 CMD FD-4000 native mode' },
@@ -990,6 +1021,7 @@ const DISK_FORMATS = {
   tap: {
     name: 'TAP',
     ext: '.tap',
+    isTape: true,           // read-only cassette image, not a disk
     dirTrack: 0,
     dirSector: 0,
     headerTrack: 0,
@@ -1021,6 +1053,7 @@ const DISK_FORMATS = {
   t64: {
     name: 'T64',
     ext: '.t64',
+    isTape: true,           // read-only tape archive, not a disk
     dirTrack: 0,
     dirSector: 0,
     headerTrack: 0,
@@ -1103,9 +1136,14 @@ var _cmdGetProtectedSectors = function(track) {
   }
   return secs;
 };
+// CMD native (DNP/D1M/D2M/D4M): BAM slots have no leading free-count byte,
+// so the bitmap starts at the slot base. bamOff is unused for these formats
+// because each format already knows its own slot layout via _bamBase.
+var _cmdGetBamBitmapBase = function(bamOff, track) { return this._bamBase(track); };
 ['dnp', 'd1m', 'd2m', 'd4m'].forEach(function(k) {
   DISK_FORMATS[k].bamBitMask = _cmdBamBitMask;
   DISK_FORMATS[k].getProtectedSectors = _cmdGetProtectedSectors;
+  DISK_FORMATS[k].getBamBitmapBase = _cmdGetBamBitmapBase;
 });
 
 // D1M/D2M/D4M: also protect CMD FD system partition sectors on the last track
@@ -1123,9 +1161,26 @@ var _cmdFdGetProtectedSectors = function(track) {
 var _cmdFdGetBamOmittedSectors = function(track) {
   return track === currentTracks ? _CMD_FD_SYS_SECTORS.slice() : [];
 };
+// BAM iteration extent for D1M/D2M/D4M. The BAM is LBA-indexed (one slot
+// per 256-sector logical track) while the format descriptor declares
+// physical SPT (40/80/160). Validators iterating the bitmap need LBA
+// coords; without this override they'd visit physical tracks past the
+// effective slot count, where _fdIsSectorFree returns false for every
+// sector and produces phantom orphans (e.g. 4960 on a fresh D4M).
+var _cmdFdGetBamIterTracks = function(data) {
+  return _fdEffectiveSlots(data);
+};
+var _cmdFdGetBamIterSectorsPerTrack = function(track) {
+  return 256;
+};
 ['d1m', 'd2m', 'd4m'].forEach(function(k) {
   DISK_FORMATS[k].getProtectedSectors = _cmdFdGetProtectedSectors;
   DISK_FORMATS[k].getBamOmittedSectors = _cmdFdGetBamOmittedSectors;
+  DISK_FORMATS[k].getBamIterTracks = _cmdFdGetBamIterTracks;
+  DISK_FORMATS[k].getBamIterSectorsPerTrack = _cmdFdGetBamIterSectorsPerTrack;
+  // LBA addressing: dir/file-chain T:S use sector_idx = (T-1)*256 + S
+  // regardless of physical SPT. Consumed by sectorOffset().
+  DISK_FORMATS[k].lbaAddressing = true;
 });
 
 // CMD RAMLink — image is a raw RAM dump (1–8 MiB typical, up to 64 MiB)
@@ -1174,12 +1229,7 @@ function getBamBitmapBase(track, bamOff) {
     var relTrack = track - currentPartition.startTrack + 1;
     return getPartitionBamEntry(bamOff, relTrack) + 1;
   }
-  var fmt = currentFormat;
-  if (fmt.isSectorFree) return fmt._bamBase(track); // CMD native (DNP/D1M/D2M/D4M): own BAM layout
-  if (fmt._bamBase) return fmt._bamBase(bamOff, track) + 1; // D81: BAM base + 1 (skip free count byte)
-  if (fmt === DISK_FORMATS.d71 && track > 35) return fmt._bam2Off(bamOff) + (track - 36) * 3;
-  if (fmt === DISK_FORMATS.d80 || fmt === DISK_FORMATS.d82) return fmt._bamEntryBase(bamOff, track) + 1;
-  return bamOff + 4 * track + 1;
+  return currentFormat.getBamBitmapBase(bamOff, track);
 }
 
 /** @param {Uint8Array} data @param {number} bamOff @param {number} track @param {number} sector @returns {boolean} */
@@ -1341,18 +1391,116 @@ function getErrorBytesOffset(format, numTracks) {
 }
 
 // Error code descriptions
+// D64.TXT rev 1.11 lines 439-569 — error codes as the 1541 drive
+// controller reports them, mapped to the human-readable description.
 var ERROR_CODES = {
-  0x00: 'No error (unused)',
-  0x01: 'OK',
-  0x02: 'Header block not found',
-  0x03: 'No sync mark',
-  0x04: 'Data block not found',
-  0x05: 'Checksum error (data)',
-  0x06: 'Decode error',
-  0x09: 'Checksum error (header)',
-  0x0B: 'ID mismatch',
-  0x0F: 'Drive not ready'
+  0x01: 'No error',                            // 1541 err 00 — sector OK
+  0x02: 'Header descriptor byte not found',    // err 20 — GCR $52 missing
+  0x03: 'No SYNC sequence found',              // err 21
+  0x04: 'Data descriptor byte not found',      // err 22 — GCR $55 missing
+  0x05: 'Checksum error in data block',        // err 23
+  0x06: 'Write verify (on format)',            // err 24
+  0x07: 'Write verify error',                  // err 25
+  0x08: 'Write protect on',                    // err 26
+  0x09: 'Checksum error in header block',      // err 27
+  0x0A: 'Write error',                         // err 28
+  0x0B: 'Disk sector ID mismatch',             // err 29
+  0x0F: 'Drive not ready',                     // err 74
 };
+
+// ── D64-specific spec features (D64.TXT rev 1.11) ────────────────────
+
+// Resolve the BAM entry start (free-count byte) for D64 track N.
+// Tracks 1-35: standard 4-byte entries starting at +$04. Tracks 36-40:
+// speeder-DOS extended BAM at the variant's offset, or -1 when no
+// variant is detected (the caller shouldn't reach here in that case
+// because bamTracksRange caps at 35).
+function _d64BamEntry(bamOff, track) {
+  if (track <= 35) return bamOff + 4 * track;
+  var v = currentBuffer ? getSpeederVariant(currentBuffer) : null;
+  if (v === 'SpeedDOS') return bamOff + 0xC0 + (track - 36) * 4;
+  if (v === 'DolphinDOS') return bamOff + 0xAC + (track - 36) * 4;
+  return -1;
+}
+
+
+// D64.TXT lines 233-242 / D71.TXT lines 248-251 / D81.TXT lines 117-120:
+// BAM +$02 ("DOS version") that isn't the format's expected byte or $00
+// triggers a "DOS Version" error 73 on every write — a "soft write protect".
+// Expected byte: $41 ('A') for D64/D71, $44 ('D') for D81, $43 ('C') for
+// D80/D82 — pulled from the format descriptor's `dosVersion` field.
+// Gated by `fmt.hasSoftWriteProtect` so any future format that grows the
+// same semantic is covered by setting the flag on its descriptor.
+// We don't block writes (the user knows what they're doing); we just
+// surface the state in the health-dot tooltip and the BAM-view banner.
+// Returns the offending byte value, or null when the disk is writable.
+function isSoftWriteProtected(buffer) {
+  if (!buffer || !currentFormat.hasSoftWriteProtect) return null;
+  var data = new Uint8Array(buffer);
+  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  if (bamOff < 0) return null;
+  var v = data[bamOff + 0x02];
+  return (v === currentFormat.dosVersion || v === 0x00) ? null : v;
+}
+
+// Spec lines 327-364: 40-track speeder-DOS variants store the extra
+// BAM entries for tracks 36-40 at non-standard offsets. We identify
+// the variant by the *presence of plausible BAM data* at the known
+// offsets, NOT by the DOS-type field at +$A5/+$A6 — that byte pair is
+// user-editable and unreliable as a format signal (see PrologicDOS /
+// ProfDOS "2P"/"4A" which are deliberately not supported here).
+//
+// Returns 'SpeedDOS' | 'DolphinDOS' | null. Gated by
+// `fmt.supportsSpeederBam` so the check stays inert on formats that
+// don't define the speeder-BAM layout (D71/D80/D82/D81/CMD native).
+function getSpeederVariant(buffer) {
+  if (!buffer || !currentFormat.supportsSpeederBam) return null;
+  if (currentTracks < 40) return null;
+  var data = new Uint8Array(buffer);
+  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  if (bamOff < 0) return null;
+  if (_hasFdEntries(data, bamOff + 0xC0)) return 'SpeedDOS';
+  if (_hasFdEntries(data, bamOff + 0xAC)) return 'DolphinDOS';
+  return null;
+}
+
+// 5 entries × 4 bytes (free-count + 3 bitmap bytes) — require free
+// counts <= 17 (max SPT on tracks 36-40) and at least one bitmap byte
+// non-zero. Pure padding / all-zero ranges → no extended BAM there.
+function _hasFdEntries(data, off) {
+  var anyBitmap = false;
+  for (var i = 0; i < 5; i++) {
+    var fc = data[off + i * 4];
+    if (fc > 17) return false;
+    var bm = data[off + i * 4 + 1] | data[off + i * 4 + 2] | data[off + i * 4 + 3];
+    if (bm !== 0) anyBitmap = true;
+  }
+  return anyBitmap;
+}
+
+// C128 auto-boot disks have the literal bytes 'CBM' at T1/S0 +$00..+$02
+// (C128BOOT.TXT rev 1.1). Routed through sectorOffset so the check
+// also works on D71/D81 if anyone ever stamps a boot block there.
+function hasC128BootSignature(buffer) {
+  if (!buffer) return false;
+  var data = new Uint8Array(buffer);
+  var off = sectorOffset(1, 0);
+  if (off < 0 || off + 3 > data.length) return false;
+  return data[off] === 0x43 && data[off + 1] === 0x42 && data[off + 2] === 0x4D;
+}
+
+// D81-specific auto-boot loader flag (D81.TXT lines 497-510). When BAM
+// (T40/S1) +$07 is non-zero the 1581 ROM looks for a USR file named
+// "COPYRIGHT CBM 86" on reset and executes it. Independent of the C128
+// boot-block signature above. Gated by `fmt.hasAutoBootFlag` so any
+// future format that grows the same convention can opt in.
+function hasD81AutoBootLoader(buffer) {
+  if (!buffer || !currentFormat.hasAutoBootFlag) return false;
+  var data = new Uint8Array(buffer);
+  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  if (bamOff < 0 || bamOff + 8 > data.length) return false;
+  return data[bamOff + 0x07] !== 0x00;
+}
 
 
 // ── Utility ──────────────────────────────────────────────────────────
@@ -1449,10 +1597,14 @@ function parseDisk(buffer, formatHint) {
     currentFormat = DISK_FORMATS.ramlink;
   }
 
-  // Reset interleave to format defaults
+  // Reset interleave to format defaults. dirInterleave is per-format:
+  // D64/D71/D80/D82 use 3; D81 and the CMD native formats (DNP/D1M/D2M/D4M)
+  // buffer a whole track at once so they use 1 for both files and dir.
   if (currentFormat.defaultInterleave) {
     fileInterleave = currentFormat.defaultInterleave;
-    dirInterleave = 3; // standard directory interleave for all formats
+    dirInterleave = (currentFormat.dirInterleave != null)
+      ? currentFormat.dirInterleave
+      : 3;
   }
 
   // Tape images use their own parsers

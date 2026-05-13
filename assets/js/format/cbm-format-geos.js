@@ -66,6 +66,50 @@ function writeGeosSignature(buffer) {
   data[hdrOff + 0xAC] = 0x00;
 }
 
+// Read the GEOS border-sector T/S pointer from the BAM/header sector
+// (+$AB/$AC per GEOS.TXT rev 1.4 line 231). Returns { track, sector } or
+// null when no border sector is allocated (most common case — writeGeosSignature
+// zeroes these bytes on a fresh format).
+function readGeosBorderRef(buffer) {
+  if (!buffer) return null;
+  var data = new Uint8Array(buffer);
+  var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector);
+  if (hdrOff < 0) return null;
+  var t = data[hdrOff + 0xAB];
+  var s = data[hdrOff + 0xAC];
+  if (t === 0) return null;
+  return { track: t, sector: s };
+}
+
+// Enumerate populated entries in the GEOS border sector. The border has
+// the same 32-byte directory-entry layout as a normal dir block, but is
+// only a single sector (link bytes 00/FF) so it holds at most 8 entries.
+// Used by GEOS for cross-disk drag-and-drop staging.
+function readGeosBorderEntries(buffer) {
+  var ref = readGeosBorderRef(buffer);
+  if (!ref) return [];
+  var off = sectorOffset(ref.track, ref.sector);
+  if (off < 0) return [];
+  var data = new Uint8Array(buffer);
+  var entries = [];
+  for (var i = 0; i < 8; i++) {
+    var eOff = off + i * 32;
+    var typeByte = data[eOff + 0x02];
+    if (typeByte === 0) continue; // empty slot
+    entries.push({
+      entryOff: eOff,
+      typeByte: typeByte,
+      typeIdx: typeByte & 0x07,
+      closed: (typeByte & 0x80) !== 0,
+      locked: (typeByte & 0x40) !== 0,
+      track: data[eOff + 0x03],
+      sector: data[eOff + 0x04],
+      blocks: data[eOff + 0x1E] | (data[eOff + 0x1F] << 8),
+    });
+  }
+  return entries;
+}
+
 // Check if a disk has GEOS formatting (border sector signature at T18/S0 offset 0xAD)
 function isGeosDisk(buffer) {
   if (!buffer) return false;
@@ -83,9 +127,21 @@ function isGeosDisk(buffer) {
   return false;
 }
 
-// Read GEOS info for a directory entry
+// Read GEOS info for a directory entry. Applies the 5-step detection
+// process from GEOS.TXT rev 1.4 (lines 280-303), with one deliberate
+// deviation:
+//   1. Lower 3 bits of dir +$02: spec says 0/1/2 only (DEL/SEQ/PRG);
+//      we also accept 3 (USR) because real-world GEOS disks (e.g.
+//      geoMagazine) store VLIR Application Data files as USR with
+//      valid GEOS metadata. REL (4) and higher are still rejected,
+//      matching the existing isVlirFile heuristic at line 310.
+//   2. If structure (+$17) and filetype (+$18) are both 0 → plain C64.
+//   3. Structure must be 0 or 1; any other value = not GEOS.
+//   4. Structure=1 → VLIR; else → GEOS-Sequential.
+//   5. Filetype != 0 → INFO block likely exists; verify info T/S range.
 function readGeosInfo(buffer, entryOff) {
   var data = new Uint8Array(buffer);
+  var cbmTypeBits = data[entryOff + 0x02] & 0x07;
   var infoTrack = data[entryOff + 0x15];     // byte 21: info block track
   var infoSector = data[entryOff + 0x16];    // byte 22: info block sector
   var geosStructure = data[entryOff + 0x17]; // byte 23: structure type
@@ -98,8 +154,18 @@ function readGeosInfo(buffer, entryOff) {
 
   var fullYear = year > 0 ? (year < 50 ? 2000 + year : 1900 + year) : 0;
 
+  // Steps 1 & 3 — sanity gates. Accept DEL/SEQ/PRG/USR; reject REL+.
+  var couldBeGeos = (cbmTypeBits <= 3) &&
+                    (geosStructure === 0 || geosStructure === 1);
+  // Step 4 — VLIR-ness flags it as GEOS even when filetype byte is 0.
+  // Step 5 — INFO block presence requires filetype != 0 AND valid T/S.
+  var infoTrackInRange = infoTrack > 0 && infoTrack <= currentTracks;
+  var hasInfoBlock = couldBeGeos && geosFileType > 0 && infoTrackInRange;
+  var isGeos = couldBeGeos && (geosFileType > 0 || geosStructure === 1);
+
   var result = {
-    isGeos: geosFileType > 0,
+    isGeos: isGeos,
+    hasInfoBlock: hasInfoBlock,
     structure: geosStructure,
     structureName: GEOS_STRUCTURE_TYPES[geosStructure] || 'Unknown ($' + geosStructure.toString(16).toUpperCase().padStart(2, '0') + ')',
     fileType: geosFileType,
@@ -573,21 +639,33 @@ function readGeosInfoBlock(buffer, track, sector) {
   if (off < 0) return null;
   var data = new Uint8Array(buffer);
 
-  // Info block layout:
-  // 0x00-0x01: info block ID bytes (should be 0x00, 0xFF)
-  // 0x02-0x03: icon width (bytes), height (pixels)
-  // 0x04-0x43: icon sprite data (63 bytes)
-  // 0x44: CBM file type
-  // 0x45: GEOS file type
-  // 0x46: GEOS structure type
-  // 0x47-0x48: load address
-  // 0x49-0x4A: end address
-  // 0x4B-0x4C: init address
-  // 0x4D-0x60: class name (20 bytes, 0x00 terminated)
-  // 0x61-0x74: author (20 bytes, 0x00 terminated)  — actually at different offset
-  // 0x85-0xFE: file description (free-form text, 0x00 terminated)
+  // GEOS.TXT line 130: INFO block always starts with 00 FF (link bytes,
+  // since it's a single sector). If the bytes are missing, the dir entry's
+  // INFO T/S is stale or points at unrelated data — bail out so callers
+  // fall back to "no INFO" instead of parsing garbage. The 03/15/BF "ID"
+  // bytes (spec line 131) are NOT validated — spec line 133 explicitly
+  // notes exceptions exist.
+  if (data[off + 0x00] !== 0x00 || data[off + 0x01] !== 0xFF) return null;
+
+  // Info block layout (GEOS.TXT rev 1.4):
+  //   0x00-0x01: 00/FF link (validated above)
+  //   0x02-0x04: icon dimensions ID (width-bytes / height-pixels / sig)
+  //   0x05-0x43: icon sprite data (63 bytes)
+  //   0x44:      CBM file type
+  //   0x45:      GEOS file type
+  //   0x46:      GEOS structure
+  //   0x47-0x48: load address
+  //   0x49-0x4A: end address (accessories only)
+  //   0x4B-0x4C: init address
+  //   0x4D-0x60: class text (20 bytes, ASCII, 0x00-terminated)
+  //   0x61-0x74: author or application disk name (20 bytes)
+  //   0x75-0x88: creating-app name for document files (20 bytes)
+  //   0x89-0x9F: app-reserved
+  //   0xA0-0xFF: description (free-form, 0x00-terminated)
 
   var className = decodeGeosString(data, off + 0x4D, 20);
+  var author = decodeGeosString(data, off + 0x61, 20);
+  var createdBy = decodeGeosString(data, off + 0x75, 20);
   var description = decodeGeosString(data, off + 0xA0, 96);
 
   // Icon: $02 = width (bytes), $03 = height (pixels), $04 = width (pixels), $05-$43 = bitmap
@@ -599,6 +677,8 @@ function readGeosInfoBlock(buffer, track, sector) {
 
   return {
     className: className,
+    author: author,
+    createdBy: createdBy,
     description: description,
     loadAddr: data[off + 0x47] | (data[off + 0x48] << 8),
     endAddr: data[off + 0x49] | (data[off + 0x4A] << 8),

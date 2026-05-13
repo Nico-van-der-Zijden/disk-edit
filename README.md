@@ -41,12 +41,12 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 | D71 70t | 349,696 | 351,062 | |
 | D71 80t | 393,216 | 394,752 | |
 | D81 | 819,200 | 822,400 | |
-| D80 | 533,248 | — | |
-| D82 | 1,066,496 | — | |
+| D80 | 533,248 | 535,331 | |
+| D82 | 1,066,496 | 1,070,662 | |
 | D1M | 829,440 | 832,680 | |
 | D2M | 1,658,880 | 1,665,360 | |
 | D4M | 3,317,760 | 3,330,720 | |
-| DNP | n × 65,536 | — | Header byte `$48` at offset 258 |
+| DNP | n × 65,536 | — | Any multiple of 65,536 that doesn't match a sized format above |
 | RML / RL | 1/2/4/8/16 MiB | — | CMD RAMLink container — opens to a partition list |
 | G64 | Variable | — | Magic: `GCR-1541` at offset 0 |
 | X64 | Variable | — | Magic: `C1541` at offset 0 |

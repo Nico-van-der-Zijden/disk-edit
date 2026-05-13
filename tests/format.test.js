@@ -130,3 +130,366 @@ describe('DISK_FORMATS structure', () => {
     }
   });
 });
+
+// ── D64-specific spec features (D64.TXT rev 1.11) ────────────────────
+
+describe('ERROR_CODES spec mapping', () => {
+  it('matches D64.TXT rev 1.11 lines 439-569', () => {
+    assert.strictEqual(ERROR_CODES[0x01], 'No error');
+    assert.strictEqual(ERROR_CODES[0x02], 'Header descriptor byte not found');
+    assert.strictEqual(ERROR_CODES[0x03], 'No SYNC sequence found');
+    assert.strictEqual(ERROR_CODES[0x04], 'Data descriptor byte not found');
+    assert.strictEqual(ERROR_CODES[0x05], 'Checksum error in data block');
+    assert.strictEqual(ERROR_CODES[0x06], 'Write verify (on format)');
+    assert.strictEqual(ERROR_CODES[0x07], 'Write verify error');
+    assert.strictEqual(ERROR_CODES[0x08], 'Write protect on');
+    assert.strictEqual(ERROR_CODES[0x09], 'Checksum error in header block');
+    assert.strictEqual(ERROR_CODES[0x0A], 'Write error');
+    assert.strictEqual(ERROR_CODES[0x0B], 'Disk sector ID mismatch');
+    assert.strictEqual(ERROR_CODES[0x0F], 'Drive not ready');
+  });
+});
+
+describe('isSoftWriteProtected', () => {
+  beforeEach(() => { resetGlobals(); });
+
+  function makeD64(bamVersionByte) {
+    var buf = createEmptyDisk('d64', 35);
+    var data = new Uint8Array(buf);
+    var bamOff = 18 * 17 * 256 + 0; // approximate — we'll use sectorOffset instead
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d64;
+    global.currentTracks = 35;
+    global.currentPartition = null;
+    if (bamVersionByte !== undefined) {
+      var bo = sectorOffset(DISK_FORMATS.d64.bamTrack, DISK_FORMATS.d64.bamSector);
+      data[bo + 0x02] = bamVersionByte;
+    }
+    return buf;
+  }
+
+  it('returns null on a fresh D64 (BAM +$02 = $41)', () => {
+    var buf = makeD64();
+    assert.strictEqual(isSoftWriteProtected(buf), null);
+  });
+
+  it('returns null when BAM +$02 is $00', () => {
+    var buf = makeD64(0x00);
+    assert.strictEqual(isSoftWriteProtected(buf), null);
+  });
+
+  it('returns the offending byte when BAM +$02 is $50', () => {
+    var buf = makeD64(0x50);
+    assert.strictEqual(isSoftWriteProtected(buf), 0x50);
+  });
+
+  it('returns null when format is not D64 or D71', () => {
+    var buf = createEmptyDisk('d81', 80);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d81;
+    global.currentTracks = 80;
+    assert.strictEqual(isSoftWriteProtected(buf), null);
+  });
+
+  it('also covers D71 (same soft-WP semantics per spec)', () => {
+    var buf = createEmptyDisk('d71', 70);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d71;
+    global.currentTracks = 70;
+    var data = new Uint8Array(buf);
+    var bo = sectorOffset(DISK_FORMATS.d71.bamTrack, DISK_FORMATS.d71.bamSector);
+    // Fresh D71: writable
+    assert.strictEqual(isSoftWriteProtected(buf), null);
+    // Flip DOS version byte to $50 — should be flagged
+    data[bo + 0x02] = 0x50;
+    assert.strictEqual(isSoftWriteProtected(buf), 0x50);
+  });
+
+  it('also covers D81 with format-specific expected byte ($44 D)', () => {
+    var buf = createEmptyDisk('d81', 80);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d81;
+    global.currentTracks = 80;
+    var data = new Uint8Array(buf);
+    var bo = sectorOffset(DISK_FORMATS.d81.bamTrack, DISK_FORMATS.d81.bamSector);
+    // Fresh D81: BAM +$02 = $44, writable
+    assert.strictEqual(data[bo + 0x02], 0x44);
+    assert.strictEqual(isSoftWriteProtected(buf), null);
+    // $00 is also OK per spec
+    data[bo + 0x02] = 0x00;
+    assert.strictEqual(isSoftWriteProtected(buf), null);
+    // $41 (the D64 byte) IS soft-WP on D81
+    data[bo + 0x02] = 0x41;
+    assert.strictEqual(isSoftWriteProtected(buf), 0x41);
+    // Arbitrary other byte
+    data[bo + 0x02] = 0x50;
+    assert.strictEqual(isSoftWriteProtected(buf), 0x50);
+  });
+
+  it('also covers D80 with expected byte $43 C', () => {
+    var buf = createEmptyDisk('d80', 77);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d80;
+    global.currentTracks = 77;
+    var data = new Uint8Array(buf);
+    var bo = sectorOffset(DISK_FORMATS.d80.bamTrack, DISK_FORMATS.d80.bamSector);
+    assert.strictEqual(data[bo + 0x02], 0x43);
+    assert.strictEqual(isSoftWriteProtected(buf), null);
+    data[bo + 0x02] = 0x00;
+    assert.strictEqual(isSoftWriteProtected(buf), null);
+    data[bo + 0x02] = 0x50;
+    assert.strictEqual(isSoftWriteProtected(buf), 0x50);
+  });
+
+  it('also covers D82 with expected byte $43 C', () => {
+    var buf = createEmptyDisk('d82', 154);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d82;
+    global.currentTracks = 154;
+    var data = new Uint8Array(buf);
+    var bo = sectorOffset(DISK_FORMATS.d82.bamTrack, DISK_FORMATS.d82.bamSector);
+    assert.strictEqual(data[bo + 0x02], 0x43);
+    assert.strictEqual(isSoftWriteProtected(buf), null);
+    data[bo + 0x02] = 0x42;
+    assert.strictEqual(isSoftWriteProtected(buf), 0x42);
+  });
+});
+
+describe('hasD81AutoBootLoader', () => {
+  beforeEach(() => { resetGlobals(); });
+
+  it('returns false on a fresh D81 (BAM +$07 = 0)', () => {
+    var buf = createEmptyDisk('d81', 80);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d81;
+    global.currentTracks = 80;
+    assert.strictEqual(hasD81AutoBootLoader(buf), false);
+  });
+
+  it('returns true when BAM(40/1)+$07 is non-zero', () => {
+    var buf = createEmptyDisk('d81', 80);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d81;
+    global.currentTracks = 80;
+    var data = new Uint8Array(buf);
+    var bo = sectorOffset(40, 1);
+    data[bo + 0x07] = 0x01;
+    assert.strictEqual(hasD81AutoBootLoader(buf), true);
+  });
+
+  it('returns false on non-D81 formats even if the byte is set', () => {
+    var buf = createEmptyDisk('d64', 35);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d64;
+    global.currentTracks = 35;
+    assert.strictEqual(hasD81AutoBootLoader(buf), false);
+  });
+});
+
+describe('Per-format dirInterleave (D81.TXT lines 17-24, D80-D82.TXT line 130)', () => {
+  it('D81 uses interleave 1 for directory (spec)', () => {
+    assert.strictEqual(DISK_FORMATS.d81.dirInterleave, 1);
+  });
+
+  it('CMD native formats use interleave 1 for directory', () => {
+    assert.strictEqual(DISK_FORMATS.dnp.dirInterleave, 1);
+    assert.strictEqual(DISK_FORMATS.d1m.dirInterleave, 1);
+    assert.strictEqual(DISK_FORMATS.d2m.dirInterleave, 1);
+    assert.strictEqual(DISK_FORMATS.d4m.dirInterleave, 1);
+  });
+
+  it('D80/D82 use interleave 1 (D80-D82.TXT line 130)', () => {
+    assert.strictEqual(DISK_FORMATS.d80.dirInterleave, 1);
+    assert.strictEqual(DISK_FORMATS.d82.dirInterleave, 1);
+  });
+
+  it('D64/D71 default (no dirInterleave override → parseDisk uses 3)', () => {
+    assert.ok(DISK_FORMATS.d64.dirInterleave == null);
+    assert.ok(DISK_FORMATS.d71.dirInterleave == null);
+  });
+});
+
+describe('D80/D82 file interleave (D80-D82.TXT line 130)', () => {
+  it('D80 defaultInterleave is 1', () => {
+    assert.strictEqual(DISK_FORMATS.d80.defaultInterleave, 1);
+  });
+
+  it('D82 defaultInterleave is 1', () => {
+    assert.strictEqual(DISK_FORMATS.d82.defaultInterleave, 1);
+  });
+});
+
+describe('D80/D82 error-byte size variants', () => {
+  it('D80 sizes table includes 535331 (77 tracks + 2083 error bytes)', () => {
+    var found = DISK_FORMATS.d80.sizes.some(function(s) {
+      return s.bytes === 535331 && s.label.indexOf('Errors') >= 0;
+    });
+    assert.ok(found, 'D80 should declare a 535331-byte +Errors variant');
+  });
+
+  it('D82 sizes table includes 1070662 (154 tracks + 4166 error bytes)', () => {
+    var found = DISK_FORMATS.d82.sizes.some(function(s) {
+      return s.bytes === 1070662 && s.label.indexOf('Errors') >= 0;
+    });
+    assert.ok(found, 'D82 should declare a 1070662-byte +Errors variant');
+  });
+
+  it('hasErrorBytes detects D80 error-byte variant', () => {
+    // hasErrorBytes scans every format's sizes table for a matching
+    // byte length labelled with "Errors" — so a buffer at that size
+    // is recognised regardless of which format is currently active.
+    var buf = new ArrayBuffer(535331);
+    assert.strictEqual(hasErrorBytes(buf), true);
+  });
+
+  it('hasErrorBytes detects D82 error-byte variant', () => {
+    var buf = new ArrayBuffer(1070662);
+    assert.strictEqual(hasErrorBytes(buf), true);
+  });
+});
+
+describe('getSpeederVariant', () => {
+  beforeEach(() => { resetGlobals(); });
+
+  function loadD64(tracks) {
+    var buf = createEmptyDisk('d64', tracks);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d64;
+    global.currentTracks = tracks;
+    global.currentPartition = null;
+    return buf;
+  }
+
+  function writeFdEntries(buf, offsetIntoBam) {
+    var data = new Uint8Array(buf);
+    var bamOff = sectorOffset(18, 0);
+    // 5 entries × 4 bytes — free-count 17, bitmap $FF $FF $01 (track of 17 sectors all free).
+    for (var i = 0; i < 5; i++) {
+      data[bamOff + offsetIntoBam + i * 4 + 0] = 17;
+      data[bamOff + offsetIntoBam + i * 4 + 1] = 0xFF;
+      data[bamOff + offsetIntoBam + i * 4 + 2] = 0xFF;
+      data[bamOff + offsetIntoBam + i * 4 + 3] = 0x01;
+    }
+  }
+
+  it('returns null on stock 35-track D64', () => {
+    loadD64(35);
+    assert.strictEqual(getSpeederVariant(currentBuffer), null);
+  });
+
+  it('returns null on 40-track D64 with no extended BAM bytes', () => {
+    loadD64(40);
+    assert.strictEqual(getSpeederVariant(currentBuffer), null);
+  });
+
+  it("returns 'SpeedDOS' when BAM-shaped data is at +$C0..$D3", () => {
+    loadD64(40);
+    writeFdEntries(currentBuffer, 0xC0);
+    assert.strictEqual(getSpeederVariant(currentBuffer), 'SpeedDOS');
+  });
+
+  it("returns 'DolphinDOS' when BAM-shaped data is at +$AC..$BF only", () => {
+    loadD64(40);
+    writeFdEntries(currentBuffer, 0xAC);
+    assert.strictEqual(getSpeederVariant(currentBuffer), 'DolphinDOS');
+  });
+
+  it('rejects ranges where the free-count byte is > 17', () => {
+    loadD64(40);
+    var data = new Uint8Array(currentBuffer);
+    var bamOff = sectorOffset(18, 0);
+    // Plant garbage at +$C0 where the first byte (FC = 99) clearly isn't a free-count
+    data[bamOff + 0xC0] = 99;
+    data[bamOff + 0xC1] = 0xFF;
+    assert.strictEqual(getSpeederVariant(currentBuffer), null);
+  });
+});
+
+describe('D64 40-track BAM extension', () => {
+  beforeEach(() => { resetGlobals(); });
+
+  it('bamTracksRange returns 40 when SpeedDOS variant detected', () => {
+    var buf = createEmptyDisk('d64', 40);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d64;
+    global.currentTracks = 40;
+    var data = new Uint8Array(buf);
+    var bamOff = sectorOffset(18, 0);
+    // Plant SpeedDOS BAM at +$C0..
+    for (var i = 0; i < 5; i++) {
+      data[bamOff + 0xC0 + i * 4 + 0] = 17;
+      data[bamOff + 0xC0 + i * 4 + 1] = 0xFF;
+      data[bamOff + 0xC0 + i * 4 + 2] = 0xFF;
+      data[bamOff + 0xC0 + i * 4 + 3] = 0x01;
+    }
+    assert.strictEqual(currentFormat.bamTracksRange(40), 40);
+  });
+
+  it('bamTracksRange returns 35 when no variant detected on 40-track', () => {
+    var buf = createEmptyDisk('d64', 40);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d64;
+    global.currentTracks = 40;
+    assert.strictEqual(currentFormat.bamTracksRange(40), 35);
+  });
+
+  it('readTrackFree(36) reads from the SpeedDOS extended BAM offset', () => {
+    var buf = createEmptyDisk('d64', 40);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d64;
+    global.currentTracks = 40;
+    var data = new Uint8Array(buf);
+    var bamOff = sectorOffset(18, 0);
+    // Plant SpeedDOS BAM with track 36 free-count = 13, marker
+    data[bamOff + 0xC0 + 0] = 13; // free count for track 36
+    data[bamOff + 0xC0 + 1] = 0xAA;
+    data[bamOff + 0xC0 + 2] = 0xBB;
+    data[bamOff + 0xC0 + 3] = 0x01;
+    // Round out the other 4 entries so getSpeederVariant accepts the set
+    for (var i = 1; i < 5; i++) {
+      data[bamOff + 0xC0 + i * 4 + 0] = 17;
+      data[bamOff + 0xC0 + i * 4 + 1] = 0xFF;
+      data[bamOff + 0xC0 + i * 4 + 2] = 0xFF;
+      data[bamOff + 0xC0 + i * 4 + 3] = 0x01;
+    }
+    assert.strictEqual(currentFormat.readTrackFree(data, bamOff, 36), 13);
+  });
+});
+
+describe('hasC128BootSignature', () => {
+  beforeEach(() => { resetGlobals(); });
+
+  it('returns false on a fresh D64', () => {
+    var buf = createEmptyDisk('d64', 35);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d64;
+    global.currentTracks = 35;
+    assert.strictEqual(hasC128BootSignature(buf), false);
+  });
+
+  it("returns true when bytes 'CBM' are at T1/S0 +$00..+$02", () => {
+    var buf = createEmptyDisk('d64', 35);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d64;
+    global.currentTracks = 35;
+    var data = new Uint8Array(buf);
+    var off = sectorOffset(1, 0);
+    data[off + 0] = 0x43; // C
+    data[off + 1] = 0x42; // B
+    data[off + 2] = 0x4D; // M
+    assert.strictEqual(hasC128BootSignature(buf), true);
+  });
+
+  it('returns false when only some of the magic bytes match', () => {
+    var buf = createEmptyDisk('d64', 35);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d64;
+    global.currentTracks = 35;
+    var data = new Uint8Array(buf);
+    var off = sectorOffset(1, 0);
+    data[off + 0] = 0x43;
+    data[off + 1] = 0x42;
+    data[off + 2] = 0x00;
+    assert.strictEqual(hasC128BootSignature(buf), false);
+  });
+});

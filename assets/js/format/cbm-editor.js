@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 109 };
+var APP_VERSION = { major: 1, minor: 3, build: 110 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -94,49 +94,10 @@ var clipboard = []; // array of { typeIdx, nameBytes, geosBytes, geosInfoBlock, 
 var dirInterleave = 3;   // directory sector interleave
 var fileInterleave = 10; // file data sector interleave
 
-// ── Extended BAM detection (SpeedDOS/DolphinDOS/PrologicDOS) ─────────
-function detectExtendedBAM(buffer) {
-  if (!buffer) return null;
-  var data = new Uint8Array(buffer);
-  var fmt = currentFormat;
-  if (fmt !== DISK_FORMATS.d64 || currentTracks < 40) return null;
-
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
-  if (bamOff < 0) return null;
-
-  // SpeedDOS: extra BAM at T18/S0 offset $C0-$D3 (4 bytes × 5 tracks = 20 bytes)
-  var speedDosOk = false;
-  var hasBytesAtC0 = false;
-  for (var i = 0xC0; i < 0xD4; i++) {
-    if (data[bamOff + i] !== 0x00) { hasBytesAtC0 = true; break; }
-  }
-  if (hasBytesAtC0) speedDosOk = true;
-
-  // DolphinDOS: extra BAM at T18/S0 offset $AC-$BF (4 bytes × 5 tracks)
-  var dolphinOk = false;
-  var hasBytesAtAC = false;
-  for (var j = 0xAC; j < 0xC0; j++) {
-    if (data[bamOff + j] !== 0xA0 && data[bamOff + j] !== 0x00) { hasBytesAtAC = true; break; }
-  }
-  if (hasBytesAtAC) dolphinOk = true;
-
-  // PrologicDOS: extra BAM at T18/S1 offset $00-$13
-  var dirOff = sectorOffset(fmt.dirTrack, fmt.dirSector);
-  var prologicOk = false;
-  // Check if bytes at the start of T18/S1 look like BAM entries (not directory data)
-  if (dirOff >= 0 && data[dirOff + 2] === 0x00) {
-    // First dir entry type byte is 0 — could be prologic BAM
-    var hasNonZero = false;
-    for (var k = 4; k < 20; k++) {
-      if (data[dirOff + k] !== 0x00) { hasNonZero = true; break; }
-    }
-    // Not reliable enough to auto-detect
-  }
-
-  if (speedDosOk) return 'SpeedDOS';
-  if (dolphinOk) return 'DolphinDOS';
-  return null;
-}
+// Speeder-DOS variant detection lives in cbm-format.js as
+// getSpeederVariant — uses data-presence heuristics (not header-ID
+// sniffing) and is consulted from the D64 descriptor's BAM helpers
+// to read tracks 36-40 from the correct offset.
 
 // ── Undo system ──────────────────────────────────────────────────────
 // The tab is "clean" (tabDirty=false) when undoStack.length === cleanStackLength.
@@ -450,14 +411,20 @@ function checkBAMIntegrity(buffer) {
   }
 
   // Check for sectors used by files but marked free in BAM (byte-level)
-  // Also detect orphaned sectors: marked used but not owned by any file
+  // Also detect orphaned sectors: marked used but not owned by any file.
+  //
+  // Formats may override getBamIterTracks / getBamIterSectorsPerTrack on
+  // the descriptor when the BAM uses a different coordinate space than
+  // the physical geometry (e.g. D1M/D2M/D4M are LBA-indexed in BAM).
+  var iterTracks = fmt.getBamIterTracks ? fmt.getBamIterTracks(data) : bamTracks;
+  var iterSptFn = fmt.getBamIterSectorsPerTrack || fmt.sectorsPerTrack;
   var allocMismatch = 0;
   var orphanCount = 0;
   var errorSectors = {}; // "t:s" → true (free but used by file)
   var orphanSectors = {}; // "t:s" → true (used but not owned by any file)
-  for (t = 1; t <= bamTracks; t++) {
+  for (t = 1; t <= iterTracks; t++) {
     if (t === fmt.dirTrack) continue;
-    var spt2 = fmt.sectorsPerTrack(t);
+    var spt2 = iterSptFn.call(fmt, t);
     for (var s2 = 0; s2 < spt2; s2++) {
       var isFree = checkSectorFree(data, bamOff, t, s2);
       var isUsed = sectorOwner[t + ':' + s2] !== undefined;

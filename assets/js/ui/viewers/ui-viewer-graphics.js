@@ -165,7 +165,7 @@ function detectGeosGfxFormats(entryOff) {
 
   // Check file type and class name for geoPaint documents
   var isPaint = (geos.fileType === 0x14);
-  if (!isPaint && geos.infoTrack > 0) {
+  if (!isPaint && geos.hasInfoBlock) {
     var infoBlock = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
     if (infoBlock && infoBlock.className && infoBlock.className.toLowerCase().indexOf('paint') === 0) {
       isPaint = true;
@@ -181,7 +181,7 @@ function detectGeosGfxFormats(entryOff) {
     matches.push({ name: 'Photo Album', mode: 'geosalbum', layout: 'geosalbum', geosEntry: entryOff });
   }
   // Check class name for photo album (stored as application data $07)
-  if (!isPaint && geos.fileType === 0x07 && geos.infoTrack > 0) {
+  if (!isPaint && geos.fileType === 0x07 && geos.hasInfoBlock) {
     var infoBlock2 = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
     if (infoBlock2 && infoBlock2.className && infoBlock2.className.toLowerCase().indexOf('photo album') === 0) {
       matches.push({ name: 'Photo Album', mode: 'geosalbum', layout: 'geosalbum', geosEntry: entryOff });

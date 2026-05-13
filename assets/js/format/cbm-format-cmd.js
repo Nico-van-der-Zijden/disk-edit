@@ -9,8 +9,9 @@
 //             Start address is a 32-bit big-endian byte address at
 //             slot offset +0x15..+0x18.
 //   D1M/D2M/D4M — split across sectors 8-11 of the last track (8
-//             entries each). Start address is a 24-bit big-endian
-//             256-byte block address at slot offset +0x15..+0x17.
+//             entries each). Start address is a 16-bit big-endian
+//             value at +0x16..+0x17, in 512-byte units (D2M-DNP.TXT
+//             rev 1.3). Byte +0x15 is documented as unknown/zero.
 //
 // Common per-slot layout (32 bytes):
 //   +0x00..+0x01  flags: 01 01 on SYSTEM, 00 00 elsewhere. On FD-style
@@ -22,7 +23,8 @@
 //                 0x07 Foreign, 0xFF System.
 //   +0x05..+0x14  16-byte name, 0xA0-padded.
 //   +0x15..+0x18  start address — encoding per CMD_CONTAINERS.startEnc.
-//   +0x1D..+0x1F  size in 256-byte blocks (24-bit big-endian).
+//   +0x1D..+0x1F  size — encoding per CMD_CONTAINERS.sizeUnit
+//                 (RAMLink: 24-bit BE × 256; FD: 24-bit BE × 512).
 //
 // CMD_CONTAINERS describes the per-type quirks; the generic helpers
 // below drive the UI uniformly.
@@ -84,7 +86,7 @@ function _makeCmdFdContainer(formatKey) {
       }
       return true;
     },
-    startEnc: 'block24',
+    startEnc: 'block16x512',
     sizeUnit: 512, // partition size stored in 512-byte clusters
     diskIdLabel: formatKey.toUpperCase(),
     nativeFormatKey: formatKey, // Native partition slices parse as the parent FD format
@@ -144,9 +146,10 @@ function _cmdContainerReadStart(data, off, startEnc) {
     return (data[off + 0x15] * 0x1000000) + (data[off + 0x16] << 16) +
            (data[off + 0x17] << 8) + data[off + 0x18];
   }
-  // block24: 24-bit BE block (×256)
-  var blocks = (data[off + 0x15] << 16) | (data[off + 0x16] << 8) | data[off + 0x17];
-  return blocks * 256;
+  // block16x512: 16-bit BE at +$16..+$17, in 512-byte units
+  // (D2M-DNP.TXT rev 1.3 §"the next entry is the first partition", bytes 16-17)
+  var blocks = (data[off + 0x16] << 8) | data[off + 0x17];
+  return blocks * 512;
 }
 
 function _cmdContainerWriteStart(data, off, startEnc, startByte) {
@@ -157,8 +160,8 @@ function _cmdContainerWriteStart(data, off, startEnc, startByte) {
     data[off + 0x18] = startByte & 0xFF;
     return;
   }
-  var blocks = Math.floor(startByte / 256);
-  data[off + 0x15] = (blocks >>> 16) & 0xFF;
+  var blocks = Math.floor(startByte / 512);
+  data[off + 0x15] = 0x00;
   data[off + 0x16] = (blocks >>> 8) & 0xFF;
   data[off + 0x17] = blocks & 0xFF;
 }
@@ -437,31 +440,35 @@ function createEmptyRamLink(sizeMiB) {
 function detectFormat(bufferSize, buffer) {
   if (buffer) {
     var data = new Uint8Array(buffer);
-    // Check for TAP magic: "C64-TAPE-RAW"
+    // File-format magics (fixed file headers, not filesystem state):
+    // TAP "C64-TAPE-RAW"
     if (bufferSize >= 20 && data[0] === 0x43 && data[1] === 0x36 && data[2] === 0x34 &&
         data[3] === 0x2D && data[4] === 0x54 && data[5] === 0x41 && data[6] === 0x50 && data[7] === 0x45) {
       return { format: DISK_FORMATS.tap, tracks: 0 };
     }
-    // Check for T64 magic: "C64"
+    // T64 "C64"
     if (bufferSize >= 64 && data[0] === 0x43 && data[1] === 0x36 && data[2] === 0x34) {
       return { format: DISK_FORMATS.t64, tracks: 0 };
     }
   }
-  // DNP: multiple of 65536, at least 1 track (RAMLink partitions can be 1-track), check header signature before size table
-  if (bufferSize >= 65536 && bufferSize % 65536 === 0 && bufferSize <= 16711680 && buffer) {
-    var dnpData = new Uint8Array(buffer);
-    // Header at T1/S1 (offset 256): byte 2 = format type 'H' ($48)
-    if (dnpData[258] === 0x48 || dnpData[0x119] === 0x31) {
-      return { format: DISK_FORMATS.dnp, tracks: bufferSize / 65536 };
-    }
-  }
-  // Try each format's sizes
+  // Size-based detection. Run the size table first so any disk whose size
+  // uniquely identifies it (D64/D71/D81/D80/D2M/D1M/D4M/...) wins regardless
+  // of what bytes the user has put in the filesystem header — disk IDs,
+  // names, and DOS-type bytes are all user-editable and can't be trusted
+  // as a format signal.
   for (const [key, fmt] of Object.entries(DISK_FORMATS)) {
     for (const size of fmt.sizes) {
       if (bufferSize === size.bytes) return { format: fmt, tracks: size.tracks };
     }
   }
-  // Fallback: if larger than D64 40-track, check D64 variants
+  // DNP fallback: any multiple of 65536 up to the 16 MiB ceiling that didn't
+  // match a sized format is treated as a DNP / Native partition. The only
+  // collision in this range would be 196608 bytes (D64 40-track vs a 3-track
+  // DNP); the size table handles that case above.
+  if (bufferSize >= 65536 && bufferSize % 65536 === 0 && bufferSize <= 16711680) {
+    return { format: DISK_FORMATS.dnp, tracks: bufferSize / 65536 };
+  }
+  // Final fallback: assume D64 (35 or 40 tracks depending on size).
   if (bufferSize >= 196608) return { format: DISK_FORMATS.d64, tracks: 40 };
   return { format: DISK_FORMATS.d64, tracks: 35 };
 }
@@ -485,13 +492,13 @@ function getTrackOffsets(format, maxTracks) {
 /** @param {number} track @param {number} sector @returns {number} Byte offset or -1 */
 function sectorOffset(track, sector) {
   const fmt = currentFormat;
-  // FD2000/FD4000 native: directory entries and file chain bytes are
-  // LBA-encoded — sector_idx = (T-1) × 256 + S, byte = idx × 256.
-  // S ranges 0..255 regardless of physical SPT. For T=1 the formula
-  // collapses to physical addressing, so BAM/header/dir reads work too.
-  // (Dir-chain bytes still use physical T:S — parseDisk's loop adds
-  // its own bounds check to short-circuit those.)
-  if (fmt && (fmt.name === 'D1M' || fmt.name === 'D2M' || fmt.name === 'D4M')) {
+  // Formats with lbaAddressing:true (D1M/D2M/D4M) treat directory entries
+  // and file-chain bytes as LBA-encoded — sector_idx = (T-1) × 256 + S,
+  // byte = idx × 256. S ranges 0..255 regardless of physical SPT. For
+  // T=1 the formula collapses to physical addressing, so BAM/header/dir
+  // reads work too. (Dir-chain bytes still use physical T:S — parseDisk's
+  // loop adds its own bounds check to short-circuit those.)
+  if (fmt && fmt.lbaAddressing) {
     if (track < 1 || sector < 0 || sector > 255) return -1;
     return ((track - 1) * 256 + sector) * 256;
   }

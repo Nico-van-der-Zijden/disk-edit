@@ -71,5 +71,5 @@ function getTapeEntry(entryOff) {
 }
 
 function isTapeFormat() {
-  return currentFormat === DISK_FORMATS.t64 || currentFormat === DISK_FORMATS.tap;
+  return !!(currentFormat && currentFormat.isTape);
 }
