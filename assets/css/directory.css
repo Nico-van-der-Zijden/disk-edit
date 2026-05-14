@@ -327,6 +327,7 @@
     color: var(--text-muted);
     flex-shrink: 0;
     white-space: pre;
+    margin-left: 8px;
     margin-right: 8px;
   }
 
@@ -524,6 +525,16 @@
   .dir-entry.deleted {
     opacity: 0.5;
   }
+
+  /* DHD partition list — SYSTEM row tinted by HD-DOS presence. Subtle
+     so the selection / hover highlights still win. */
+  .dir-entry.dhd-dos-present { background: color-mix(in srgb, var(--color-recover) 18%, transparent); }
+  .dir-entry.dhd-dos-missing { background: color-mix(in srgb, var(--color-error) 18%, transparent); }
+  .dir-entry.dhd-dos-present:hover { background: color-mix(in srgb, var(--color-recover) 28%, transparent); }
+  .dir-entry.dhd-dos-missing:hover { background: color-mix(in srgb, var(--color-error) 28%, transparent); }
+  /* Selection still wins over the tint. */
+  .dir-entry.dhd-dos-present.selected,
+  .dir-entry.dhd-dos-missing.selected { background: var(--selected-bg); }
 
   /* Reversed PETSCII chars ($00-$1F, $80-$9F): swap fg/bg with the
      surrounding letters, matching how a C64 draws them. */

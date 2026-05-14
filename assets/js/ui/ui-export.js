@@ -844,8 +844,8 @@ fileInput.addEventListener('change', async () => {
         continue;
       }
 
-      // CMD containers (RAMLink, FD2000/FD4000): open the partition list.
-      if (/\.(rml|rl|d1m|d2m|d4m)$/i.test(fname)) {
+      // CMD containers (RAMLink, FD2000/FD4000, CMD HD): open the partition list.
+      if (/\.(rml|rl|d1m|d2m|d4m|dhd)$/i.test(fname)) {
         await openCmdContainerAsTab(buf, fname);
         continue;
       }

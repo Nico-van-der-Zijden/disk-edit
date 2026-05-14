@@ -575,9 +575,18 @@ function updateEntryMenuState() {
   var cNewBtn = document.getElementById('opt-cmdc-new-partition');
   var cRenBtn = document.getElementById('opt-cmdc-rename-partition');
   var cDelBtn = document.getElementById('opt-cmdc-delete-partition');
-  cNewBtn.style.display = containerList ? '' : 'none';
-  cRenBtn.style.display = containerList ? '' : 'none';
-  cDelBtn.style.display = containerList ? '' : 'none';
+  var cImpBtn = document.getElementById('opt-cmdc-import-partition');
+  var cExpBtn = document.getElementById('opt-cmdc-export-partition');
+  var cSep1 = document.getElementById('sep-cmdc-partitions');
+  var cSep2 = document.getElementById('sep-cmdc-partition-io');
+  var partDisplay = containerList ? '' : 'none';
+  cNewBtn.style.display = partDisplay;
+  cRenBtn.style.display = partDisplay;
+  cDelBtn.style.display = partDisplay;
+  cImpBtn.style.display = partDisplay;
+  cExpBtn.style.display = partDisplay;
+  if (cSep1) cSep1.style.display = partDisplay;
+  if (cSep2) cSep2.style.display = partDisplay;
   if (containerList) {
     var listSelEl = document.querySelector('.dir-entry.selected[data-cmdc-part]');
     var selPartIdx = listSelEl ? parseInt(listSelEl.dataset.cmdcPart, 10) : -1;
@@ -587,6 +596,12 @@ function updateEntryMenuState() {
     var canModify = !!selPart && selPart.type !== 0xFF;
     cRenBtn.classList.toggle('disabled', !canModify);
     cDelBtn.classList.toggle('disabled', !canModify);
+    // Import: a free slot must exist (same condition as New Partition).
+    // Export: requires a non-SYSTEM partition of a supported type
+    // (Native / 1541 / 1571 / 1581) — those map to .dnp / .d64 / .d71 / .d81.
+    cImpBtn.classList.toggle('disabled', !canAddCmdContainerPartition());
+    var canExport = !!selPart && (selPart.type >= 0x01 && selPart.type <= 0x04);
+    cExpBtn.classList.toggle('disabled', !canExport);
   }
   // Multi-select compatible operations (all disabled for tape / container list except copy/export)
   document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection || noEdit);

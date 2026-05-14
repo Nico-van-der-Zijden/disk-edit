@@ -129,6 +129,7 @@
               <div class="option" data-format="ramlink" data-rl-mib="16">16 MiB</div>
             </div>
           </div>
+          <div class="option" data-format="dhd">CMD HD (DHD)</div>
         </div>
       </div>
       <div class="option" id="opt-open">Open...</div>
@@ -170,6 +171,7 @@
           <div class="option disabled" id="opt-convert-geos">Convert to GEOS Format</div>
           <div class="option disabled" id="opt-view-border">View GEOS Border Sector...</div>
           <div class="option disabled" id="opt-restore-dos-version">Restore DOS Version Byte</div>
+          <div class="option disabled" id="opt-dhd-install-dos">Install HD-DOS</div>
         </div>
       </div>
       <div class="option disabled has-submenu" id="opt-disk-export">Export Disk
@@ -206,9 +208,13 @@
       <div class="option disabled" id="opt-move-up">Move Up</div>
       <div class="option disabled" id="opt-move-down">Move Down</div>
       <div class="option disabled" id="opt-add-partition">Add Directory</div>
+      <div class="separator" id="sep-cmdc-partitions"></div>
       <div class="option disabled" id="opt-cmdc-new-partition">New Partition</div>
       <div class="option disabled" id="opt-cmdc-rename-partition">Rename Partition</div>
       <div class="option disabled" id="opt-cmdc-delete-partition">Delete Partition</div>
+      <div class="separator" id="sep-cmdc-partition-io"></div>
+      <div class="option disabled" id="opt-cmdc-import-partition">Import Partition...</div>
+      <div class="option disabled" id="opt-cmdc-export-partition">Export Partition...</div>
       <div class="option disabled has-submenu" id="opt-align">Align
         <div class="submenu">
           <div class="option" data-align="left">Align Left</div>
@@ -350,7 +356,7 @@
   <div class="theme-toggle" id="theme-toggle" title="Toggle theme"></div>
 </div>
 
-<input type="file" id="file-input" accept=".d64,.d71,.d81,.d80,.d82,.t64,.tap,.x64,.g64,.d1m,.d2m,.d4m,.dnp,.nib,.nb2,.nbz,.p00,.s00,.u00,.r00,.lnx,.zip,.gz,.rml,.rl" multiple>
+<input type="file" id="file-input" accept=".d64,.d71,.d81,.d80,.d82,.t64,.tap,.x64,.g64,.d1m,.d2m,.d4m,.dnp,.nib,.nb2,.nbz,.p00,.s00,.u00,.r00,.lnx,.zip,.gz,.rml,.rl,.dhd" multiple>
 
 <div class="toolbar" id="toolbar">
   <div class="toolbar-group">

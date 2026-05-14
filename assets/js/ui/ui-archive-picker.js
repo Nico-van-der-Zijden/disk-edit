@@ -2,7 +2,7 @@
 
 function showZipArchiveModal(archiveName, entries) {
   return new Promise(function(resolve) {
-    const diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp', '.lnx', '.rml', '.rl'];
+    const diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp', '.lnx', '.rml', '.rl', '.dhd'];
     const fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
 
     const disks = [], files = [], others = [];
@@ -84,7 +84,7 @@ function showZipArchiveModal(archiveName, entries) {
 // that case the picker would just be a forced extra click. Returns null
 // to fall through to the picker.
 function pickSoloDisk(entries) {
-  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp', '.lnx'];
+  var diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp', '.lnx', '.rml', '.rl', '.dhd'];
   var fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
   var disks = [], files = 0;
   for (var i = 0; i < entries.length; i++) {

@@ -36,7 +36,8 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
         '<span class="about-format-list">' +
           '<b>DNP</b> &middot; ' +
           '<b>D1M</b> / <b>D2M</b> / <b>D4M</b> (FD-2000 / 4000) &middot; ' +
-          '<b>RAMLink</b>' +
+          '<b>RAMLink</b> &middot; ' +
+          '<b>DHD</b> (CMD HD)' +
         '</span>' +
         '<span class="about-format-cat">Tape</span>' +
         '<span class="about-format-list">' +
@@ -276,6 +277,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.111', title: 'CMD HD (DHD) container support', items: [
+      'New DHD format opens to a partition list like RAMLink, with up to 254 user partitions of types Native / 1541 / 1571 / 1581. Disk → New → CMD HD creates a fresh image that grows as you add partitions; opening a real DHD with HD-DOS once caches the firmware locally so subsequent new images become bootable',
+      'New Import / Export Partition entries on the File menu round-trip individual partitions as standalone .dnp / .d64 / .d71 / .d81 files',
+      'Native-partition size pickers (inside CMD containers and for standalone DNP) now use a slider with a live MiB readout',
+    ]},
     { ver: '1.3.110', title: 'Disk-format spec audit pass', items: [
       'BAM view banner now flags format-specific quirks when present: soft write-protect (BAM +$02 mismatch), 40-track speeder-DOS extended BAM (SpeedDOS / DolphinDOS), C128 auto-boot signature, and 1581 auto-boot loader flag. New Disk → Restore DOS Version Byte action clears the soft-WP byte on D64 / D71 / D81 / D80 / D82',
       'GEOS Info modal now shows Author and "Created by app" fields (when present in the INFO block). USR-typed GEOS VLIR files — like the ones on geoMagazine disks — are now correctly recognised as GEOS so the info dialog and load-address fields work for them',

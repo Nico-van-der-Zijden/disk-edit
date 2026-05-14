@@ -24,6 +24,7 @@ An online, cross-platform alternative to desktop tools like DirMaster, CBMXfer a
 | D2M | CMD FD-2000 | High density 3.5" (81 tracks, 80 spt) |
 | D4M | CMD FD-4000 | Extra density 3.5" (81 tracks, 160 spt) |
 | RML / RL | CMD RAMLink | Container of up to 31 partitions (Native, 1541, 1571, 1581) |
+| DHD | CMD HD | Hard-drive container of up to 254 partitions (Native, 1541, 1571, 1581); grows as partitions are added |
 | T64 | Tape | Tape archive container (read-only) |
 | TAP | Tape | Raw tape pulse data (read-only) |
 | CVT | GEOS | GEOS Convert file format |
@@ -48,6 +49,7 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 | D4M | 3,317,760 | 3,330,720 | |
 | DNP | n × 65,536 | — | Any multiple of 65,536 that doesn't match a sized format above |
 | RML / RL | 1/2/4/8/16 MiB | — | CMD RAMLink container — opens to a partition list |
+| DHD | Variable | — | CMD HD container — fresh image is 264 KiB and grows per partition; max ≈ 4 GiB |
 | G64 | Variable | — | Magic: `GCR-1541` at offset 0 |
 | X64 | Variable | — | Magic: `C1541` at offset 0 |
 | T64 | Variable | — | Magic: `C64` at offset 0 |

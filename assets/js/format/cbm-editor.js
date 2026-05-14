@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 110 };
+var APP_VERSION = { major: 1, minor: 3, build: 111 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -50,7 +50,7 @@ function setHexColoring(name) {
 var currentPartition = null; // null = root, or { entryOff, startTrack, partSize, name }
 
 // ── CMD container state (RAMLink, D1M/D2M/D4M, …) ───────────────────
-// When the active tab is a CMD-style container (.rml/.rl/.d1m/.d2m/.d4m),
+// When the active tab is a CMD-style container (.rml/.rl/.d1m/.d2m/.d4m/.dhd),
 // we keep the full container buffer here and let the user move between
 // the partition list and any individual partition. currentBuffer /
 // currentFormat reflect whatever view is active: when cmdcPartitionIdx
@@ -62,7 +62,7 @@ var cmdcBuffer = null;          // full container ArrayBuffer or null
 var cmdcFileName = null;        // original container file name
 var cmdcPartitions = null;      // parsed partition list (from readCmdContainerPartitions)
 var cmdcPartitionIdx = -1;      // -1 = partition-list view, else index into cmdcPartitions
-var cmdcContainerKey = null;    // 'ramlink' / 'd1m' / 'd2m' / 'd4m' — picks the CMD_CONTAINERS descriptor
+var cmdcContainerKey = null;    // 'ramlink' / 'd1m' / 'd2m' / 'd4m' / 'dhd' — picks the CMD_CONTAINERS descriptor
 
 // True when the active tab is a CMD container and we're showing the
 // partition list (not inside any partition). Disk-edit operations don't

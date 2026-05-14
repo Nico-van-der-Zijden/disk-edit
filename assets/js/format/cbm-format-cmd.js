@@ -1,9 +1,12 @@
 // ── CMD container partition tables (RAMLink, FD2000/FD4000, future…) ──
 //
 // Several CMD-style devices store a 32-byte-per-slot partition table
-// with slot 0 reserved for SYSTEM (type 0xFF) and slots 1-31 holding
-// user partitions of types Native (DNP), 1541, 1571, 1581. The on-disk
-// table location and start-address encoding differ by container:
+// with slot 0 reserved for SYSTEM (type 0xFF) and the remaining slots
+// holding user partitions of types Native (DNP), 1541, 1571, 1581. The
+// total slot count varies — 32 for RAMLink and FD2000/4000, 255 for
+// CMD HD (sectors 1024-1054 carry 8 slots each, sector 1055 carries 7
+// more; max user slot index is 254). The on-disk table location and
+// start-address encoding also differ by container:
 //
 //   RAMLink — contiguous 1024-byte block at (end - 2048).
 //             Start address is a 32-bit big-endian byte address at
@@ -117,6 +120,7 @@ var CMD_CONTAINERS = {
     startEnc: 'byte32',
     sizeUnit: 256, // partition size stored in 256-byte blocks
     diskIdLabel: 'RML',
+    partitionIdBytes: [0x52, 0x4C], // "RL" — stamped into freshly-built partitions
     nativeFormatKey: 'dnp', // RAMLink Native partitions are standard DNP filesystems
     // SYSTEM region = final 16 sectors (4 KiB)
     getReservedRanges: function(buffer) {
@@ -126,6 +130,51 @@ var CMD_CONTAINERS = {
   d1m: _makeCmdFdContainer('d1m'),
   d2m: _makeCmdFdContainer('d2m'),
   d4m: _makeCmdFdContainer('d4m'),
+  // CMD HD. SYSTEM partition spans sectors 768-1055 and contains the
+  // HD-DOS shadow plus the partition table itself; the table is at
+  // fixed offset 0x40000 regardless of image size. Start/size are
+  // 24-bit BE 512-byte clusters at +0x15..+0x17 / +0x1D..+0x1F —
+  // 32-bit byte addresses or 16-bit clusters mis-read partitions
+  // above the 16 MiB mark.
+  dhd: {
+    name: 'CMD HD',
+    formatKey: 'dhd',
+    extensions: ['.dhd'],
+    // 32 sectors × 8 slots = 255 valid slot indices (slot 255's row
+    // overlaps the chain terminator's reserved bytes and is unused);
+    // CMD's HD-Tools populates up to 252 user partitions.
+    getTableLayout: function(buffer) {
+      var sections = [];
+      for (var sec = 0; sec < 31; sec++) {
+        sections.push({ off: 0x40000 + sec * 256, slots: 8 });
+      }
+      sections.push({ off: 0x40000 + 31 * 256, slots: 7 });
+      return sections;
+    },
+    isSignaturePresent: function(data, layout) {
+      var off = layout[0].off + 2;
+      return off < data.length && data[off] === 0xFF;
+    },
+    startEnc: 'block24x512',
+    sizeUnit: 512,
+    diskIdLabel: 'HD',
+    partitionIdBytes: [0x48, 0x44], // "HD" — what HD-Tools / DirMaster stamp
+    nativeFormatKey: 'dnp',
+    getReservedRanges: function(buffer) {
+      return []; // no end-of-disk reservation
+    },
+    getMinPartitionStart: function(buffer) {
+      return 0x42000; // sector 1056: just past the SYSTEM partition (which
+                      // ends at sector 1055 and contains the table at 1024)
+    },
+    // CMD HD is grow-as-needed — the buffer can expand up to the V8
+    // ArrayBuffer ceiling rather than being capped at its current size.
+    // findCmdContainerFreeSpace uses this to report the partition budget,
+    // and addCmdContainerPartition grows the buffer when the allocation
+    // extends past the current end. Other CMD containers (RAMLink, FD)
+    // omit this hook and remain fixed-size.
+    getMaxGrownSize: function(buffer) { return 0xFFFFFFFF; },
+  },
 };
 
 // Slot N's absolute byte offset under a (possibly multi-section) layout.
@@ -146,8 +195,12 @@ function _cmdContainerReadStart(data, off, startEnc) {
     return (data[off + 0x15] * 0x1000000) + (data[off + 0x16] << 16) +
            (data[off + 0x17] << 8) + data[off + 0x18];
   }
-  // block16x512: 16-bit BE at +$16..+$17, in 512-byte units
-  // (D2M-DNP.TXT rev 1.3 §"the next entry is the first partition", bytes 16-17)
+  if (startEnc === 'block24x512') {
+    // 24-bit BE × 512. High byte goes non-zero past the 16 MiB mark.
+    var blocks24 = (data[off + 0x15] << 16) | (data[off + 0x16] << 8) | data[off + 0x17];
+    return blocks24 * 512;
+  }
+  // 16-bit BE × 512 (FD only; +0x15 is always zero in those images).
   var blocks = (data[off + 0x16] << 8) | data[off + 0x17];
   return blocks * 512;
 }
@@ -158,6 +211,13 @@ function _cmdContainerWriteStart(data, off, startEnc, startByte) {
     data[off + 0x16] = (startByte >>> 16) & 0xFF;
     data[off + 0x17] = (startByte >>> 8) & 0xFF;
     data[off + 0x18] = startByte & 0xFF;
+    return;
+  }
+  if (startEnc === 'block24x512') {
+    var blocks24w = Math.floor(startByte / 512);
+    data[off + 0x15] = (blocks24w >>> 16) & 0xFF;
+    data[off + 0x16] = (blocks24w >>> 8) & 0xFF;
+    data[off + 0x17] = blocks24w & 0xFF;
     return;
   }
   var blocks = Math.floor(startByte / 512);
@@ -215,7 +275,9 @@ function extractCmdContainerPartition(buffer, partition) {
   return buffer.slice(partition.startByte, end);
 }
 
-// Lowest empty user slot (1..31). Slot 0 is SYSTEM and never returned.
+// Lowest empty user slot. Slot 0 is SYSTEM and never returned. Upper
+// bound comes from the descriptor's getTableLayout: 31 for RAMLink /
+// FD2000 / FD4000, 254 for CMD HD.
 function findCmdContainerEmptySlot(buffer, containerKey) {
   var ct = CMD_CONTAINERS[containerKey];
   if (!ct || !buffer) return -1;
@@ -251,7 +313,16 @@ function findCmdContainerFreeSpace(buffer, containerKey, partitions) {
   }
   if (highEnd & 0xFF) highEnd = (highEnd + 0x100) & ~0xFF;
 
-  var dataEnd = buffer.byteLength;
+  // Floor the allocation at the container's minimum partition-start byte
+  // (CMD HD reserves the first 1028 sectors for system + partition table;
+  // RAMLink/FD have no floor since partitions begin at byte 0).
+  var minStart = ct.getMinPartitionStart ? ct.getMinPartitionStart(buffer) : 0;
+  if (highEnd < minStart) highEnd = minStart;
+
+  // For grow-as-needed containers (CMD HD), dataEnd is the absolute max
+  // the buffer can grow to, not just its current size. Fixed-size
+  // containers (RAMLink, FD) fall back to buffer.byteLength.
+  var dataEnd = ct.getMaxGrownSize ? ct.getMaxGrownSize(buffer) : buffer.byteLength;
   var reserved = ct.getReservedRanges(buffer);
   for (var r = 0; r < reserved.length; r++) {
     if (reserved[r].start < dataEnd) dataEnd = reserved[r].start;
@@ -435,6 +506,156 @@ function createEmptyRamLink(sizeMiB) {
   writeCmdContainerPartitionEntry(buf, 'ramlink', 1, 0x01, 'RAMLINK  1', 0, natBlocks);
 
   return buf;
+}
+
+// ── CMD HD DOS shadow ────────────────────────────────────────────────
+// The drive firmware ("HD-DOS", © 1990 Creative Micro Designs) lives on
+// the disk itself at a fixed offset; the boot ROM loads it at power-on.
+// Without it a generated DHD won't be bootable. We don't ship the bytes —
+// they're captured at runtime from any DHD that contains them, persisted
+// in localStorage, and re-used when generating new images.
+var DHD_DOS_OFFSET = 0x30400;  // sector 772
+var DHD_DOS_SIZE   = 0x7C00;   // 31 KiB
+var DHD_DOS_LS_KEY = 'cbm-dhd-hddos-shadow-v2';
+
+// True when the buffer carries a non-trivial DOS region (≥256 non-zero
+// bytes). Freshly-allocated buffers are all zero, so this also screens
+// out the "no DOS yet" case.
+function dhdHasDosShadow(buffer) {
+  if (!buffer || buffer.byteLength < DHD_DOS_OFFSET + DHD_DOS_SIZE) return false;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var nonZero = 0;
+  for (var i = 0; i < DHD_DOS_SIZE; i++) {
+    if (data[DHD_DOS_OFFSET + i] !== 0) {
+      nonZero++;
+      if (nonZero >= 256) return true;
+    }
+  }
+  return false;
+}
+
+function extractDhdDosShadow(buffer) {
+  if (!dhdHasDosShadow(buffer)) return null;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  return data.slice(DHD_DOS_OFFSET, DHD_DOS_OFFSET + DHD_DOS_SIZE);
+}
+
+function installDhdDosShadow(buffer, shadow) {
+  if (!buffer || !shadow) return false;
+  if (buffer.byteLength < DHD_DOS_OFFSET + DHD_DOS_SIZE) return false;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  data.set(shadow.subarray(0, DHD_DOS_SIZE), DHD_DOS_OFFSET);
+  return true;
+}
+
+// Persist a captured shadow as base64 in localStorage. Silent on quota /
+// SecurityError so headless test environments don't trip.
+function saveDhdDosShadow(shadow) {
+  if (!shadow || typeof localStorage === 'undefined') return false;
+  try {
+    var chunkSize = 0x4000;
+    var s = '';
+    for (var i = 0; i < shadow.length; i += chunkSize) {
+      s += String.fromCharCode.apply(null, shadow.subarray(i, i + chunkSize));
+    }
+    localStorage.setItem(DHD_DOS_LS_KEY, btoa(s));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function loadDhdDosShadow() {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    var b64 = localStorage.getItem(DHD_DOS_LS_KEY);
+    if (!b64) return null;
+    var s = atob(b64);
+    if (s.length !== DHD_DOS_SIZE) return null;
+    var out = new Uint8Array(DHD_DOS_SIZE);
+    for (var i = 0; i < DHD_DOS_SIZE; i++) out[i] = s.charCodeAt(i);
+    return out;
+  } catch (e) {
+    return null;
+  }
+}
+
+function hasStoredDhdDosShadow() {
+  if (typeof localStorage === 'undefined') return false;
+  try { return !!localStorage.getItem(DHD_DOS_LS_KEY); } catch (e) { return false; }
+}
+
+// Read the HD-DOS version + date strings. Layout at the start of the
+// shadow: 16 bytes of header, 4 spaces, 4-byte version (e.g. "1.92"),
+// then 8-byte date (e.g. "03/22/96"). Returns { version, date } with
+// either field nullable, or null when neither parses.
+function readDhdDosVersionFrom(bytes, base) {
+  function readAscii(off, len) {
+    var s = '';
+    for (var i = 0; i < len; i++) {
+      var b = bytes[base + off + i];
+      if (b < 0x20 || b >= 0x7F) break;
+      s += String.fromCharCode(b);
+    }
+    return s.trim();
+  }
+  var v = readAscii(0x14, 4);
+  var d = readAscii(0x18, 8);
+  var versionOk = /^[0-9](\.[0-9]+)?$/.test(v);
+  var dateOk = /^\d{2}\/\d{2}\/\d{2}$/.test(d);
+  if (!versionOk && !dateOk) return null;
+  return { version: versionOk ? v : null, date: dateOk ? d : null };
+}
+
+function extractDhdDosVersion(buffer) {
+  if (!buffer) return null;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  // Two call shapes: full DHD (look at +DHD_DOS_OFFSET) or just the shadow.
+  if (data.length >= DHD_DOS_OFFSET + 0x40) return readDhdDosVersionFrom(data, DHD_DOS_OFFSET);
+  if (data.length >= 0x40) return readDhdDosVersionFrom(data, 0);
+  return null;
+}
+
+// Fresh CMD HD container — minimal 264 KiB image holding just the
+// SYSTEM partition. Grown lazily as the user adds partitions; this
+// matches CMD's own tools, which don't pre-allocate the drive capacity.
+var DHD_MIN_SIZE = 0x42000; // sectors 0..1055, ending where SYSTEM ends
+
+function createEmptyDhd() {
+  var buf = new ArrayBuffer(DHD_MIN_SIZE);
+  var data = new Uint8Array(buf);
+
+  // Bytes are zero-initialised by the runtime, matching the factory
+  // pattern. HD-DOS goes in only if the user has previously cached one.
+  var dosShadow = loadDhdDosShadow();
+  if (dosShadow) installDhdDosShadow(buf, dosShadow);
+
+  // SYSTEM is a CBM-DOS chained-sector list spanning 32 sectors. Sectors
+  // 0..30 chain forward with `01 NN` (NN = 01..1F); sector 31 terminates
+  // with `00 FF`. The first chain pair doubles as slot 0's flag bytes,
+  // which is why writeCmdContainerPartitionEntry only touches +0x02..+0x1F.
+  for (var s = 0; s <= 30; s++) {
+    data[0x40000 + s * 256 + 0] = 0x01;
+    data[0x40000 + s * 256 + 1] = (s + 1) & 0xFF;
+  }
+  data[0x40000 + 31 * 256 + 0] = 0x00;
+  data[0x40000 + 31 * 256 + 1] = 0xFF;
+
+  // SYSTEM record: starts at sector 768, 144 × 512-byte clusters.
+  writeCmdContainerPartitionEntry(buf, 'dhd', 0, 0xFF, 'SYSTEM', 0x30000, 288);
+
+  return buf;
+}
+
+// Return an ArrayBuffer of at least `newSize` bytes with the old contents
+// copied in. Returns `oldBuf` unchanged when no growth is needed. Clamps
+// to V8's maxByteLength (4 GiB − 1). Caller must re-assign every alias.
+function growCmdContainer(oldBuf, newSize) {
+  if (newSize > 0xFFFFFFFF) newSize = 0xFFFFFFFF;
+  if (newSize <= oldBuf.byteLength) return oldBuf;
+  var newBuf = new ArrayBuffer(newSize);
+  new Uint8Array(newBuf).set(new Uint8Array(oldBuf));
+  return newBuf;
 }
 
 function detectFormat(bufferSize, buffer) {

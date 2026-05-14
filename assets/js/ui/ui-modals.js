@@ -420,3 +420,164 @@ document.getElementById('input-modal-field').addEventListener('keydown', (e) => 
   }
 });
 
+// Slider + number input + live readout, tied together with shared state
+// and step-aware blur-clamping. Used by anywhere we need a "pick a size
+// in N-sized steps" widget. `formatLabel(n)` formats the readout text.
+function buildBlockSliderRow(opts) {
+  var min = opts.min, step = opts.step;
+  var max = opts.max;
+  var formatLabel = opts.formatLabel || function(n) { return n + ' blocks'; };
+
+  var row = document.createElement('div');
+  row.style.display = 'flex';
+  row.style.alignItems = 'center';
+  row.style.gap = '8px';
+
+  var slider = document.createElement('input');
+  slider.type = 'range';
+  slider.min = String(min);
+  slider.max = String(max);
+  slider.step = String(step);
+  slider.value = String(opts.value);
+  slider.style.flex = '1';
+
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'modal-input';
+  input.style.width = '90px';
+  input.style.flex = '0 0 auto';
+  input.value = String(opts.value);
+
+  var readout = document.createElement('span');
+  readout.style.opacity = '0.7';
+  readout.style.minWidth = '70px';
+
+  row.appendChild(slider);
+  row.appendChild(input);
+  row.appendChild(readout);
+
+  function refreshReadout() {
+    var n = parseInt(input.value, 10);
+    if (isNaN(n)) n = min;
+    readout.textContent = formatLabel(n);
+  }
+  function clamp(n) {
+    if (isNaN(n) || n < min) return min;
+    if (n > max) return max;
+    return Math.floor(n / step) * step;
+  }
+  slider.addEventListener('input', function() {
+    input.value = slider.value;
+    refreshReadout();
+  });
+  // Mid-typing: clamp non-disruptively (don't rewrite the input value).
+  input.addEventListener('input', function() {
+    var n = parseInt(input.value, 10);
+    if (isNaN(n)) return;
+    if (n > max) n = max;
+    if (n < min) n = min;
+    slider.value = String(n);
+    refreshReadout();
+  });
+  // Commit: snap to a valid step.
+  input.addEventListener('blur', function() {
+    var n = clamp(parseInt(input.value, 10));
+    input.value = String(n);
+    slider.value = String(n);
+    refreshReadout();
+  });
+  refreshReadout();
+
+  return {
+    row: row,
+    slider: slider,
+    input: input,
+    readout: readout,
+    getValue: function() { return clamp(parseInt(input.value, 10)); },
+    setMax: function(newMax, fallback) {
+      max = newMax;
+      slider.max = String(newMax);
+      var current = parseInt(input.value, 10);
+      if (isNaN(current) || current > newMax) {
+        var v = fallback !== undefined ? fallback : newMax;
+        input.value = String(v);
+        slider.value = String(v);
+        refreshReadout();
+      }
+    },
+  };
+}
+
+// "New DNP" size picker. Returns the chosen block count, or null on
+// cancel. Range is 1..255 tracks expressed as 256..65280 blocks.
+function showDnpSizePicker(defaultBlocks) {
+  return new Promise(function(resolve) {
+    setModalSize(null);
+    document.getElementById('modal-title').textContent = 'New DNP';
+    var body = document.getElementById('modal-body');
+    body.innerHTML = '';
+
+    var minBlocks = 256, maxBlocks = 255 * 256;
+    var initial = Math.max(minBlocks, Math.min(maxBlocks, defaultBlocks || maxBlocks));
+    initial = Math.floor(initial / 256) * 256;
+
+    function formatSize(blocks) {
+      var bytes = blocks * 256;
+      if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(2) + ' MiB';
+      return (bytes / 1024).toFixed(0) + ' KiB';
+    }
+
+    var wrap = document.createElement('div');
+    wrap.style.display = 'flex';
+    wrap.style.flexDirection = 'column';
+    wrap.style.gap = '8px';
+
+    var label = document.createElement('div');
+    label.style.opacity = '0.7';
+    label.textContent = 'Size (' + minBlocks + ' – ' + maxBlocks + ' blocks, step 256)';
+
+    var sliderRow = buildBlockSliderRow({
+      min: minBlocks, max: maxBlocks, step: 256, value: initial,
+      formatLabel: formatSize,
+    });
+
+    var footer = document.createElement('div');
+    footer.style.opacity = '0.55';
+    footer.style.fontSize = '0.9em';
+    footer.textContent = 'max ' + maxBlocks + ' blocks (' + formatSize(maxBlocks) + ')';
+
+    wrap.appendChild(label);
+    wrap.appendChild(sliderRow.row);
+    wrap.appendChild(footer);
+    body.appendChild(wrap);
+
+    var modalFooter = document.querySelector('#modal-overlay .modal-footer');
+    modalFooter.innerHTML = '';
+    var done = false;
+    function ok() {
+      if (done) return;
+      done = true;
+      document.getElementById('modal-overlay').classList.remove('open');
+      resolve(sliderRow.getValue());
+    }
+    function cancel() {
+      if (done) return;
+      done = true;
+      document.getElementById('modal-overlay').classList.remove('open');
+      resolve(null);
+    }
+    var cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.className = 'modal-btn-secondary';
+    cancelBtn.addEventListener('click', cancel);
+    modalFooter.appendChild(cancelBtn);
+    var okBtn = document.createElement('button');
+    okBtn.textContent = 'OK';
+    okBtn.addEventListener('click', ok);
+    modalFooter.appendChild(okBtn);
+
+    document.getElementById('modal-overlay').classList.add('open');
+    setTimeout(function() { sliderRow.input.focus(); sliderRow.input.select(); }, 0);
+  });
+}
+

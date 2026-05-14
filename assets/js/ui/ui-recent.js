@@ -140,9 +140,9 @@ function openRecentDisk(entry) {
     if (entry.isArchive || /\.lnx$/i.test(entry.name)) {
       clearCmdContainerState();
       openLnxArchiveAsTab(bufCopy, entry.name);
-    } else if (/\.(rml|rl|d1m|d2m|d4m)$/i.test(entry.name)) {
-      // CMD containers (RAMLink, FD2000/FD4000) open to the partition
-      // list — double-click a partition to enter it.
+    } else if (/\.(rml|rl|d1m|d2m|d4m|dhd)$/i.test(entry.name)) {
+      // CMD containers (RAMLink, FD2000/FD4000, CMD HD) open to the
+      // partition list — double-click a partition to enter it.
       openCmdContainerAsTab(bufCopy, entry.name);
     } else {
       clearCmdContainerState();

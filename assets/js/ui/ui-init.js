@@ -41,7 +41,7 @@ document.addEventListener('drop', async function(e) {
   const diskExts = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.dnp', '.nib', '.nb2'];
   const fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
   const archiveExts = ['.lnx'];
-  const cmdcExts = ['.rml', '.rl', '.d1m', '.d2m', '.d4m'];
+  const cmdcExts = ['.rml', '.rl', '.d1m', '.d2m', '.d4m', '.dhd'];
   var diskEntries = [], importEntries = [], archiveEntries = [], cmdcEntries = [];
   for (var i = 0; i < entries.length; i++) {
     var lname = entries[i].name.toLowerCase();

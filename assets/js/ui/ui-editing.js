@@ -196,6 +196,24 @@ function updateMenuState() {
   document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || noEdit || hasGeosSignature(currentBuffer));
   document.getElementById('opt-view-border').classList.toggle('disabled', !hasDisk || !hasGeosSignature(currentBuffer));
   document.getElementById('opt-restore-dos-version').classList.toggle('disabled', !hasDisk || noEdit || isSoftWriteProtected(currentBuffer) === null);
+  // Install HD-DOS: only meaningful on a DHD container view, only enabled
+  // when a donor shadow is cached AND the active image is missing its own.
+  // The label tracks the cached version so the user sees what would be
+  // installed (or "no donor cached" when nothing is captured yet).
+  var dhdDosBtn = document.getElementById('opt-dhd-install-dos');
+  var onDhdContainer = cmdcContainerKey === 'dhd' && !!cmdcBuffer;
+  var dhdDosCached = hasStoredDhdDosShadow();
+  var dhdDosNeeded = onDhdContainer && !dhdHasDosShadow(cmdcBuffer);
+  dhdDosBtn.classList.toggle('disabled', !(onDhdContainer && dhdDosCached && dhdDosNeeded));
+  var dhdDosLabel = 'Install HD-DOS';
+  if (dhdDosCached) {
+    var cachedShadow = loadDhdDosShadow();
+    var cachedVer = cachedShadow ? extractDhdDosVersion(cachedShadow) : null;
+    if (cachedVer && cachedVer.version) dhdDosLabel += ' V' + cachedVer.version;
+  } else {
+    dhdDosLabel += ' (no donor cached)';
+  }
+  dhdDosBtn.textContent = dhdDosLabel;
   document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-compact-dir').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-file-chains').classList.toggle('disabled', !hasDisk || noEdit);
@@ -213,7 +231,13 @@ function updateMenuState() {
   document.getElementById('opt-base64').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-g64-layout').classList.toggle('disabled', !currentG64Layout);
-  document.getElementById('opt-disk-tools').classList.toggle('disabled', !hasDisk || noEdit);
+  // Disk Tools is normally disabled on a container list view (the items
+  // inside operate on filesystems, not containers). But Install HD-DOS
+  // is a container-level operation, so keep the submenu reachable when
+  // that one item is applicable — the user can click in to use it while
+  // the rest stay individually disabled.
+  var dhdInstallApplicable = onDhdContainer && dhdDosCached && dhdDosNeeded;
+  document.getElementById('opt-disk-tools').classList.toggle('disabled', (!hasDisk || noEdit) && !dhdInstallApplicable);
   document.getElementById('opt-disk-export').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-find').classList.toggle('disabled', !hasDisk || containerList);
   document.getElementById('opt-find-tabs').classList.toggle('disabled', tabs.length === 0);
@@ -964,6 +988,15 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
       await openCmdContainerAsTab(rlBuf, rlName, 'ramlink');
       return;
     }
+    if (formatKey === 'dhd') {
+      // CMD HD is grow-as-needed — initial image is 264 KiB (SYSTEM only)
+      // and grows when partitions are added.
+      newDiskCount++;
+      var hdBuf = createEmptyDhd();
+      var hdName = 'New CMD HD ' + newDiskCount + '.dhd';
+      await openCmdContainerAsTab(hdBuf, hdName, 'dhd');
+      return;
+    }
     if (formatKey === 'd1m' || formatKey === 'd2m' || formatKey === 'd4m') {
       newDiskCount++;
       var fdBuf = createEmptyDisk(formatKey, tracks);
@@ -972,15 +1005,13 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
       return;
     }
 
-    // DNP: prompt for number of tracks
+    // DNP: prompt for size in blocks via the slider modal, then convert
+    // back to tracks (createEmptyDisk wants tracks, not blocks). Default
+    // 65280 = 255 × 256 = the previous default of "full 255-track DNP".
     if (formatKey === 'dnp') {
-      var tracksStr = await showInputModal('Number of tracks (2 - 255)', '255');
-      if (tracksStr === null) return;
-      tracks = parseInt(tracksStr, 10);
-      if (isNaN(tracks) || tracks < 2 || tracks > 255) {
-        showModal('New DNP', ['Invalid number. Enter 2 to 255.']);
-        return;
-      }
+      var pickedBlocks = await showDnpSizePicker(255 * 256);
+      if (pickedBlocks === null) return;
+      tracks = pickedBlocks / 256;
     }
 
     var buf = createEmptyDisk(formatKey, tracks);

@@ -94,11 +94,13 @@ function _cmdReadTrackFree(data, bamOff, track) {
   }
   return free;
 }
-// DNP track 1 has sectors 0-63 reserved for filesystem overhead: boot, header,
-// 32-sector BAM area (covers up to 255 tracks), dir start (S$22), and 29
-// pre-reserved sectors for dir-chain growth. CMD HD's "blocks free" excludes
-// those 64 sectors regardless of bitmap state — so skip the first 8 bitmap
-// bytes (sectors 0-63) when totalling free blocks for the dir track.
+// DNP dir-track free-blocks: skip the first 8 BAM bytes (sectors 0-63 of
+// the dir track). The CMD HD ROM treats those 64 sectors as reserved
+// regardless of bitmap state — 35 of them are bitmap-marked used (boot,
+// T1/S1 header, 32 BAM sectors, first dir) and the remaining 29 are
+// pre-reserved for dir-chain growth. Real hardware reports `(tracks × 256) − 64`
+// free on a fresh-formatted Native; we have to subtract the same 29
+// invisible reserved sectors to match.
 function _dnpReadTrackFree(data, bamOff, track) {
   var base = this._bamBase(track);
   if (base < 0 || base + 32 > data.length) return 0;
@@ -1196,6 +1198,14 @@ DISK_FORMATS.ramlink = Object.assign({}, DISK_FORMATS.dnp, {
   extAlternates: ['.rl'],
 });
 
+// CMD HD — same container shape as RAMLink (32-slot partition table,
+// Native sub-partitions are DNP). Aliased here so save-as keeps the .dhd
+// suffix and the disk-format pipeline recognises the format key.
+DISK_FORMATS.dhd = Object.assign({}, DISK_FORMATS.dnp, {
+  name: 'CMD HD',
+  ext: '.dhd',
+});
+
 // ── Active format ────────────────────────────────────────────────────
 var currentFormat = DISK_FORMATS.d64;
 var currentTracks = 35;
@@ -1578,10 +1588,22 @@ function parseDisk(buffer, formatHint) {
   // whose size doesn't match any standard disk format (e.g., an FD Native
   // partition). Caller passes the format key directly so detectFormat is
   // skipped. tracks falls back to the format's first declared size.
+  //
+  // DNP is variable-size — sizes[] is empty — so derive track count from
+  // the slice itself (one track = 256 sectors × 256 bytes = 64 KiB).
+  // Without this, parseDisk would fall through to the hardcoded "81"
+  // default and a 16 MiB Native partition would mis-report itself as an
+  // 81-track DNP, showing 20,672 free instead of 65,216.
   if (formatHint && DISK_FORMATS[formatHint]) {
     currentFormat = DISK_FORMATS[formatHint];
-    currentTracks = currentFormat.sizes && currentFormat.sizes[0]
-      ? currentFormat.sizes[0].tracks : 81;
+    if (formatHint === 'dnp') {
+      currentTracks = Math.floor(buffer.byteLength / 65536);
+      if (currentTracks < 1) currentTracks = 1;
+      if (currentTracks > 255) currentTracks = 255;
+    } else {
+      currentTracks = currentFormat.sizes && currentFormat.sizes[0]
+        ? currentFormat.sizes[0].tracks : 81;
+    }
   } else {
     const detected = detectFormat(data.length, buffer);
     currentFormat = detected.format;
