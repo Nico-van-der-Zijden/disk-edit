@@ -169,6 +169,48 @@ describe('DHD-hosted partition round-trip', () => {
     assert.strictEqual(info3.freeBlocks, 2 * 256 - 64);
   });
 
+  it('deleting a partition compacts data downward and shrinks the buffer', function() {
+    // Start with a fresh DHD, grow + add two 2-track Native partitions
+    // (slots 1 and 2). Then clear slot 1: slot 2's data must shift down
+    // into slot 1's range and the container's buffer must trim to fit.
+    var dhdBuf = createEmptyDhd();
+    var partTracks = 2;
+    var partBytes = partTracks * 65536;
+    var p1Start = 0x42000;
+    var p2Start = p1Start + partBytes;
+    dhdBuf = growCmdContainer(dhdBuf, p2Start + partBytes);
+
+    new Uint8Array(dhdBuf).set(new Uint8Array(createEmptyDisk('dnp', partTracks)), p1Start);
+    writeCmdContainerPartitionEntry(dhdBuf, 'dhd', 1, 0x01, 'FIRST', p1Start, partTracks * 256);
+    new Uint8Array(dhdBuf).set(new Uint8Array(createEmptyDisk('dnp', partTracks)), p2Start);
+    writeCmdContainerPartitionEntry(dhdBuf, 'dhd', 2, 0x01, 'SECOND', p2Start, partTracks * 256);
+
+    // Distinct signature in slot 2's body so we can prove it moved.
+    new Uint8Array(dhdBuf)[p2Start + 0x400] = 0xAB;
+    new Uint8Array(dhdBuf)[p2Start + 0x401] = 0xCD;
+
+    var sizeBefore = dhdBuf.byteLength;
+    clearCmdContainerPartitionEntry(dhdBuf, 'dhd', 1);
+    dhdBuf = compactCmdContainer(dhdBuf, 'dhd');
+
+    assert.ok(dhdBuf.byteLength < sizeBefore, 'buffer shrank: was ' + sizeBefore + ', now ' + dhdBuf.byteLength);
+    assert.strictEqual(dhdBuf.byteLength, p1Start + partBytes, 'trimmed to fit one remaining Native partition');
+
+    var info = readCmdContainerPartitions(dhdBuf, 'dhd');
+    assert.strictEqual(info.partitions.length, 2, 'SYSTEM + the one remaining partition');
+    var second = info.partitions.find(function(p) { return p.index === 2; });
+    assert.ok(second, 'slot 2 still populated');
+    assert.strictEqual(second.startByte, p1Start, 'slot 2 shifted down into slot 1\'s old range');
+    assert.strictEqual(new Uint8Array(dhdBuf)[p1Start + 0x400], 0xAB, 'slot 2 data moved with the entry');
+    assert.strictEqual(new Uint8Array(dhdBuf)[p1Start + 0x401], 0xCD);
+
+    // Delete the last user partition; buffer must collapse back to the
+    // minimum SYSTEM-only size.
+    clearCmdContainerPartitionEntry(dhdBuf, 'dhd', 2);
+    dhdBuf = compactCmdContainer(dhdBuf, 'dhd');
+    assert.strictEqual(dhdBuf.byteLength, 0x42000, 'empty DHD shrinks back to 264 KiB');
+  });
+
   it('partition entry start/size encoding round-trips on a multi-MiB DHD', function() {
     // Place a partition at a byte address whose high byte (+0x15) is
     // non-zero, exercising the block24x512 start encoder. 32 MiB into the

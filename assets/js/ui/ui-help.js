@@ -278,7 +278,7 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   var body = document.getElementById('modal-body');
   var changes = [
     { ver: '1.3.111', title: 'CMD HD (DHD) container support', items: [
-      'New DHD format opens to a partition list like RAMLink, with up to 254 user partitions of types Native / 1541 / 1571 / 1581. Disk → New → CMD HD creates a fresh image that grows as you add partitions; opening a real DHD with HD-DOS once caches the firmware locally so subsequent new images become bootable',
+      'New DHD format opens to a partition list like RAMLink, with up to 254 user partitions of types Native / 1541 / 1571 / 1581. Disk → New → CMD HD creates a fresh image that grows when you add partitions and shrinks when you delete them; opening a real DHD with HD-DOS once caches the firmware locally so subsequent new images become bootable',
       'New Import / Export Partition entries on the File menu round-trip individual partitions as standalone .dnp / .d64 / .d71 / .d81 files',
       'Native-partition size pickers (inside CMD containers and for standalone DNP) now use a slider with a live MiB readout',
     ]},

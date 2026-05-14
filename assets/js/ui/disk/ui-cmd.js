@@ -721,7 +721,15 @@ async function deleteCmdContainerPartition() {
 
   pushUndo();
   clearCmdContainerPartitionEntry(cmdcBuffer, cmdcContainerKey, part.index);
+  // Grow-as-needed containers (DHD) shrink the file once the partition
+  // is gone; fixed-size containers (RAMLink, FD) keep their byte length.
+  var shrunk = compactCmdContainer(cmdcBuffer, cmdcContainerKey);
+  if (shrunk !== cmdcBuffer) {
+    cmdcBuffer = shrunk;
+    currentBuffer = cmdcBuffer;
+  }
   cmdcPartitions = readCmdContainerPartitions(cmdcBuffer, cmdcContainerKey).partitions;
+  tabDirty = true;
   refreshCmdContainerView();
 }
 

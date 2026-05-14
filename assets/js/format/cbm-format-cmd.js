@@ -658,6 +658,30 @@ function growCmdContainer(oldBuf, newSize) {
   return newBuf;
 }
 
+// Trim a grow-as-needed container down to whatever its current
+// partitions still need. Returns the same buffer when the container
+// isn't shrinkable (RAMLink / FD have a fixed size) or no slack exists.
+// Counterpart to growCmdContainer — usually called after a delete to
+// reclaim the freed tail.
+function compactCmdContainer(oldBuf, containerKey) {
+  var ct = CMD_CONTAINERS[containerKey];
+  if (!ct || !ct.getMaxGrownSize) return oldBuf;
+  var info = readCmdContainerPartitions(oldBuf, containerKey);
+  if (!info) return oldBuf;
+  var highEnd = 0;
+  for (var i = 0; i < info.partitions.length; i++) {
+    var p = info.partitions[i];
+    if (p.type === 0x00) continue;
+    var end = p.startByte + p.sizeBytes;
+    if (end > highEnd) highEnd = end;
+  }
+  if (highEnd & 0xFF) highEnd = (highEnd + 0x100) & ~0xFF;
+  if (highEnd >= oldBuf.byteLength) return oldBuf;
+  var newBuf = new ArrayBuffer(highEnd);
+  new Uint8Array(newBuf).set(new Uint8Array(oldBuf).subarray(0, highEnd));
+  return newBuf;
+}
+
 function detectFormat(bufferSize, buffer) {
   if (buffer) {
     var data = new Uint8Array(buffer);
