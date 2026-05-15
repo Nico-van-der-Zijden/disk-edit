@@ -232,6 +232,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['T/S column', 'Edit track/sector'],
       ['Disk name / ID', 'Edit disk header'],
       ['Blocks free', 'Edit free block count'],
+      ['Partition row', 'Open partition (enter its filesystem)'],
     ]},
     { title: 'Sector Editor', shortcuts: [
       ['Ctrl + J', 'Follow sector chain (jump to T/S in bytes 0-1)'],
@@ -239,7 +240,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Escape', 'Cancel byte edit'],
     ]},
     { title: 'Drag & Drop', shortcuts: [
-      ['Drop .d64/.d71/.d81', 'Open disk image(s) in new tab(s)'],
+      ['Drop a disk image', 'Open in new tab(s) — any supported format (D64, D71, D81, DNP, DHD, RML, FD, G64, NIB, …)'],
       ['Drop .prg/.seq/.usr/.rel/.cvt', 'Import file(s) into current disk'],
       ['Drag file entry to OS', 'Export file (Chrome/Edge)'],
     ]},
