@@ -201,6 +201,64 @@ function readCfsFileData(buffer, treeRootLba, fileSize) {
   return { data: result, error: null };
 }
 
+// Read the "next directory sector" pointer encoded across all 16
+// directory entries in a sector. Mirrors fusecfs get_dir_next(): the
+// 4-byte next-sector pointer's bytes are reconstructed from bits 5..4
+// of byte 0 of each entry's data-tree-pointer field ($14 within the
+// 32-byte entry). Same bit-slicing idea as treelinks, just at a 32-byte
+// stride instead of 4-byte.
+function _cfsReadDirNext(data, sectorBase) {
+  var bytes = [0, 0, 0, 0];
+  for (var i = 0; i < 4; i++) {
+    // i=0 → entries 12..15 (bytes 0x180+0x14, +0x34, +0x54, +0x74)
+    // i=1 → entries 8..11
+    // i=2 → entries 4..7
+    // i=3 → entries 0..3
+    var entryBase = sectorBase + 0x180 - i * 0x80;
+    var c = (data[entryBase + 0x14] << 2) & 0xC0;
+    c |= data[entryBase + 0x34] & 0x30;
+    c |= (data[entryBase + 0x54] >>> 2) & 0x0C;
+    c |= (data[entryBase + 0x74] >>> 4) & 0x03;
+    bytes[i] = c;
+  }
+  var b0 = bytes[0], b1 = bytes[1], b2 = bytes[2], b3 = bytes[3];
+  var lba = (b0 & 0x40) !== 0;
+  var addr = lba ? (((b0 & 0x0F) << 24) | (b1 << 16) | (b2 << 8) | b3) : null;
+  return { raw0: b0, lba: lba, addr: addr };
+}
+
+// Walk a directory's sector chain via _cfsReadDirNext and collect every
+// entry across all sectors. Returns an array of entry objects (same
+// shape as readCfsDirectorySector's output) plus a `dirLba` tag on each
+// entry pointing at the sector it was read from. Capped at 64 sectors
+// to match fusecfs's extend_dir limit. Cycle-detected via a visited set.
+function readCfsDirectory(buffer, firstDirLba) {
+  if (!buffer || !firstDirLba) return null;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var allEntries = [];
+  var visited = {};
+  var dirLba = firstDirLba;
+  var sectorCount = 0;
+  while (dirLba && !visited[dirLba] && sectorCount < 64) {
+    visited[dirLba] = true;
+    sectorCount++;
+    var entries = readCfsDirectorySector(buffer, dirLba);
+    if (!entries) break;
+    for (var i = 0; i < entries.length; i++) {
+      entries[i].dirLba = dirLba;
+      entries[i].sectorIndex = sectorCount - 1;
+      // Skip the per-sector self-ref tag for non-first sectors so the
+      // UI doesn't hide entry 0 of every chained sector. Only the very
+      // first directory sector's entry 0 is the dir's true self-reference.
+      if (sectorCount > 1) entries[i].isSelfRef = false;
+      allEntries.push(entries[i]);
+    }
+    var nextPtr = _cfsReadDirNext(data, dirLba * IDE64_SECTOR_SIZE);
+    dirLba = (nextPtr.lba && nextPtr.addr > 0) ? nextPtr.addr : 0;
+  }
+  return allEntries;
+}
+
 // Parse one 512-byte CFS directory sector into 16 entries. Each entry's
 // `empty` flag is true when the slot is all zeros (unused). Entry 0 is
 // the dir's self-reference (its name = the directory's own name); the

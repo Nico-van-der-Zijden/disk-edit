@@ -25,6 +25,7 @@ function clearIde64State() {
   cfsPartitionIdx = -1;
   cfsDirLba = 0;
   cfsDirEntries = null;
+  cfsDirStack = [];
 }
 
 function openIde64AsTab(buffer, fileName) {
@@ -200,14 +201,15 @@ function enterIde64Partition(idx) {
     showModal('CFS partition', ['Partition "' + (p.name || ('#' + idx)) + '" has no valid root directory pointer.']);
     return;
   }
-  var entries = readCfsDirectorySector(hddBuffer, p.cfsRootDir.addr);
+  var entries = readCfsDirectory(hddBuffer, p.cfsRootDir.addr);
   if (!entries) {
-    showModal('CFS partition', ['Could not read the root directory sector for partition "' + (p.name || ('#' + idx)) + '".']);
+    showModal('CFS partition', ['Could not read the root directory for partition "' + (p.name || ('#' + idx)) + '".']);
     return;
   }
   cfsPartitionIdx = idx;
   cfsDirLba = p.cfsRootDir.addr;
   cfsDirEntries = entries;
+  cfsDirStack = [];
   // Swap the descriptor so renderer / menu-state code that branches on
   // currentFormat.filesystem picks the CFS path. currentBuffer stays on
   // the whole .hdd buffer — Phase 2 doesn't slice the partition out.
@@ -222,9 +224,51 @@ function leaveCfsPartition() {
   cfsPartitionIdx = -1;
   cfsDirLba = 0;
   cfsDirEntries = null;
+  cfsDirStack = [];
   currentFormat = DISK_FORMATS.hdd;
   selectedEntryIndex = -1;
   refreshIde64View();
+}
+
+// Drill into a CFS subdirectory. Pushes the current dir onto the
+// breadcrumb stack, then switches the view to the subdir's first
+// directory sector. The subdir entry stores its first dir sector LBA
+// in the data-tree-pointer field at $14.
+function enterCfsSubdir(entry) {
+  if (!entry || entry.ftype !== CFS_FTYPE.DIR) return;
+  if (!entry.dataTreePtr || !entry.dataTreePtr.lba) {
+    showModal('CFS subdirectory', ['"' + entry.name + '" has no valid directory sector pointer.']);
+    return;
+  }
+  cfsDirStack.push({ dirLba: cfsDirLba, name: _cfsCurrentDirDisplayName() });
+  cfsDirLba = entry.dataTreePtr.addr;
+  cfsDirEntries = null;
+  selectedEntryIndex = -1;
+  refreshIde64View();
+}
+
+// Pop one level off the breadcrumb. Called from the "↑ up to ..." row.
+function leaveCfsSubdir() {
+  if (cfsDirStack.length === 0) return;
+  var parent = cfsDirStack.pop();
+  cfsDirLba = parent.dirLba;
+  cfsDirEntries = null;
+  selectedEntryIndex = -1;
+  refreshIde64View();
+}
+
+// Display name for the currently-viewed directory: prefer the entry-0
+// self-reference's name (every CFS dir's first slot carries its own
+// name); fall back to the partition name if that's missing.
+function _cfsCurrentDirDisplayName() {
+  if (cfsDirEntries && cfsDirEntries.length > 0 && cfsDirEntries[0].name) {
+    return cfsDirEntries[0].name;
+  }
+  if (cfsPartitionIdx >= 0 && hddPartitions) {
+    var p = hddPartitions[cfsPartitionIdx];
+    if (p) return p.name || ('Partition ' + cfsPartitionIdx);
+  }
+  return 'CFS';
 }
 
 // ── Render the CFS directory listing ──────────────────────────────────
@@ -235,10 +279,17 @@ function renderCfsDirectoryView() {
   // Re-parse every render — matches the CMD container pattern; edits in
   // future phases mutate hddBuffer directly and this picks them up without
   // a separate refresh hook.
-  cfsDirEntries = readCfsDirectorySector(hddBuffer, cfsDirLba) || [];
+  cfsDirEntries = readCfsDirectory(hddBuffer, cfsDirLba) || [];
 
   var content = document.getElementById('content');
-  var titleName = part.name || ('Partition ' + part.index);
+  var partName = part.name || ('Partition ' + part.index);
+  var crumbs = [partName];
+  for (var ci = 0; ci < cfsDirStack.length; ci++) {
+    crumbs.push(cfsDirStack[ci].name || '?');
+  }
+  var thisDirName = _cfsCurrentDirDisplayName();
+  if (cfsDirStack.length > 0) crumbs.push(thisDirName);
+  var titleName = crumbs.join(' / ');
 
   var html = '<div class="disk-panel">' +
     '<div class="disk-header">' +
@@ -265,13 +316,27 @@ function renderCfsDirectoryView() {
       '<span class="dir-cfs-attrs"></span>' +
       '<span class="dir-icons"></span>' +
     '</div>';
+  if (cfsDirStack.length > 0) {
+    var parentName = cfsDirStack[cfsDirStack.length - 1].name || '..';
+    html +=
+      '<div class="dir-entry dir-parent-row" data-cfs-up="1">' +
+        '<span class="dir-grip"></span>' +
+        '<span class="dir-blocks"></span>' +
+        '<span class="dir-name">&uarr; up to ' + escHtml(parentName) + '</span>' +
+        '<span class="dir-type"></span>' +
+        '<span class="dir-cfs-mtime"></span>' +
+        '<span class="dir-cfs-attrs"></span>' +
+        '<span class="dir-icons"></span>' +
+      '</div>';
+  }
 
   var fileCount = 0;
   for (var i = 0; i < cfsDirEntries.length; i++) {
     var e = cfsDirEntries[i];
     if (e.empty) continue;
-    if (e.isSelfRef) continue; // entry 0 = directory's own name, hide it
+    if (e.isSelfRef) continue; // entry 0 of first sector = directory's own name, hide it
 
+    var absIdx = i; // unique across all chained sectors
     var typeStr = e.typeSuffix || _cfsFtypeLabel(e.ftype);
     var sizeStr;
     if (e.ftype === CFS_FTYPE.DIR || e.ftype === CFS_FTYPE.LNK) {
@@ -294,7 +359,7 @@ function renderCfsDirectoryView() {
     var rowTitle = e.name + ' — ' + (e.size + ' bytes');
 
     html +=
-      '<div class="dir-entry' + deletedCls + '" data-cfs-entry="' + e.index + '" title="' + escHtml(rowTitle) + '">' +
+      '<div class="dir-entry' + deletedCls + '" data-cfs-entry="' + absIdx + '" title="' + escHtml(rowTitle) + '">' +
         '<span class="dir-grip"></span>' +
         '<span class="dir-blocks">' + sizeStr + '</span>' +
         '<span class="dir-name">"' + escHtml(e.name) + '"</span>' +
@@ -323,6 +388,11 @@ function renderCfsDirectoryView() {
     row.addEventListener('click', function() { leaveCfsPartition(); });
     row.addEventListener('dblclick', function() { leaveCfsPartition(); });
   });
+  // Up-to-parent row (only present in subdirs)
+  content.querySelectorAll('.dir-entry[data-cfs-up]').forEach(function(row) {
+    row.addEventListener('click', function() { leaveCfsSubdir(); });
+    row.addEventListener('dblclick', function() { leaveCfsSubdir(); });
+  });
 
   // File rows: click selects; dblclick on DIR is reserved for Phase 3
   content.querySelectorAll('.dir-entry[data-cfs-entry]').forEach(function(row) {
@@ -336,14 +406,9 @@ function renderCfsDirectoryView() {
     });
     row.addEventListener('dblclick', function() {
       if (entry.ftype === CFS_FTYPE.DIR) {
-        showModal('CFS subdirectory', [
-          'Entering "' + entry.name + '" is not yet supported.',
-          'Phase 3b adds subdirectory navigation.',
-        ]);
+        enterCfsSubdir(entry);
       } else if (entry.ftype === CFS_FTYPE.LNK) {
-        showModal('CFS link', [
-          '"' + entry.name + '" is a symbolic link. Following links comes in Phase 3b.',
-        ]);
+        showCfsLinkTarget(entry);
       } else if (entry.ftype === CFS_FTYPE.DEL) {
         showModal('Deleted file', ['Entry is marked deleted; nothing to view.']);
       } else {
@@ -366,6 +431,33 @@ function _cfsFtypeLabel(ft) {
     case CFS_FTYPE.LNK: return 'LNK';
     default: return 'T' + ft;
   }
+}
+
+// Show a CFS symbolic link's target. The link's content is the target
+// path (PETSCII / ASCII). Phase 3b just surfaces what it points at —
+// actually following the link to navigate to its target is Phase 3c
+// territory (needs a path resolver that walks dir-by-dir within the
+// partition).
+function showCfsLinkTarget(entry) {
+  if (!entry || !entry.dataTreePtr || !entry.dataTreePtr.lba) {
+    showModal('CFS link', ['"' + entry.name + '" has no target pointer.']);
+    return;
+  }
+  var res = readCfsFileData(hddBuffer, entry.dataTreePtr.addr, entry.size || 256);
+  if (res.error) {
+    showModal('CFS link', ['Could not read target of "' + entry.name + '": ' + res.error]);
+    return;
+  }
+  var target = '';
+  for (var i = 0; i < res.data.length; i++) {
+    var c = res.data[i];
+    if (c === 0 || c === 0xA0) break;
+    target += String.fromCharCode(c);
+  }
+  showModal('Symbolic link: ' + entry.name, [
+    'Target: ' + (target || '(empty)'),
+    'Following links to navigate is not yet implemented.',
+  ]);
 }
 
 // ── CFS file content viewer (Phase 3a, hex + download) ────────────────

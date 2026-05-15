@@ -75,11 +75,13 @@ var hddPartitions = null;
 
 // CFS-inside-HDD view state. cfsPartitionIdx >= 0 means we're showing a
 // CFS partition's directory (instead of the HDD partition-list); the
-// rest pin which directory sector is displayed (root or a subdir LBA in
-// Phase 3+) and the parsed entries for the render path.
+// rest pin which directory sector is displayed (root or a subdir LBA)
+// and the parsed entries for the render path. cfsDirStack is the
+// breadcrumb of parent dirs when the user has drilled into subdirs.
 var cfsPartitionIdx = -1;
 var cfsDirLba = 0;
 var cfsDirEntries = null;
+var cfsDirStack = []; // array of { dirLba, name }
 
 // True when the active tab is a CMD container and we're showing the
 // partition list (not inside any partition). Disk-edit operations don't
@@ -204,6 +206,7 @@ function createTab(name, buffer, fileName) {
     cfsPartitionIdx: -1,
     cfsDirLba: 0,
     cfsDirEntries: null,
+    cfsDirStack: [],
     g64Layout: currentG64Layout
   };
   tabs.push(tab);
@@ -238,6 +241,7 @@ function saveActiveTab() {
   tab.cfsPartitionIdx = cfsPartitionIdx;
   tab.cfsDirLba = cfsDirLba;
   tab.cfsDirEntries = cfsDirEntries;
+  tab.cfsDirStack = cfsDirStack.slice();
   tab.g64Layout = currentG64Layout;
 }
 
@@ -266,6 +270,7 @@ function loadTab(tab) {
   cfsPartitionIdx = (typeof tab.cfsPartitionIdx === 'number') ? tab.cfsPartitionIdx : -1;
   cfsDirLba = tab.cfsDirLba || 0;
   cfsDirEntries = tab.cfsDirEntries || null;
+  cfsDirStack = (tab.cfsDirStack && tab.cfsDirStack.slice) ? tab.cfsDirStack.slice() : [];
   currentG64Layout = tab.g64Layout || null;
   activeTabId = tab.id;
 }

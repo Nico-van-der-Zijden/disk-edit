@@ -285,6 +285,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.115', title: 'IDE64 .hdd — subdirectories + multi-sector dirs', items: [
+      'Drill into CFS subdirectories with a breadcrumb at the top of the directory view ("Partition / Subdir / …"). New &uarr; row navigates back up one level; &laquo; back to partition list still pops out entirely',
+      'Directories with more than 14 files now read correctly — the chain of dir sectors is walked via the bit-sliced "next sector" pointer encoded across all 16 entries\' data-tree-pointer fields',
+      'Symbolic links: double-click shows the link\'s target string. Following the link to navigate is still pending',
+    ]},
     { ver: '1.3.114', title: 'IDE64 .hdd — enter CFS partitions + read files', items: [
       'Double-click a CFS partition to see its root directory: filename, type (PRG/SEQ/USR/REL/DIR/LNK), block count, modification timestamp, and attribute flags (C/D/R/W/X). Double-click a file to open it in a hex viewer with a Download button',
       'B-tree file reader handles files up to 4 GiB. Sparse holes read as zeros, matching the IDEDOS reference behaviour',
