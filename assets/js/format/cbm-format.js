@@ -1082,6 +1082,45 @@ const DISK_FORMATS = {
     writeTrackBitmap: function() {},
     initBAM: function() {},
   },
+  // CFS 0.11 filesystem inside an IDE64 partition. Becomes currentFormat
+  // on entering a CFS partition so menu-state queries that read
+  // currentFormat.filesystem branch to CFS-aware code without touching
+  // the CBM-DOS path. Geometry differs from CBM-DOS in every dimension —
+  // 512-byte sectors, LBA addressing, 16-byte filenames, 16 dir entries
+  // per sector. The placeholder CBM-DOS hooks below are never invoked
+  // because dispatch happens earlier (cfsPartitionIdx >= 0).
+  cfs: {
+    name: 'CFS',
+    ext: '.hdd',
+    filesystem: 'cfs',
+    sectorSize: 512,
+    isTape: false,
+    dirTrack: 0,
+    dirSector: 0,
+    headerTrack: 0,
+    headerSector: 0,
+    bamTrack: 0,
+    bamSector: 0,
+    dosVersion: 0x00,
+    dosType: 'CF',
+    nameOffset: 0,
+    nameLength: 16,
+    idOffset: 0,
+    idLength: 0,
+    maxDirSectors: 0,
+    entriesPerSector: 16,
+    entrySize: 32,
+    doubleSidedFlag: 0x00,
+    fileTypes: [],
+    sizes: [],
+    sectorsPerTrack: function() { return 0; },
+    bamTracksRange: function() { return 0; },
+    readTrackFree: function() { return 0; },
+    writeTrackFree: function() {},
+    readTrackBitmap: function() { return 0; },
+    writeTrackBitmap: function() {},
+    initBAM: function() {},
+  },
   // IDE64 .hdd — a container, not a CBM-DOS filesystem. Descriptor exists
   // only so the tab/save-as machinery has something to point at; CFS-aware
   // code branches on filesystem === 'ide64-container' before any T/S code

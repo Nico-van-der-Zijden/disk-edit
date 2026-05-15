@@ -177,9 +177,12 @@ function renderDisk(info) {
     return;
   }
   // IDE64 .hdd container list — same idea, separate code path because
-  // CFS is a different filesystem inside.
+  // CFS is a different filesystem inside. cfsPartitionIdx >= 0 means
+  // we're inside a CFS partition's directory, otherwise the partition
+  // list itself.
   if (hddPartitions) {
-    renderIde64PartitionList();
+    if (cfsPartitionIdx >= 0) renderCfsDirectoryView();
+    else renderIde64PartitionList();
     return;
   }
   const prevSelected = selectedEntryIndex;

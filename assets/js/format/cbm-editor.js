@@ -73,6 +73,14 @@ var hddFileName = null;
 var hddBootInfo = null;
 var hddPartitions = null;
 
+// CFS-inside-HDD view state. cfsPartitionIdx >= 0 means we're showing a
+// CFS partition's directory (instead of the HDD partition-list); the
+// rest pin which directory sector is displayed (root or a subdir LBA in
+// Phase 3+) and the parsed entries for the render path.
+var cfsPartitionIdx = -1;
+var cfsDirLba = 0;
+var cfsDirEntries = null;
+
 // True when the active tab is a CMD container and we're showing the
 // partition list (not inside any partition). Disk-edit operations don't
 // apply at this level — we're on a container, not a filesystem — so
@@ -193,6 +201,9 @@ function createTab(name, buffer, fileName) {
     hddFileName: null,
     hddBootInfo: null,
     hddPartitions: null,
+    cfsPartitionIdx: -1,
+    cfsDirLba: 0,
+    cfsDirEntries: null,
     g64Layout: currentG64Layout
   };
   tabs.push(tab);
@@ -224,6 +235,9 @@ function saveActiveTab() {
   tab.hddFileName = hddFileName;
   tab.hddBootInfo = hddBootInfo;
   tab.hddPartitions = hddPartitions;
+  tab.cfsPartitionIdx = cfsPartitionIdx;
+  tab.cfsDirLba = cfsDirLba;
+  tab.cfsDirEntries = cfsDirEntries;
   tab.g64Layout = currentG64Layout;
 }
 
@@ -249,6 +263,9 @@ function loadTab(tab) {
   hddFileName = tab.hddFileName || null;
   hddBootInfo = tab.hddBootInfo || null;
   hddPartitions = tab.hddPartitions || null;
+  cfsPartitionIdx = (typeof tab.cfsPartitionIdx === 'number') ? tab.cfsPartitionIdx : -1;
+  cfsDirLba = tab.cfsDirLba || 0;
+  cfsDirEntries = tab.cfsDirEntries || null;
   currentG64Layout = tab.g64Layout || null;
   activeTabId = tab.id;
 }

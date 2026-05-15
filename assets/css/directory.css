@@ -359,6 +359,26 @@
     display: block;
   }
 
+  /* CFS-specific columns (IDE64 .hdd) — always visible, sized for
+     YYYY-MM-DD HH:MM:SS timestamps and CDRWX permission flags. */
+  .dir-cfs-mtime {
+    width: 20ch;
+    text-align: left;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 12px;
+    white-space: pre;
+  }
+
+  .dir-cfs-attrs {
+    width: 6ch;
+    text-align: left;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 12px;
+    white-space: pre;
+  }
+
   .dir-grip {
     width: 16px;
     flex-shrink: 0;

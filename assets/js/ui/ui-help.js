@@ -285,6 +285,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.114', title: 'IDE64 .hdd — enter CFS partitions + read files', items: [
+      'Double-click a CFS partition to see its root directory: filename, type (PRG/SEQ/USR/REL/DIR/LNK), block count, modification timestamp, and attribute flags (C/D/R/W/X). Double-click a file to open it in a hex viewer with a Download button',
+      'B-tree file reader handles files up to 4 GiB. Sparse holes read as zeros, matching the IDEDOS reference behaviour',
+      'Not yet: subdirectory navigation, LNK following, multi-sector directories (>14 files), PETSCII / BASIC viewers — coming in the next pass',
+    ]},
     { ver: '1.3.113', title: 'IDE64 .hdd partition list (first step)', items: [
       'Open a .hdd image (IDE64 hard-disk dump, CFS 0.11 filesystem) and the editor now shows its 16-slot partition table — name, type (CFS / GEOS / reserved), start LBA, size, and flags (Hidden / Writeable / LBA / default). Like a CMD HD container view but for IDE64',
       'Entering a CFS partition is not implemented yet (planned: dir listing, file viewers, file-level edit, eventually new-image creation). Double-clicking a partition shows a "not yet supported" note',

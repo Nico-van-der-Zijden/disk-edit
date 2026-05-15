@@ -11,11 +11,20 @@ function isIde64ContainerView() {
   return !!hddBuffer && !!hddPartitions;
 }
 
+// True when we're inside a CFS partition (Phase 2+ view). Distinguished
+// from the partition-list view by cfsPartitionIdx >= 0.
+function isCfsPartitionView() {
+  return !!hddBuffer && cfsPartitionIdx >= 0;
+}
+
 function clearIde64State() {
   hddBuffer = null;
   hddFileName = null;
   hddBootInfo = null;
   hddPartitions = null;
+  cfsPartitionIdx = -1;
+  cfsDirLba = 0;
+  cfsDirEntries = null;
 }
 
 function openIde64AsTab(buffer, fileName) {
@@ -54,7 +63,11 @@ function openIde64AsTab(buffer, fileName) {
 }
 
 function refreshIde64View() {
-  renderIde64PartitionList();
+  if (cfsPartitionIdx >= 0) {
+    renderCfsDirectoryView();
+  } else {
+    renderIde64PartitionList();
+  }
   renderTabs();
   updateMenuState();
   updateEntryMenuState();
@@ -160,10 +173,7 @@ function renderIde64PartitionList() {
       var p = hddPartitions[idx];
       if (!p || p.empty) return;
       if (p.type === 0x01) {
-        showModal('CFS partition', [
-          'Entering "' + (p.name || ('Partition ' + idx)) + '" is not yet supported.',
-          'Phase 2 will add a CFS directory reader. For now the container view shows what\'s on the disk.',
-        ]);
+        enterIde64Partition(idx);
       } else {
         showModal(p.typeName + ' partition', [
           '"' + (p.name || ('Partition ' + idx)) + '" is a ' + p.typeName + ' partition.',
@@ -176,4 +186,255 @@ function renderIde64PartitionList() {
   selectedEntryIndex = -1;
   selectedEntries = [];
   updateEntryMenuState();
+}
+
+// ── Enter a CFS partition (Phase 2 view) ──────────────────────────────
+// Switch from the HDD partition-list to a CFS directory listing.
+// Phase 2 is read-only: parse the partition's root dir, display the
+// entries; clicking a file selects, clicking a subdir opens it (Phase 3+).
+function enterIde64Partition(idx) {
+  if (!hddPartitions) return;
+  var p = hddPartitions[idx];
+  if (!p || p.type !== 0x01) return;
+  if (!p.cfsRootDir || !p.cfsRootDir.lba) {
+    showModal('CFS partition', ['Partition "' + (p.name || ('#' + idx)) + '" has no valid root directory pointer.']);
+    return;
+  }
+  var entries = readCfsDirectorySector(hddBuffer, p.cfsRootDir.addr);
+  if (!entries) {
+    showModal('CFS partition', ['Could not read the root directory sector for partition "' + (p.name || ('#' + idx)) + '".']);
+    return;
+  }
+  cfsPartitionIdx = idx;
+  cfsDirLba = p.cfsRootDir.addr;
+  cfsDirEntries = entries;
+  // Swap the descriptor so renderer / menu-state code that branches on
+  // currentFormat.filesystem picks the CFS path. currentBuffer stays on
+  // the whole .hdd buffer — Phase 2 doesn't slice the partition out.
+  currentFormat = DISK_FORMATS.cfs;
+  currentTracks = 0;
+  selectedEntryIndex = -1;
+  refreshIde64View();
+}
+
+// Leave the CFS partition view, return to the HDD partition list.
+function leaveCfsPartition() {
+  cfsPartitionIdx = -1;
+  cfsDirLba = 0;
+  cfsDirEntries = null;
+  currentFormat = DISK_FORMATS.hdd;
+  selectedEntryIndex = -1;
+  refreshIde64View();
+}
+
+// ── Render the CFS directory listing ──────────────────────────────────
+function renderCfsDirectoryView() {
+  if (!hddPartitions || cfsPartitionIdx < 0) return;
+  var part = hddPartitions[cfsPartitionIdx];
+  if (!part) return;
+  // Re-parse every render — matches the CMD container pattern; edits in
+  // future phases mutate hddBuffer directly and this picks them up without
+  // a separate refresh hook.
+  cfsDirEntries = readCfsDirectorySector(hddBuffer, cfsDirLba) || [];
+
+  var content = document.getElementById('content');
+  var titleName = part.name || ('Partition ' + part.index);
+
+  var html = '<div class="disk-panel">' +
+    '<div class="disk-header">' +
+      '<div class="disk-header-spacer"><i class="fa-solid fa-folder-open" title="CFS directory"></i></div>' +
+      '<div class="disk-name">' + escHtml(titleName) + '</div>' +
+      '<div class="disk-id">CFS</div>' +
+    '</div>' +
+    '<div class="dir-entry dir-header-row">' +
+      '<span class="dir-grip"></span>' +
+      '<span class="dir-blocks">Size</span>' +
+      '<span class="dir-name">Name</span>' +
+      '<span class="dir-type">Type</span>' +
+      '<span class="dir-cfs-mtime">Modified</span>' +
+      '<span class="dir-cfs-attrs">Attrs</span>' +
+      '<span class="dir-icons"></span>' +
+    '</div>' +
+    '<div class="dir-listing">' +
+    '<div class="dir-entry dir-parent-row" data-cfs-leave="1">' +
+      '<span class="dir-grip"></span>' +
+      '<span class="dir-blocks"></span>' +
+      '<span class="dir-name">&laquo; back to partition list</span>' +
+      '<span class="dir-type"></span>' +
+      '<span class="dir-cfs-mtime"></span>' +
+      '<span class="dir-cfs-attrs"></span>' +
+      '<span class="dir-icons"></span>' +
+    '</div>';
+
+  var fileCount = 0;
+  for (var i = 0; i < cfsDirEntries.length; i++) {
+    var e = cfsDirEntries[i];
+    if (e.empty) continue;
+    if (e.isSelfRef) continue; // entry 0 = directory's own name, hide it
+
+    var typeStr = e.typeSuffix || _cfsFtypeLabel(e.ftype);
+    var sizeStr;
+    if (e.ftype === CFS_FTYPE.DIR || e.ftype === CFS_FTYPE.LNK) {
+      sizeStr = '';
+    } else {
+      // Show CBM-style blocks count (rounded up, 254 data bytes per block
+      // — same as the existing disk views) plus the raw byte count via tooltip.
+      sizeStr = Math.ceil(e.size / 254).toString();
+    }
+    var mtimeStr = formatCfsTimestamp(e.mtime);
+    var attrs = '';
+    if (e.closed) attrs += 'C';
+    if (e.attrByte & 0x40) attrs += 'D';
+    if (e.attrByte & 0x20) attrs += 'R';
+    if (e.attrByte & 0x10) attrs += 'W';
+    if (e.attrByte & 0x08) attrs += 'X';
+
+    var deletedCls = (e.ftype === CFS_FTYPE.DEL) ? ' deleted' : '';
+    var enterableSubdir = (e.ftype === CFS_FTYPE.DIR);
+    var rowTitle = e.name + ' — ' + (e.size + ' bytes');
+
+    html +=
+      '<div class="dir-entry' + deletedCls + '" data-cfs-entry="' + e.index + '" title="' + escHtml(rowTitle) + '">' +
+        '<span class="dir-grip"></span>' +
+        '<span class="dir-blocks">' + sizeStr + '</span>' +
+        '<span class="dir-name">"' + escHtml(e.name) + '"</span>' +
+        '<span class="dir-type">' + escHtml(typeStr) + '</span>' +
+        '<span class="dir-cfs-mtime">' + escHtml(mtimeStr) + '</span>' +
+        '<span class="dir-cfs-attrs">' + escHtml(attrs) + '</span>' +
+        '<span class="dir-icons"></span>' +
+      '</div>';
+    fileCount++;
+  }
+
+  var partSizeLabel = part.sizeBytes !== null
+    ? (part.sizeBytes / (1024 * 1024)).toFixed(part.sizeBytes < 10 * 1024 * 1024 ? 2 : 1) + ' MiB'
+    : '';
+  html += '</div>' +
+    '<div class="dir-footer"><div class="dir-footer-row">' +
+      '<span class="dir-footer-blocks">' + fileCount + '</span>' +
+      '<span class="dir-footer-label">file(s).</span>' +
+      '<span class="dir-footer-tracks">' + escHtml(partSizeLabel) + ' CFS partition</span>' +
+    '</div></div>' +
+  '</div>';
+  content.innerHTML = html;
+
+  // Back-to-partition-list row
+  content.querySelectorAll('.dir-entry[data-cfs-leave]').forEach(function(row) {
+    row.addEventListener('click', function() { leaveCfsPartition(); });
+    row.addEventListener('dblclick', function() { leaveCfsPartition(); });
+  });
+
+  // File rows: click selects; dblclick on DIR is reserved for Phase 3
+  content.querySelectorAll('.dir-entry[data-cfs-entry]').forEach(function(row) {
+    var idx = parseInt(row.dataset.cfsEntry, 10);
+    var entry = cfsDirEntries[idx];
+    row.addEventListener('click', function() {
+      content.querySelectorAll('.dir-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
+      row.classList.add('selected');
+      selectedEntryIndex = idx;
+      updateEntryMenuState();
+    });
+    row.addEventListener('dblclick', function() {
+      if (entry.ftype === CFS_FTYPE.DIR) {
+        showModal('CFS subdirectory', [
+          'Entering "' + entry.name + '" is not yet supported.',
+          'Phase 3b adds subdirectory navigation.',
+        ]);
+      } else if (entry.ftype === CFS_FTYPE.LNK) {
+        showModal('CFS link', [
+          '"' + entry.name + '" is a symbolic link. Following links comes in Phase 3b.',
+        ]);
+      } else if (entry.ftype === CFS_FTYPE.DEL) {
+        showModal('Deleted file', ['Entry is marked deleted; nothing to view.']);
+      } else {
+        showCfsFileHexViewer(entry);
+      }
+    });
+  });
+
+  selectedEntryIndex = -1;
+  selectedEntries = [];
+  updateEntryMenuState();
+}
+
+function _cfsFtypeLabel(ft) {
+  switch (ft) {
+    case CFS_FTYPE.DEL: return 'DEL';
+    case CFS_FTYPE.NORMAL: return 'PRG';
+    case CFS_FTYPE.REL: return 'REL';
+    case CFS_FTYPE.DIR: return 'DIR';
+    case CFS_FTYPE.LNK: return 'LNK';
+    default: return 'T' + ft;
+  }
+}
+
+// ── CFS file content viewer (Phase 3a, hex + download) ────────────────
+// Reads the file via the B-tree walker, opens a hex modal with a
+// Download button. PETSCII / BASIC viewers are deferred to Phase 3b —
+// the existing implementations are deeply tied to currentBuffer + a
+// CBM directory entry offset, so reusing them requires more plumbing.
+function showCfsFileHexViewer(entry) {
+  if (!entry || !entry.dataTreePtr || !entry.dataTreePtr.lba) {
+    showModal('CFS file', ['"' + entry.name + '" has no data tree pointer.']);
+    return;
+  }
+  var rootLba = entry.dataTreePtr.addr;
+  var res = readCfsFileData(hddBuffer, rootLba, entry.size);
+  if (res.error) {
+    showModal('CFS file', ['Error reading "' + entry.name + '": ' + res.error]);
+    return;
+  }
+  var payload = res.data;
+  var totalBytes = payload.length;
+  var suggestedName = entry.name + (entry.typeSuffix ? '.' + entry.typeSuffix.toLowerCase() : '');
+
+  var html = '<div class="text-md text-muted mb-md">' +
+    escHtml(entry.name) + (entry.typeSuffix ? ' (' + escHtml(entry.typeSuffix) + ')' : '') +
+    ' — ' + totalBytes + ' bytes' +
+    '</div>' +
+    '<div class="hex-editor">';
+  // Cap the rendered hex view at 16 KiB to keep the DOM responsive;
+  // Download stays available for the full file.
+  var renderLimit = Math.min(totalBytes, 16384);
+  var rows = Math.ceil(renderLimit / 16) || 1;
+  for (var row = 0; row < rows; row++) {
+    var rowOff = row * 16;
+    html += '<div class="hex-row"><span class="hex-offset">' +
+      rowOff.toString(16).toUpperCase().padStart(6, '0') + '</span><span class="hex-bytes">';
+    var ascii = '';
+    for (var col = 0; col < 16; col++) {
+      var idx = rowOff + col;
+      if (idx < renderLimit) {
+        var b = payload[idx];
+        html += '<span class="hex-byte">' + b.toString(16).toUpperCase().padStart(2, '0') + '</span>';
+        ascii += (b >= 0x20 && b < 0x7F) ? String.fromCharCode(b) : '.';
+      } else {
+        html += '<span class="hex-byte" style="opacity:0.2">--</span>';
+        ascii += ' ';
+      }
+    }
+    html += '</span><span class="hex-ascii">' + escHtml(ascii) + '</span></div>';
+  }
+  if (totalBytes > renderLimit) {
+    html += '<div class="text-sm text-muted" style="padding:8px 0">' +
+      '… ' + (totalBytes - renderLimit) + ' more bytes (use Download to get the whole file).</div>';
+  }
+  html += '</div>';
+
+  var body = showViewerModal('Hex — ' + entry.name, html, 'large');
+
+  // Replace the OK button with Download + Close
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.innerHTML = '<button id="cfs-dl">Download</button> <button id="modal-close">Close</button>';
+  document.getElementById('cfs-dl').addEventListener('click', function() {
+    var blob = new Blob([payload], { type: 'application/octet-stream' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = suggestedName;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
 }
