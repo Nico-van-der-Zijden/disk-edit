@@ -176,6 +176,12 @@ function renderDisk(info) {
     renderCmdContainerPartitionList();
     return;
   }
+  // IDE64 .hdd container list — same idea, separate code path because
+  // CFS is a different filesystem inside.
+  if (hddPartitions) {
+    renderIde64PartitionList();
+    return;
+  }
   const prevSelected = selectedEntryIndex;
   selectedEntryIndex = -1;
   const content = document.getElementById('content');

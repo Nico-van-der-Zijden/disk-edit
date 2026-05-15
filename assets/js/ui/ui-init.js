@@ -42,11 +42,13 @@ document.addEventListener('drop', async function(e) {
   const fileExts = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
   const archiveExts = ['.lnx'];
   const cmdcExts = ['.rml', '.rl', '.d1m', '.d2m', '.d4m', '.dhd'];
-  var diskEntries = [], importEntries = [], archiveEntries = [], cmdcEntries = [];
+  const ide64Exts = ['.hdd'];
+  var diskEntries = [], importEntries = [], archiveEntries = [], cmdcEntries = [], ide64Entries = [];
   for (var i = 0; i < entries.length; i++) {
     var lname = entries[i].name.toLowerCase();
     var ext = lname.substring(lname.lastIndexOf('.'));
     if (cmdcExts.indexOf(ext) >= 0) cmdcEntries.push(entries[i]);
+    else if (ide64Exts.indexOf(ext) >= 0) ide64Entries.push(entries[i]);
     else if (diskExts.indexOf(ext) >= 0) diskEntries.push(entries[i]);
     else if (archiveExts.indexOf(ext) >= 0) archiveEntries.push(entries[i]);
     else if (fileExts.indexOf(ext) >= 0) importEntries.push(entries[i]);
@@ -91,6 +93,15 @@ document.addEventListener('drop', async function(e) {
       await openCmdContainerAsTab(cmdcEntries[ri].buffer, cmdcEntries[ri].name);
     } catch (err) {
       showModal('Error', ['Failed to read container ' + cmdcEntries[ri].name + ': ' + (err && err.message ? err.message : err)]);
+    }
+  }
+
+  // IDE64 .hdd containers — separate filesystem (CFS), separate parser.
+  for (var ii64 = 0; ii64 < ide64Entries.length; ii64++) {
+    try {
+      openIde64AsTab(ide64Entries[ii64].buffer, ide64Entries[ii64].name);
+    } catch (err) {
+      showModal('Error', ['Failed to read IDE64 image ' + ide64Entries[ii64].name + ': ' + (err && err.message ? err.message : err)]);
     }
   }
 

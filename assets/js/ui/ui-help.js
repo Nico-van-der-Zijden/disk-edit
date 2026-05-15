@@ -166,6 +166,10 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '<br>' +
       '<b>Browser emulator:</b><br>' +
       '&bull; <a href="https://emulatorjs.org/" target="_blank" class="link">EmulatorJS</a> + the libretro <a href="https://github.com/libretro/vice-libretro" target="_blank" class="link">vice_x64sc</a> core — actual VICE running in the browser; hosted at <a href="https://c64.sannic.nl/" target="_blank" class="link">c64.sannic.nl</a> for the Run / Open in Emulator handoff<br>' +
+      '<br>' +
+      '<b>IDE64 references:</b><br>' +
+      '&bull; <a href="https://singularcrew.hu/idedos/" target="_blank" class="link">IDEDOS</a> and <a href="https://singularcrew.hu/idedos/cfs.html" target="_blank" class="link">CFS 0.11 spec</a> by Soci/Singular — IDE64 cartridge firmware and filesystem documentation<br>' +
+      '&bull; <a href="http://c64.rulez.org/pub/c64/IDE64/source/fusecfs/" target="_blank" class="link">fusecfs</a> by Soci/Singular (GPL) — reference FUSE driver; canonical byte-level partition layout and pointer codec for the .hdd reader<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
@@ -243,7 +247,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Escape', 'Cancel byte edit'],
     ]},
     { title: 'Drag & Drop', shortcuts: [
-      ['Drop a disk image', 'Open in new tab(s) — any supported format (D64, D71, D81, DNP, DHD, RML, FD, G64, NIB, …)'],
+      ['Drop a disk image', 'Open in new tab(s) — any supported format (D64, D71, D81, DNP, DHD, HDD, RML, FD, G64, NIB, …)'],
       ['Drop .prg/.seq/.usr/.rel/.cvt', 'Import file(s) into current disk'],
       ['Drag file entry to OS', 'Export file (Chrome/Edge)'],
     ]},
@@ -281,6 +285,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.113', title: 'IDE64 .hdd partition list (first step)', items: [
+      'Open a .hdd image (IDE64 hard-disk dump, CFS 0.11 filesystem) and the editor now shows its 16-slot partition table — name, type (CFS / GEOS / reserved), start LBA, size, and flags (Hidden / Writeable / LBA / default). Like a CMD HD container view but for IDE64',
+      'Entering a CFS partition is not implemented yet (planned: dir listing, file viewers, file-level edit, eventually new-image creation). Double-clicking a partition shows a "not yet supported" note',
+      'Spec page (singularcrew.hu/idedos/cfs.html) is approximate — the partition layout and label length were reverse-engineered from the fusecfs reference driver and verified against the official 64m_image.zip',
+    ]},
     { ver: '1.3.112', title: 'Run / Open in Emulator', items: [
       'New Disk → Open in Emulator and File → Run in Emulator hand the current disk or selected PRG to <a href="https://c64.sannic.nl/" target="_blank" class="link">c64.sannic.nl</a> (VICE x64sc via EmulatorJS) over postMessage — no upload, no URL length limit',
       'Scratched-file recoverability indicator (green/yellow) now also checks that the file\'s sector chain ends with a clean T=0 link, not at a bogus track pointer. Files whose tail was overwritten with garbage no longer claim to be fully recoverable',

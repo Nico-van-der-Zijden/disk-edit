@@ -64,6 +64,15 @@ var cmdcPartitions = null;      // parsed partition list (from readCmdContainerP
 var cmdcPartitionIdx = -1;      // -1 = partition-list view, else index into cmdcPartitions
 var cmdcContainerKey = null;    // 'ramlink' / 'd1m' / 'd2m' / 'd4m' / 'dhd' — picks the CMD_CONTAINERS descriptor
 
+// IDE64 .hdd container state (parallel to the CMD container globals
+// above). CFS is a separate filesystem so the rest of the editor
+// branches on hddPartitions / currentFormat.filesystem rather than
+// reusing the CMD plumbing.
+var hddBuffer = null;
+var hddFileName = null;
+var hddBootInfo = null;
+var hddPartitions = null;
+
 // True when the active tab is a CMD container and we're showing the
 // partition list (not inside any partition). Disk-edit operations don't
 // apply at this level — we're on a container, not a filesystem — so
@@ -180,6 +189,10 @@ function createTab(name, buffer, fileName) {
     cmdcPartitions: null,
     cmdcPartitionIdx: -1,
     cmdcContainerKey: null,
+    hddBuffer: null,
+    hddFileName: null,
+    hddBootInfo: null,
+    hddPartitions: null,
     g64Layout: currentG64Layout
   };
   tabs.push(tab);
@@ -207,6 +220,10 @@ function saveActiveTab() {
   tab.cmdcPartitions = cmdcPartitions;
   tab.cmdcPartitionIdx = cmdcPartitionIdx;
   tab.cmdcContainerKey = cmdcContainerKey;
+  tab.hddBuffer = hddBuffer;
+  tab.hddFileName = hddFileName;
+  tab.hddBootInfo = hddBootInfo;
+  tab.hddPartitions = hddPartitions;
   tab.g64Layout = currentG64Layout;
 }
 
@@ -228,6 +245,10 @@ function loadTab(tab) {
   cmdcPartitions = tab.cmdcPartitions || null;
   cmdcPartitionIdx = (typeof tab.cmdcPartitionIdx === 'number') ? tab.cmdcPartitionIdx : -1;
   cmdcContainerKey = tab.cmdcContainerKey || null;
+  hddBuffer = tab.hddBuffer || null;
+  hddFileName = tab.hddFileName || null;
+  hddBootInfo = tab.hddBootInfo || null;
+  hddPartitions = tab.hddPartitions || null;
   currentG64Layout = tab.g64Layout || null;
   activeTabId = tab.id;
 }
@@ -257,6 +278,7 @@ function closeTab(tabId) {
     selectedEntryIndex = -1;
     currentPartition = null;
     clearCmdContainerState();
+    if (typeof clearIde64State === 'function') clearIde64State();
     showEmptyState();
     renderTabs();
     updateMenuState();

@@ -695,6 +695,14 @@ function detectFormat(bufferSize, buffer) {
     if (bufferSize >= 64 && data[0] === 0x43 && data[1] === 0x36 && data[2] === 0x34) {
       return { format: DISK_FORMATS.t64, tracks: 0 };
     }
+    // IDE64 .hdd — CFS 0.11 boot-sector magic at $0008. Images are
+    // arbitrary user-chosen sizes (typically 8 MiB-128 GiB), so the
+    // size table can't catch them; the magic at this fixed offset is
+    // the only reliable signal. The boot sector isn't a user-editable
+    // surface in this app, so it passes the size-first detection rule.
+    if (typeof isIde64Hdd === 'function' && isIde64Hdd(data)) {
+      return { format: DISK_FORMATS.hdd, tracks: 0 };
+    }
   }
   // Size-based detection. Run the size table first so any disk whose size
   // uniquely identifies it (D64/D71/D81/D80/D2M/D1M/D4M/...) wins regardless

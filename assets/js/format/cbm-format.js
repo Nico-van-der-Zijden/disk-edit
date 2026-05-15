@@ -1082,6 +1082,41 @@ const DISK_FORMATS = {
     writeTrackBitmap: function() {},
     initBAM: function() {},
   },
+  // IDE64 .hdd — a container, not a CBM-DOS filesystem. Descriptor exists
+  // only so the tab/save-as machinery has something to point at; CFS-aware
+  // code branches on filesystem === 'ide64-container' before any T/S code
+  // can run. Detection lives in cbm-format-ide64.js (boot-sector magic).
+  hdd: {
+    name: 'IDE64 HDD',
+    ext: '.hdd',
+    filesystem: 'ide64-container',
+    isTape: false,
+    dirTrack: 0,
+    dirSector: 0,
+    headerTrack: 0,
+    headerSector: 0,
+    bamTrack: 0,
+    bamSector: 0,
+    dosVersion: 0x00,
+    dosType: 'I6',
+    nameOffset: 0,
+    nameLength: 8,
+    idOffset: 0,
+    idLength: 0,
+    maxDirSectors: 0,
+    entriesPerSector: 0,
+    entrySize: 32,
+    doubleSidedFlag: 0x00,
+    fileTypes: [],
+    sizes: [], // variable size; detected by boot-sector magic
+    sectorsPerTrack: function() { return 0; },
+    bamTracksRange: function() { return 0; },
+    readTrackFree: function() { return 0; },
+    writeTrackFree: function() {},
+    readTrackBitmap: function() { return 0; },
+    writeTrackBitmap: function() {},
+    initBAM: function() {},
+  },
 };
 
 // ── Protected sector helpers (shared defaults) ─────────────────────
