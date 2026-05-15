@@ -653,6 +653,7 @@ function updateEntryMenuState() {
   var gfxEnabled = false;
   var geosEnabled = false;
   var geoWriteEnabled = false;
+  var prgSelected = false;
   if (hasSelection && tape) {
     var tapeEntry = getTapeEntry(selectedEntryIndex);
     if (tapeEntry) {
@@ -660,6 +661,7 @@ function updateEntryMenuState() {
       copyEnabled = true;
       // Check if PRG with BASIC load address
       if (tapeEntry.type.trim() === 'PRG') {
+        prgSelected = true;
         var tResult = readFileData(currentBuffer, selectedEntryIndex);
         if (tResult.data.length >= 2) {
           var tAddr = tResult.data[0] | (tResult.data[1] << 8);
@@ -675,6 +677,7 @@ function updateEntryMenuState() {
     var eIdx = eType & 0x07;
     exportEnabled = eClosed && eIdx >= 1 && eIdx <= 4;
     copyEnabled = exportEnabled;
+    prgSelected = eClosed && eIdx === 2;
     var geosFileType = edata[selectedEntryIndex + 0x18];
     var geosStruct = edata[selectedEntryIndex + 0x17];
     var isGeosGfx = (geosFileType === 0x14 || geosFileType === 0x15 || geosFileType === 0x08 || geosFileType === 0x18) ||
@@ -711,6 +714,7 @@ function updateEntryMenuState() {
   document.getElementById('opt-export-txt-gw').classList.toggle('disabled', !geoWriteEnabled || containerList);
   document.getElementById('opt-save-sep').classList.toggle('disabled', !hasSelection || noEdit);
   document.getElementById('opt-export-menu').classList.toggle('disabled', (!exportEnabled && !geoWriteEnabled) || containerList);
+  document.getElementById('opt-run-in-emulator').classList.toggle('disabled', !prgSelected || multiSelect || containerList);
   document.getElementById('opt-copy').classList.toggle('disabled', !copyEnabled || containerList);
   document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !currentBuffer || !canInsertFile() || noEdit);
   document.getElementById('opt-view-basic').classList.toggle('disabled', !basicEnabled);

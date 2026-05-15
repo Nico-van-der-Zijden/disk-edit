@@ -239,6 +239,10 @@ function updateMenuState() {
   var dhdInstallApplicable = onDhdContainer && dhdDosCached && dhdDosNeeded;
   document.getElementById('opt-disk-tools').classList.toggle('disabled', (!hasDisk || noEdit) && !dhdInstallApplicable);
   document.getElementById('opt-disk-export').classList.toggle('disabled', !hasDisk);
+  // Open in Emulator: any mountable disk image (including tape). Disabled
+  // on the CMD container partition-list view — the container itself isn't
+  // a disk EmulatorJS can mount; enter a partition first.
+  document.getElementById('opt-open-in-emulator').classList.toggle('disabled', !hasDisk || containerList);
   document.getElementById('opt-find').classList.toggle('disabled', !hasDisk || containerList);
   document.getElementById('opt-find-tabs').classList.toggle('disabled', tabs.length === 0);
   document.getElementById('opt-goto-sector').classList.toggle('disabled', !hasDisk || noEdit);

@@ -163,6 +163,9 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '&bull; <a href="https://github.com/markusC64/nibtools" target="_blank" class="link">nibtools</a> by Pete Rittwage and contributors — NIB file format reference for the .nib reader<br>' +
       '&bull; LZ77 compressor/decompressor by Marcus Geelnard (2003-2006, BSD-3) — distributed inside <a href="https://github.com/markusC64/nibtools/blob/upstream/lz.c" target="_blank" class="link">nibtools/lz.c</a>; algorithm ported to JS for the .nbz reader<br>' +
       '&bull; <a href="https://simonomi.dev/blog/color-code-your-bytes/" target="_blank" class="link">Color-code your bytes</a> by simonomi — schemes (hexyl, xcd-rgb, nybble) for the optional Hex Coloring picker<br>' +
+      '<br>' +
+      '<b>Browser emulator:</b><br>' +
+      '&bull; <a href="https://emulatorjs.org/" target="_blank" class="link">EmulatorJS</a> + the libretro <a href="https://github.com/libretro/vice-libretro" target="_blank" class="link">vice_x64sc</a> core — actual VICE running in the browser; hosted at <a href="https://c64.sannic.nl/" target="_blank" class="link">c64.sannic.nl</a> for the Run / Open in Emulator handoff<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
@@ -278,6 +281,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.112', title: 'Run / Open in Emulator', items: [
+      'New Disk → Open in Emulator and File → Run in Emulator hand the current disk or selected PRG to <a href="https://c64.sannic.nl/" target="_blank" class="link">c64.sannic.nl</a> (VICE x64sc via EmulatorJS) over postMessage — no upload, no URL length limit',
+      'Scratched-file recoverability indicator (green/yellow) now also checks that the file\'s sector chain ends with a clean T=0 link, not at a bogus track pointer. Files whose tail was overwritten with garbage no longer claim to be fully recoverable',
+    ]},
     { ver: '1.3.111', title: 'CMD HD (DHD) container support', items: [
       'New DHD format opens to a partition list like RAMLink, with up to 254 user partitions of types Native / 1541 / 1571 / 1581. Disk → New → CMD HD creates a fresh image that grows when you add partitions and shrinks when you delete them; opening a real DHD with HD-DOS once caches the firmware locally so subsequent new images become bootable',
       'New Import / Export Partition entries on the File menu round-trip individual partitions as standalone .dnp / .d64 / .d71 / .d81 files',

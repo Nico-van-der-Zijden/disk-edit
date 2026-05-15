@@ -573,18 +573,33 @@ function showTypeDropdown(typeSpan, entryOff) {
 const MAX_BLOCKS = 65535;
 
 // Check if a scratched file's sectors are still free (recoverable)
-// Returns 'yes' (all free), 'partial' (some free), 'no' (none/invalid chain)
+// Returns 'yes' (all free + chain ends cleanly), 'partial' (some free, or
+// chain broken before T=0 end-marker), 'no' (head invalid / nothing free).
 function checkScratchedRecoverable(buffer, entryOff) {
   var data = new Uint8Array(buffer);
-  if (data[entryOff + 3] === 0) return 'no';
-  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  var fmt = currentFormat;
+  var t = data[entryOff + 3], s = data[entryOff + 4];
+  if (t === 0) return 'no';
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
   var totalSectors = 0, freeSectors = 0;
-  forEachFileSector(data, entryOff, function(t, s) {
+  var visited = {};
+  var chainClean = false;
+  while (t !== 0) {
+    if (t < 1 || t > currentTracks) break;
+    if (s >= fmt.sectorsPerTrack(t)) break;
+    var key = t + ':' + s;
+    if (visited[key]) break;
+    visited[key] = true;
     totalSectors++;
     if (checkSectorFree(data, bamOff, t, s)) freeSectors++;
-  });
+    var off = sectorOffset(t, s);
+    if (off < 0) break;
+    var nt = data[off], ns = data[off + 1];
+    if (nt === 0) { chainClean = true; break; }
+    t = nt; s = ns;
+  }
   if (totalSectors === 0) return 'no';
-  if (freeSectors === totalSectors) return 'yes';
+  if (chainClean && freeSectors === totalSectors) return 'yes';
   if (freeSectors > 0) return 'partial';
   return 'no';
 }
