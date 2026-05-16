@@ -119,6 +119,51 @@ describe('CFS multi-sector directories', function() {
   });
 });
 
+describe('cfsResolvePath', function() {
+  it('finds a flat file name in the start dir', function() {
+    var buf = new ArrayBuffer(1024 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 10, 0, { name: 'ROOT', ftype: 3, typeSuffix: 'DIR' });
+    writeCfsEntry(d, 10, 1, { name: 'HELLO', ftype: 1, typeSuffix: 'PRG', size: 100 });
+    var found = cfsResolvePath(buf, 10, 'HELLO');
+    assert.ok(found);
+    assert.strictEqual(found.name, 'HELLO');
+    assert.strictEqual(found.size, 100);
+  });
+
+  it('walks a multi-component path through subdirs', function() {
+    var buf = new ArrayBuffer(2 * 1024 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 10, 0, { name: 'ROOT', ftype: 3, typeSuffix: 'DIR' });
+    writeCfsEntry(d, 10, 1, { name: 'GAMES', ftype: 3, typeSuffix: 'DIR', tree: 20 });
+    writeCfsEntry(d, 20, 0, { name: 'GAMES', ftype: 3, typeSuffix: 'DIR' });
+    writeCfsEntry(d, 20, 1, { name: 'BOULDER', ftype: 1, typeSuffix: 'PRG', size: 30000 });
+    var found = cfsResolvePath(buf, 10, 'GAMES/BOULDER');
+    assert.ok(found);
+    assert.strictEqual(found.name, 'BOULDER');
+    assert.strictEqual(found.size, 30000);
+  });
+
+  it('returns null when any component is missing', function() {
+    var buf = new ArrayBuffer(1024 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 10, 0, { name: 'ROOT', ftype: 3, typeSuffix: 'DIR' });
+    writeCfsEntry(d, 10, 1, { name: 'HELLO', ftype: 1, typeSuffix: 'PRG' });
+    assert.strictEqual(cfsResolvePath(buf, 10, 'NOPE'), null);
+    assert.strictEqual(cfsResolvePath(buf, 10, 'HELLO/MORE'), null); // can't descend into PRG
+  });
+
+  it('handles leading and trailing slashes', function() {
+    var buf = new ArrayBuffer(1024 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 10, 0, { name: 'ROOT', ftype: 3, typeSuffix: 'DIR' });
+    writeCfsEntry(d, 10, 1, { name: 'HELLO', ftype: 1, typeSuffix: 'PRG' });
+    assert.ok(cfsResolvePath(buf, 10, '/HELLO'));
+    assert.ok(cfsResolvePath(buf, 10, 'HELLO/'));
+    assert.ok(cfsResolvePath(buf, 10, '/HELLO/'));
+  });
+});
+
 describe('CFS subdirectory entries', function() {
   it('readCfsDirectory finds a subdir entry and its tree pointer leads to its first dir sector', function() {
     var buf = new ArrayBuffer(2 * 1024 * 1024);

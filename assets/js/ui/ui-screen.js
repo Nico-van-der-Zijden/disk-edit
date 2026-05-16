@@ -20,12 +20,22 @@ var PETSCII_COLOR_MAP = {
   0x9F: 3   // cyan
 };
 
-function showFilePetsciiViewer(entryOff) {
-  if (!currentBuffer) return;
-  var data = new Uint8Array(currentBuffer);
-  var result = readFileData(currentBuffer, entryOff);
-  var fileData = result.data;
-  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+function showFilePetsciiViewer(entryOff, preloaded) {
+  // preloaded = { data: Uint8Array, name: string, error?: string } lets
+  // callers from outside the CBM-DOS pipeline (CFS) drive this viewer
+  // with their own bytes instead of going through readFileData.
+  var fileData, name, result;
+  if (preloaded) {
+    fileData = preloaded.data;
+    name = preloaded.name || '';
+    result = { error: preloaded.error || null };
+  } else {
+    if (!currentBuffer) return;
+    var data = new Uint8Array(currentBuffer);
+    result = readFileData(currentBuffer, entryOff);
+    fileData = result.data;
+    name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+  }
 
   // Virtual 40x25 screen
   var W = 40, H = 25;

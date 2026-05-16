@@ -230,16 +230,23 @@ function detokenizeBasic(fileData, dialect) {
   return { loadAddr: loadAddr, version: version, lines: lines };
 }
 
-function showFileBasicViewer(entryOff) {
-  if (!currentBuffer) return;
-  showFileBasicRendered(entryOff, null);
+function showFileBasicViewer(entryOff, preloaded) {
+  if (!preloaded && !currentBuffer) return;
+  showFileBasicRendered(entryOff, null, preloaded);
 }
 
-function showFileBasicRendered(entryOff, dialect) {
-  var result = readFileData(currentBuffer, entryOff);
-  var fileData = result.data;
-  var data = new Uint8Array(currentBuffer);
-  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+function showFileBasicRendered(entryOff, dialect, preloaded) {
+  var result, fileData, name;
+  if (preloaded) {
+    fileData = preloaded.data;
+    name = preloaded.name || '';
+    result = { error: preloaded.error || null };
+  } else {
+    result = readFileData(currentBuffer, entryOff);
+    fileData = result.data;
+    var data = new Uint8Array(currentBuffer);
+    name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+  }
 
   var basic = detokenizeBasic(fileData, dialect);
   if (!basic || basic.lines.length === 0) {
@@ -282,7 +289,7 @@ function showFileBasicRendered(entryOff, dialect) {
         btn.textContent = label;
         btn.className = 'btn-small' + (currentDialect === val ? ' active' : '');
         btn.addEventListener('click', function() {
-          showFileBasicRendered(entryOff, val);
+          showFileBasicRendered(entryOff, val, preloaded);
         });
         selDiv.appendChild(btn);
       })(dialects[di][0], dialects[di][1]);

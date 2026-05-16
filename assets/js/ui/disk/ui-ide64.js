@@ -17,23 +17,11 @@ function isCfsPartitionView() {
   return !!hddBuffer && cfsPartitionIdx >= 0;
 }
 
-function clearIde64State() {
-  hddBuffer = null;
-  hddFileName = null;
-  hddBootInfo = null;
-  hddPartitions = null;
-  cfsPartitionIdx = -1;
-  cfsDirLba = 0;
-  cfsDirEntries = null;
-  cfsDirStack = [];
-}
-
 function openIde64AsTab(buffer, fileName) {
   if (!buffer) return;
   var info = readIde64Partitions(buffer);
   saveActiveTab();
-  clearCmdContainerState();
-  clearIde64State();
+  clearCmdContainerState(); // also clears HDD globals — see cbm-editor.js
 
   if (!info) {
     showModal('IDE64 HDD', [
@@ -433,31 +421,68 @@ function _cfsFtypeLabel(ft) {
   }
 }
 
-// Show a CFS symbolic link's target. The link's content is the target
-// path (PETSCII / ASCII). Phase 3b just surfaces what it points at —
-// actually following the link to navigate to its target is Phase 3c
-// territory (needs a path resolver that walks dir-by-dir within the
-// partition).
-function showCfsLinkTarget(entry) {
-  if (!entry || !entry.dataTreePtr || !entry.dataTreePtr.lba) {
-    showModal('CFS link', ['"' + entry.name + '" has no target pointer.']);
-    return;
-  }
+// Read a CFS LNK's target path. Content is a null-padded byte string.
+function _cfsReadLinkTarget(entry) {
+  if (!entry || !entry.dataTreePtr || !entry.dataTreePtr.lba) return '';
   var res = readCfsFileData(hddBuffer, entry.dataTreePtr.addr, entry.size || 256);
-  if (res.error) {
-    showModal('CFS link', ['Could not read target of "' + entry.name + '": ' + res.error]);
-    return;
-  }
+  if (res.error) return '';
   var target = '';
   for (var i = 0; i < res.data.length; i++) {
     var c = res.data[i];
     if (c === 0 || c === 0xA0) break;
     target += String.fromCharCode(c);
   }
-  showModal('Symbolic link: ' + entry.name, [
-    'Target: ' + (target || '(empty)'),
-    'Following links to navigate is not yet implemented.',
-  ]);
+  return target.trim();
+}
+
+// Follow a CFS symbolic link. The link's content is its target path.
+// Resolution order: absolute path (leading "/" → from partition root),
+// relative-with-slash (walk from current dir), flat name (lookup in
+// current dir). Cycle-detected when target itself is another LNK.
+function showCfsLinkTarget(entry) {
+  if (!entry || !entry.dataTreePtr || !entry.dataTreePtr.lba) {
+    showModal('CFS link', ['"' + entry.name + '" has no target pointer.']);
+    return;
+  }
+  if (!hddPartitions || cfsPartitionIdx < 0) return;
+  var partition = hddPartitions[cfsPartitionIdx];
+  if (!partition || !partition.cfsRootDir || !partition.cfsRootDir.lba) return;
+
+  var visited = {};
+  var current = entry;
+  var maxHops = 16;
+  while (current && current.ftype === CFS_FTYPE.LNK && maxHops-- > 0) {
+    var key = current.dirLba + ':' + current.index;
+    if (visited[key]) {
+      showModal('CFS link', ['Link cycle detected — bailing.']);
+      return;
+    }
+    visited[key] = true;
+    var target = _cfsReadLinkTarget(current);
+    if (!target) {
+      showModal('CFS link', ['"' + current.name + '" → (empty target)']);
+      return;
+    }
+    var startLba = target.charAt(0) === '/' ? partition.cfsRootDir.addr : cfsDirLba;
+    current = cfsResolvePath(hddBuffer, startLba, target);
+    if (!current) {
+      showModal('CFS link', [
+        '"' + entry.name + '" → ' + target,
+        'Target not found in this partition.',
+      ]);
+      return;
+    }
+  }
+  if (!current) return;
+
+  // Resolved to a non-LNK entry: act on it.
+  if (current.ftype === CFS_FTYPE.DIR) {
+    enterCfsSubdir(current);
+  } else if (current.ftype === CFS_FTYPE.DEL) {
+    showModal('CFS link', ['"' + entry.name + '" resolves to a deleted entry.']);
+  } else {
+    showCfsFileHexViewer(current);
+  }
 }
 
 // ── CFS file content viewer (Phase 3a, hex + download) ────────────────
@@ -515,9 +540,23 @@ function showCfsFileHexViewer(entry) {
 
   var body = showViewerModal('Hex — ' + entry.name, html, 'large');
 
-  // Replace the OK button with Download + Close
+  // Footer: View as / Download / Close
   var footer = document.querySelector('#modal-overlay .modal-footer');
-  footer.innerHTML = '<button id="cfs-dl">Download</button> <button id="modal-close">Close</button>';
+  footer.innerHTML =
+    '<button id="cfs-view-petscii">PETSCII</button> ' +
+    '<button id="cfs-view-basic">BASIC</button> ' +
+    '<button id="cfs-dl">Download</button> ' +
+    '<button id="modal-close">Close</button>';
+
+  // PETSCII view — opens a second modal via the shared viewer with our bytes.
+  document.getElementById('cfs-view-petscii').addEventListener('click', function() {
+    showFilePetsciiViewer(0, { data: payload, name: entry.name });
+  });
+  // BASIC view — only meaningful for PRG-ish content but show it anyway;
+  // the viewer surfaces "not a valid BASIC program" on its own.
+  document.getElementById('cfs-view-basic').addEventListener('click', function() {
+    showFileBasicViewer(0, { data: payload, name: entry.name });
+  });
   document.getElementById('cfs-dl').addEventListener('click', function() {
     var blob = new Blob([payload], { type: 'application/octet-stream' });
     var a = document.createElement('a');

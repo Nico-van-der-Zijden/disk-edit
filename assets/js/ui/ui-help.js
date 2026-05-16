@@ -285,6 +285,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.116', title: 'IDE64 .hdd — PETSCII / BASIC viewers, LNK follow, tab-switch fix', items: [
+      'CFS file viewer modal now has View-as-PETSCII and View-as-BASIC buttons next to Download. Reuses the existing viewers — same PETSCII screen renderer and BASIC detokenizer that work for D64 files',
+      'Symbolic links: double-click now actually follows the target path. Absolute (starts with "/") walks from partition root; relative walks from the current dir. Files open in the viewer, directories drill in. 16-hop cap with cycle detection for LNK→LNK chains',
+      'Fix: opening any non-HDD disk on top of an open .hdd tab now renders the new disk correctly. Was showing the old HDD\'s partition list instead because the HDD container globals weren\'t reset',
+    ]},
     { ver: '1.3.115', title: 'IDE64 .hdd — subdirectories + multi-sector dirs', items: [
       'Drill into CFS subdirectories with a breadcrumb at the top of the directory view ("Partition / Subdir / …"). New &uarr; row navigates back up one level; &laquo; back to partition list still pops out entirely',
       'Directories with more than 14 files now read correctly — the chain of dir sectors is walked via the bit-sliced "next sector" pointer encoded across all 16 entries\' data-tree-pointer fields',

@@ -103,6 +103,19 @@ function clearCmdContainerState() {
   cmdcPartitions = null;
   cmdcPartitionIdx = -1;
   cmdcContainerKey = null;
+  // IDE64 .hdd container state lives in parallel globals — clear it
+  // here too so every load path that drops out of a container view
+  // also drops the HDD one. Without this, opening a D64 on top of an
+  // HDD tab left hddPartitions set and renderDisk kept drawing the
+  // partition list instead of the new disk's directory.
+  hddBuffer = null;
+  hddFileName = null;
+  hddBootInfo = null;
+  hddPartitions = null;
+  cfsPartitionIdx = -1;
+  cfsDirLba = 0;
+  cfsDirEntries = null;
+  cfsDirStack = [];
 }
 // Per-track physical sector layout captured by decodeG64toD64 when the
 // active tab was opened from a .g64. null on D64/D71/D81 etc. — the G64
@@ -300,7 +313,6 @@ function closeTab(tabId) {
     selectedEntryIndex = -1;
     currentPartition = null;
     clearCmdContainerState();
-    if (typeof clearIde64State === 'function') clearIde64State();
     showEmptyState();
     renderTabs();
     updateMenuState();

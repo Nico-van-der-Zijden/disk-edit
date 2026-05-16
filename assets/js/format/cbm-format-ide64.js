@@ -227,6 +227,37 @@ function _cfsReadDirNext(data, sectorBase) {
   return { raw0: b0, lba: lba, addr: addr };
 }
 
+// Resolve a slash-separated CFS path against `buffer`, starting at the
+// directory at `startDirLba`. Returns the matched entry or null when
+// any component is missing or a non-DIR is encountered mid-path. Names
+// are matched case-sensitively — CFS preserves case (unlike CBM-DOS).
+function cfsResolvePath(buffer, startDirLba, path) {
+  if (!buffer || !path) return null;
+  var parts = path.split('/').filter(function(p) { return p.length > 0; });
+  if (parts.length === 0) return null;
+  var dirLba = startDirLba;
+  var found = null;
+  for (var i = 0; i < parts.length; i++) {
+    var entries = readCfsDirectory(buffer, dirLba);
+    if (!entries) return null;
+    var match = null;
+    for (var j = 0; j < entries.length; j++) {
+      var e = entries[j];
+      if (e.empty || e.isSelfRef) continue;
+      if (e.name === parts[i]) { match = e; break; }
+    }
+    if (!match) return null;
+    if (i < parts.length - 1) {
+      if (match.ftype !== CFS_FTYPE.DIR) return null;
+      if (!match.dataTreePtr || !match.dataTreePtr.lba) return null;
+      dirLba = match.dataTreePtr.addr;
+    } else {
+      found = match;
+    }
+  }
+  return found;
+}
+
 // Walk a directory's sector chain via _cfsReadDirNext and collect every
 // entry across all sectors. Returns an array of entry objects (same
 // shape as readCfsDirectorySector's output) plus a `dirLba` tag on each
