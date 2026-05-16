@@ -576,6 +576,18 @@ function updateEntryMenuState() {
   // it like a tape image for the disabled-state checks.
   const containerList = isCmdContainerListView();
   const noEdit = tape || containerList;
+  // Reset any items the CFS override may have hidden last time around.
+  // Without this, switching from a CFS partition view back to a D64/etc
+  // tab leaves Lock / Splat / Remove Entry / Move Up / Move Down / Align
+  // / Edit T-S / View As stuck on display:none from a prior render.
+  // Each individual disabled-state check below still runs to set the
+  // correct disabled class for the new view.
+  var _cfsHiddenIds = ['opt-lock', 'opt-splat', 'opt-move-up',
+    'opt-move-down', 'opt-change-ts', 'opt-view-as', 'opt-scratch', 'opt-unscratch'];
+  for (var _ri = 0; _ri < _cfsHiddenIds.length; _ri++) {
+    var _re = document.getElementById(_cfsHiddenIds[_ri]);
+    if (_re) _re.style.display = '';
+  }
   // Single-select only operations (all disabled for tape / container list)
   document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
   document.getElementById('opt-insert').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || noEdit);
@@ -909,18 +921,32 @@ function updateEntryMenuState() {
     // Hide both items entirely to keep the menu honest.
     document.getElementById('opt-lock').style.display = 'none';
     document.getElementById('opt-splat').style.display = 'none';
-    // Other CBM-DOS-only ops: Remove Entry, Move Up/Down, Align, Edit
-    // Track/Sector, View As. They either don't translate to CFS at all
-    // (track/sector isn't a thing — files use a B-tree by LBA) or would
-    // corrupt hddBuffer at random offsets since the click handlers all
-    // assume selectedEntryIndex is a CBM-DOS byte offset, not a CFS
-    // slot index. Same hide-them-entirely treatment as Lock/Splat.
-    document.getElementById('opt-remove').style.display = 'none';
+    // Other CBM-DOS-only ops: Move Up/Down, Edit Track/Sector, View As.
+    // They either don't translate to CFS at all (track/sector isn't a
+    // thing — files use a B-tree by LBA) or would corrupt hddBuffer at
+    // random offsets since the click handlers all assume
+    // selectedEntryIndex is a CBM-DOS byte offset, not a CFS slot
+    // index. Same hide-them-entirely treatment as Lock/Splat.
     document.getElementById('opt-move-up').style.display = 'none';
     document.getElementById('opt-move-down').style.display = 'none';
-    document.getElementById('opt-align').style.display = 'none';
     document.getElementById('opt-change-ts').style.display = 'none';
     document.getElementById('opt-view-as').style.display = 'none';
+    // Remove Entry: hard delete — frees the data sectors (recursive for
+    // dirs) and zeros the 32-byte slot. Loses unscratch for the entry,
+    // but keeps the bitmap clean. Enabled on any editable entry (DEL
+    // entries just get the zero-slot step since their sectors are
+    // already free from the original scratch). The dir self-ref is
+    // refused at the format layer.
+    document.getElementById('opt-remove').classList.toggle('disabled', !cfsEditableEntry && !cfsIsDeleted);
+    // Insert Entry: placeholder entry, no data sectors allocated. Only
+    // disabled when the dir chain has no free slot (cfsFindEmptyDirSlot
+    // checks both truly-empty and DEL-fallback slots, mirroring import).
+    var cfsHasFreeSlot = !!cfsFindEmptyDirSlot(hddBuffer, cfsDirLba);
+    document.getElementById('opt-insert').classList.toggle('disabled', !cfsHasFreeSlot);
+    // Align: handler routes to alignCfsFilename in CFS view. Gate on
+    // the same editable-entry flag we use for Rename / Scratch so the
+    // system <<DELETED FILES>> entry stays protected.
+    document.getElementById('opt-align').classList.toggle('disabled', !cfsEditableEntry);
     // Show-Deleted toggle works the same way in CFS view — keep it
     // enabled whenever the partition view is open.
     document.getElementById('opt-show-deleted').classList.toggle('disabled', false);

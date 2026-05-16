@@ -230,16 +230,17 @@ function writeFilenameAligned(data, entryOff, content) {
   }
 }
 
-function alignFilename(buffer, entryOff, alignment) {
-  const data = new Uint8Array(buffer);
-  const content = getFilenameContent(data, entryOff);
-
+// Pure alignment math: given a content byte array (already stripped of
+// surrounding padding), return a 16-byte aligned name. Shared between
+// CBM-DOS (entryOff + 5 layout) and CFS (entryOff + 0 layout) — the
+// callers handle the differing storage offsets.
+function computeAlignedName(content, alignment) {
   // Strip trailing 0x20 spaces and 0xA0 padding
   while (content.length > 0 && (content[content.length - 1] === 0x20 || content[content.length - 1] === 0xA0)) content.pop();
   // Strip leading 0x20 spaces
   while (content.length > 0 && content[0] === 0x20) content.shift();
-  if (content.length >= 16) return;
-  if (content.length === 0 && alignment !== 'expand') return;
+  if (content.length >= 16) return null;
+  if (content.length === 0 && alignment !== 'expand') return null;
 
   const result = new Uint8Array(16).fill(0x20); // fill with real spaces
   const padCount = 16 - content.length;
@@ -298,7 +299,36 @@ function alignFilename(buffer, entryOff, alignment) {
     for (let i = content.length; i < 16; i++) result[i] = 0x20;
   }
 
+  return result;
+}
+
+function alignFilename(buffer, entryOff, alignment) {
+  const data = new Uint8Array(buffer);
+  const content = getFilenameContent(data, entryOff);
+  const result = computeAlignedName(content, alignment);
+  if (!result) return;
   writeFilenameAligned(data, entryOff, result);
+}
+
+// CFS analogue: name lives at entry.dirLba*512 + entry.index*32, offset
+// 0..15. Refuses on the system "<<DELETED FILES>>" entry, deleted
+// entries, and the dir self-ref (slot 0 of the first sector).
+function alignCfsFilename(entry, alignment) {
+  if (!hddBuffer || !entry || entry.empty || entry.isSelfRef) return;
+  if (entry.ftype === CFS_FTYPE.DEL) return;
+  if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(entry)) return;
+  const data = new Uint8Array(hddBuffer);
+  const nameOff = entry.dirLba * 512 + entry.index * 32;
+  const content = [];
+  for (let i = 0; i < 16; i++) {
+    const b = data[nameOff + i];
+    if (b === 0xA0 || b === 0x00) break;
+    content.push(b);
+  }
+  const result = computeAlignedName(content, alignment);
+  if (!result) return;
+  for (let i = 0; i < 16; i++) data[nameOff + i] = result[i];
+  if (typeof cfsTouchEntryMtime === 'function') cfsTouchEntryMtime(hddBuffer, entry.dirLba, entry.index);
 }
 
 // ── Remove directory entry ────────────────────────────────────────────
@@ -1207,10 +1237,78 @@ function insertAndPosition() {
   return newOff;
 }
 
-document.getElementById('opt-insert').addEventListener('click', (e) => {
+document.getElementById('opt-insert').addEventListener('click', async (e) => {
   e.stopPropagation();
-  if (!currentBuffer || !canInsertFile()) return;
   closeMenus();
+  // CFS view: insert a placeholder entry — zero size, no tree pointer.
+  // CBM-DOS canInsertFile() reads currentFormat shape; in CFS view
+  // we route through cfsInsertPlaceholderEntry which checks for a free
+  // slot via cfsFindEmptyDirSlot. Prompt for a name + type so the user
+  // gets a meaningful slot, not just an empty "NEW" row.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    if (!cfsFindEmptyDirSlot(hddBuffer, cfsDirLba)) {
+      showModal('Insert Entry', ['No empty directory slot available — every slot in the dir chain is in use.']);
+      return;
+    }
+    var name = await showInputModal('Entry Name', 'NEW');
+    if (!name) return;
+    var cleanName = String(name).toUpperCase().substring(0, 16);
+    // Snapshot the selection before we mutate — we'll need its
+    // (dirLba, slotIndex) to position the new entry right after it.
+    var selBefore = (selectedEntryIndex >= 0 && cfsDirEntries[selectedEntryIndex])
+      ? { dirLba: cfsDirEntries[selectedEntryIndex].dirLba, slotIndex: cfsDirEntries[selectedEntryIndex].index }
+      : null;
+    pushUndo();
+    var res = cfsInsertPlaceholderEntry(hddBuffer, cfsDirLba, cleanName, { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'PRG' });
+    if (!res.ok) {
+      showModal('Insert Entry failed', [res.error || 'Unknown error.']);
+      if (typeof popUndo === 'function') popUndo();
+      return;
+    }
+    // Shift the inserted slot backward through the dir chain until it
+    // sits immediately after the selection — same as CBM-DOS Insert
+    // File. Each swap preserves bits 5..4 of byte $14 (dir-next
+    // encoding) so the chain pointer stays intact. No selection or
+    // free slot already adjacent? No shifting needed.
+    if (selBefore) {
+      var allSlots = cfsCollectDirSlots(hddBuffer, cfsDirLba);
+      var selIdx = -1, newIdx = -1;
+      for (var si = 0; si < allSlots.length; si++) {
+        if (allSlots[si].dirLba === selBefore.dirLba && allSlots[si].slotIndex === selBefore.slotIndex) selIdx = si;
+        if (allSlots[si].dirLba === res.dirLba && allSlots[si].slotIndex === res.slotIndex) newIdx = si;
+      }
+      if (selIdx >= 0 && newIdx > selIdx + 1) {
+        var cur = newIdx;
+        var target = selIdx + 1;
+        while (cur !== target) {
+          cfsSwapDirSlots(hddBuffer, allSlots[cur], allSlots[cur - 1]);
+          cur--;
+        }
+        res.dirLba = allSlots[target].dirLba;
+        res.slotIndex = allSlots[target].slotIndex;
+      }
+    }
+    refreshIde64View();
+    // Select the (final) new-entry slot so menu state highlights the
+    // right options for follow-up edits.
+    var pick = -1;
+    for (var ni = 0; ni < cfsDirEntries.length; ni++) {
+      var ent = cfsDirEntries[ni];
+      if (ent && ent.dirLba === res.dirLba && ent.index === res.slotIndex) { pick = ni; break; }
+    }
+    if (pick >= 0) {
+      selectedEntryIndex = pick;
+      selectedEntries = [pick];
+      var pickRow = document.querySelector('.dir-entry[data-cfs-entry="' + pick + '"]');
+      if (pickRow) {
+        document.querySelectorAll('.dir-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
+        pickRow.classList.add('selected');
+      }
+      updateEntryMenuState();
+    }
+    return;
+  }
+  if (!currentBuffer || !canInsertFile()) return;
   var newOff = insertAndPosition();
   if (newOff < 0) return;
   selectedEntryIndex = newOff;
@@ -1235,6 +1333,62 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+
+  // CFS view: cfsRemoveDirEntry handles both DEL (just zero slot) and
+  // live (cfsDeleteFile to free bitmap, then zero slot) paths so the
+  // bitmap stays consistent. Dir self-ref is refused at the format
+  // layer; the menu state separately blocks the protected
+  // <<DELETED FILES>> entry. Auto-selects the next entry after removal,
+  // matching the CBM-DOS Remove Entry behavior — fall back to the last
+  // remaining entry if we removed at the end of the list.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var entry = cfsDirEntries[selectedEntryIndex];
+    if (!entry || entry.empty) return;
+    var part = hddPartitions && hddPartitions[cfsPartitionIdx];
+    if (!part) return;
+    function _cfsRowVisible(e) {
+      if (!e || e.empty || e.isSelfRef) return false;
+      if (e.ftype === CFS_FTYPE.DEL && !showDeleted) return false;
+      return true;
+    }
+    // Visible position of the entry we're about to remove — count
+    // visible entries strictly before it in the flat cfsDirEntries
+    // array.
+    var prevVisIdx = 0;
+    for (var pvi = 0; pvi < selectedEntryIndex; pvi++) {
+      if (_cfsRowVisible(cfsDirEntries[pvi])) prevVisIdx++;
+    }
+    pushUndo();
+    var res = cfsRemoveDirEntry(hddBuffer, part.startLba, part.endLba, entry, cfsDirLba);
+    if (!res.ok) {
+      showModal('Remove Entry failed', [res.error || 'Unknown error.']);
+      if (typeof popUndo === 'function') popUndo();
+      return;
+    }
+    refreshIde64View();
+    // After the refresh, cfsDirEntries is a freshly-parsed flat list.
+    // Pick the visible entry at min(prevVisIdx, len-1) and re-apply the
+    // selection + .selected row class so menu state stays current.
+    var newVisible = [];
+    for (var nv = 0; nv < cfsDirEntries.length; nv++) {
+      if (_cfsRowVisible(cfsDirEntries[nv])) newVisible.push(nv);
+    }
+    if (newVisible.length > 0) {
+      var pick = newVisible[Math.min(prevVisIdx, newVisible.length - 1)];
+      selectedEntryIndex = pick;
+      selectedEntries = [pick];
+      var pickRow = document.querySelector('.dir-entry[data-cfs-entry="' + pick + '"]');
+      if (pickRow) {
+        document.querySelectorAll('.dir-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
+        pickRow.classList.add('selected');
+      }
+    } else {
+      selectedEntryIndex = -1;
+      selectedEntries = [];
+    }
+    updateEntryMenuState();
+    return;
+  }
 
   var removeEntryOff = selectedEntryIndex;
   var data = new Uint8Array(currentBuffer);
@@ -1329,6 +1483,18 @@ document.querySelectorAll('#opt-align .submenu .option').forEach(el => {
     e.stopPropagation();
     if (!currentBuffer || selectedEntryIndex < 0) return;
     closeMenus();
+    // CFS view: alignFilename works on entryOff + 5 (CBM-DOS layout).
+    // Route through alignCfsFilename which handles the CFS 32-byte
+    // entry shape and skips system/protected entries.
+    if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+      var entry = cfsDirEntries[selectedEntryIndex];
+      if (!entry || entry.empty) return;
+      pushUndo();
+      alignCfsFilename(entry, el.dataset.align);
+      refreshIde64View();
+      return;
+    }
+    pushUndo();
     var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
     for (var ai = 0; ai < entries.length; ai++) alignFilename(currentBuffer, entries[ai], el.dataset.align);
     const info = parseCurrentDir(currentBuffer);

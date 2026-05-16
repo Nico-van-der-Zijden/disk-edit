@@ -94,6 +94,13 @@ function renderIde64PartitionList() {
   if (!hddPartitions || !hddBootInfo) return;
 
   var content = document.getElementById('content');
+  // Preserve scroll across the rebuild — partition-list edits (rename,
+  // attrs, default flag, delete, restore) shouldn't fling the list back
+  // to the top. The scrollable slot is .dir-listing inside #content (see
+  // renderCfsDirectoryView for the same pattern).
+  var prevListing = content ? content.querySelector('.dir-listing') : null;
+  var prevScrollTop = prevListing ? prevListing.scrollTop : 0;
+  var prevScrollLeft = prevListing ? prevListing.scrollLeft : 0;
   var label = hddBootInfo.label || 'IDE64';
   var defaultPart = hddBootInfo.defaultPart;
 
@@ -189,6 +196,11 @@ function renderIde64PartitionList() {
     '</div></div>' +
   '</div>';
   content.innerHTML = html;
+  var newListing = content.querySelector('.dir-listing');
+  if (newListing) {
+    newListing.scrollTop = prevScrollTop;
+    newListing.scrollLeft = prevScrollLeft;
+  }
 
   content.querySelectorAll('.dir-entry[data-hdd-part]').forEach(function(row) {
     var idx = parseInt(row.dataset.hddPart, 10);
@@ -316,6 +328,15 @@ function renderCfsDirectoryView() {
   cfsDirEntries = readCfsDirectory(hddBuffer, cfsDirLba) || [];
 
   var content = document.getElementById('content');
+  // Preserve scroll across the innerHTML rebuild so edits (rename, remove,
+  // scratch, restore, attribute toggles, ...) don't bounce the list back
+  // to the top. The scrollable element is .dir-listing (overflow-y:auto)
+  // inside #content — #content itself doesn't scroll. We capture from the
+  // *old* .dir-listing before innerHTML wipes it, then write back to the
+  // *new* one after.
+  var prevListing = content ? content.querySelector('.dir-listing') : null;
+  var prevScrollTop = prevListing ? prevListing.scrollTop : 0;
+  var prevScrollLeft = prevListing ? prevListing.scrollLeft : 0;
   // Match DHD/D64/DNP convention: header shows only the *current* dir's
   // name (whether that's the partition root or a subdir). cfsDirStack
   // is still used for ".." navigation but isn't part of the header text.
@@ -418,16 +439,15 @@ function renderCfsDirectoryView() {
     // render with the .petscii-rev wrapper, then pad to 18 chars total
     // (quote + 16 name chars + quote) so column alignment matches DHD.
     //
-    // Trim trailing $20 bytes (CFS sometimes uses space-padding instead
-    // of the $A0 readPetsciiRich stops on by default) BEFORE calling
-    // readPetsciiRich — its return value uses PUA codepoints, not plain
-    // ASCII, so a post-decode `\s` strip wouldn't match.
+    // Stop at $A0 or $00 (the byte-level terminators) but NOT at $20 —
+    // trailing spaces are meaningful for File → Align (right/center/
+    // expand) and we'd otherwise display an aligned name visually
+    // indistinguishable from a left-aligned one.
     var entryByteOff = e.dirLba * 512 + e.index * 32;
     var nlen = 16;
     for (var nb = 0; nb < 16; nb++) {
       if (disk[entryByteOff + nb] === 0xA0 || disk[entryByteOff + nb] === 0x00) { nlen = nb; break; }
     }
-    while (nlen > 0 && disk[entryByteOff + nlen - 1] === 0x20) nlen--;
     var richName = readPetsciiRich(disk, entryByteOff, nlen);
     var nameStr = richName.map(function(c) {
       return c.reversed
@@ -460,6 +480,15 @@ function renderCfsDirectoryView() {
     '</div></div>' +
   '</div>';
   content.innerHTML = html;
+  // Restore scroll on the *new* .dir-listing — different DOM node than
+  // the one we read from, but same CSS slot. Browsers clamp scrollTop
+  // to the new scrollHeight, so removing the last visible row keeps the
+  // list anchored at the new bottom instead of jumping.
+  var newListing = content.querySelector('.dir-listing');
+  if (newListing) {
+    newListing.scrollTop = prevScrollTop;
+    newListing.scrollLeft = prevScrollLeft;
+  }
 
   // ".." parent row — pops one level. Same handler as DHD's parent row.
   content.querySelectorAll('.dir-entry[data-cfs-back]').forEach(function(row) {
@@ -487,21 +516,32 @@ function renderCfsDirectoryView() {
       updateEntryMenuState();
     });
     row.addEventListener('dblclick', function(ev) {
-      // Dblclick on the blocks column → inline block-size edit, mirroring
-      // CBM-DOS (ui-render.js routes the same way for d64/d71/etc).
+      // Dblclick UX mirrors CBM-DOS (ui-render.js): column-aware on file
+      // rows, navigation on partitions/dirs. Blocks column → inline
+      // block-size edit. DIR entries → enter the directory regardless
+      // of where the click landed (same as a CBM partition row). LNK
+      // entries → follow the link. DEL → not actionable. Anything else
+      // on a regular file → inline rename (matches CBM-DOS's
+      // dblclick-on-name → startRenameEntry default).
       if (ev.target && ev.target.classList && ev.target.classList.contains('dir-blocks')) {
         startInlineEditCfsBlockSize(row);
         return;
       }
       if (entry.ftype === CFS_FTYPE.DIR) {
         enterCfsSubdir(entry);
-      } else if (entry.ftype === CFS_FTYPE.LNK) {
-        showCfsLinkTarget(entry);
-      } else if (entry.ftype === CFS_FTYPE.DEL) {
-        showModal('Deleted file', ['Entry is marked deleted; nothing to view.']);
-      } else {
-        showCfsFileHexViewer(entry);
+        return;
       }
+      if (entry.ftype === CFS_FTYPE.LNK) {
+        showCfsLinkTarget(entry);
+        return;
+      }
+      if (entry.ftype === CFS_FTYPE.DEL) {
+        showModal('Deleted file', ['Entry is marked deleted; use Restore to bring it back.']);
+        return;
+      }
+      // Regular file (NORMAL / REL): dblclick renames. Hex / PETSCII
+      // / BASIC viewers stay reachable from the right-click menu.
+      startInlineRenameCfsEntry(row);
     });
   });
 
@@ -837,6 +877,7 @@ function startInlineRenameCfsEntry(entryEl) {
       pushUndo();
       var data = new Uint8Array(hddBuffer);
       for (var wi = 0; wi < 16; wi++) data[entryOff + wi] = newBytes[wi];
+      cfsTouchEntryMtime(hddBuffer, entry.dirLba, entry.index);
     }
     cleanup();
     refreshIde64View();

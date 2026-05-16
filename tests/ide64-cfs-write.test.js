@@ -39,22 +39,25 @@ describe('CFS write — rename', function() {
     assert.strictEqual(entries[1].ftype, 1);
   });
 
-  it('truncates names > 16 chars and space-pads short ones', function() {
+  it('truncates names > 16 chars and pads short ones with $A0', function() {
     var buf = new ArrayBuffer(64 * 1024);
     var d = new Uint8Array(buf);
     writeCfsEntry(d, 10, 1, { name: 'A', ftype: 1 });
 
     cfsWriteDirEntryName(buf, 10, 1, 'A NAME TOO LONG FOR SIXTEEN');
     var off = 10 * 512 + 32;
-    // First 16 bytes = truncated input
-    var got = '';
-    for (var i = 0; i < 16; i++) got += String.fromCharCode(d[off + i]);
-    assert.strictEqual(got, 'A NAME TOO LONG ');
+    var got = [];
+    for (var i = 0; i < 16; i++) got.push(d[off + i]);
+    // 16-byte truncation, no padding needed
+    assert.deepStrictEqual(got, [0x41,0x20,0x4E,0x41,0x4D,0x45,0x20,0x54,0x4F,0x4F,0x20,0x4C,0x4F,0x4E,0x47,0x20]);
 
     cfsWriteDirEntryName(buf, 10, 1, 'SHORT');
-    got = '';
-    for (var j = 0; j < 16; j++) got += String.fromCharCode(d[off + j]);
-    assert.strictEqual(got, 'SHORT           ');
+    got = [];
+    for (var j = 0; j < 16; j++) got.push(d[off + j]);
+    // 'SHORT' + 11 × $A0 padding (CBM/VICE terminator)
+    var expected = [0x53,0x48,0x4F,0x52,0x54];
+    for (var k = 0; k < 11; k++) expected.push(0xA0);
+    assert.deepStrictEqual(got, expected);
   });
 
   it('returns false on out-of-range slot or undersized buffer', function() {
@@ -887,6 +890,341 @@ describe('CFS unscratch (Phase C)', function() {
     assert.strictEqual(restored[1].ftype, 3);
     assert.strictEqual(restored[1].closed, true);
     assert.strictEqual(cfsIsSectorFree(buf, partStart, 10), false);
+  });
+});
+
+describe('cfsTouchEntryMtime / encodeCfsTimestamp', function() {
+  it('encodeCfsTimestamp round-trips through decodeCfsTimestamp', function() {
+    var date = new Date(2026, 4, 16, 14, 27, 53); // May 16 2026 14:27:53
+    var bytes = encodeCfsTimestamp(date);
+    var ts = decodeCfsTimestamp(bytes[0], bytes[1], bytes[2], bytes[3]);
+    assert.strictEqual(ts.year, 2026);
+    assert.strictEqual(ts.month, 5);
+    assert.strictEqual(ts.day, 16);
+    assert.strictEqual(ts.hour, 14);
+    assert.strictEqual(ts.min, 27);
+    assert.strictEqual(ts.sec, 53);
+  });
+
+  it('clamps year to 1980..2043 (6-bit field)', function() {
+    var early = encodeCfsTimestamp(new Date(1970, 0, 1));
+    var late = encodeCfsTimestamp(new Date(2099, 11, 31));
+    assert.strictEqual(decodeCfsTimestamp(early[0], early[1], early[2], early[3]).year, 1980);
+    assert.strictEqual(decodeCfsTimestamp(late[0], late[1], late[2], late[3]).year, 2043);
+  });
+
+  it('cfsTouchEntryMtime writes a non-zero timestamp at $1C..$1F', function() {
+    var buf = new ArrayBuffer(64 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 5, 1, { name: 'X', ftype: 1, typeSuffix: 'PRG' });
+    var fixed = new Date(2026, 0, 15, 10, 30, 0);
+    assert.strictEqual(cfsTouchEntryMtime(buf, 5, 1, fixed), true);
+    var entries = readCfsDirectorySector(buf, 5);
+    assert.ok(entries[1].mtime, 'mtime should not be null');
+    assert.strictEqual(entries[1].mtime.year, 2026);
+    assert.strictEqual(entries[1].mtime.month, 1);
+    assert.strictEqual(entries[1].mtime.day, 15);
+  });
+
+  it('cfsImportFile, cfsInsertPlaceholderEntry, cfsWriteDirEntryName, cfsWriteDirEntryAttrByte, cfsWriteFileSize each stamp mtime', function() {
+    var buf = new ArrayBuffer(2 * 1024 * 1024);
+    var d = new Uint8Array(buf);
+    var partStart = 2, partEnd = 1000;
+    for (var i = 0; i < 512; i++) d[partStart * 512 + i] = 0xFF;
+    cfsMarkSectorUsed(buf, partStart, partStart);
+    cfsMarkSectorUsed(buf, partStart, 5);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+
+    // Import — mtime should be set
+    var imp = cfsImportSingleSectorFile(buf, partStart, partEnd, 5, 'F', new Uint8Array([1]), { ftype: 1, typeSuffix: 'PRG' });
+    var afterImport = readCfsDirectorySector(buf, 5)[imp.slotIndex].mtime;
+    assert.ok(afterImport, 'mtime set on import');
+
+    // Zero the mtime, then rename — mtime should be re-stamped
+    var slotOff = 5 * 512 + imp.slotIndex * 32;
+    d[slotOff + 0x1C] = 0; d[slotOff + 0x1D] = 0; d[slotOff + 0x1E] = 0; d[slotOff + 0x1F] = 0;
+    cfsWriteDirEntryName(buf, 5, imp.slotIndex, 'F2');
+    assert.ok(readCfsDirectorySector(buf, 5)[imp.slotIndex].mtime, 'mtime set on rename');
+
+    // Zero again, attr toggle — mtime should be set
+    d[slotOff + 0x1C] = 0; d[slotOff + 0x1D] = 0; d[slotOff + 0x1E] = 0; d[slotOff + 0x1F] = 0;
+    cfsWriteDirEntryAttrByte(buf, 5, imp.slotIndex, 0xF9);
+    assert.ok(readCfsDirectorySector(buf, 5)[imp.slotIndex].mtime, 'mtime set on attr edit');
+
+    // Zero again, size edit — mtime should be set
+    d[slotOff + 0x1C] = 0; d[slotOff + 0x1D] = 0; d[slotOff + 0x1E] = 0; d[slotOff + 0x1F] = 0;
+    cfsWriteFileSize(buf, 5, imp.slotIndex, 1234, CFS_FTYPE.NORMAL);
+    assert.ok(readCfsDirectorySector(buf, 5)[imp.slotIndex].mtime, 'mtime set on size edit');
+
+    // Placeholder insert — mtime set
+    var ph = cfsInsertPlaceholderEntry(buf, 5, 'PLACE', { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'PRG' });
+    assert.ok(readCfsDirectorySector(buf, 5)[ph.slotIndex].mtime, 'mtime set on placeholder');
+  });
+
+  it('cfsDeleteFile + cfsUnscratchEntry preserve original mtime', function() {
+    var buf = new ArrayBuffer(2 * 1024 * 1024);
+    var d = new Uint8Array(buf);
+    var partStart = 2, partEnd = 1000;
+    for (var i = 0; i < 512; i++) d[partStart * 512 + i] = 0xFF;
+    cfsMarkSectorUsed(buf, partStart, partStart);
+    cfsMarkSectorUsed(buf, partStart, 5);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    var imp = cfsImportSingleSectorFile(buf, partStart, partEnd, 5, 'F', new Uint8Array([1]), { ftype: 1, typeSuffix: 'PRG' });
+    var origMtime = readCfsDirectorySector(buf, 5)[imp.slotIndex].mtime;
+
+    var entry = readCfsDirectorySector(buf, 5)[imp.slotIndex];
+    entry.dirLba = 5;
+    cfsDeleteFile(buf, partStart, partEnd, entry);
+    // After scratch — mtime still equal to original
+    var afterScratch = readCfsDirectorySector(buf, 5)[imp.slotIndex].mtime;
+    assert.deepStrictEqual(afterScratch.raw, origMtime.raw, 'scratch preserves mtime');
+
+    var del = readCfsDirectorySector(buf, 5)[imp.slotIndex];
+    del.dirLba = 5;
+    cfsUnscratchEntry(buf, partStart, partEnd, del);
+    var afterRestore = readCfsDirectorySector(buf, 5)[imp.slotIndex].mtime;
+    assert.deepStrictEqual(afterRestore.raw, origMtime.raw, 'unscratch preserves mtime');
+  });
+});
+
+describe('cfsSwapDirSlots / cfsCollectDirSlots', function() {
+  it('swaps slot contents but preserves bits 5..4 of byte $14 in each slot', function() {
+    var buf = new ArrayBuffer(64 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    writeCfsEntry(d, 5, 1, { name: 'A', ftype: 1, typeSuffix: 'PRG', attrByte: 0xF9 });
+    writeCfsEntry(d, 5, 2, { name: 'B', ftype: 1, typeSuffix: 'PRG', attrByte: 0xF9 });
+    // Stash distinguishable dir-next bits in each slot's byte $14 bits 5..4
+    d[5 * 512 + 1 * 32 + 0x14] |= 0x10; // slot 1 → bit 4
+    d[5 * 512 + 2 * 32 + 0x14] |= 0x20; // slot 2 → bit 5
+    var aBitsBefore = d[5 * 512 + 1 * 32 + 0x14] & 0x30;
+    var bBitsBefore = d[5 * 512 + 2 * 32 + 0x14] & 0x30;
+    assert.strictEqual(aBitsBefore, 0x10);
+    assert.strictEqual(bBitsBefore, 0x20);
+
+    cfsSwapDirSlots(buf, { dirLba: 5, slotIndex: 1 }, { dirLba: 5, slotIndex: 2 });
+
+    var entries = readCfsDirectorySector(buf, 5);
+    // Names swapped
+    assert.strictEqual(petsciiToReadable(entries[1].name), 'B');
+    assert.strictEqual(petsciiToReadable(entries[2].name), 'A');
+    // Dir-next bits stayed put with each slot
+    assert.strictEqual(d[5 * 512 + 1 * 32 + 0x14] & 0x30, 0x10);
+    assert.strictEqual(d[5 * 512 + 2 * 32 + 0x14] & 0x30, 0x20);
+  });
+
+  it('cfsCollectDirSlots skips slot 0 of the first sector (self-ref)', function() {
+    var buf = new ArrayBuffer(64 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    var slots = cfsCollectDirSlots(buf, 5);
+    assert.strictEqual(slots.length, 15);
+    assert.strictEqual(slots[0].slotIndex, 1, 'first listed slot is index 1, not 0');
+    assert.strictEqual(slots[14].slotIndex, 15);
+  });
+});
+
+describe('cfsInsertPlaceholderEntry', function() {
+  it('creates a zero-size, null-tree entry that the reader sees correctly', function() {
+    var buf = new ArrayBuffer(64 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    var res = cfsInsertPlaceholderEntry(buf, 5, 'PLACEHOLDER', { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'PRG' });
+    assert.ok(res.ok, res.error || '');
+    assert.strictEqual(res.dirLba, 5);
+    assert.strictEqual(res.slotIndex, 1);
+    var entries = readCfsDirectorySector(buf, 5);
+    var e = entries[1];
+    assert.strictEqual(petsciiToReadable(e.name), 'PLACEHOLDER');
+    assert.strictEqual(e.ftype, CFS_FTYPE.NORMAL);
+    assert.strictEqual(e.size, 0);
+    assert.strictEqual(e.closed, true);
+    assert.strictEqual(e.typeSuffix, 'PRG');
+    assert.strictEqual(e.dataTreePtr.lba, false, 'tree pointer should not have LBA flag');
+  });
+
+  it('scratch + remove work on a placeholder (no tree → just mark/zero)', function() {
+    var buf = new ArrayBuffer(2 * 1024 * 1024);
+    var d = new Uint8Array(buf);
+    var partStart = 2, partEnd = 1000;
+    for (var i = 0; i < 512; i++) d[2 * 512 + i] = 0xFF;
+    cfsMarkSectorUsed(buf, partStart, 2);
+    cfsMarkSectorUsed(buf, partStart, 5);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    var res = cfsInsertPlaceholderEntry(buf, 5, 'STUB', { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'PRG' });
+    assert.ok(res.ok);
+    var entry = readCfsDirectorySector(buf, 5)[res.slotIndex];
+    entry.dirLba = 5;
+    // Scratch — no tree to free, but attr should flip to DEL.
+    var del = cfsDeleteFile(buf, partStart, partEnd, entry);
+    assert.ok(del.ok, del.error || '');
+    var afterScratch = readCfsDirectorySector(buf, 5)[res.slotIndex];
+    assert.strictEqual(afterScratch.ftype, CFS_FTYPE.DEL);
+    // Remove — zero the slot (sectors already nothing).
+    afterScratch.dirLba = 5;
+    var rem = cfsRemoveDirEntry(buf, partStart, partEnd, afterScratch, 5);
+    assert.ok(rem.ok, rem.error || '');
+    var slotOff = 5 * 512 + res.slotIndex * 32;
+    for (var z = 0; z < 32; z++) {
+      var expected = (z === 0x14) ? (d[slotOff + z] & 0x30) : 0;
+      assert.strictEqual(d[slotOff + z], expected);
+    }
+  });
+
+  it('refuses when the dir has no free slot', function() {
+    var buf = new ArrayBuffer(64 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    for (var i = 1; i < 16; i++) {
+      writeCfsEntry(d, 5, i, { name: 'F' + i, ftype: 1, typeSuffix: 'PRG', attrByte: 0xF9 });
+    }
+    var res = cfsInsertPlaceholderEntry(buf, 5, 'X');
+    assert.strictEqual(res.ok, false);
+    assert.match(res.error, /no empty/);
+  });
+});
+
+describe('cfsRemoveDirEntry (hard remove)', function() {
+  it('on a live file: frees bitmap + zeros the 32-byte slot', function() {
+    var buf = new ArrayBuffer(2 * 1024 * 1024);
+    var d = new Uint8Array(buf);
+    var partStart = 2, partEnd = 1000;
+    for (var i = 0; i < 512; i++) d[2 * 512 + i] = 0xFF;
+    cfsMarkSectorUsed(buf, partStart, 2);
+    cfsMarkSectorUsed(buf, partStart, 5);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    var imp = cfsImportSingleSectorFile(buf, partStart, partEnd, 5, 'HI', new Uint8Array([1, 2, 3]), { ftype: 1, typeSuffix: 'PRG' });
+    assert.ok(imp.ok);
+
+    var entries = readCfsDirectorySector(buf, 5);
+    var entry = entries[imp.slotIndex];
+    entry.dirLba = 5;
+    var res = cfsRemoveDirEntry(buf, partStart, partEnd, entry, 5);
+    assert.ok(res.ok, res.error || '');
+
+    // Slot is all zeros now
+    var slotOff = 5 * 512 + imp.slotIndex * 32;
+    for (var z = 0; z < 32; z++) assert.strictEqual(d[slotOff + z], 0, 'byte ' + z);
+    // Bitmap: tree + data freed (live → cfsDeleteFile freed them)
+    assert.strictEqual(cfsIsSectorFree(buf, partStart, imp.treeLba), true);
+    assert.strictEqual(cfsIsSectorFree(buf, partStart, imp.dataLbas[0]), true);
+  });
+
+  it('on a DEL entry: just zeros the slot (sectors already free)', function() {
+    var buf = new ArrayBuffer(2 * 1024 * 1024);
+    var d = new Uint8Array(buf);
+    var partStart = 2, partEnd = 1000;
+    for (var i = 0; i < 512; i++) d[2 * 512 + i] = 0xFF;
+    cfsMarkSectorUsed(buf, partStart, 2);
+    cfsMarkSectorUsed(buf, partStart, 5);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    var imp = cfsImportSingleSectorFile(buf, partStart, partEnd, 5, 'X', new Uint8Array([9]), { ftype: 1, typeSuffix: 'PRG' });
+    var preEntries = readCfsDirectorySector(buf, 5);
+    preEntries[imp.slotIndex].dirLba = 5;
+    cfsDeleteFile(buf, partStart, partEnd, preEntries[imp.slotIndex]); // → DEL state, sectors free
+    var delEntries = readCfsDirectorySector(buf, 5);
+    delEntries[imp.slotIndex].dirLba = 5;
+
+    var res = cfsRemoveDirEntry(buf, partStart, partEnd, delEntries[imp.slotIndex], 5);
+    assert.ok(res.ok);
+    var slotOff = 5 * 512 + imp.slotIndex * 32;
+    for (var z = 0; z < 32; z++) assert.strictEqual(d[slotOff + z], 0);
+  });
+
+  it('refuses on the dir self-reference (slot 0 of first sector)', function() {
+    var buf = new ArrayBuffer(64 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    var entries = readCfsDirectorySector(buf, 5);
+    entries[0].dirLba = 5;
+    var res = cfsRemoveDirEntry(buf, 2, 100, entries[0], 5);
+    assert.strictEqual(res.ok, false);
+    assert.match(res.error, /self-reference/);
+  });
+
+  it('preserves dir-next pointer bits when zeroing a slot in a multi-sector dir', function() {
+    // Mirrors the ide.hdd bug: bits 5..4 of byte $14 across all 16 slots
+    // encode the dir-next pointer. Zeroing slot 3 used to clear its 2-bit
+    // contribution, corrupting the parent dir's next-sector pointer and
+    // sending later reads into garbage. Set up a multi-sector dir whose
+    // next-pointer requires non-zero contribution from slot 3 byte $14.
+    var fs = require('fs');
+    var path = require('path');
+    var refPath = path.join(__dirname, '..', 'disks', 'ide.hdd');
+    if (!fs.existsSync(refPath)) return; // user-supplied fixture
+    var buf = new Uint8Array(fs.readFileSync(refPath)).buffer;
+    var data = new Uint8Array(buf);
+
+    var partInfo = readIde64Partitions(buf);
+    var part = partInfo.partitions[0];
+
+    // Read root + capture the pre-zero next pointer
+    function readNext(lba) {
+      var bytes = [0,0,0,0];
+      for (var i = 0; i < 4; i++) {
+        var eb = lba * 512 + 0x180 - i * 0x80;
+        var c = (data[eb + 0x14] << 2) & 0xC0;
+        c |= data[eb + 0x34] & 0x30;
+        c |= (data[eb + 0x54] >>> 2) & 0x0C;
+        c |= (data[eb + 0x74] >>> 4) & 0x03;
+        bytes[i] = c;
+      }
+      return ((bytes[0] & 0x0F) << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
+    }
+    var rootLba = part.cfsRootDir.addr;
+    var nextBefore = readNext(rootLba);
+    assert.ok(nextBefore > 0, 'root must have a chained next-sector to exercise the bug');
+
+    // Find TURBOCHARGE in root (slot 3 on this fixture) and remove it
+    var rootEntries = readCfsDirectorySector(buf, rootLba);
+    var target = null;
+    for (var ri = 0; ri < rootEntries.length; ri++) {
+      if (petsciiToReadable(rootEntries[ri].name).indexOf('TURBOCHAR') === 0) {
+        target = rootEntries[ri]; break;
+      }
+    }
+    assert.ok(target, 'TURBOCHARGE not found');
+    target.dirLba = rootLba;
+    var res = cfsRemoveDirEntry(buf, part.startLba, part.endLba, target, rootLba);
+    assert.ok(res.ok, res.error || '');
+
+    // Slot bytes are mostly zero, except bits 5..4 of byte $14 preserved
+    var off = rootLba * 512 + target.index * 32;
+    for (var z = 0; z < 32; z++) {
+      var expected = (z === 0x14) ? (data[off + z] & 0x30) : 0;
+      assert.strictEqual(data[off + z], expected, 'byte 0x' + z.toString(16));
+    }
+    // The dir-next pointer reads the same as before — the bit-slice
+    // pipeline didn't drop any of the 2 bits that lived in this slot.
+    var nextAfter = readNext(rootLba);
+    assert.strictEqual(nextAfter, nextBefore, 'dir-next pointer must not change');
+  });
+
+  it('on a live directory: cascades like scratch + zeros the parent slot', function() {
+    var buf = new ArrayBuffer(2 * 1024 * 1024);
+    var d = new Uint8Array(buf);
+    var partStart = 2, partEnd = 1000;
+    for (var i = 0; i < 512; i++) d[2 * 512 + i] = 0xFF;
+    cfsMarkSectorUsed(buf, partStart, partStart);
+    cfsMarkSectorUsed(buf, partStart, 5);
+    writeDirSelfRef(d, 5, 5, 0, 'ROOT', 'DIR');
+    writeCfsEntry(d, 5, 1, { name: 'SUBDIR', ftype: 3, typeSuffix: 'DIR', attrByte: 0xFB });
+    cfsMarkSectorUsed(buf, partStart, 10);
+    d[5 * 512 + 32 + 0x14] = 0xC0; d[5 * 512 + 32 + 0x17] = 10;
+    writeDirSelfRef(d, 10, 5, 0, 'SUBDIR', 'DIR');
+    var fileRes = cfsImportSingleSectorFile(buf, partStart, partEnd, 10, 'KID', new Uint8Array([7]), { ftype: 1, typeSuffix: 'PRG' });
+
+    var rootEntries = readCfsDirectorySector(buf, 5);
+    rootEntries[1].dirLba = 5;
+    var res = cfsRemoveDirEntry(buf, partStart, partEnd, rootEntries[1], 5);
+    assert.ok(res.ok, res.error || '');
+
+    // Root slot 1 zeroed
+    for (var z = 0; z < 32; z++) assert.strictEqual(d[5 * 512 + 32 + z], 0);
+    // Dir sector + child's tree + child's data all freed in bitmap
+    assert.strictEqual(cfsIsSectorFree(buf, partStart, 10), true);
+    assert.strictEqual(cfsIsSectorFree(buf, partStart, fileRes.treeLba), true);
+    assert.strictEqual(cfsIsSectorFree(buf, partStart, fileRes.dataLbas[0]), true);
   });
 });
 
