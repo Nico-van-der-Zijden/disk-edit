@@ -86,16 +86,16 @@ describe('CFS multi-sector directories', function() {
     // Total entries returned = 32 (all 16 slots from each sector)
     assert.strictEqual(entries.length, 32);
     // Sector A entries
-    assert.strictEqual(entries[0].name, 'DIR');
+    assert.strictEqual(petsciiToReadable(entries[0].name), 'DIR');
     assert.strictEqual(entries[0].isSelfRef, true);
-    assert.strictEqual(entries[1].name, 'F1');
-    assert.strictEqual(entries[15].name, 'F15');
+    assert.strictEqual(petsciiToReadable(entries[1].name), 'F1');
+    assert.strictEqual(petsciiToReadable(entries[15].name), 'F15');
     // Sector B entries — entry 0 of sector B should NOT be flagged as
     // self-ref (only the very first sector's slot 0 is the true self-ref)
-    assert.strictEqual(entries[16].name, 'G0');
+    assert.strictEqual(petsciiToReadable(entries[16].name), 'G0');
     assert.strictEqual(entries[16].isSelfRef, false);
-    assert.strictEqual(entries[17].name, 'G1');
-    assert.strictEqual(entries[18].name, 'G2');
+    assert.strictEqual(petsciiToReadable(entries[17].name), 'G1');
+    assert.strictEqual(petsciiToReadable(entries[18].name), 'G2');
     // Remaining slots in sector B are empty
     for (var k = 19; k < 32; k++) {
       assert.strictEqual(entries[k].empty, true);
@@ -127,7 +127,7 @@ describe('cfsResolvePath', function() {
     writeCfsEntry(d, 10, 1, { name: 'HELLO', ftype: 1, typeSuffix: 'PRG', size: 100 });
     var found = cfsResolvePath(buf, 10, 'HELLO');
     assert.ok(found);
-    assert.strictEqual(found.name, 'HELLO');
+    assert.strictEqual(petsciiToReadable(found.name), 'HELLO');
     assert.strictEqual(found.size, 100);
   });
 
@@ -140,7 +140,7 @@ describe('cfsResolvePath', function() {
     writeCfsEntry(d, 20, 1, { name: 'BOULDER', ftype: 1, typeSuffix: 'PRG', size: 30000 });
     var found = cfsResolvePath(buf, 10, 'GAMES/BOULDER');
     assert.ok(found);
-    assert.strictEqual(found.name, 'BOULDER');
+    assert.strictEqual(petsciiToReadable(found.name), 'BOULDER');
     assert.strictEqual(found.size, 30000);
   });
 
@@ -180,7 +180,7 @@ describe('CFS subdirectory entries', function() {
 
     // Walk root: should see ROOT (self), GAMES, MAIN
     var root = readCfsDirectory(buf, 10);
-    var games = root.find(function(e) { return e.name === 'GAMES'; });
+    var games = root.find(function(e) { return petsciiToReadable(e.name) === 'GAMES'; });
     assert.ok(games);
     assert.strictEqual(games.ftype, 3);
     assert.strictEqual(games.dataTreePtr.lba, true);
@@ -188,7 +188,7 @@ describe('CFS subdirectory entries', function() {
 
     // Walk into the subdir
     var sub = readCfsDirectory(buf, games.dataTreePtr.addr);
-    var boulder = sub.find(function(e) { return e.name === 'BOULDER'; });
+    var boulder = sub.find(function(e) { return petsciiToReadable(e.name) === 'BOULDER'; });
     assert.ok(boulder);
     assert.strictEqual(boulder.size, 30000);
     assert.strictEqual(boulder.typeSuffix, 'PRG');

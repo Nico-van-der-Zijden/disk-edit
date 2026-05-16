@@ -97,18 +97,18 @@ describe('CFS directory parser', function() {
     // Entry 0: dir self-reference
     assert.strictEqual(entries[0].empty, false);
     assert.strictEqual(entries[0].isSelfRef, true);
-    assert.strictEqual(entries[0].name, 'SELF');
+    assert.strictEqual(petsciiToReadable(entries[0].name), 'SELF');
     assert.strictEqual(entries[0].ftype, CFS_FTYPE.DIR);
 
     // Entry 1: SEQ file
-    assert.strictEqual(entries[1].name, 'README');
+    assert.strictEqual(petsciiToReadable(entries[1].name), 'README');
     assert.strictEqual(entries[1].typeSuffix, 'SEQ');
     assert.strictEqual(entries[1].ftype, CFS_FTYPE.NORMAL);
     assert.strictEqual(entries[1].size, 1234);
     assert.strictEqual(entries[1].closed, true);
 
     // Entry 2: PRG with mtime
-    assert.strictEqual(entries[2].name, 'HELLO');
+    assert.strictEqual(petsciiToReadable(entries[2].name), 'HELLO');
     assert.strictEqual(entries[2].typeSuffix, 'PRG');
     assert.strictEqual(entries[2].size, 4096);
     assert.ok(entries[2].mtime);
@@ -116,7 +116,7 @@ describe('CFS directory parser', function() {
     assert.strictEqual(entries[2].mtime.month, 5);
 
     // Entry 3: subdir
-    assert.strictEqual(entries[3].name, 'GAMES');
+    assert.strictEqual(petsciiToReadable(entries[3].name), 'GAMES');
     assert.strictEqual(entries[3].ftype, CFS_FTYPE.DIR);
 
     // Slots 4..15: empty
@@ -155,9 +155,9 @@ describe('CFS directory parser', function() {
     var entries = readCfsDirectorySector(buf, p0.cfsRootDir.addr);
     assert.ok(entries);
     assert.strictEqual(entries[0].isSelfRef, true);
-    assert.strictEqual(entries[0].name, 'VICE PARTITION 1');
+    assert.strictEqual(petsciiToReadable(entries[0].name), 'VICE PARTITION 1');
     assert.strictEqual(entries[0].ftype, CFS_FTYPE.DIR);
-    assert.strictEqual(entries[1].name, '%DELETED  FILES%');
+    assert.strictEqual(petsciiToReadable(entries[1].name), '%DELETED  FILES%');
     assert.strictEqual(entries[1].ftype, CFS_FTYPE.DIR);
     // All other slots empty on this fresh image
     for (var i = 2; i < 16; i++) {

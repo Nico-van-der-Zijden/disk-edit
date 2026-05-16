@@ -175,7 +175,7 @@ function renderIde64PartitionList() {
         enterIde64Partition(idx);
       } else {
         showModal(p.typeName + ' partition', [
-          '"' + (p.name || ('Partition ' + idx)) + '" is a ' + p.typeName + ' partition.',
+          '"' + (petsciiToReadable(p.name) || ('Partition ' + idx)) + '" is a ' + p.typeName + ' partition.',
           'Only CFS partitions are planned for the editor; other types stay informational.',
         ]);
       }
@@ -196,12 +196,12 @@ function enterIde64Partition(idx) {
   var p = hddPartitions[idx];
   if (!p || p.type !== 0x01) return;
   if (!p.cfsRootDir || !p.cfsRootDir.lba) {
-    showModal('CFS partition', ['Partition "' + (p.name || ('#' + idx)) + '" has no valid root directory pointer.']);
+    showModal('CFS partition', ['Partition "' + (petsciiToReadable(p.name) || ('#' + idx)) + '" has no valid root directory pointer.']);
     return;
   }
   var entries = readCfsDirectory(hddBuffer, p.cfsRootDir.addr);
   if (!entries) {
-    showModal('CFS partition', ['Could not read the root directory for partition "' + (p.name || ('#' + idx)) + '".']);
+    showModal('CFS partition', ['Could not read the root directory for partition "' + (petsciiToReadable(p.name) || ('#' + idx)) + '".']);
     return;
   }
   cfsPartitionIdx = idx;
@@ -235,7 +235,7 @@ function leaveCfsPartition() {
 function enterCfsSubdir(entry) {
   if (!entry || entry.ftype !== CFS_FTYPE.DIR) return;
   if (!entry.dataTreePtr || !entry.dataTreePtr.lba) {
-    showModal('CFS subdirectory', ['"' + entry.name + '" has no valid directory sector pointer.']);
+    showModal('CFS subdirectory', ['"' + petsciiToReadable(entry.name) + '" has no valid directory sector pointer.']);
     return;
   }
   cfsDirStack.push({ dirLba: cfsDirLba, name: _cfsCurrentDirDisplayName() });
@@ -305,28 +305,18 @@ function renderCfsDirectoryView() {
       '<span class="dir-icons"></span>' +
     '</div>' +
     '<div class="dir-listing">' +
-    '<div class="dir-entry dir-parent-row" data-cfs-leave="1">' +
+    // Single ".." parent row — same shape as the CBM-DOS / DHD parent
+    // row in ui-render.js. Goes up one level: subdir → parent, or
+    // (at partition root) → the HDD partition list.
+    '<div class="dir-entry dir-parent-row" id="dir-parent" data-cfs-back="1">' +
       '<span class="dir-grip"></span>' +
-      '<span class="dir-blocks"></span>' +
-      '<span class="dir-name">&laquo; back to partition list</span>' +
+      '<span class="dir-blocks"><i class="fa-solid fa-arrow-left" style="font-size:11px"></i></span>' +
+      '<span class="dir-name"><i class="fa-solid fa-folder-open" style="font-size:11px;margin-right:4px"></i>..</span>' +
       '<span class="dir-type"></span>' +
       '<span class="dir-cfs-mtime"></span>' +
       '<span class="dir-cfs-attrs"></span>' +
       '<span class="dir-icons"></span>' +
     '</div>';
-  if (cfsDirStack.length > 0) {
-    var parentName = cfsDirStack[cfsDirStack.length - 1].name || '..';
-    html +=
-      '<div class="dir-entry dir-parent-row" data-cfs-up="1">' +
-        '<span class="dir-grip"></span>' +
-        '<span class="dir-blocks"></span>' +
-        '<span class="dir-name">&uarr; up to ' + escHtml(parentName) + '</span>' +
-        '<span class="dir-type"></span>' +
-        '<span class="dir-cfs-mtime"></span>' +
-        '<span class="dir-cfs-attrs"></span>' +
-        '<span class="dir-icons"></span>' +
-      '</div>';
-  }
   // Import row — multi-level trees in place, so anything up to a few
   // MiB works. UI cap of 4 MiB matches the depth-2 ceiling and is
   // generous for typical C64 use (covers full D81 / D2M imports).
@@ -376,7 +366,10 @@ function renderCfsDirectoryView() {
 
     var deletedCls = (e.ftype === CFS_FTYPE.DEL) ? ' deleted' : '';
     var enterableSubdir = (e.ftype === CFS_FTYPE.DIR);
-    var rowTitle = e.name + ' — ' + (e.size + ' bytes');
+    // Tooltip renders in the browser's default font, not the C64 PUA
+    // font — strip PETSCII codepoints back to plain ASCII so it doesn't
+    // come out as ??? / boxes.
+    var rowTitle = petsciiToReadable(e.name) + ' — ' + (e.size + ' bytes');
 
     html +=
       '<div class="dir-entry' + deletedCls + '" data-cfs-entry="' + absIdx + '" title="' + escHtml(rowTitle) + '">' +
@@ -403,15 +396,14 @@ function renderCfsDirectoryView() {
   '</div>';
   content.innerHTML = html;
 
-  // Back-to-partition-list row
-  content.querySelectorAll('.dir-entry[data-cfs-leave]').forEach(function(row) {
-    row.addEventListener('click', function() { leaveCfsPartition(); });
-    row.addEventListener('dblclick', function() { leaveCfsPartition(); });
-  });
-  // Up-to-parent row (only present in subdirs)
-  content.querySelectorAll('.dir-entry[data-cfs-up]').forEach(function(row) {
-    row.addEventListener('click', function() { leaveCfsSubdir(); });
-    row.addEventListener('dblclick', function() { leaveCfsSubdir(); });
+  // ".." parent row — pops one level. Same handler as DHD's parent row.
+  content.querySelectorAll('.dir-entry[data-cfs-back]').forEach(function(row) {
+    function goBack() {
+      if (cfsDirStack.length > 0) leaveCfsSubdir();
+      else leaveCfsPartition();
+    }
+    row.addEventListener('click', goBack);
+    row.addEventListener('dblclick', goBack);
   });
   // Import file row
   content.querySelectorAll('.dir-entry[data-cfs-import]').forEach(function(row) {
@@ -483,7 +475,7 @@ function _cfsReadLinkTarget(entry) {
 // current dir). Cycle-detected when target itself is another LNK.
 function showCfsLinkTarget(entry) {
   if (!entry || !entry.dataTreePtr || !entry.dataTreePtr.lba) {
-    showModal('CFS link', ['"' + entry.name + '" has no target pointer.']);
+    showModal('CFS link', ['"' + petsciiToReadable(entry.name) + '" has no target pointer.']);
     return;
   }
   if (!hddPartitions || cfsPartitionIdx < 0) return;
@@ -502,14 +494,14 @@ function showCfsLinkTarget(entry) {
     visited[key] = true;
     var target = _cfsReadLinkTarget(current);
     if (!target) {
-      showModal('CFS link', ['"' + current.name + '" → (empty target)']);
+      showModal('CFS link', ['"' + petsciiToReadable(current.name) + '" → (empty target)']);
       return;
     }
     var startLba = target.charAt(0) === '/' ? partition.cfsRootDir.addr : cfsDirLba;
     current = cfsResolvePath(hddBuffer, startLba, target);
     if (!current) {
       showModal('CFS link', [
-        '"' + entry.name + '" → ' + target,
+        '"' + petsciiToReadable(entry.name) + '" → ' + target,
         'Target not found in this partition.',
       ]);
       return;
@@ -521,7 +513,7 @@ function showCfsLinkTarget(entry) {
   if (current.ftype === CFS_FTYPE.DIR) {
     enterCfsSubdir(current);
   } else if (current.ftype === CFS_FTYPE.DEL) {
-    showModal('CFS link', ['"' + entry.name + '" resolves to a deleted entry.']);
+    showModal('CFS link', ['"' + petsciiToReadable(entry.name) + '" resolves to a deleted entry.']);
   } else {
     showCfsFileHexViewer(current);
   }
@@ -534,21 +526,23 @@ function showCfsLinkTarget(entry) {
 // CBM directory entry offset, so reusing them requires more plumbing.
 function showCfsFileHexViewer(entry) {
   if (!entry || !entry.dataTreePtr || !entry.dataTreePtr.lba) {
-    showModal('CFS file', ['"' + entry.name + '" has no data tree pointer.']);
+    showModal('CFS file', ['"' + petsciiToReadable(entry.name) + '" has no data tree pointer.']);
     return;
   }
   var rootLba = entry.dataTreePtr.addr;
   var res = readCfsFileData(hddBuffer, rootLba, entry.size);
   if (res.error) {
-    showModal('CFS file', ['Error reading "' + entry.name + '": ' + res.error]);
+    showModal('CFS file', ['Error reading "' + petsciiToReadable(entry.name) + '": ' + res.error]);
     return;
   }
   var payload = res.data;
   var totalBytes = payload.length;
-  var suggestedName = entry.name + (entry.typeSuffix ? '.' + entry.typeSuffix.toLowerCase() : '');
+  // Download filename — plain ASCII so OS file pickers accept it cleanly.
+  var readableName = petsciiToReadable(entry.name);
+  var suggestedName = readableName + (entry.typeSuffix ? '.' + entry.typeSuffix.toLowerCase() : '');
 
   var html = '<div class="text-md text-muted mb-md">' +
-    escHtml(entry.name) + (entry.typeSuffix ? ' (' + escHtml(entry.typeSuffix) + ')' : '') +
+    escHtml(readableName) + (entry.typeSuffix ? ' (' + escHtml(entry.typeSuffix) + ')' : '') +
     ' — ' + totalBytes + ' bytes' +
     '</div>' +
     '<div class="hex-editor">';
@@ -580,7 +574,7 @@ function showCfsFileHexViewer(entry) {
   }
   html += '</div>';
 
-  var body = showViewerModal('Hex — ' + entry.name, html, 'large');
+  var body = showViewerModal('Hex — ' + readableName, html, 'large');
 
   // Footer: View as / Rename / Attrs / Download / Close
   var footer = document.querySelector('#modal-overlay .modal-footer');
@@ -595,12 +589,12 @@ function showCfsFileHexViewer(entry) {
 
   // PETSCII view — opens a second modal via the shared viewer with our bytes.
   document.getElementById('cfs-view-petscii').addEventListener('click', function() {
-    showFilePetsciiViewer(0, { data: payload, name: entry.name });
+    showFilePetsciiViewer(0, { data: payload, name: readableName });
   });
   // BASIC view — only meaningful for PRG-ish content but show it anyway;
   // the viewer surfaces "not a valid BASIC program" on its own.
   document.getElementById('cfs-view-basic').addEventListener('click', function() {
-    showFileBasicViewer(0, { data: payload, name: entry.name });
+    showFileBasicViewer(0, { data: payload, name: readableName });
   });
   document.getElementById('cfs-rename').addEventListener('click', function() {
     showCfsRenameDialog(entry);
@@ -634,18 +628,19 @@ function showCfsRenameDialog(entry) {
   var titleEl = document.getElementById('modal-title');
   var body = document.getElementById('modal-body');
   var footer = document.querySelector('#modal-overlay .modal-footer');
-  titleEl.textContent = 'Rename — ' + entry.name;
+  var readableName = petsciiToReadable(entry.name);
+  titleEl.textContent = 'Rename — ' + readableName;
   body.innerHTML =
     '<div class="text-md mb-md">New name (up to 16 characters):</div>' +
     '<input type="text" id="cfs-rename-input" maxlength="16" style="width:100%;font-family:monospace;font-size:14px;padding:6px" />';
   var input = document.getElementById('cfs-rename-input');
-  input.value = entry.name;
+  input.value = readableName;
   setTimeout(function() { input.focus(); input.select(); }, 0);
   footer.innerHTML = '<button id="cfs-rename-ok">OK</button> <button id="cfs-rename-cancel">Cancel</button>';
   function commit() {
     var newName = _sanitiseCfsName(input.value, 'Rename');
     if (newName == null) return;
-    if (newName === entry.name) {
+    if (newName === readableName) {
       document.getElementById('modal-overlay').classList.remove('open');
       return;
     }
@@ -1032,7 +1027,7 @@ function showCfsDeleteConfirm(entry) {
   var footer = document.querySelector('#modal-overlay .modal-footer');
   titleEl.textContent = 'Delete file';
   body.innerHTML =
-    '<div class="text-md mb-md">Delete <b>' + escHtml(entry.name) + '</b> (' + entry.size + ' bytes)?</div>' +
+    '<div class="text-md mb-md">Delete <b>' + escHtml(petsciiToReadable(entry.name)) + '</b> (' + entry.size + ' bytes)?</div>' +
     '<div class="text-sm text-muted">Data sectors are returned to the partition\'s free-block pool. The directory entry is marked deleted with the original tree pointer preserved (recovery context).</div>';
   footer.innerHTML = '<button id="cfs-del-ok">Delete</button> <button id="cfs-del-cancel">Cancel</button>';
   document.getElementById('cfs-del-ok').addEventListener('click', function() {
@@ -1059,10 +1054,11 @@ function showCfsAttrsDialog(entry) {
   var titleEl = document.getElementById('modal-title');
   var body = document.getElementById('modal-body');
   var footer = document.querySelector('#modal-overlay .modal-footer');
-  titleEl.textContent = 'Attributes — ' + entry.name;
+  var readableAttrName = petsciiToReadable(entry.name);
+  titleEl.textContent = 'Attributes — ' + readableAttrName;
   var attr = entry.attrByte;
   body.innerHTML =
-    '<div class="text-md mb-md">File: <b>' + escHtml(entry.name) + '</b></div>' +
+    '<div class="text-md mb-md">File: <b>' + escHtml(readableAttrName) + '</b></div>' +
     '<label style="display:block;margin:6px 0"><input type="checkbox" id="cfs-attr-c"' +
       ((attr & 0x80) ? ' checked' : '') + ' /> Closed (active file, not deleted)</label>' +
     '<label style="display:block;margin:6px 0"><input type="checkbox" id="cfs-attr-d"' +

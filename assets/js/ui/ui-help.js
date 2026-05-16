@@ -285,6 +285,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.120', title: 'IDE64 .hdd — PETSCII filenames + unified ".." navigation', items: [
+      'Filenames and the directory-header partition name now decode as PETSCII (PUA codepoints) so the C64 font renders glyphs the same way it does for D64 / DHD entries. Plain-text contexts (tooltips, modal titles + bodies, download filenames, viewer headers, rename-input value) feed the name through petsciiToReadable so they don\'t come out as ??? boxes',
+      'CFS directory view now uses a single ".." row (same shape as the DHD / D64 / DNP parent row: folder-open icon, left-arrow blocks column). Click or double-click goes up one level — into the parent subdirectory, or out to the partition list when at the partition root. Drops the earlier "« back to partition list" + "↑ up to ..." stacked rows',
+    ]},
     { ver: '1.3.119', title: 'IDE64 .hdd — container view polish, partition rename/delete via the menu', items: [
       'Partition list now hides empty slots and uses the same File → New / Rename / Delete Partition menu items (with right-click context-menu) that the CMD container view uses. Selection-on-right-click works; menu items hide when nothing is selectable',
       'Rename Partition is an inline PETSCII editor on the row (same UX as DHD/RAMLink/FD) with the on-screen PETSCII keyboard. Names decode as PETSCII (PUA codepoints render via the C64 font in the list, plain ASCII in modals)',

@@ -32,7 +32,7 @@ describe('CFS write — rename', function() {
 
     assert.strictEqual(cfsWriteDirEntryName(buf, 10, 1, 'NEWFILE'), true);
     var entries = readCfsDirectorySector(buf, 10);
-    assert.strictEqual(entries[1].name, 'NEWFILE');
+    assert.strictEqual(petsciiToReadable(entries[1].name), 'NEWFILE');
 
     // Type and attribute byte untouched
     assert.strictEqual(entries[1].typeSuffix, 'PRG');
@@ -152,7 +152,7 @@ describe('CFS delete + import (Phase 4b)', function() {
     // Read the entry back
     var entries = readCfsDirectorySector(buf, res.dirLba);
     var e = entries[res.slotIndex];
-    assert.strictEqual(e.name, 'HELLO');
+    assert.strictEqual(petsciiToReadable(e.name), 'HELLO');
     assert.strictEqual(e.size, 100);
     assert.strictEqual(e.typeSuffix, 'PRG');
     assert.strictEqual(e.ftype, 1);
@@ -430,14 +430,14 @@ describe('CFS delete + import (Phase 4b)', function() {
     // Parent dir now has the outgoing GAMES entry
     var parentEntries = readCfsDirectorySector(buf, 5);
     var gamesInParent = parentEntries[res.slotIndex];
-    assert.strictEqual(gamesInParent.name, 'GAMES');
+    assert.strictEqual(petsciiToReadable(gamesInParent.name), 'GAMES');
     assert.strictEqual(gamesInParent.ftype, CFS_FTYPE.DIR);
     assert.strictEqual(gamesInParent.typeSuffix, 'DIR');
     assert.strictEqual(gamesInParent.dataTreePtr.addr, res.newDirLba);
 
     // Walking into the new dir gives a self-reference at slot 0
     var subEntries = readCfsDirectorySector(buf, res.newDirLba);
-    assert.strictEqual(subEntries[0].name, 'GAMES');
+    assert.strictEqual(petsciiToReadable(subEntries[0].name), 'GAMES');
     assert.strictEqual(subEntries[0].ftype, CFS_FTYPE.DIR);
     assert.strictEqual(subEntries[0].isSelfRef, true);
     assert.strictEqual(subEntries[0].dataTreePtr.addr, 5); // parent ptr at \$14..\$17
@@ -480,10 +480,10 @@ describe('CFS delete + import (Phase 4b)', function() {
 
     // Root directory: self-ref + %DELETED FILES% + empty slots
     var entries = readCfsDirectory(buf, p0.cfsRootDir.addr);
-    assert.strictEqual(entries[0].name, 'MAIN');
+    assert.strictEqual(petsciiToReadable(entries[0].name), 'MAIN');
     assert.strictEqual(entries[0].ftype, CFS_FTYPE.DIR);
     assert.strictEqual(entries[0].isSelfRef, true);
-    assert.strictEqual(entries[1].name, '%DELETED  FILES%');
+    assert.strictEqual(petsciiToReadable(entries[1].name), '%DELETED  FILES%');
     for (var i = 2; i < 16; i++) assert.strictEqual(entries[i].empty, true);
 
     // Importing a file works on the fresh image
@@ -492,7 +492,7 @@ describe('CFS delete + import (Phase 4b)', function() {
     var imp = cfsImportFile(buf, p0.startLba, p0.endLba, p0.cfsRootDir.addr, 'HELLO', payload);
     assert.ok(imp.ok, imp.error || '');
     var after = readCfsDirectory(buf, p0.cfsRootDir.addr);
-    assert.ok(after.some(function(e) { return e.name === 'HELLO' && e.size === 200; }));
+    assert.ok(after.some(function(e) { return petsciiToReadable(e.name) === 'HELLO' && e.size === 200; }));
   });
 
   it('cfsAddPartitionToTable + cfsInitPartitionStorage build a working second partition', function() {
@@ -527,7 +527,7 @@ describe('CFS delete + import (Phase 4b)', function() {
 
     // Drilling into the new partition works
     var p2Entries = readCfsDirectory(buf, active[1].cfsRootDir.addr);
-    assert.strictEqual(p2Entries[0].name, 'SECOND');
+    assert.strictEqual(petsciiToReadable(p2Entries[0].name), 'SECOND');
     assert.strictEqual(p2Entries[0].isSelfRef, true);
   });
 
@@ -543,7 +543,7 @@ describe('CFS delete + import (Phase 4b)', function() {
     cfsCreateSubdir(buf, partStart, partEnd, 5, 'INNER');
     var resolved = cfsResolvePath(buf, 5, 'INNER');
     assert.ok(resolved);
-    assert.strictEqual(resolved.name, 'INNER');
+    assert.strictEqual(petsciiToReadable(resolved.name), 'INNER');
     assert.strictEqual(resolved.ftype, CFS_FTYPE.DIR);
   });
 

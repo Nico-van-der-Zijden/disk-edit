@@ -906,11 +906,16 @@ function cfsResolvePath(buffer, startDirLba, path) {
   for (var i = 0; i < parts.length; i++) {
     var entries = readCfsDirectory(buffer, dirLba);
     if (!entries) return null;
+    // Compare via petsciiToReadable on both sides: entry names carry
+    // PUA-PETSCII codepoints (so the C64 font renders them); the path
+    // string the caller passed is plain ASCII or a similar PUA form,
+    // either of which collapses to the same readable form.
+    var targetReadable = petsciiToReadable(parts[i]);
     var match = null;
     for (var j = 0; j < entries.length; j++) {
       var e = entries[j];
       if (e.empty || e.isSelfRef) continue;
-      if (e.name === parts[i]) { match = e; break; }
+      if (petsciiToReadable(e.name) === targetReadable) { match = e; break; }
     }
     if (!match) return null;
     if (i < parts.length - 1) {
@@ -981,13 +986,16 @@ function readCfsDirectorySector(buffer, dirLba) {
 
     var nameBytes = [];
     for (var n = 0; n < 16; n++) nameBytes.push(data[off + n]);
-    var name = '';
-    for (var k = 0; k < 16; k++) {
-      var c = nameBytes[k];
-      if (c === 0x00 || c === 0xA0) break;
-      name += String.fromCharCode(c);
+    // Trim length at the byte level (stop at $A0 / $00, then strip
+    // trailing $20 runs) before decoding PETSCII → PUA codepoints. PUA
+    // chars don't match JS regex `\s` so post-decode trim wouldn't
+    // catch the space-padded names we get from createEmptyHdd.
+    var nlen = 16;
+    for (var nb = 0; nb < 16; nb++) {
+      if (data[off + nb] === 0xA0 || data[off + nb] === 0x00) { nlen = nb; break; }
     }
-    name = name.replace(/ +$/, '');
+    while (nlen > 0 && data[off + nlen - 1] === 0x20) nlen--;
+    var name = readPetsciiString(data, off, nlen, false);
 
     var sizeLo = data[off + 0x10] | (data[off + 0x11] << 8) | (data[off + 0x12] << 16);
     var sizeHi = data[off + 0x13];
