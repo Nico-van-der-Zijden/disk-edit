@@ -256,6 +256,7 @@ function enterIde64Partition(idx) {
   cfsDirLba = p.cfsRootDir.addr;
   cfsDirEntries = entries;
   cfsDirStack = [];
+  cfsEnteredAs = null; // partition root → header uses self-ref/partition name
   // Swap the descriptor so renderer / menu-state code that branches on
   // currentFormat.filesystem picks the CFS path. currentBuffer stays on
   // the whole .hdd buffer — Phase 2 doesn't slice the partition out.
@@ -271,6 +272,7 @@ function leaveCfsPartition() {
   cfsDirLba = 0;
   cfsDirEntries = null;
   cfsDirStack = [];
+  cfsEnteredAs = null;
   currentFormat = DISK_FORMATS.hdd;
   selectedEntryIndex = -1;
   refreshIde64View();
@@ -286,7 +288,8 @@ function enterCfsSubdir(entry) {
     showModal('CFS subdirectory', ['"' + petsciiToReadable(entry.name) + '" has no valid directory sector pointer.']);
     return;
   }
-  cfsDirStack.push({ dirLba: cfsDirLba, name: _cfsCurrentDirDisplayName() });
+  cfsDirStack.push({ dirLba: cfsDirLba, name: _cfsCurrentDirDisplayName(), enteredAs: cfsEnteredAs });
+  cfsEnteredAs = entry.name; // PUA-PETSCII string from readCfsDirectorySector
   cfsDirLba = entry.dataTreePtr.addr;
   cfsDirEntries = null;
   selectedEntryIndex = -1;
@@ -298,15 +301,21 @@ function leaveCfsSubdir() {
   if (cfsDirStack.length === 0) return;
   var parent = cfsDirStack.pop();
   cfsDirLba = parent.dirLba;
+  cfsEnteredAs = parent.enteredAs != null ? parent.enteredAs : null;
   cfsDirEntries = null;
   selectedEntryIndex = -1;
   refreshIde64View();
 }
 
-// Display name for the currently-viewed directory: prefer the entry-0
-// self-reference's name (every CFS dir's first slot carries its own
-// name); fall back to the partition name if that's missing.
+// Display name for the currently-viewed directory: the parent's
+// outgoing-entry name we entered through. Falls back to the dir's own
+// self-reference (slot 0 of the first sector) when there's no parent
+// (= partition root) and finally to the partition name. Self-ref and
+// outgoing entries can drift apart if a rename only updated one of
+// them — using the outgoing entry as canonical matches what the user
+// sees in the parent listing.
 function _cfsCurrentDirDisplayName() {
+  if (cfsEnteredAs) return cfsEnteredAs;
   if (cfsDirEntries && cfsDirEntries.length > 0 && cfsDirEntries[0].name) {
     return cfsDirEntries[0].name;
   }
@@ -469,7 +478,7 @@ function renderCfsDirectoryView() {
     var nameHtml = '"' + nameStr + '"' + ' '.repeat(Math.max(0, 16 - richName.length));
 
     html +=
-      '<div class="dir-entry' + deletedCls + '" data-cfs-entry="' + absIdx + '" title="' + escHtml(rowTitle) + '">' +
+      '<div class="dir-entry' + deletedCls + '" data-cfs-entry="' + absIdx + '" draggable="true" title="' + escHtml(rowTitle) + '">' +
         '<span class="dir-grip"><i class="fa-solid fa-grip-vertical"></i></span>' +
         '<span class="dir-blocks">' + sizeStr + '</span>' +
         '<span class="dir-name">' + nameHtml + '</span>' +
@@ -516,14 +525,51 @@ function renderCfsDirectoryView() {
     row.addEventListener('dblclick', goBack);
   });
 
-  // File rows: click selects; dblclick on DIR is reserved for Phase 3
+  // File rows: click selects; dblclick on DIR is reserved for Phase 3.
+  // Click also supports Ctrl (toggle) and Shift (range) multi-select,
+  // mirroring CBM-DOS in ui-render.js. selectedEntries carries the
+  // absolute indices into cfsDirEntries (same convention as
+  // selectedEntryIndex), so downstream batch handlers can iterate it.
   content.querySelectorAll('.dir-entry[data-cfs-entry]').forEach(function(row) {
     var idx = parseInt(row.dataset.cfsEntry, 10);
     var entry = cfsDirEntries[idx];
-    row.addEventListener('click', function() {
-      content.querySelectorAll('.dir-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
-      row.classList.add('selected');
-      selectedEntryIndex = idx;
+    row.addEventListener('click', function(ev) {
+      var allRows = Array.prototype.slice.call(content.querySelectorAll('.dir-entry[data-cfs-entry]'));
+      if (ev.ctrlKey) {
+        if (row.classList.contains('selected')) {
+          row.classList.remove('selected');
+          selectedEntries = selectedEntries.filter(function(o) { return o !== idx; });
+          selectedEntryIndex = selectedEntries.length > 0 ? selectedEntries[selectedEntries.length - 1] : -1;
+        } else {
+          row.classList.add('selected');
+          selectedEntries.push(idx);
+          selectedEntryIndex = idx;
+        }
+      } else if (ev.shiftKey && selectedEntryIndex >= 0) {
+        var allIdx = allRows.map(function(r) { return parseInt(r.dataset.cfsEntry, 10); });
+        var startIdx = allIdx.indexOf(selectedEntryIndex);
+        var endIdx = allIdx.indexOf(idx);
+        if (startIdx < 0 || endIdx < 0) {
+          allRows.forEach(function(r) { r.classList.remove('selected'); });
+          row.classList.add('selected');
+          selectedEntryIndex = idx;
+          selectedEntries = [idx];
+        } else {
+          if (startIdx > endIdx) { var tmp = startIdx; startIdx = endIdx; endIdx = tmp; }
+          allRows.forEach(function(r) { r.classList.remove('selected'); });
+          selectedEntries = [];
+          for (var si = startIdx; si <= endIdx; si++) {
+            allRows[si].classList.add('selected');
+            selectedEntries.push(allIdx[si]);
+          }
+          selectedEntryIndex = idx;
+        }
+      } else {
+        allRows.forEach(function(r) { r.classList.remove('selected'); });
+        row.classList.add('selected');
+        selectedEntryIndex = idx;
+        selectedEntries = [idx];
+      }
       updateEntryMenuState();
     });
     row.addEventListener('dblclick', function(ev) {
@@ -906,6 +952,16 @@ function startInlineRenameCfsEntry(entryEl) {
       var data = new Uint8Array(hddBuffer);
       for (var wi = 0; wi < 16; wi++) data[entryOff + wi] = newBytes[wi];
       cfsTouchEntryMtime(hddBuffer, entry.dirLba, entry.index);
+      // If the renamed entry is a DIR, also rewrite the child dir's
+      // slot-0 self-reference name so the two stay in sync. Without
+      // this, IDEDOS-style drift returns the next time something edits
+      // the parent without touching the child. See
+      // project_cfs_dir_self_ref_naming.md memory for the open question
+      // about which side is canonical on real IDEDOS / VICE.
+      if (entry.ftype === CFS_FTYPE.DIR && entry.dataTreePtr && entry.dataTreePtr.lba) {
+        var childBase = entry.dataTreePtr.addr * 512;
+        for (var sri = 0; sri < 16; sri++) data[childBase + sri] = newBytes[sri];
+      }
     }
     cleanup();
     refreshIde64View();

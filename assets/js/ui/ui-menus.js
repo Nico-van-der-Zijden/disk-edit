@@ -217,12 +217,18 @@ function tryShowEntryContextMenu(target, x, y) {
   } else if (entry && entry.dataset.cfsEntry !== undefined) {
     // CFS file / subdir row — select via data-cfs-entry. The index is
     // the absolute slot in cfsDirEntries (across all chained dir
-    // sectors), not a byte offset.
-    document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
-    entry.classList.add('selected');
-    selectedEntryIndex = parseInt(entry.dataset.cfsEntry, 10);
-    selectedEntries = [selectedEntryIndex];
-    updateEntryMenuState();
+    // sectors), not a byte offset. Mirror the CBM-DOS branch below:
+    // right-click *inside* a multi-selection preserves the selection
+    // (so batch handlers act on every row); right-click *outside* it
+    // retargets to just the clicked row.
+    var cfsIdx = parseInt(entry.dataset.cfsEntry, 10);
+    if (selectedEntries.indexOf(cfsIdx) < 0) {
+      document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
+      entry.classList.add('selected');
+      selectedEntryIndex = cfsIdx;
+      selectedEntries = [cfsIdx];
+      updateEntryMenuState();
+    }
   } else if (entry && entry.dataset.offset) {
     var offset = parseInt(entry.dataset.offset, 10);
     // Right-click on a file outside the current multi-selection retargets
@@ -880,7 +886,9 @@ function updateEntryMenuState() {
     // / slot heuristics since neither is guaranteed stable.
     var cfsIsDeldirRef = cfsHasEntry && typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(cfsEntrySel);
     var cfsEditableEntry = cfsHasEntry && !cfsIsDeleted && !cfsIsDeldirRef;
-    document.getElementById('opt-rename').classList.toggle('disabled', !cfsEditableEntry);
+    // Rename is single-only — both startInlineRenameCfsEntry and the
+    // CBM-DOS analogue refuse with multi-select. Disable in multi too.
+    document.getElementById('opt-rename').classList.toggle('disabled', !cfsEditableEntry || multiSelect);
     document.getElementById('opt-add-partition').classList.toggle('disabled', false);
     // Scratch: any non-empty, non-already-deleted, non-system entry.
     // Label flips to "Delete Directory" for DIR entries — directory
@@ -915,7 +923,9 @@ function updateEntryMenuState() {
     var cfsSizeEditable = cfsEditableEntry &&
       cfsEntrySel.ftype !== CFS_FTYPE.DIR &&
       cfsEntrySel.ftype !== CFS_FTYPE.LNK;
-    document.getElementById('opt-block-size').classList.toggle('disabled', !cfsSizeEditable);
+    // opt-block-size is inline DOM-edit on one row (single-only). Set
+    // Actual File Size batches via cfsCountFileDataSectors per entry.
+    document.getElementById('opt-block-size').classList.toggle('disabled', !cfsSizeEditable || multiSelect);
     document.getElementById('opt-recalc-size').classList.toggle('disabled', !cfsSizeEditable);
     // Name Case: case-flipping the system "<<DELETED FILES>>" entry
     // would break IDEDOS's name-match recognition. Allow only on
@@ -962,14 +972,22 @@ function updateEntryMenuState() {
     // disabled when the dir chain has no free slot (cfsFindEmptyDirSlot
     // checks both truly-empty and DEL-fallback slots, mirroring import).
     var cfsHasFreeSlot = !!cfsFindEmptyDirSlot(hddBuffer, cfsDirLba);
-    document.getElementById('opt-insert').classList.toggle('disabled', !cfsHasFreeSlot);
-    // Insert → Separator submenu: same gate as opt-insert.
-    document.getElementById('opt-insert-sep').classList.toggle('disabled', !cfsHasFreeSlot);
+    // Insert / Insert Separator are single-action; disable on multi.
+    document.getElementById('opt-insert').classList.toggle('disabled', !cfsHasFreeSlot || multiSelect);
+    document.getElementById('opt-insert-sep').classList.toggle('disabled', !cfsHasFreeSlot || multiSelect);
     // File → Import File: dispatches to showCfsImportPicker in CFS view.
     // Same free-slot gate; the CBM-DOS canInsertFile() check at line
     // ~810 would reject every CFS view since currentFormat shape doesn't
     // match.
     document.getElementById('opt-import').classList.toggle('disabled', !cfsHasFreeSlot);
+    // Export: live file entries (NORMAL / REL) only — dirs/links/DEL
+    // have no data to dump. opt-export-menu is the parent submenu; the
+    // CBM-DOS code keeps it disabled outside CBM contexts so override
+    // here so the CFS user can reach Export File.
+    var cfsExportable = cfsHasEntry && !cfsIsDeleted &&
+      (cfsEntrySel.ftype === CFS_FTYPE.NORMAL || cfsEntrySel.ftype === CFS_FTYPE.REL);
+    document.getElementById('opt-export').classList.toggle('disabled', !cfsExportable);
+    document.getElementById('opt-export-menu').classList.toggle('disabled', !cfsExportable);
     // Align: handler routes to alignCfsFilename in CFS view. Gate on
     // the same editable-entry flag we use for Rename / Scratch so the
     // system <<DELETED FILES>> entry stays protected.

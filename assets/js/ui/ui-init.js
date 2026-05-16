@@ -172,34 +172,68 @@ document.addEventListener('drop', async function(e) {
 // Make dir entries draggable to OS (export on drag)
 document.addEventListener('dragstart', function(e) {
   var entry = e.target.closest('.dir-entry:not(.dir-header-row):not(.dir-parent-row)');
-  if (!entry || !currentBuffer || !entry.dataset.offset) return;
+  if (!entry) return;
 
-  var entryOff = parseInt(entry.dataset.offset, 10);
-  var data = new Uint8Array(currentBuffer);
-  var typeByte = data[entryOff + 2];
-  var typeIdx = typeByte & 0x07;
-  if (typeIdx < 1 || typeIdx > 4 || !(typeByte & 0x80)) return;
-  // GEOS VLIR: dir T/S is the index sector, not file data — use Export CVT
-  if (isVlirFile(data, entryOff)) return;
+  // Helper: turn one .dir-entry row into { name, ext, data } or null.
+  // Centralises the CFS vs CBM-DOS read paths so the multi-drag branch
+  // below can build a payload list and the single-drag branch reuses
+  // the same logic.
+  function buildPayloadFromRow(row) {
+    if (row.dataset.cfsEntry !== undefined && typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0 && cfsDirEntries) {
+      var ce = cfsDirEntries[parseInt(row.dataset.cfsEntry, 10)];
+      if (!ce || ce.empty) return null;
+      if (ce.ftype === CFS_FTYPE.DIR || ce.ftype === CFS_FTYPE.LNK || ce.ftype === CFS_FTYPE.DEL) return null;
+      if (!ce.dataTreePtr || !ce.dataTreePtr.lba) return null;
+      var cRes = readCfsFileData(hddBuffer, ce.dataTreePtr.addr, ce.size);
+      if (cRes.error || !cRes.data || cRes.data.length === 0) return null;
+      var cName = petsciiToReadable(ce.name).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+      return {
+        name: cName || 'export',
+        ext: '.' + (ce.typeSuffix || 'PRG').toLowerCase(),
+        data: cRes.data,
+      };
+    }
+    if (currentBuffer && row.dataset.offset) {
+      var entryOff = parseInt(row.dataset.offset, 10);
+      var data = new Uint8Array(currentBuffer);
+      var typeByte = data[entryOff + 2];
+      var typeIdx = typeByte & 0x07;
+      if (typeIdx < 1 || typeIdx > 4 || !(typeByte & 0x80)) return null;
+      if (isVlirFile(data, entryOff)) return null; // GEOS VLIR needs Export CVT
+      var result = readFileData(currentBuffer, entryOff);
+      if (result.error || result.data.length === 0) return null;
+      var extMap = { 1: '.seq', 2: '.prg', 3: '.usr', 4: '.rel' };
+      var rName = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+      return {
+        name: rName || 'export',
+        ext: extMap[typeIdx] || '.prg',
+        data: result.data,
+      };
+    }
+    return null;
+  }
 
-  var result = readFileData(currentBuffer, entryOff);
-  if (result.error || result.data.length === 0) return;
+  var primary = buildPayloadFromRow(entry);
+  if (!primary) return;
 
-  var extMap = { 1: '.seq', 2: '.prg', 3: '.usr', 4: '.rel' };
-  var ext = extMap[typeIdx] || '.prg';
-  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
-  if (!name) name = 'export';
-
-  var blob = new Blob([result.data], { type: 'application/octet-stream' });
-  var url = URL.createObjectURL(blob);
-
-  // Set download data for drag to OS
+  // Set DownloadURL on the drag — this is what lets the user drop onto
+  // a folder window and get the file there. HTML5's DownloadURL is
+  // single-file by design, so the dragged row is the one that lands at
+  // the drop target.
+  var primaryBlob = new Blob([primary.data], { type: 'application/octet-stream' });
+  var primaryUrl = URL.createObjectURL(primaryBlob);
   try {
-    e.dataTransfer.setData('DownloadURL', 'application/octet-stream:' + name + ext + ':' + url);
+    e.dataTransfer.setData('DownloadURL', 'application/octet-stream:' + primary.name + primary.ext + ':' + primaryUrl);
   } catch (err) {
     // DownloadURL not supported in all browsers
   }
   e.dataTransfer.effectAllowed = 'copyMove';
+  // Multi-select drag only exports the dragged row. HTML5's DownloadURL
+  // protocol is single-file per event, and any side-channel download
+  // (a.click() on the other selected rows) bypasses the drop target —
+  // those files land in the OS Downloads folder regardless of where
+  // the user is dragging. For multi-file export, use File → Export
+  // File from the menu / context menu instead.
 });
 
 // CMD container loading + partition management lives in

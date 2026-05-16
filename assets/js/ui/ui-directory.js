@@ -1342,26 +1342,43 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
   // matching the CBM-DOS Remove Entry behavior — fall back to the last
   // remaining entry if we removed at the end of the list.
   if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-    var entry = cfsDirEntries[selectedEntryIndex];
-    if (!entry || entry.empty) return;
     var part = hddPartitions && hddPartitions[cfsPartitionIdx];
     if (!part) return;
     function _cfsRowVisible(e) {
       if (!e || e.empty || e.isSelfRef) return false;
-      if (e.ftype === CFS_FTYPE.DEL && !showDeleted) return false;
+      if (e.ftype === CFS_FTYPE.DEL && !e.closed && !showDeleted) return false;
       return true;
     }
-    // Visible position of the entry we're about to remove — count
-    // visible entries strictly before it in the flat cfsDirEntries
-    // array.
+    // Multi-select: gather candidates from selectedEntries (fallback to
+    // selectedEntryIndex). Skip protected and invalid entries silently —
+    // they're not part of what the user can act on in this batch.
+    var rawIdx = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+    var rmTargets = [];
+    for (var rti = 0; rti < rawIdx.length; rti++) {
+      var rmEnt = cfsDirEntries[rawIdx[rti]];
+      if (!rmEnt || rmEnt.empty) continue;
+      if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(rmEnt)) continue;
+      rmTargets.push({ idx: rawIdx[rti], entry: rmEnt });
+    }
+    if (rmTargets.length === 0) return;
+    // Visible position of the earliest removed entry, so the new
+    // selection lands at "what slid up into the same spot".
+    var firstAbsIdx = rmTargets[0].idx;
+    for (var ri = 0; ri < rmTargets.length; ri++) {
+      if (rmTargets[ri].idx < firstAbsIdx) firstAbsIdx = rmTargets[ri].idx;
+    }
     var prevVisIdx = 0;
-    for (var pvi = 0; pvi < selectedEntryIndex; pvi++) {
+    for (var pvi = 0; pvi < firstAbsIdx; pvi++) {
       if (_cfsRowVisible(cfsDirEntries[pvi])) prevVisIdx++;
     }
     pushUndo();
-    var res = cfsRemoveDirEntry(hddBuffer, part.startLba, part.endLba, entry, cfsDirLba);
-    if (!res.ok) {
-      showModal('Remove Entry failed', [res.error || 'Unknown error.']);
+    var rmFailures = [];
+    for (var rd = 0; rd < rmTargets.length; rd++) {
+      var rmRes = cfsRemoveDirEntry(hddBuffer, part.startLba, part.endLba, rmTargets[rd].entry, cfsDirLba);
+      if (!rmRes.ok) rmFailures.push(petsciiToReadable(rmTargets[rd].entry.name) + ': ' + (rmRes.error || 'unknown'));
+    }
+    if (rmFailures.length === rmTargets.length) {
+      showModal('Remove Entry failed', rmFailures);
       if (typeof popUndo === 'function') popUndo();
       return;
     }
@@ -1387,6 +1404,9 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
       selectedEntries = [];
     }
     updateEntryMenuState();
+    if (rmFailures.length > 0) {
+      showModal('Remove Entry — partial', ['Some entries could not be removed:'].concat(rmFailures));
+    }
     return;
   }
 
@@ -1487,10 +1507,16 @@ document.querySelectorAll('#opt-align .submenu .option').forEach(el => {
     // Route through alignCfsFilename which handles the CFS 32-byte
     // entry shape and skips system/protected entries.
     if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-      var entry = cfsDirEntries[selectedEntryIndex];
-      if (!entry || entry.empty) return;
+      var rawIdx = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+      var targets = [];
+      for (var ti = 0; ti < rawIdx.length; ti++) {
+        var ent = cfsDirEntries[rawIdx[ti]];
+        if (!ent || ent.empty) continue;
+        targets.push(ent);
+      }
+      if (targets.length === 0) return;
       pushUndo();
-      alignCfsFilename(entry, el.dataset.align);
+      for (var ai = 0; ai < targets.length; ai++) alignCfsFilename(targets[ai], el.dataset.align);
       refreshIde64View();
       return;
     }
@@ -1555,12 +1581,20 @@ document.getElementById('opt-recalc-size').addEventListener('click', (e) => {
   if (cfsPartitionIdx >= 0 && cfsDirEntries) {
     var part = hddPartitions && hddPartitions[cfsPartitionIdx];
     if (!part) return;
-    var entry = cfsDirEntries[selectedEntryIndex];
-    if (!entry || entry.empty) return;
-    if (entry.ftype === CFS_FTYPE.DIR || entry.ftype === CFS_FTYPE.LNK || entry.ftype === CFS_FTYPE.DEL) return;
+    var rawIdx = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+    var targets = [];
+    for (var ti = 0; ti < rawIdx.length; ti++) {
+      var ent = cfsDirEntries[rawIdx[ti]];
+      if (!ent || ent.empty) continue;
+      if (ent.ftype === CFS_FTYPE.DIR || ent.ftype === CFS_FTYPE.LNK || ent.ftype === CFS_FTYPE.DEL) continue;
+      targets.push(ent);
+    }
+    if (targets.length === 0) return;
     pushUndo();
-    var sectors = cfsCountFileDataSectors(hddBuffer, part.startLba, part.endLba, entry);
-    cfsWriteFileSize(hddBuffer, entry.dirLba, entry.index, sectors * 512, entry.ftype);
+    for (var si = 0; si < targets.length; si++) {
+      var sectors = cfsCountFileDataSectors(hddBuffer, part.startLba, part.endLba, targets[si]);
+      cfsWriteFileSize(hddBuffer, targets[si].dirLba, targets[si].index, sectors * 512, targets[si].ftype);
+    }
     refreshIde64View();
     return;
   }

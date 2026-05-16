@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 3, build: 124 };
+var APP_VERSION = { major: 1, minor: 3, build: 125 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -81,7 +81,12 @@ var hddPartitions = null;
 var cfsPartitionIdx = -1;
 var cfsDirLba = 0;
 var cfsDirEntries = null;
-var cfsDirStack = []; // array of { dirLba, name }
+var cfsDirStack = []; // array of { dirLba, name, enteredAs }
+var cfsEnteredAs = null; // name the current dir was opened *as* — the
+                         // parent's outgoing-entry name. Stays canonical
+                         // even if the dir's self-ref carries a different
+                         // label (which can happen if a rename only
+                         // touched the parent entry).
 
 // True when the active tab is a CMD container and we're showing the
 // partition list (not inside any partition). Disk-edit operations don't

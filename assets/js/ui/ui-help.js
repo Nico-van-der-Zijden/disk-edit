@@ -285,6 +285,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.125', title: 'IDE64 .hdd — Export File, drag-export, multi-select, directory header now shows the parent name', items: [
+      'Export File works in CFS partitions (File menu and right-click). Drag a file row out to the desktop / Explorer to drop the content there — name is "<entry>.<typeSuffix lowercased>", same convention CBM-DOS uses. Single-file only on drag (HTML5 limitation); use Export File from the menu for multi-export',
+      'Ctrl+click and Shift+click work in CFS file listings, same UX as D64 / D71. Scratch, Remove Entry, Name Case, Align, Set Actual File Size, and Export now batch over the whole selection. Rename / Insert / Insert Separator / Change File Size stay single-only (gated in the menu state, matching CBM-DOS). Right-click on a row that\'s already in the multi-selection keeps the selection; right-click outside retargets to just that row',
+      'Directory header now shows the name we entered the dir through (the parent\'s outgoing-entry name) instead of the dir\'s self-reference at slot 0. The two can drift if a rename only touched one side — IDE64\'s ide.hdd had CREATURES2 in the root listing but C2 in the dir\'s self-ref. Renaming a DIR now syncs both names so they don\'t drift further',
+    ]},
     { ver: '1.3.124', title: 'IDE64 .hdd — file import via the File menu + drag-drop, VICE-compatible tree pointers', items: [
       'File → Import File works in a CFS partition now (and so does drag-dropping files onto the page). Same UX as a D64 — no more inline "+ Import file" row in the listing. File-picker default filter matches the CBM-DOS importer (.prg / .seq / .usr / .rel / .p00 / .s00 / .u00 / .r00 / .cvt / .txt); user can still pick "All files" or drag-drop anything else',
       'Filename byte conversion now reuses the CBM-DOS asciiToNameBytes path — preserves the PETSCII-safe punctuation set ($21..$3F) instead of replacing unknown chars with underscores (the previous behaviour rendered everything as the PETSCII "arrow left" glyph). Only CFS-specific tweak: "/" → space (path separator)',

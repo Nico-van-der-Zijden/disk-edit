@@ -3,6 +3,32 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+  // CFS view: read via the B-tree walker, name + extension from the
+  // entry's typeSuffix. The CFS dir layout doesn't match CBM-DOS's
+  // entryOff + 2 / + 5 conventions, so the CBM-DOS loop below would
+  // misread the byte offsets. Handles multi-select — every browser will
+  // show a "site is downloading multiple files" prompt after the first.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var rawIdx = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+    for (var ti = 0; ti < rawIdx.length; ti++) {
+      var cEntry = cfsDirEntries[rawIdx[ti]];
+      if (!cEntry || cEntry.empty || cEntry.ftype === CFS_FTYPE.DIR ||
+          cEntry.ftype === CFS_FTYPE.LNK || cEntry.ftype === CFS_FTYPE.DEL) continue;
+      if (!cEntry.dataTreePtr || !cEntry.dataTreePtr.lba) continue;
+      var cRes = readCfsFileData(hddBuffer, cEntry.dataTreePtr.addr, cEntry.size);
+      if (cRes.error || !cRes.data || cRes.data.length === 0) continue;
+      var cName = petsciiToReadable(cEntry.name).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+      if (!cName) cName = 'export';
+      var cExt = (cEntry.typeSuffix || 'PRG').toLowerCase();
+      var cBlob = new Blob([cRes.data], { type: 'application/octet-stream' });
+      var cAnchor = document.createElement('a');
+      cAnchor.href = URL.createObjectURL(cBlob);
+      cAnchor.download = cName + '.' + cExt;
+      cAnchor.click();
+      URL.revokeObjectURL(cAnchor.href);
+    }
+    return;
+  }
   var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
   var data = new Uint8Array(currentBuffer);
   var extMap = { 1: '.seq', 2: '.prg', 3: '.usr', 4: '.rel' };
@@ -997,22 +1023,36 @@ document.getElementById('opt-scratch').addEventListener('click', async (e) => {
   // sectors in the partition bitmap, marks the dir entry deleted while
   // keeping the tree pointer for recovery context).
   if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-    var entry = cfsDirEntries[selectedEntryIndex];
-    if (!entry || entry.empty) return;
-    // System-managed "<<DELETED FILES>>" entry — scratching it would
-    // orphan the partition's deldir mechanism. Refuse loudly.
-    if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(entry)) {
-      showModal('Protected entry', ['The <<DELETED FILES>> entry is system-managed and can\'t be scratched.']);
-      return;
-    }
     var part = hddPartitions && hddPartitions[cfsPartitionIdx];
     if (!part) return;
-    // Directory deletes cascade — confirm first, listing what's inside
-    // so the user knows the scope. File deletes stay silent (one entry,
-    // recoverable via Unscratch).
-    if (entry.ftype === CFS_FTYPE.DIR) {
-      var counts = (entry.dataTreePtr && entry.dataTreePtr.lba)
-        ? _cfsCountDirContents(hddBuffer, entry.dataTreePtr.addr)
+    // Build the multi-select target list (same convention CBM-DOS uses
+    // via selectedEntries / selectedEntryIndex fallback). Filter out
+    // empties, already-deleted entries, and the protected <<DELETED
+    // FILES>> system entry — skipping silently in multi-select keeps
+    // an accidental ctrl-click on the system row from cancelling the
+    // whole batch with a modal.
+    var rawIdx = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+    var targets = [];
+    for (var ti = 0; ti < rawIdx.length; ti++) {
+      var tEnt = cfsDirEntries[rawIdx[ti]];
+      if (!tEnt || tEnt.empty) continue;
+      if (tEnt.ftype === CFS_FTYPE.DEL) continue;
+      if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(tEnt)) {
+        if (rawIdx.length === 1) {
+          showModal('Protected entry', ['The <<DELETED FILES>> entry is system-managed and can\'t be scratched.']);
+          return;
+        }
+        continue;
+      }
+      targets.push(tEnt);
+    }
+    if (targets.length === 0) return;
+    // Confirmation: single DIR keeps the detailed cascade preview; multi
+    // shows a "X file(s) + Y dir(s)" summary; single non-DIR stays silent.
+    if (targets.length === 1 && targets[0].ftype === CFS_FTYPE.DIR) {
+      var sEntry = targets[0];
+      var counts = (sEntry.dataTreePtr && sEntry.dataTreePtr.lba)
+        ? _cfsCountDirContents(hddBuffer, sEntry.dataTreePtr.addr)
         : { files: 0, dirs: 0 };
       var contentsBits = [];
       if (counts.files) contentsBits.push(counts.files + ' file' + (counts.files === 1 ? '' : 's'));
@@ -1020,22 +1060,46 @@ document.getElementById('opt-scratch').addEventListener('click', async (e) => {
       var contentsLabel = contentsBits.length ? contentsBits.join(' + ') : 'empty';
       var choice = await showChoiceModal(
         'Delete Directory',
-        'Delete directory "' + petsciiToReadable(entry.name) + '" (' + contentsLabel + ')? It will be recoverable via Restore Directory until the data sectors are reallocated.',
+        'Delete directory "' + petsciiToReadable(sEntry.name) + '" (' + contentsLabel + ')? It will be recoverable via Restore Directory until the data sectors are reallocated.',
         [
           { label: 'Cancel', value: false, secondary: true },
           { label: 'Delete', value: true }
         ]
       );
       if (!choice) return;
+    } else if (targets.length > 1) {
+      var batchFiles = 0, batchDirs = 0;
+      for (var bi = 0; bi < targets.length; bi++) {
+        if (targets[bi].ftype === CFS_FTYPE.DIR) batchDirs++; else batchFiles++;
+      }
+      var batchLabel = [];
+      if (batchFiles) batchLabel.push(batchFiles + ' file' + (batchFiles === 1 ? '' : 's'));
+      if (batchDirs) batchLabel.push(batchDirs + ' director' + (batchDirs === 1 ? 'y' : 'ies'));
+      var batchChoice = await showChoiceModal(
+        'Scratch ' + targets.length + ' entries',
+        'Scratch ' + batchLabel.join(' + ') + '? Recoverable via Unscratch until the data sectors are reallocated. Directories cascade — every child gets scratched too.',
+        [
+          { label: 'Cancel', value: false, secondary: true },
+          { label: 'Scratch', value: true }
+        ]
+      );
+      if (!batchChoice) return;
     }
     pushUndo();
-    var res = cfsDeleteFile(hddBuffer, part.startLba, part.endLba, entry);
-    if (!res.ok) {
-      showModal('Scratch failed', [res.error || 'Unknown error.']);
+    var failures = [];
+    for (var di = 0; di < targets.length; di++) {
+      var res = cfsDeleteFile(hddBuffer, part.startLba, part.endLba, targets[di]);
+      if (!res.ok) failures.push(petsciiToReadable(targets[di].name) + ': ' + (res.error || 'unknown'));
+    }
+    if (failures.length === targets.length) {
+      showModal('Scratch failed', failures);
       if (typeof popUndo === 'function') popUndo();
       return;
     }
     refreshIde64View();
+    if (failures.length > 0) {
+      showModal('Scratch — partial', ['Some entries could not be scratched:'].concat(failures));
+    }
     return;
   }
   pushUndo();

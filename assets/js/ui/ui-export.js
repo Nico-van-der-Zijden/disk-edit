@@ -47,16 +47,25 @@ function changeCfsNameCase(entry, mode) {
     // CFS view: changeNameCase writes at entryOff + 5 which is wrong
     // (CFS dir name lives at +0). Route through the CFS-aware variant.
     if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-      var entry = cfsDirEntries[selectedEntryIndex];
-      if (!entry || entry.empty) return;
-      // Block the system-managed "<<DELETED FILES>>" entry — its name
-      // is part of IDEDOS's recognition pattern, no edits.
-      if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(entry)) {
-        showModal('Protected entry', ['The <<DELETED FILES>> entry is system-managed and can\'t be renamed or case-flipped.']);
-        return;
+      // Multi-select: iterate selectedEntries (fallback to single).
+      // Skip protected / invalid entries silently in a batch.
+      var rawIdx = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+      var targets = [];
+      for (var ti = 0; ti < rawIdx.length; ti++) {
+        var ent = cfsDirEntries[rawIdx[ti]];
+        if (!ent || ent.empty) continue;
+        if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(ent)) {
+          if (rawIdx.length === 1) {
+            showModal('Protected entry', ['The <<DELETED FILES>> entry is system-managed and can\'t be renamed or case-flipped.']);
+            return;
+          }
+          continue;
+        }
+        targets.push(ent);
       }
+      if (targets.length === 0) return;
       pushUndo();
-      changeCfsNameCase(entry, mode);
+      for (var ci = 0; ci < targets.length; ci++) changeCfsNameCase(targets[ci], mode);
       refreshIde64View();
       return;
     }
