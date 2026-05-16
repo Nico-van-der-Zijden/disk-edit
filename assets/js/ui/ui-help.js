@@ -285,6 +285,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.118', title: 'IDE64 .hdd — full write parity (multi-sector files, subdirs, new partitions, new disks)', items: [
+      'Multi-sector imports up to 4 MiB. The writer walks the B-tree at any depth, allocating intermediate nodes on demand. Treelinks encoded across bits 5..4 of byte 0 of 16 data pointers in each 64-byte sub-region — same scheme the reader uses; verified end-to-end up to depth 2 (700 KiB files)',
+      'Delete works for files of any size now: walks the whole tree recursively, frees every tree-node and data sector. Replaces the earlier 64 KiB cap',
+      'New: + New subdirectory&hellip; row in the directory view (creates a sector with self-ref + parent pointer, registers in the parent dir)',
+      'New: + New CFS partition&hellip; row at the bottom of the partition-list view (picks the next free 16-slot entry, asks for a name + size in MiB, initialises the bitmap chain + root dir + deleted-dir)',
+      'New: File &rarr; New &rarr; IDE64 HDD with 4 / 8 / 16 / 32 / 64 / 128 MiB sizes. Creates a fresh image with one CFS partition spanning the whole disk',
+    ]},
     { ver: '1.3.117', title: 'IDE64 .hdd — rename, attributes, delete, import (small files)', items: [
       'CFS file viewer modal: new Rename, Attributes, and Delete buttons. Rename writes a 16-byte ASCII name. Attributes toggles the C/D/R/W/X bits. Delete frees the file\'s data + tree sectors in the partition bitmap and marks the directory entry deleted',
       'New "+ Import file" row at the top of the directory view: pick a local file up to 512 bytes, it gets allocated a tree + data sector and added as a new directory entry. Larger imports come with the multi-sector writer in the next phase',

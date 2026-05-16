@@ -113,6 +113,56 @@ function _cfsReadTreeLink(data, base) {
   return { raw0: b0, lba: lba, addr: addr };
 }
 
+// Compute the tree depth needed for a file of `fileSize` bytes. Same
+// algorithm as fusecfs read_tree_search's level loop: peel 3-bit chunks
+// from (m-1) until it reaches zero. Result is the *deepest* level any
+// read in the file requires; intermediate offsets may need fewer levels.
+//   depth 0: ≤ 64 KiB                    (1 leaf = root itself)
+//   depth 1: ≤ 9 × 64 KiB ≈ 576 KiB      (root + up to 8 child leaves)
+//   depth 2: ≤ 73 × 64 KiB ≈ 4.78 MiB    (and so on...)
+function _cfsComputeTreeDepth(fileSize) {
+  if (fileSize <= 0) return 0;
+  var m = Math.floor((fileSize - 1) / 65536);
+  var level = 0;
+  while (m > 0) {
+    m = (m - 1) >>> 3;
+    level++;
+  }
+  return level;
+}
+
+// Encode a 4-byte LBA pointer into the bit-sliced treelink slot at
+// `base` (one of 8 64-byte regions in a tree sector). Inverse of
+// _cfsReadTreeLink; matches fusecfs set_treelink.
+function _cfsWriteTreeLink(data, base, addr) {
+  var bytes = [
+    0x40 | ((addr >>> 24) & 0x0F),
+    (addr >>> 16) & 0xFF,
+    (addr >>> 8) & 0xFF,
+    addr & 0xFF,
+  ];
+  for (var i = 0; i < 4; i++) {
+    var bj = bytes[i];
+    var entryBase = base + (3 - i) * 16;
+    data[entryBase]      = (data[entryBase]      & ~0x30) | ((bj >>> 2) & 0x30);
+    data[entryBase + 4]  = (data[entryBase + 4]  & ~0x30) | (bj & 0x30);
+    data[entryBase + 8]  = (data[entryBase + 8]  & ~0x30) | ((bj << 2) & 0x30);
+    data[entryBase + 12] = (data[entryBase + 12] & ~0x30) | ((bj << 4) & 0x30);
+  }
+}
+
+// Write a 4-byte data-sector pointer at `off`, preserving bits 5..4 of
+// byte 0 (those are the SLICE bits a treelink may have stuffed there).
+// Without this preservation, growing a single-level tree into a multi-
+// level tree would clobber the treelinks the first time a data pointer
+// gets rewritten.
+function _cfsWriteDataPointer(data, off, lba) {
+  data[off + 0] = (data[off + 0] & 0x30) | 0x40 | ((lba >>> 24) & 0x0F);
+  data[off + 1] = (lba >>> 16) & 0xFF;
+  data[off + 2] = (lba >>> 8) & 0xFF;
+  data[off + 3] = lba & 0xFF;
+}
+
 // Walk the B-tree from rootLba down to the leaf containing byteOffset.
 // Returns the leaf-tree-sector LBA, or null if the path is broken /
 // the file has a sparse hole at this offset.
@@ -329,21 +379,21 @@ function cfsWriteDirEntryAttrByte(buffer, dirLba, slotIndex, newAttrByte) {
   return true;
 }
 
-// Delete a CFS file: free its tree root + all data pointers in the
-// tree, then mark the directory entry as deleted (ftype=0, Closed bit
-// cleared, other attribute bits preserved for recovery tools). The
-// tree pointer field stays — matches the IDEDOS pattern where deleted
-// entries keep their original metadata.
+// Delete a CFS file: walk the entire B-tree freeing every tree-node
+// sector + every data sector it references, then mark the directory
+// entry as deleted (ftype=0, Closed bit cleared, other attribute bits
+// preserved for recovery tools). The tree pointer field stays —
+// matches the IDEDOS pattern where deleted entries keep their original
+// metadata.
 //
-// Phase 4b: handles single-level trees only (files ≤ 64 KiB). Multi-
-// level trees (>64 KiB files) are refused; that's Phase 5 work.
-//
-// Returns { ok: bool, error?: string }.
+// Tree walk visits each node once (seen-set), collects the node's LBA
+// + the LBAs of all 128 data-pointer slots, and recurses into the 8
+// treelink slots when the current depth-from-root is less than the
+// file's total tree depth. Every CFS tree sector serves simultaneously
+// as a leaf AND an internal node, so each non-leaf node contributes
+// both data sectors AND child tree sectors.
 function cfsDeleteFile(buffer, partitionStart, partitionEndLba, entry) {
   if (!buffer || !entry || entry.dirLba == null) return { ok: false, error: 'invalid entry' };
-  if (entry.size > 65536) {
-    return { ok: false, error: 'file > 64 KiB — multi-level tree deletion not yet supported' };
-  }
   if (!entry.dataTreePtr || !entry.dataTreePtr.lba) {
     return { ok: false, error: 'no data tree pointer' };
   }
@@ -351,18 +401,36 @@ function cfsDeleteFile(buffer, partitionStart, partitionEndLba, entry) {
   var treeLba = entry.dataTreePtr.addr;
   if (treeLba <= 0) return { ok: false, error: 'invalid tree pointer' };
 
-  // Free every data pointer in the leaf tree
-  var treeBase = treeLba * IDE64_SECTOR_SIZE;
-  if (treeBase + IDE64_SECTOR_SIZE > data.length) return { ok: false, error: 'tree sector out of range' };
-  for (var ptrIdx = 0; ptrIdx < 128; ptrIdx++) {
-    var off = treeBase + ptrIdx * 4;
-    var dp = _readIde64Pointer(data, off);
-    if (dp.lba && dp.addr > 0 && dp.addr >= partitionStart && dp.addr <= partitionEndLba) {
-      cfsMarkSectorFree(data, partitionStart, dp.addr);
+  var depth = _cfsComputeTreeDepth(entry.size);
+  var seen = {};
+  function walk(nodeLba, levelFromRoot) {
+    if (!nodeLba || nodeLba < partitionStart || nodeLba > partitionEndLba) return;
+    if (seen[nodeLba]) return;
+    seen[nodeLba] = true;
+    var nodeBase = nodeLba * IDE64_SECTOR_SIZE;
+    if (nodeBase + IDE64_SECTOR_SIZE > data.length) return;
+    // Free every data pointer the node holds (every node acts as a
+    // leaf for its own 64 KiB-worth of file offsets).
+    for (var ptrIdx = 0; ptrIdx < 128; ptrIdx++) {
+      var dp = _readIde64Pointer(data, nodeBase + ptrIdx * 4);
+      if (dp.lba && dp.addr > 0 && dp.addr >= partitionStart && dp.addr <= partitionEndLba) {
+        cfsMarkSectorFree(data, partitionStart, dp.addr);
+      }
     }
+    // Recurse into the 8 treelink slots if we're not yet at the deepest
+    // level the file needs.
+    if (levelFromRoot < depth) {
+      for (var slot = 0; slot < 8; slot++) {
+        var link = _cfsReadTreeLink(data, nodeBase + slot * 64);
+        if (link.lba && link.addr > 0) {
+          walk(link.addr, levelFromRoot + 1);
+        }
+      }
+    }
+    // Free the node itself last so we've already read its links.
+    cfsMarkSectorFree(data, partitionStart, nodeLba);
   }
-  // Free the tree sector itself
-  cfsMarkSectorFree(data, partitionStart, treeLba);
+  walk(treeLba, 0);
 
   // Mark dir entry as deleted: ftype → 0, clear Closed bit. Other attr
   // bits preserved for recovery context.
@@ -402,82 +470,398 @@ function cfsFindEmptyDirSlot(buffer, firstDirLba) {
   return null;
 }
 
-// Import a single-sector PRG/SEQ/USR (payload ≤ 512 bytes) into a CFS
-// directory. Allocates a tree-root sector + one data sector, writes the
-// payload, fills tree[0..3] with the data pointer, finds an empty dir
-// slot in the chain, writes the entry.
+// Maximum tree depth this writer supports. Each depth covers ≈ 8× the
+// previous; depth 5 = ≈ 38 GiB which is way past anything sane to host
+// in a single CFS file. Reads handle arbitrary depths already (the C
+// algorithm doesn't care); the cap here just prevents pathological
+// allocations on bad input.
+var CFS_MAX_IMPORT_DEPTH = 5;
+
+// Returns the leaf-level tree sector for `byteOffset` within a tree
+// rooted at `rootLba`. Walks down `depth` levels (the value computed
+// from the file's total size), allocating + zeroing intermediate
+// sectors when their treelink slot isn't yet populated. Every newly-
+// allocated child is appended to `allocated` so the caller can roll
+// back. Returns -1 if any allocation fails.
 //
-// Returns { ok, error?, dirLba?, slotIndex? }. Refuses files > 512 bytes
-// — multi-sector imports are Phase 5.
-function cfsImportSingleSectorFile(buffer, partitionStart, partitionEndLba, firstDirLba, name, payload, opts) {
+// At offset 0 (m=0) the localLevel computed below is 0 regardless of
+// the file's depth → returns rootLba unchanged. This is correct because
+// every CFS tree sector serves simultaneously as the *leaf* for the
+// 64 KiB chunk that starts at its own walk-base AND as the *internal
+// node* for deeper offsets via its treelinks.
+function _cfsEnsureLeafForOffset(buffer, rootLba, byteOffset, partitionStart, partitionEndLba, allocated, searchHint) {
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var m = Math.floor(byteOffset / 65536);
+  var m2 = 0;
+  var localLevel = 0;
+  var mWork = m;
+  while (mWork > 0) {
+    mWork--;
+    m2 = (m2 << 1) | (mWork & 1); mWork = mWork >>> 1;
+    m2 = (m2 << 1) | (mWork & 1); mWork = mWork >>> 1;
+    m2 = (m2 << 1) | (mWork & 1); mWork = mWork >>> 1;
+    localLevel++;
+  }
+
+  var itt = rootLba;
+  for (var lvl = 0; lvl < localLevel; lvl++) {
+    var slot = m2 & 7;
+    m2 = m2 >>> 3;
+    var base = itt * IDE64_SECTOR_SIZE + slot * 64;
+    var link = _cfsReadTreeLink(data, base);
+    if (link.lba && link.addr > 0) {
+      itt = link.addr;
+    } else {
+      var childLba = cfsAllocSector(buffer, partitionStart, partitionEndLba, searchHint || (itt + 1));
+      if (childLba < 0) return -1;
+      allocated.push(childLba);
+      // Zero the new sector so subsequent data-pointer writes start
+      // from clean bits 5..4 (any treelinks written by this growth
+      // step will set them explicitly).
+      var cbase = childLba * IDE64_SECTOR_SIZE;
+      for (var z = 0; z < IDE64_SECTOR_SIZE; z++) data[cbase + z] = 0;
+      _cfsWriteTreeLink(data, base, childLba);
+      itt = childLba;
+    }
+  }
+  return itt;
+}
+
+// Import a file of arbitrary size up to ~38 GiB (depth 5 cap). Builds
+// the B-tree of arbitrary depth: walks every 512-byte chunk of payload,
+// finds (or grows) the leaf sector for that chunk's offset, then writes
+// a data-sector pointer there. Treelinks are encoded via bit-slicing
+// across bits 5..4 of byte 0 of 16 data pointers in each 64-byte sub-
+// region — see _cfsWriteTreeLink. The root sector serves simultaneously
+// as both the leaf for offsets 0..64 KiB-1 AND the level-N internal
+// node for higher offsets; the two encodings share bytes without
+// collision because data-pointer reads ignore bits 5..4 and treelinks
+// only use them.
+//
+// Rolls back every bitmap allocation on any failure.
+function cfsImportFile(buffer, partitionStart, partitionEndLba, firstDirLba, name, payload, opts) {
   opts = opts || {};
   if (!buffer || !firstDirLba) return { ok: false, error: 'invalid args' };
   if (!payload || payload.length === 0) return { ok: false, error: 'empty payload' };
-  if (payload.length > IDE64_SECTOR_SIZE) {
-    return { ok: false, error: 'payload > 512 B — multi-sector imports not yet supported' };
+  var depth = _cfsComputeTreeDepth(payload.length);
+  if (depth > CFS_MAX_IMPORT_DEPTH) {
+    return { ok: false, error: 'file size requires tree depth > ' + CFS_MAX_IMPORT_DEPTH };
   }
 
   var slot = cfsFindEmptyDirSlot(buffer, firstDirLba);
   if (!slot) return { ok: false, error: 'no empty directory slot' };
 
-  // Reserve a starting LBA past the system area. Avoid the dir's own
-  // first sector (firstDirLba) and the bitmap LBAs.
-  var startSearch = firstDirLba + 1;
-  var treeLba = cfsAllocSector(buffer, partitionStart, partitionEndLba, startSearch);
-  if (treeLba < 0) return { ok: false, error: 'no free sectors for tree' };
-  var dataLba = cfsAllocSector(buffer, partitionStart, partitionEndLba, treeLba + 1);
-  if (dataLba < 0) {
-    // Roll back the tree allocation if we can't get a data sector
-    cfsMarkSectorFree(buffer, partitionStart, treeLba);
-    return { ok: false, error: 'no free sectors for data' };
+  var sectorsNeeded = Math.ceil(payload.length / IDE64_SECTOR_SIZE);
+  var allocated = [];
+  function rollback() {
+    for (var ri = 0; ri < allocated.length; ri++) {
+      cfsMarkSectorFree(buffer, partitionStart, allocated[ri]);
+    }
   }
+
+  var treeLba = cfsAllocSector(buffer, partitionStart, partitionEndLba, firstDirLba + 1);
+  if (treeLba < 0) return { ok: false, error: 'no free sector for tree root' };
+  allocated.push(treeLba);
 
   var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-
-  // Write payload into data sector. Pad/zero anything past payload.
-  var dataBase = dataLba * IDE64_SECTOR_SIZE;
-  for (var i = 0; i < IDE64_SECTOR_SIZE; i++) {
-    data[dataBase + i] = i < payload.length ? payload[i] : 0;
-  }
-
-  // Tree root: zero whole sector, write data pointer at offset 0
+  // Zero the root so we start from clean state (bits 5..4 of all
+  // pointer slots == 0, no stale treelinks).
   var treeBase = treeLba * IDE64_SECTOR_SIZE;
   for (var t = 0; t < IDE64_SECTOR_SIZE; t++) data[treeBase + t] = 0;
-  // 28-bit LBA pointer, LBA flag set
-  data[treeBase + 0] = 0x40 | ((dataLba >>> 24) & 0x0F);
-  data[treeBase + 1] = (dataLba >>> 16) & 0xFF;
-  data[treeBase + 2] = (dataLba >>> 8) & 0xFF;
-  data[treeBase + 3] = dataLba & 0xFF;
+
+  var dataLbas = [];
+  var searchFrom = treeLba + 1;
+  for (var si = 0; si < sectorsNeeded; si++) {
+    var offsetInFile = si * IDE64_SECTOR_SIZE;
+
+    var leafLba = _cfsEnsureLeafForOffset(buffer, treeLba, offsetInFile, partitionStart, partitionEndLba, allocated, searchFrom);
+    if (leafLba < 0) { rollback(); return { ok: false, error: 'no free sectors for tree growth' }; }
+    if (leafLba >= searchFrom) searchFrom = leafLba + 1;
+
+    var dlba = cfsAllocSector(buffer, partitionStart, partitionEndLba, searchFrom);
+    if (dlba < 0) { rollback(); return { ok: false, error: 'no free data sector (sector ' + si + ' of ' + sectorsNeeded + ')' }; }
+    allocated.push(dlba);
+    dataLbas.push(dlba);
+    searchFrom = dlba + 1;
+
+    // Write 512 bytes of payload (last sector zero-padded)
+    var dbase = dlba * IDE64_SECTOR_SIZE;
+    for (var byteI = 0; byteI < IDE64_SECTOR_SIZE; byteI++) {
+      var pi = offsetInFile + byteI;
+      data[dbase + byteI] = pi < payload.length ? payload[pi] : 0;
+    }
+
+    // Write data pointer in leaf at index (offset/512) % 128
+    var ptrIdxInLeaf = (offsetInFile >>> 9) & 0x7F;
+    _cfsWriteDataPointer(data, leafLba * IDE64_SECTOR_SIZE + ptrIdxInLeaf * 4, dlba);
+  }
 
   // Directory entry
   var eo = slot.dirLba * IDE64_SECTOR_SIZE + slot.slotIndex * CFS_DIR_ENTRY_SIZE;
-  // Zero the slot first
-  for (var z = 0; z < CFS_DIR_ENTRY_SIZE; z++) data[eo + z] = 0;
-  // Name (16 B, space-padded)
+  for (var z2 = 0; z2 < CFS_DIR_ENTRY_SIZE; z2++) data[eo + z2] = 0;
   for (var n = 0; n < 16; n++) {
     data[eo + n] = n < name.length ? (name.charCodeAt(n) & 0xFF) : 0x20;
   }
-  // Size (32-bit LE)
   data[eo + 0x10] = payload.length & 0xFF;
   data[eo + 0x11] = (payload.length >>> 8) & 0xFF;
   data[eo + 0x12] = (payload.length >>> 16) & 0xFF;
   data[eo + 0x13] = (payload.length >>> 24) & 0xFF;
-  // Data-tree pointer (LBA + VALID-equivalent flag pattern)
   data[eo + 0x14] = 0xC0 | ((treeLba >>> 24) & 0x0F);
   data[eo + 0x15] = (treeLba >>> 16) & 0xFF;
   data[eo + 0x16] = (treeLba >>> 8) & 0xFF;
   data[eo + 0x17] = treeLba & 0xFF;
-  // Attribute byte: Closed + D/R/W/X + ftype (default NORMAL = 1)
   var ftype = (opts.ftype != null) ? opts.ftype : CFS_FTYPE.NORMAL;
   data[eo + 0x18] = 0xF8 | (ftype & 0x07);
-  // Type suffix (3 B, space-padded)
   var suf = opts.typeSuffix || 'PRG';
   for (var s = 0; s < 3; s++) {
     data[eo + 0x19 + s] = s < suf.length ? (suf.charCodeAt(s) & 0xFF) : 0x20;
   }
-  // Timestamp = 0 (no mtime). User can set via UI later.
 
-  return { ok: true, dirLba: slot.dirLba, slotIndex: slot.slotIndex, treeLba: treeLba, dataLba: dataLba };
+  return {
+    ok: true,
+    dirLba: slot.dirLba,
+    slotIndex: slot.slotIndex,
+    treeLba: treeLba,
+    dataLbas: dataLbas,
+    depth: depth,
+  };
+}
+
+// Single-sector wrapper kept for back-compat with Phase 4b callers/tests.
+function cfsImportSingleSectorFile(buffer, partitionStart, partitionEndLba, firstDirLba, name, payload, opts) {
+  return cfsImportFile(buffer, partitionStart, partitionEndLba, firstDirLba, name, payload, opts);
+}
+
+// Initialize a fresh CFS partition's storage: write 0xFF-filled bitmaps
+// every 4096 LBAs from partition_start, mark the bitmaps themselves
+// used, mark sectors start+1, +2, +3 used (reserved / deldir / rootdir),
+// initialise the root dir sector (self-ref + %DELETED FILES% entry) and
+// zero the deldir sector. Mirrors the layout we see in ide.hdd:
+//   start+0 = BAM_0, start+1 = unused, start+2 = deldir, start+3 = rootdir
+// Returns { ok, rootDirLba, deletedDirLba, error? }.
+function cfsInitPartitionStorage(buffer, partitionStart, partitionEndLba, partitionName) {
+  if (!buffer) return { ok: false, error: 'invalid buffer' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var deldirLba = partitionStart + 2;
+  var rootdirLba = partitionStart + 3;
+  if (rootdirLba > partitionEndLba) return { ok: false, error: 'partition too small for system area' };
+
+  // Fill every bitmap sector with 0xFF (all sectors free) before marking used ones.
+  var bitmapCount = 0;
+  for (var bm = 0; bm <= (partitionEndLba - partitionStart); bm += 4096) {
+    var bitmapLba = partitionStart + bm;
+    var bo = bitmapLba * IDE64_SECTOR_SIZE;
+    if (bo + IDE64_SECTOR_SIZE > data.length) return { ok: false, error: 'partition extends past buffer' };
+    for (var i = 0; i < IDE64_SECTOR_SIZE; i++) data[bo + i] = 0xFF;
+    bitmapCount++;
+  }
+
+  // Mark each bitmap sector as used (so the partition can't accidentally
+  // overwrite its own allocation tables).
+  for (var bm2 = 0; bm2 < bitmapCount; bm2++) {
+    cfsMarkSectorUsed(buffer, partitionStart, partitionStart + bm2 * 4096);
+  }
+
+  // Mark anything past partitionEndLba in the final bitmap as used so
+  // the allocator never returns an LBA outside the partition.
+  var lastBmStart = partitionStart + (bitmapCount - 1) * 4096;
+  var coverageEnd = lastBmStart + 4096 - 1;
+  for (var pastLba = partitionEndLba + 1; pastLba <= coverageEnd; pastLba++) {
+    cfsMarkSectorUsed(buffer, partitionStart, pastLba);
+  }
+
+  // Mark the three reserved system sectors used.
+  cfsMarkSectorUsed(buffer, partitionStart, partitionStart + 1);
+  cfsMarkSectorUsed(buffer, partitionStart, deldirLba);
+  cfsMarkSectorUsed(buffer, partitionStart, rootdirLba);
+
+  // Root dir sector: self-ref at slot 0, %DELETED FILES% at slot 1.
+  var rootBase = rootdirLba * IDE64_SECTOR_SIZE;
+  for (var rz = 0; rz < IDE64_SECTOR_SIZE; rz++) data[rootBase + rz] = 0;
+  var pname = partitionName || 'PARTITION';
+  for (var rn = 0; rn < 16; rn++) {
+    data[rootBase + rn] = rn < pname.length ? (pname.charCodeAt(rn) & 0xFF) : 0x20;
+  }
+  // Self ptr at $10..$13
+  data[rootBase + 0x10] = 0x40 | ((rootdirLba >>> 24) & 0x0F);
+  data[rootBase + 0x11] = (rootdirLba >>> 16) & 0xFF;
+  data[rootBase + 0x12] = (rootdirLba >>> 8) & 0xFF;
+  data[rootBase + 0x13] = rootdirLba & 0xFF;
+  // Parent ptr at $14..$17 (root has no parent, points to self)
+  data[rootBase + 0x14] = 0x40 | ((rootdirLba >>> 24) & 0x0F);
+  data[rootBase + 0x15] = (rootdirLba >>> 16) & 0xFF;
+  data[rootBase + 0x16] = (rootdirLba >>> 8) & 0xFF;
+  data[rootBase + 0x17] = rootdirLba & 0xFF;
+  // Attr + "DIR" suffix
+  data[rootBase + 0x18] = 0x7B;
+  data[rootBase + 0x19] = 0x44; data[rootBase + 0x1A] = 0x49; data[rootBase + 0x1B] = 0x52;
+
+  // %DELETED FILES% entry at slot 1 (mirrors what ide.hdd has)
+  var dfBase = rootBase + CFS_DIR_ENTRY_SIZE;
+  var dfName = '%DELETED  FILES%';
+  for (var dfn = 0; dfn < 16; dfn++) data[dfBase + dfn] = dfName.charCodeAt(dfn) & 0xFF;
+  // $14..$17 pointer to deldir
+  data[dfBase + 0x14] = 0xC0 | ((deldirLba >>> 24) & 0x0F);
+  data[dfBase + 0x15] = (deldirLba >>> 16) & 0xFF;
+  data[dfBase + 0x16] = (deldirLba >>> 8) & 0xFF;
+  data[dfBase + 0x17] = deldirLba & 0xFF;
+  data[dfBase + 0x18] = 0xAB; // matches the attr byte ide.hdd uses for this special entry
+  data[dfBase + 0x19] = 0x44; data[dfBase + 0x1A] = 0x49; data[dfBase + 0x1B] = 0x52;
+
+  // Deleted-dir sector: zero (no deleted files yet).
+  var delBase = deldirLba * IDE64_SECTOR_SIZE;
+  for (var dz = 0; dz < IDE64_SECTOR_SIZE; dz++) data[delBase + dz] = 0;
+
+  return { ok: true, rootDirLba: rootdirLba, deletedDirLba: deldirLba };
+}
+
+// Write a partition entry at slot `slotIdx` in the partition directory
+// (LBA 1). Pointer bytes follow the conventions seen in ide.hdd:
+//   $10..$13 start ptr: VALID|LBA (0xC0 high nibble)
+//   $14..$17 end ptr:   LBA|TYPE-bit-0 (CFS = bit 4) → byte0 0x50
+//   $18..$1B deldir:    LBA flag only (0x40)
+//   $1C..$1F rootdir:   LBA flag only (0x40)
+function cfsAddPartitionToTable(buffer, slotIdx, partitionName, startLba, endLba, rootDirLba, deldirLba) {
+  if (slotIdx < 0 || slotIdx >= IDE64_PARTITION_ENTRIES) return { ok: false, error: 'invalid slot index' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var partTableLba = 1; // CFS partition directory is at LBA 1 by convention
+  var eo = partTableLba * IDE64_SECTOR_SIZE + slotIdx * IDE64_PARTITION_ENTRY_SIZE;
+  if (eo + IDE64_PARTITION_ENTRY_SIZE > data.length) return { ok: false, error: 'partition table out of range' };
+  for (var z = 0; z < IDE64_PARTITION_ENTRY_SIZE; z++) data[eo + z] = 0;
+
+  // Name (16 B, space-padded to match the global-label convention)
+  for (var n = 0; n < 16; n++) {
+    data[eo + n] = n < partitionName.length ? (partitionName.charCodeAt(n) & 0xFF) : 0x20;
+  }
+  // Start pointer
+  data[eo + 0x10] = 0xC0 | ((startLba >>> 24) & 0x0F);
+  data[eo + 0x11] = (startLba >>> 16) & 0xFF;
+  data[eo + 0x12] = (startLba >>> 8) & 0xFF;
+  data[eo + 0x13] = startLba & 0xFF;
+  // End pointer with TYPE=CFS (bit 4 of byte 0)
+  data[eo + 0x14] = 0x50 | ((endLba >>> 24) & 0x0F);
+  data[eo + 0x15] = (endLba >>> 16) & 0xFF;
+  data[eo + 0x16] = (endLba >>> 8) & 0xFF;
+  data[eo + 0x17] = endLba & 0xFF;
+  // Deleted-dir pointer
+  data[eo + 0x18] = 0x40 | ((deldirLba >>> 24) & 0x0F);
+  data[eo + 0x19] = (deldirLba >>> 16) & 0xFF;
+  data[eo + 0x1A] = (deldirLba >>> 8) & 0xFF;
+  data[eo + 0x1B] = deldirLba & 0xFF;
+  // Root-dir pointer
+  data[eo + 0x1C] = 0x40 | ((rootDirLba >>> 24) & 0x0F);
+  data[eo + 0x1D] = (rootDirLba >>> 16) & 0xFF;
+  data[eo + 0x1E] = (rootDirLba >>> 8) & 0xFF;
+  data[eo + 0x1F] = rootDirLba & 0xFF;
+  return { ok: true };
+}
+
+// Build a fresh, empty IDE64 .hdd of the given size in MiB, with one
+// CFS partition spanning the whole image (minus boot sector + partition
+// table). Returns an ArrayBuffer.
+function createEmptyHdd(sizeMib, opts) {
+  opts = opts || {};
+  var label = opts.label || 'IDE64 HDD';
+  var partitionName = opts.partitionName || 'PARTITION';
+  var totalLbas = Math.floor(sizeMib * 1024 * 1024 / IDE64_SECTOR_SIZE);
+  if (totalLbas < 10) return null;
+  var buf = new ArrayBuffer(totalLbas * IDE64_SECTOR_SIZE);
+  var d = new Uint8Array(buf);
+
+  // Boot sector at LBA 0
+  d[0x01] = 0; // default partition
+  for (var mi = 0; mi < IDE64_MAGIC_STRING.length; mi++) {
+    d[IDE64_MAGIC_OFFSET + mi] = IDE64_MAGIC_STRING.charCodeAt(mi);
+  }
+  // @partition-directory pointer → LBA 1 (LBA flag only)
+  d[0x18] = 0x40; d[0x19] = 0x00; d[0x1A] = 0x00; d[0x1B] = 0x01;
+  d[0x1C] = 0x40; d[0x1D] = 0x00; d[0x1E] = 0x00; d[0x1F] = 0x01;
+  // Disk label at $20 (16 B, space-padded)
+  for (var li = 0; li < 16; li++) {
+    d[0x20 + li] = li < label.length ? (label.charCodeAt(li) & 0xFF) : 0x20;
+  }
+  // Partition table at LBA 1 starts zeroed (matches ArrayBuffer default).
+
+  var partStart = 2;
+  var partEnd = totalLbas - 1;
+  var initRes = cfsInitPartitionStorage(buf, partStart, partEnd, partitionName);
+  if (!initRes.ok) return null;
+  var addRes = cfsAddPartitionToTable(buf, 0, partitionName, partStart, partEnd, initRes.rootDirLba, initRes.deletedDirLba);
+  if (!addRes.ok) return null;
+  return buf;
+}
+
+// Create a CFS subdirectory inside `parentDirLba`. Allocates one sector
+// for the new directory, writes a self-reference entry in its slot 0
+// (with self pointer at $10..$13 and parent pointer at $14..$17), then
+// adds an outgoing DIR entry in the parent dir's first free slot.
+//
+// Conventions cross-checked against ide.hdd's PROFIRE self-ref:
+//   * self-ref name is space-padded, attr byte 0x7B (D|R|W|X | DIR, no
+//     Closed bit — self-refs aren't "files")
+//   * outgoing DIR entry name is null-padded, attr byte 0xFB (Closed |
+//     D|R|W|X | DIR)
+//   * self-ref's $10..$13 pointer uses byte0=0x40 (LBA flag only)
+//   * outgoing's data-tree pointer uses byte0=0xC0 (VALID|LBA — clean
+//     pattern; reading code never checks VALID anyway)
+function cfsCreateSubdir(buffer, partitionStart, partitionEndLba, parentDirLba, name) {
+  if (!buffer || !parentDirLba) return { ok: false, error: 'invalid args' };
+  if (!name || name.length === 0) return { ok: false, error: 'empty name' };
+
+  var slot = cfsFindEmptyDirSlot(buffer, parentDirLba);
+  if (!slot) return { ok: false, error: 'no empty slot in parent dir' };
+
+  var newDirLba = cfsAllocSector(buffer, partitionStart, partitionEndLba, parentDirLba + 1);
+  if (newDirLba < 0) return { ok: false, error: 'no free sector for new directory' };
+
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+
+  // Zero the new directory sector, then write its self-reference at slot 0.
+  var newDirBase = newDirLba * IDE64_SECTOR_SIZE;
+  for (var z = 0; z < IDE64_SECTOR_SIZE; z++) data[newDirBase + z] = 0;
+  // Self-ref name: 16 bytes, space-padded (matches PROFIRE in ide.hdd)
+  for (var n = 0; n < 16; n++) {
+    data[newDirBase + n] = n < name.length ? (name.charCodeAt(n) & 0xFF) : 0x20;
+  }
+  // $10..$13 — self pointer (LBA flag, addr = newDirLba)
+  data[newDirBase + 0x10] = 0x40 | ((newDirLba >>> 24) & 0x0F);
+  data[newDirBase + 0x11] = (newDirLba >>> 16) & 0xFF;
+  data[newDirBase + 0x12] = (newDirLba >>> 8) & 0xFF;
+  data[newDirBase + 0x13] = newDirLba & 0xFF;
+  // $14..$17 — parent pointer
+  data[newDirBase + 0x14] = 0x40 | ((parentDirLba >>> 24) & 0x0F);
+  data[newDirBase + 0x15] = (parentDirLba >>> 16) & 0xFF;
+  data[newDirBase + 0x16] = (parentDirLba >>> 8) & 0xFF;
+  data[newDirBase + 0x17] = parentDirLba & 0xFF;
+  // $18 — attribute byte (D|R|W|X | DIR, no Closed)
+  data[newDirBase + 0x18] = 0x7B;
+  // $19..$1B — "DIR"
+  data[newDirBase + 0x19] = 0x44; // D
+  data[newDirBase + 0x1A] = 0x49; // I
+  data[newDirBase + 0x1B] = 0x52; // R
+  // $1C..$1F — mtime stays zero (we don't have a clock source here)
+
+  // Write the outgoing entry in the parent directory.
+  var po = slot.dirLba * IDE64_SECTOR_SIZE + slot.slotIndex * CFS_DIR_ENTRY_SIZE;
+  for (var pz = 0; pz < CFS_DIR_ENTRY_SIZE; pz++) data[po + pz] = 0;
+  // Outgoing name: null-padded (matches root→PROFIRE in ide.hdd)
+  for (var nn = 0; nn < 16 && nn < name.length; nn++) {
+    data[po + nn] = name.charCodeAt(nn) & 0xFF;
+  }
+  // $10..$13 — zeros (outgoing convention; size field is meaningless for DIRs)
+  // $14..$17 — data-tree pointer to the new subdir's first sector
+  data[po + 0x14] = 0xC0 | ((newDirLba >>> 24) & 0x0F);
+  data[po + 0x15] = (newDirLba >>> 16) & 0xFF;
+  data[po + 0x16] = (newDirLba >>> 8) & 0xFF;
+  data[po + 0x17] = newDirLba & 0xFF;
+  // $18 — attribute byte (Closed|D|R|W|X | DIR)
+  data[po + 0x18] = 0xFB;
+  // $19..$1B — "DIR"
+  data[po + 0x19] = 0x44;
+  data[po + 0x1A] = 0x49;
+  data[po + 0x1B] = 0x52;
+
+  return { ok: true, dirLba: slot.dirLba, slotIndex: slot.slotIndex, newDirLba: newDirLba };
 }
 
 // Resolve a slash-separated CFS path against `buffer`, starting at the
@@ -742,6 +1126,9 @@ function readIde64Partitions(buffer) {
       if (c === 0xA0 || c === 0x00) break;
       name += String.fromCharCode(c);
     }
+    // Also trim trailing spaces — fresh partitions we create are space-
+    // padded (matching the boot-sector label convention).
+    name = name.replace(/ +$/, '');
 
     var startPtr = _readIde64Pointer(data, off + 0x10);
     var endPtr = _readIde64Pointer(data, off + 0x14);

@@ -155,6 +155,22 @@ function renderIde64PartitionList() {
       '</div>';
   }
 
+  // "+ New partition" row — enabled if there's a free slot
+  var hasFreeSlot = hddPartitions.some(function(p) { return p.empty; });
+  if (hasFreeSlot) {
+    html +=
+      '<div class="dir-entry dir-parent-row" data-hdd-newpart="1">' +
+        '<span class="dir-grip"></span>' +
+        '<span class="dir-blocks"></span>' +
+        '<span class="dir-name">+ New CFS partition&hellip;</span>' +
+        '<span class="dir-type"></span>' +
+        '<span class="dir-slot"></span>' +
+        '<span class="dir-ts"></span>' +
+        '<span class="dir-addr"></span>' +
+        '<span class="dir-icons"></span>' +
+      '</div>';
+  }
+
   html += '</div>' +
     '<div class="dir-footer"><div class="dir-footer-row">' +
       '<span class="dir-footer-blocks">' + openCount + '</span>' +
@@ -183,6 +199,11 @@ function renderIde64PartitionList() {
         ]);
       }
     });
+  });
+  // + New partition row
+  content.querySelectorAll('.dir-entry[data-hdd-newpart]').forEach(function(row) {
+    row.addEventListener('click', function() { showCfsNewPartitionDialog(); });
+    row.addEventListener('dblclick', function() { showCfsNewPartitionDialog(); });
   });
 
   selectedEntryIndex = -1;
@@ -330,12 +351,23 @@ function renderCfsDirectoryView() {
         '<span class="dir-icons"></span>' +
       '</div>';
   }
-  // Import row (Phase 4b — single-sector files only)
+  // Import row — multi-level trees in place, so anything up to a few
+  // MiB works. UI cap of 4 MiB matches the depth-2 ceiling and is
+  // generous for typical C64 use (covers full D81 / D2M imports).
   html +=
     '<div class="dir-entry dir-parent-row" data-cfs-import="1">' +
       '<span class="dir-grip"></span>' +
       '<span class="dir-blocks"></span>' +
-      '<span class="dir-name">+ Import file&hellip; (≤ 512 B)</span>' +
+      '<span class="dir-name">+ Import file&hellip;</span>' +
+      '<span class="dir-type"></span>' +
+      '<span class="dir-cfs-mtime"></span>' +
+      '<span class="dir-cfs-attrs"></span>' +
+      '<span class="dir-icons"></span>' +
+    '</div>' +
+    '<div class="dir-entry dir-parent-row" data-cfs-newdir="1">' +
+      '<span class="dir-grip"></span>' +
+      '<span class="dir-blocks"></span>' +
+      '<span class="dir-name">+ New subdirectory&hellip;</span>' +
       '<span class="dir-type"></span>' +
       '<span class="dir-cfs-mtime"></span>' +
       '<span class="dir-cfs-attrs"></span>' +
@@ -409,6 +441,11 @@ function renderCfsDirectoryView() {
   content.querySelectorAll('.dir-entry[data-cfs-import]').forEach(function(row) {
     row.addEventListener('click', function() { showCfsImportPicker(); });
     row.addEventListener('dblclick', function() { showCfsImportPicker(); });
+  });
+  // New subdirectory row
+  content.querySelectorAll('.dir-entry[data-cfs-newdir]').forEach(function(row) {
+    row.addEventListener('click', function() { showCfsNewSubdirDialog(); });
+    row.addEventListener('dblclick', function() { showCfsNewSubdirDialog(); });
   });
 
   // File rows: click selects; dblclick on DIR is reserved for Phase 3
@@ -653,6 +690,133 @@ function showCfsRenameDialog(entry) {
   });
 }
 
+// ── New CFS partition in an existing .hdd (Phase 5e) ──────────────────
+// Picks the first free 16-entry partition slot, asks the user for a
+// name + size, places the new partition just past the highest existing
+// end-LBA (or after the partition table at LBA 1 if the image is empty),
+// then runs cfsInitPartitionStorage + cfsAddPartitionToTable.
+function showCfsNewPartitionDialog() {
+  if (!hddBuffer || !hddPartitions) return;
+  // First empty slot
+  var slotIdx = -1;
+  for (var i = 0; i < hddPartitions.length; i++) {
+    if (hddPartitions[i].empty) { slotIdx = i; break; }
+  }
+  if (slotIdx < 0) {
+    showModal('New partition', ['All 16 partition slots are in use.']);
+    return;
+  }
+  // Highest existing end LBA + 1 → start for the new partition. Bumped
+  // up to a 4096-LBA boundary so the new partition's first bitmap sits
+  // at the natural chunk boundary (matches what we see in ide.hdd).
+  var nextStart = 2; // first non-system LBA in the image
+  for (var pi = 0; pi < hddPartitions.length; pi++) {
+    var p = hddPartitions[pi];
+    if (!p.empty && p.endLba != null && p.endLba + 1 > nextStart) nextStart = p.endLba + 1;
+  }
+  // Available LBAs from nextStart to (totalLbas - 1)
+  var totalLbas = hddBuffer.byteLength / 512;
+  var availLbas = totalLbas - nextStart;
+  if (availLbas < 8) {
+    showModal('New partition', ['Not enough free space left in this .hdd image.']);
+    return;
+  }
+
+  var titleEl = document.getElementById('modal-title');
+  var body = document.getElementById('modal-body');
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  titleEl.textContent = 'New CFS partition';
+  var maxMib = Math.floor(availLbas * 512 / (1024 * 1024));
+  if (maxMib < 1) maxMib = 1;
+  var defaultMib = Math.min(maxMib, 4);
+  body.innerHTML =
+    '<div class="text-md mb-md">Name (up to 16 characters):</div>' +
+    '<input type="text" id="cfs-newpart-name" maxlength="16" value="PARTITION" style="width:100%;font-family:monospace;font-size:14px;padding:6px" />' +
+    '<div class="text-md mb-md" style="margin-top:12px">Size (MiB, max ' + maxMib + '):</div>' +
+    '<input type="number" id="cfs-newpart-size" min="1" max="' + maxMib + '" value="' + defaultMib + '" style="width:120px;font-family:monospace;font-size:14px;padding:6px" />' +
+    '<div class="text-sm text-muted" style="margin-top:8px">Slot ' + slotIdx + ' will be used, starting at LBA $' + nextStart.toString(16).toUpperCase() + '.</div>';
+  footer.innerHTML = '<button id="cfs-newpart-ok">Create</button> <button id="cfs-newpart-cancel">Cancel</button>';
+  function commit() {
+    var partitionName = (document.getElementById('cfs-newpart-name').value || '').trim() || 'PARTITION';
+    var mib = parseInt(document.getElementById('cfs-newpart-size').value, 10);
+    if (!mib || mib < 1) return;
+    if (mib > maxMib) mib = maxMib;
+    var sizeLbas = Math.floor(mib * 1024 * 1024 / 512);
+    var startLba = nextStart;
+    var endLba = startLba + sizeLbas - 1;
+    if (endLba >= totalLbas) endLba = totalLbas - 1;
+
+    pushUndo();
+    var init = cfsInitPartitionStorage(hddBuffer, startLba, endLba, partitionName);
+    if (!init.ok) {
+      showModal('New partition failed', [init.error || 'Could not initialise partition storage.']);
+      if (typeof popUndo === 'function') popUndo();
+      return;
+    }
+    var add = cfsAddPartitionToTable(hddBuffer, slotIdx, partitionName, startLba, endLba, init.rootDirLba, init.deletedDirLba);
+    if (!add.ok) {
+      showModal('New partition failed', [add.error || 'Could not write the partition entry.']);
+      if (typeof popUndo === 'function') popUndo();
+      return;
+    }
+    // Re-parse the partition table so the row appears immediately.
+    var info = readIde64Partitions(hddBuffer);
+    if (info) {
+      hddBootInfo = info;
+      hddPartitions = info.partitions;
+    }
+    document.getElementById('modal-overlay').classList.remove('open');
+    refreshIde64View();
+  }
+  document.getElementById('cfs-newpart-ok').addEventListener('click', commit);
+  document.getElementById('cfs-newpart-cancel').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+}
+
+// ── CFS new subdirectory (Phase 5b) ───────────────────────────────────
+// Prompt for a name, then allocate + initialize a new directory sector
+// and register it in the current directory.
+function showCfsNewSubdirDialog() {
+  if (cfsPartitionIdx < 0 || !hddPartitions) return;
+  var part = hddPartitions[cfsPartitionIdx];
+  if (!part) return;
+  var titleEl = document.getElementById('modal-title');
+  var body = document.getElementById('modal-body');
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  titleEl.textContent = 'New subdirectory';
+  body.innerHTML =
+    '<div class="text-md mb-md">Name (up to 16 characters):</div>' +
+    '<input type="text" id="cfs-newdir-input" maxlength="16" style="width:100%;font-family:monospace;font-size:14px;padding:6px" />';
+  var input = document.getElementById('cfs-newdir-input');
+  setTimeout(function() { input.focus(); }, 0);
+  footer.innerHTML = '<button id="cfs-newdir-ok">Create</button> <button id="cfs-newdir-cancel">Cancel</button>';
+  function commit() {
+    var newName = input.value.trim();
+    if (!newName) {
+      document.getElementById('modal-overlay').classList.remove('open');
+      return;
+    }
+    pushUndo();
+    var res = cfsCreateSubdir(hddBuffer, part.startLba, part.endLba, cfsDirLba, newName);
+    if (!res.ok) {
+      showModal('Create subdirectory failed', [res.error || 'Unknown error.']);
+      if (typeof popUndo === 'function') popUndo();
+      return;
+    }
+    document.getElementById('modal-overlay').classList.remove('open');
+    refreshIde64View();
+  }
+  document.getElementById('cfs-newdir-ok').addEventListener('click', commit);
+  document.getElementById('cfs-newdir-cancel').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') commit();
+    else if (e.key === 'Escape') document.getElementById('modal-overlay').classList.remove('open');
+  });
+}
+
 // ── CFS import single-sector file (Phase 4b) ──────────────────────────
 // Pops a native file picker. On selection: if the file is ≤ 512 bytes,
 // allocates a tree + data sector and creates a dir entry. Larger files
@@ -669,10 +833,11 @@ function showCfsImportPicker() {
     var file = input.files && input.files[0];
     document.body.removeChild(input);
     if (!file) return;
-    if (file.size > 512) {
+    var importCap = 4 * 1024 * 1024;
+    if (file.size > importCap) {
       showModal('Import not supported', [
         '"' + file.name + '" is ' + file.size + ' bytes.',
-        'Single-sector import (≤ 512 B) is the Phase 4b scope; multi-sector imports come in Phase 5.',
+        'The UI caps imports at 4 MiB. Larger files would need depth-3+ trees; the format handles them but the partition would have to be huge.',
       ]);
       return;
     }
@@ -687,7 +852,7 @@ function showCfsImportPicker() {
       ext = ext.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'PRG';
 
       pushUndo();
-      var res = cfsImportSingleSectorFile(hddBuffer, part.startLba, part.endLba, cfsDirLba, baseName, payload, {
+      var res = cfsImportFile(hddBuffer, part.startLba, part.endLba, cfsDirLba, baseName, payload, {
         ftype: CFS_FTYPE.NORMAL,
         typeSuffix: ext,
       });

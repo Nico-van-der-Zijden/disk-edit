@@ -1008,6 +1008,16 @@ document.querySelectorAll('#opt-new .option[data-format]').forEach(el => {
       await openCmdContainerAsTab(fdBuf, fdName, formatKey);
       return;
     }
+    if (formatKey === 'hdd') {
+      var hddMib = parseInt(el.dataset.hddMib, 10);
+      if (isNaN(hddMib) || hddMib < 1) return;
+      newDiskCount++;
+      var hdBuf2 = createEmptyHdd(hddMib);
+      if (!hdBuf2) return;
+      var hdName2 = 'New IDE64 HDD ' + newDiskCount + '.hdd';
+      openIde64AsTab(hdBuf2, hdName2);
+      return;
+    }
 
     // DNP: prompt for size in blocks via the slider modal, then convert
     // back to tracks (createEmptyDisk wants tracks, not blocks). Default
