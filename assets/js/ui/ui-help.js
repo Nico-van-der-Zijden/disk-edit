@@ -285,6 +285,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.124', title: 'IDE64 .hdd — file import via the File menu + drag-drop, VICE-compatible tree pointers', items: [
+      'File → Import File works in a CFS partition now (and so does drag-dropping files onto the page). Same UX as a D64 — no more inline "+ Import file" row in the listing. File-picker default filter matches the CBM-DOS importer (.prg / .seq / .usr / .rel / .p00 / .s00 / .u00 / .r00 / .cvt / .txt); user can still pick "All files" or drag-drop anything else',
+      'Filename byte conversion now reuses the CBM-DOS asciiToNameBytes path — preserves the PETSCII-safe punctuation set ($21..$3F) instead of replacing unknown chars with underscores (the previous behaviour rendered everything as the PETSCII "arrow left" glyph). Only CFS-specific tweak: "/" → space (path separator)',
+      'Fix: newly-imported / newly-created subdir entries weren\'t showing up in VICE\'s CFS dir listing. Tree pointer at byte $14 was being written as 0xC0 (VALID + LBA) when real IDE64 uses 0x40 (LBA flag only — the VALID bit only applies to partition-table entries, not file/subdir trees). VICE refuses entries that have bit 7 set there',
+    ]},
     { ver: '1.3.123', title: 'IDE64 .hdd — separators, Lock/Splat for CFS, "blocks used" footer, splat/lock markers in the type column', items: [
       'Insert Separator works in CFS partitions — File menu → Separator → Insert <pattern>, the View → Show Separators float palette, and the right-click context menu all route to a CFS-aware writer that drops a Closed-DEL entry with attr 0xF8 (Closed + D/R/W/X + DEL) and "DEL" in the typeSuffix bytes so VICE\'s CFS listing renders the row correctly',
       'Lock / Unlock and Splat / Unsplat are back in CFS view. Lock flips the W bit at attr $18 (VICE\'s read-only "<" marker). Splat flips the Closed bit (same bit position + semantic as CBM-DOS). Labels toggle live based on current state',

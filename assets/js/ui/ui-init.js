@@ -122,11 +122,30 @@ document.addEventListener('drop', async function(e) {
   // Import PRG/SEQ/USR/REL/CVT files into current disk
   if (importEntries.length > 0 && currentBuffer) {
     var imported = 0, failed = 0;
+    // CFS view: route each file through cfsImportFile (no GEOS .cvt
+    // handling — CFS imports are plain file writes). Same dispatch
+    // criteria as opt-import / the View Separators float.
+    var inCfsImport = typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0;
+    var cfsImportPart = inCfsImport && hddPartitions ? hddPartitions[cfsPartitionIdx] : null;
     for (var ii = 0; ii < importEntries.length; ii++) {
       try {
         var ent = importEntries[ii];
         var iext = ent.name.substring(ent.name.lastIndexOf('.')).toLowerCase();
-        if (iext === '.cvt') {
+        if (inCfsImport && cfsImportPart) {
+          // Reuse CBM-DOS's asciiToNameBytes via _cfsImportNameBytes so
+          // dropped files name the same way as on a D64 (only "/" is
+          // stripped — CFS treats it as the path separator).
+          var baseName = _cfsImportNameBytes(ent.name);
+          var extM = (ent.name.match(/\.([^.]+)$/) || [])[1] || 'PRG';
+          extM = extM.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'PRG';
+          pushUndo();
+          var cres = cfsImportFile(hddBuffer, cfsImportPart.startLba, cfsImportPart.endLba, cfsDirLba, baseName, new Uint8Array(ent.buffer), {
+            ftype: CFS_FTYPE.NORMAL,
+            typeSuffix: extM,
+          });
+          if (cres.ok) imported++;
+          else { failed++; if (typeof popUndo === 'function') popUndo(); }
+        } else if (iext === '.cvt') {
           await importCvtFile(ent.name, new Uint8Array(ent.buffer));
         } else {
           importFileToDisk(ent.name, new Uint8Array(ent.buffer));
@@ -137,8 +156,12 @@ document.addEventListener('drop', async function(e) {
       }
     }
     if (imported > 0) {
-      var info2 = parseCurrentDir(currentBuffer);
-      renderDisk(info2);
+      if (inCfsImport) {
+        refreshIde64View();
+      } else {
+        var info2 = parseCurrentDir(currentBuffer);
+        renderDisk(info2);
+      }
       showModal('Import Complete', [imported + ' file(s) imported.' + (failed > 0 ? ' ' + failed + ' failed.' : '')]);
     }
   } else if (importEntries.length > 0 && !currentBuffer) {

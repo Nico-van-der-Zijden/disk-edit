@@ -335,8 +335,16 @@ document.body.appendChild(importFileInput);
 
 document.getElementById('opt-import').addEventListener('click', (e) => {
   e.stopPropagation();
-  if (!currentBuffer || !canInsertFile()) return;
   closeMenus();
+  // CFS view: route through the CFS-aware picker. Skips the CBM-DOS
+  // canInsertFile() check (which reads currentFormat shape) and the
+  // GEOS .cvt handling in importFileToDisk — CFS imports are plain
+  // file writes via cfsImportFile.
+  if (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0) {
+    if (typeof showCfsImportPicker === 'function') showCfsImportPicker();
+    return;
+  }
+  if (!currentBuffer || !canInsertFile()) return;
   importFileInput.click();
 });
 

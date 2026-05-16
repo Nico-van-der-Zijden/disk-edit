@@ -965,6 +965,11 @@ function updateEntryMenuState() {
     document.getElementById('opt-insert').classList.toggle('disabled', !cfsHasFreeSlot);
     // Insert → Separator submenu: same gate as opt-insert.
     document.getElementById('opt-insert-sep').classList.toggle('disabled', !cfsHasFreeSlot);
+    // File → Import File: dispatches to showCfsImportPicker in CFS view.
+    // Same free-slot gate; the CBM-DOS canInsertFile() check at line
+    // ~810 would reject every CFS view since currentFormat shape doesn't
+    // match.
+    document.getElementById('opt-import').classList.toggle('disabled', !cfsHasFreeSlot);
     // Align: handler routes to alignCfsFilename in CFS view. Gate on
     // the same editable-entry flag we use for Rename / Scratch so the
     // system <<DELETED FILES>> entry stays protected.

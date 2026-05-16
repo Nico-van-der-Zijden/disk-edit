@@ -1028,7 +1028,12 @@ function cfsImportFile(buffer, partitionStart, partitionEndLba, firstDirLba, nam
   data[eo + 0x11] = (payload.length >>> 8) & 0xFF;
   data[eo + 0x12] = (payload.length >>> 16) & 0xFF;
   data[eo + 0x13] = (payload.length >>> 24) & 0xFF;
-  data[eo + 0x14] = 0xC0 | dirNextBits | ((treeLba >>> 24) & 0x0F);
+  // Byte $14 of a file entry's tree pointer: bit 6 = LBA flag, bits 5..4
+  // = dir-next contribution, bits 3..0 = LBA high nibble. Bit 7 stays
+  // CLEAR — real ide.hdd file entries have $14 like 0x40/0x60/0x70 (no
+  // VALID bit set on file/subdir trees, unlike partition-table entries).
+  // VICE refuses to list entries that have bit 7 set here.
+  data[eo + 0x14] = 0x40 | dirNextBits | ((treeLba >>> 24) & 0x0F);
   data[eo + 0x15] = (treeLba >>> 16) & 0xFF;
   data[eo + 0x16] = (treeLba >>> 8) & 0xFF;
   data[eo + 0x17] = treeLba & 0xFF;
@@ -1572,8 +1577,10 @@ function cfsCreateSubdir(buffer, partitionStart, partitionEndLba, parentDirLba, 
     data[po + nn] = name.charCodeAt(nn) & 0xFF;
   }
   // $10..$13 — zeros (outgoing convention; size field is meaningless for DIRs)
-  // $14..$17 — data-tree pointer to the new subdir's first sector
-  data[po + 0x14] = 0xC0 | dirNextBits | ((newDirLba >>> 24) & 0x0F);
+  // $14..$17 — data-tree pointer to the new subdir's first sector. Bit 7
+  // stays clear (no VALID bit on file/subdir tree pointers — see
+  // cfsImportFile for the same rule and why VICE relies on it).
+  data[po + 0x14] = 0x40 | dirNextBits | ((newDirLba >>> 24) & 0x0F);
   data[po + 0x15] = (newDirLba >>> 16) & 0xFF;
   data[po + 0x16] = (newDirLba >>> 8) & 0xFF;
   data[po + 0x17] = newDirLba & 0xFF;

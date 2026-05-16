@@ -382,18 +382,8 @@ function renderCfsDirectoryView() {
         '<span class="dir-icons"></span>' +
       '</div>';
     })();
-  // Import row stays in-list (no menu equivalent yet). New subdir is
-  // reachable through File → Add Directory (same as DNP/DHD).
-  html +=
-    '<div class="dir-entry dir-parent-row" data-cfs-import="1">' +
-      '<span class="dir-grip"></span>' +
-      '<span class="dir-blocks"></span>' +
-      '<span class="dir-name">+ Import file&hellip;</span>' +
-      '<span class="dir-type"></span>' +
-      '<span class="dir-cfs-mtime"></span>' +
-      '<span class="dir-cfs-attrs"></span>' +
-      '<span class="dir-icons"></span>' +
-    '</div>';
+  // Import is now reachable through File → Import File (same as
+  // CBM-DOS), so no inline "+ Import file" row in the listing.
 
   var fileCount = 0;
   var blocksUsed = 0;
@@ -524,11 +514,6 @@ function renderCfsDirectoryView() {
     }
     row.addEventListener('click', goBack);
     row.addEventListener('dblclick', goBack);
-  });
-  // Import file row
-  content.querySelectorAll('.dir-entry[data-cfs-import]').forEach(function(row) {
-    row.addEventListener('click', function() { showCfsImportPicker(); });
-    row.addEventListener('dblclick', function() { showCfsImportPicker(); });
   });
 
   // File rows: click selects; dblclick on DIR is reserved for Phase 3
@@ -796,6 +781,23 @@ function showCfsRenameDialog(entry) {
 
 // Validate a CFS partition / dir / file name. Returns the sanitised
 // name on success or null with an error message via showModal.
+// CBM-DOS's asciiToNameBytes (ui-fileops.js) handles the character set
+// for us — uppercase A-Z + digits + the PETSCII-safe 0x21..0x3F
+// punctuation range, anything else → space, padded with 0xA0. The only
+// CFS-specific tweak is the "/" byte (0x2F): asciiToNameBytes keeps it
+// as printable punctuation, but CFS treats it as the path separator and
+// our cfsResolvePath splits on it. Returns a 16-char string whose
+// char codes are the bytes cfsImportFile should write.
+function _cfsImportNameBytes(rawName) {
+  var dotIdx = rawName.lastIndexOf('.');
+  var base = dotIdx >= 0 ? rawName.substring(0, dotIdx) : rawName;
+  var bytes = asciiToNameBytes(base);
+  for (var i = 0; i < bytes.length; i++) {
+    if (bytes[i] === 0x2F) bytes[i] = 0x20; // strip CFS path separator
+  }
+  return String.fromCharCode.apply(null, bytes);
+}
+
 // Disallows `/` since CFS uses it as the path separator in cfsResolvePath
 // (and the IDEDOS firmware treats slashes the same way).
 function _sanitiseCfsName(input, title) {
@@ -1442,6 +1444,11 @@ function showCfsImportPicker() {
   if (!part) return;
   var input = document.createElement('input');
   input.type = 'file';
+  // Same default filter as the CBM-DOS importer in ui-fileops.js. CFS
+  // accepts any 3-char typeSuffix, but defaulting the file dialog to
+  // the recognised filetypes saves the user from accidentally dropping
+  // a binary they didn't mean to.
+  input.accept = '.prg,.seq,.usr,.rel,.p00,.s00,.u00,.r00,.cvt,.txt';
   input.style.display = 'none';
   document.body.appendChild(input);
   input.addEventListener('change', function() {
@@ -1458,10 +1465,9 @@ function showCfsImportPicker() {
     }
     file.arrayBuffer().then(function(buf) {
       var payload = new Uint8Array(buf);
-      // Build a name from the source filename: drop extension, uppercase,
-      // truncate to 16 chars, sanitize non-alphanumerics to underscores.
-      var baseName = file.name.replace(/\.[^.]+$/, '').toUpperCase().replace(/[^A-Z0-9_-]/g, '_').slice(0, 16);
-      if (!baseName) baseName = 'IMPORTED';
+      // Reuse CBM-DOS's asciiToNameBytes (via _cfsImportNameBytes) so
+      // dropped files get the same byte layout in CFS as on a D64.
+      var baseName = _cfsImportNameBytes(file.name);
       // Type suffix from extension (if present and 1-3 chars)
       var ext = (file.name.match(/\.([^.]+)$/) || [])[1] || 'PRG';
       ext = ext.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'PRG';
