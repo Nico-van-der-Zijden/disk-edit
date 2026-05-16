@@ -285,6 +285,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.123', title: 'IDE64 .hdd — separators, Lock/Splat for CFS, "blocks used" footer, splat/lock markers in the type column', items: [
+      'Insert Separator works in CFS partitions — File menu → Separator → Insert <pattern>, the View → Show Separators float palette, and the right-click context menu all route to a CFS-aware writer that drops a Closed-DEL entry with attr 0xF8 (Closed + D/R/W/X + DEL) and "DEL" in the typeSuffix bytes so VICE\'s CFS listing renders the row correctly',
+      'Lock / Unlock and Splat / Unsplat are back in CFS view. Lock flips the W bit at attr $18 (VICE\'s read-only "<" marker). Splat flips the Closed bit (same bit position + semantic as CBM-DOS). Labels toggle live based on current state',
+      'Type column now shows the same * / < decoration CBM-DOS uses: "*" prefix for splat (Closed cleared), "<" suffix for locked (W cleared). Padded to 5 characters so columns align cleanly',
+      'Directory footer reports "N blocks used (M files)" — sum of per-file block counts the way IDE64\'s BASIC dir listing does. Deleted/separator rows are excluded from the total. Block-size formula corrected to 256 bytes per block (CFS data sectors have no T/S link overhead, all 512 bytes are payload) — was 254 from the CBM-DOS convention',
+    ]},
     { ver: '1.3.122', title: 'IDE64 .hdd — file-menu parity with D64, plus Insert / Remove Entry / Align / Name Case for CFS', items: [
       'File menu in a CFS partition view now matches D64 / D71 / etc as closely as the format allows. Rename, Scratch, Unscratch, Insert File (a placeholder dir entry with no data sectors), Remove Entry (zeros the slot, frees the data, cascades for directories), Align (Left / Right / Center / Justify / Expand), Name Case (UPPER / lower / Toggle), Change File Size + Set Actual File Size all route through CFS-aware handlers. Double-click on the name now opens the inline rename editor (matching d64), not the hex viewer modal',
       'Modified date is stamped on every entry mutation (Import, Insert, Rename, Attribute toggle, Size edit, Align, Add Directory). Scratch / Unscratch / Remove preserve the original mtime so recovery is byte-equal to pre-scratch',

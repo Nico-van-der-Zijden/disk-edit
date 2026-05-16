@@ -910,6 +910,17 @@ document.getElementById('opt-lock').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+  // CFS view: flip the W (writeable) bit at byte $18 — that's the
+  // attribute VICE / IDEDOS surface as the read-only "<" marker, so
+  // it's the closest CFS analogue to CBM-DOS's lock bit.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var entry = cfsDirEntries[selectedEntryIndex];
+    if (!entry || entry.empty) return;
+    pushUndo();
+    cfsWriteDirEntryAttrByte(hddBuffer, entry.dirLba, entry.index, entry.attrByte ^ 0x10);
+    refreshIde64View();
+    return;
+  }
   pushUndo();
   const data = new Uint8Array(currentBuffer);
   var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
@@ -922,12 +933,26 @@ document.getElementById('opt-splat').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+  // CFS view: flip the Closed bit at byte $18 — same bit position as
+  // CBM-DOS's closed flag, same semantic. Splatting a CFS entry clears
+  // bit 0x80; unsplat sets it. Refuses on DEL entries (scratched files
+  // have Closed cleared and DEL ftype together, flipping just the
+  // Closed bit there would create an inconsistent state we don't want
+  // to expose).
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var sentry = cfsDirEntries[selectedEntryIndex];
+    if (!sentry || sentry.empty || sentry.ftype === CFS_FTYPE.DEL) return;
+    pushUndo();
+    cfsWriteDirEntryAttrByte(hddBuffer, sentry.dirLba, sentry.index, sentry.attrByte ^ 0x80);
+    refreshIde64View();
+    return;
+  }
   pushUndo();
-  const data = new Uint8Array(currentBuffer);
-  var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
-  for (var i = 0; i < entries.length; i++) data[entries[i] + 2] ^= 0x80;
-  const info = parseCurrentDir(currentBuffer);
-  renderDisk(info);
+  const data2 = new Uint8Array(currentBuffer);
+  var entries2 = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+  for (var j = 0; j < entries2.length; j++) data2[entries2[j] + 2] ^= 0x80;
+  const info2 = parseCurrentDir(currentBuffer);
+  renderDisk(info2);
 });
 
 // Walk a CFS directory's chain and count every live entry inside it
@@ -941,7 +966,7 @@ function _cfsCountDirContents(buffer, firstDirLba, depth) {
   for (var i = 0; i < entries.length; i++) {
     var e = entries[i];
     if (!e || e.empty || e.isSelfRef) continue;
-    if (e.ftype === CFS_FTYPE.DEL) continue; // already deleted, no cascade
+    if (e.ftype === CFS_FTYPE.DEL) continue; // already deleted OR separator, no cascade
     if (e.ftype === CFS_FTYPE.DIR) {
       dirs++;
       if (e.dataTreePtr && e.dataTreePtr.lba) {

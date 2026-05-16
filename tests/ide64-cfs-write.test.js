@@ -1024,6 +1024,134 @@ describe('cfsSwapDirSlots / cfsCollectDirSlots', function() {
   });
 });
 
+describe('cfsCountUsedBlocks', function() {
+  it('counts allocated sectors via popcount on the partition bitmap', function() {
+    var buf = new ArrayBuffer(2 * 1024 * 1024);
+    var d = new Uint8Array(buf);
+    var partStart = 2, partEnd = 1000; // 999 sectors total
+    // Empty bitmap (all 0xFF = all free) → 0 used
+    for (var i = 0; i < 512; i++) d[partStart * 512 + i] = 0xFF;
+    assert.strictEqual(cfsCountUsedBlocks(buf, partStart, partEnd), 0);
+
+    // Mark the bitmap, root dir, and a file's tree + data → 4 used
+    cfsMarkSectorUsed(buf, partStart, partStart);
+    cfsMarkSectorUsed(buf, partStart, 5);
+    cfsMarkSectorUsed(buf, partStart, 7);
+    cfsMarkSectorUsed(buf, partStart, 8);
+    assert.strictEqual(cfsCountUsedBlocks(buf, partStart, partEnd), 4);
+  });
+
+  it('matches a known-good count after Import → Scratch round-trip', function() {
+    var buf = new ArrayBuffer(2 * 1024 * 1024);
+    var d = new Uint8Array(buf);
+    var partStart = 2, partEnd = 1000;
+    for (var i = 0; i < 512; i++) d[partStart * 512 + i] = 0xFF;
+    cfsMarkSectorUsed(buf, partStart, partStart);
+    cfsMarkSectorUsed(buf, partStart, 5);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    var beforeImport = cfsCountUsedBlocks(buf, partStart, partEnd);
+    var imp = cfsImportFile(buf, partStart, partEnd, 5, 'F', new Uint8Array(2000), { ftype: 1, typeSuffix: 'PRG' });
+    assert.ok(imp.ok);
+    // Import adds tree + ceil(2000/512) = 4 data sectors = 5 sectors
+    assert.strictEqual(cfsCountUsedBlocks(buf, partStart, partEnd), beforeImport + 5);
+    // Scratch frees them all
+    var entry = readCfsDirectorySector(buf, 5)[imp.slotIndex];
+    entry.dirLba = 5;
+    cfsDeleteFile(buf, partStart, partEnd, entry);
+    assert.strictEqual(cfsCountUsedBlocks(buf, partStart, partEnd), beforeImport);
+  });
+});
+
+describe('Lock / Splat attr-byte toggles (via cfsWriteDirEntryAttrByte)', function() {
+  it('XOR 0x10 on attr byte toggles the W (writeable) bit — CFS lock', function() {
+    var buf = new ArrayBuffer(64 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 5, 1, { name: 'X', ftype: 1, typeSuffix: 'PRG', attrByte: 0xF9 });
+    var before = readCfsDirectorySector(buf, 5)[1];
+    assert.strictEqual((before.attrByte & 0x10) !== 0, true, 'starts writeable');
+    cfsWriteDirEntryAttrByte(buf, 5, 1, before.attrByte ^ 0x10);
+    var after = readCfsDirectorySector(buf, 5)[1];
+    assert.strictEqual((after.attrByte & 0x10) !== 0, false, 'now locked');
+    // Lock again → re-toggle restores
+    cfsWriteDirEntryAttrByte(buf, 5, 1, after.attrByte ^ 0x10);
+    var again = readCfsDirectorySector(buf, 5)[1];
+    assert.strictEqual((again.attrByte & 0x10) !== 0, true, 'unlocked again');
+  });
+
+  it('XOR 0x80 on attr byte toggles the Closed bit — CFS splat', function() {
+    var buf = new ArrayBuffer(64 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 5, 1, { name: 'X', ftype: 1, typeSuffix: 'PRG', attrByte: 0xF9 });
+    var before = readCfsDirectorySector(buf, 5)[1];
+    assert.strictEqual(before.closed, true);
+    cfsWriteDirEntryAttrByte(buf, 5, 1, before.attrByte ^ 0x80);
+    assert.strictEqual(readCfsDirectorySector(buf, 5)[1].closed, false, 'splatted');
+    cfsWriteDirEntryAttrByte(buf, 5, 1, readCfsDirectorySector(buf, 5)[1].attrByte ^ 0x80);
+    assert.strictEqual(readCfsDirectorySector(buf, 5)[1].closed, true, 'unsplatted');
+  });
+});
+
+describe('cfsInsertSeparator', function() {
+  it('writes a Closed-DEL entry with attr byte 0xF8 and the pattern in the name field', function() {
+    var buf = new ArrayBuffer(64 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    var pattern = [0x2D, 0x2D, 0x2D, 0x2D, 0x2D, 0x2D, 0x2D, 0x2D]; // 8 dashes
+    var res = cfsInsertSeparator(buf, 5, pattern);
+    assert.ok(res.ok, res.error || '');
+    var slotOff = 5 * 512 + res.slotIndex * 32;
+    // Pattern bytes 0..7, then $A0 padding 8..15
+    for (var i = 0; i < 8; i++) assert.strictEqual(d[slotOff + i], 0x2D);
+    for (var j = 8; j < 16; j++) assert.strictEqual(d[slotOff + j], 0xA0);
+    // attr byte: 0xF8 = Closed + D + R + W + X + ftype DEL. Without
+    // the W bit set, VICE's CFS listing flags the row as read-only
+    // ("<" marker), so all four permission bits go in.
+    assert.strictEqual(d[slotOff + 0x18], 0xF8);
+    // Reader sees ftype DEL + closed + all permission bits + "DEL" suffix
+    var entries = readCfsDirectorySector(buf, 5);
+    assert.strictEqual(entries[res.slotIndex].ftype, CFS_FTYPE.DEL);
+    assert.strictEqual(entries[res.slotIndex].closed, true);
+    assert.strictEqual(entries[res.slotIndex].attrByte & 0x78, 0x78);
+    assert.strictEqual(entries[res.slotIndex].typeSuffix, 'DEL');
+  });
+
+  it('refuses when the dir is full', function() {
+    var buf = new ArrayBuffer(64 * 1024);
+    var d = new Uint8Array(buf);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    for (var i = 1; i < 16; i++) {
+      writeCfsEntry(d, 5, i, { name: 'F' + i, ftype: 1, typeSuffix: 'PRG', attrByte: 0xF9 });
+    }
+    var res = cfsInsertSeparator(buf, 5, [0x2D]);
+    assert.strictEqual(res.ok, false);
+  });
+
+  it('Remove Entry zeros a separator slot cleanly (no orphaned bitmap)', function() {
+    var buf = new ArrayBuffer(2 * 1024 * 1024);
+    var d = new Uint8Array(buf);
+    var partStart = 2, partEnd = 1000;
+    for (var i = 0; i < 512; i++) d[2 * 512 + i] = 0xFF;
+    cfsMarkSectorUsed(buf, partStart, 2);
+    cfsMarkSectorUsed(buf, partStart, 5);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    var res = cfsInsertSeparator(buf, 5, [0x2D, 0x2D, 0x2D]);
+    assert.ok(res.ok);
+
+    var entries = readCfsDirectorySector(buf, 5);
+    var sep = entries[res.slotIndex];
+    sep.dirLba = 5;
+    // Separator is ftype DEL — cfsRemoveDirEntry's DEL branch handles it
+    // (just zero the slot, no bitmap free).
+    var rem = cfsRemoveDirEntry(buf, partStart, partEnd, sep, 5);
+    assert.ok(rem.ok, rem.error || '');
+    var slotOff = 5 * 512 + res.slotIndex * 32;
+    for (var z = 0; z < 32; z++) {
+      var expected = (z === 0x14) ? (d[slotOff + z] & 0x30) : 0;
+      assert.strictEqual(d[slotOff + z], expected);
+    }
+  });
+});
+
 describe('cfsInsertPlaceholderEntry', function() {
   it('creates a zero-size, null-tree entry that the reader sees correctly', function() {
     var buf = new ArrayBuffer(64 * 1024);

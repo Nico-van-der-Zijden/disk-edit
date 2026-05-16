@@ -396,15 +396,28 @@ function renderCfsDirectoryView() {
     '</div>';
 
   var fileCount = 0;
+  var blocksUsed = 0;
   var disk = new Uint8Array(hddBuffer);
   for (var i = 0; i < cfsDirEntries.length; i++) {
     var e = cfsDirEntries[i];
     if (e.empty) continue;
     if (e.isSelfRef) continue; // entry 0 of first sector = directory's own name, hide it
-    if (e.ftype === CFS_FTYPE.DEL && !showDeleted) continue; // Show Deleted toggle (File menu)
+    // DEL filter: scratched entries (DEL + Closed cleared) follow the
+    // Show Deleted toggle. Separators (DEL + Closed set — same pattern
+    // CBM-DOS uses) always render, since they're intentional content
+    // the user placed via Insert Separator.
+    if (e.ftype === CFS_FTYPE.DEL && !e.closed && !showDeleted) continue;
 
     var absIdx = i; // unique across all chained sectors
-    var typeStr = e.typeSuffix || _cfsFtypeLabel(e.ftype);
+    // Type column: "*"-prefix for splat (Closed bit cleared), "<"-suffix
+    // for locked (W bit cleared) — same display convention CBM-DOS uses.
+    // Always emit 1+3+1 chars so columns align in the .dir-type slot
+    // (width: 5ch; white-space: pre). DEL entries don't get the splat
+    // prefix since their not-Closed state has DEL semantics, not splat.
+    var baseType = e.typeSuffix || _cfsFtypeLabel(e.ftype);
+    var splatPrefix = (!e.closed && e.ftype !== CFS_FTYPE.DEL) ? '*' : ' ';
+    var lockedSuffix = !(e.attrByte & 0x10) ? '<' : ' ';
+    var typeStr = splatPrefix + baseType + lockedSuffix;
     // Hide size for directories / links — and also for deleted-directory
     // entries, which keep typeSuffix "DIR" but have ftype=0 (DEL). Without
     // this, a scratched subdir shows "0" in the size column where a live
@@ -415,9 +428,16 @@ function renderCfsDirectoryView() {
     if (isDirLike) {
       sizeStr = '';
     } else {
-      // Show CBM-style blocks count (rounded up, 254 data bytes per block
-      // — same as the existing disk views) plus the raw byte count via tooltip.
-      sizeStr = Math.ceil(e.size / 254).toString();
+      // CFS reports file size in 256-byte blocks (one 512-byte CFS sector
+      // = 2 blocks). The CBM-DOS convention of 254 bytes/block doesn't
+      // apply — CFS data sectors carry no T/S link, all 512 bytes are
+      // payload. IDE64's "LOAD\"$\",8" agrees: each sector = 2 blocks.
+      var entryBlocks = Math.ceil(e.size / 256);
+      sizeStr = entryBlocks.toString();
+      // Skip DEL entries from the per-listing total — separators and
+      // scratched rows show up in the listing under their own rules but
+      // shouldn't count toward "blocks used by files".
+      if (e.ftype !== CFS_FTYPE.DEL) blocksUsed += entryBlocks;
     }
     var mtimeStr = formatCfsTimestamp(e.mtime);
     var attrs = '';
@@ -427,7 +447,9 @@ function renderCfsDirectoryView() {
     if (e.attrByte & 0x10) attrs += 'W';
     if (e.attrByte & 0x08) attrs += 'X';
 
-    var deletedCls = (e.ftype === CFS_FTYPE.DEL) ? ' deleted' : '';
+    // Only scratched entries (DEL + Closed cleared) get the dim style.
+    // Separators (DEL + Closed) are intentional and render normally.
+    var deletedCls = (e.ftype === CFS_FTYPE.DEL && !e.closed) ? ' deleted' : '';
     var enterableSubdir = (e.ftype === CFS_FTYPE.DIR);
     // Tooltip renders in the browser's default font, not the C64 PUA
     // font — strip PETSCII codepoints back to plain ASCII so it doesn't
@@ -472,10 +494,14 @@ function renderCfsDirectoryView() {
   var partSizeLabel = part.sizeBytes !== null
     ? (part.sizeBytes / (1024 * 1024)).toFixed(part.sizeBytes < 10 * 1024 * 1024 ? 2 : 1) + ' MiB'
     : '';
+  // Footer matches the IDE64 BASIC "LOAD\"$\",8" convention: the sum of
+  // per-file block counts visible in the listing (NOT the bitmap-wide
+  // allocation — that includes dir/bitmap overhead). File count comes
+  // along in brackets so the user still sees the directory size.
   html += '</div>' +
     '<div class="dir-footer"><div class="dir-footer-row">' +
-      '<span class="dir-footer-blocks">' + fileCount + '</span>' +
-      '<span class="dir-footer-label">file(s).</span>' +
+      '<span class="dir-footer-blocks">' + blocksUsed + '</span>' +
+      '<span class="dir-footer-label">blocks used (' + fileCount + ' file' + (fileCount === 1 ? '' : 's') + ').</span>' +
       '<span class="dir-footer-tracks">' + escHtml(partSizeLabel) + ' CFS partition</span>' +
     '</div></div>' +
   '</div>';
@@ -923,7 +949,10 @@ function startInlineEditCfsBlockSize(entryEl) {
   if (!blocksSpan || blocksSpan.querySelector('input')) return;
   if (typeof cancelActiveEdits === 'function') cancelActiveEdits();
 
-  var currentBlocks = Math.ceil(entry.size / 254);
+  // CFS blocks are 256 bytes (one 512-byte sector = 2 blocks). Not 254
+  // like CBM-DOS — CFS data sectors carry no T/S link, every byte is
+  // payload. Matches what IDE64 reports in BASIC "LOAD\"$\",8".
+  var currentBlocks = Math.ceil(entry.size / 256);
   var input = document.createElement('input');
   input.type = 'number';
   input.min = '0';
@@ -969,7 +998,7 @@ function startInlineEditCfsBlockSize(entryEl) {
     cleanup();
     if (parsed !== currentBlocks) {
       pushUndo();
-      cfsWriteFileSize(hddBuffer, entry.dirLba, entry.index, parsed * 254, entry.ftype);
+      cfsWriteFileSize(hddBuffer, entry.dirLba, entry.index, parsed * 256, entry.ftype);
     }
     refreshIde64View();
   }

@@ -301,7 +301,11 @@ function ensureSepFloatBuilt() {
     var idx = parseInt(item.getAttribute('data-sep-idx'), 10);
     var all = getAllSeparators();
     if (isNaN(idx) || idx < 0 || idx >= all.length) return;
-    insertSeparator(all[idx]);
+    if (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0) {
+      insertCfsSeparator(all[idx]);
+    } else {
+      insertSeparator(all[idx]);
+    }
     // Re-render so the disabled state updates if this insert filled the dir.
     renderSepFloatBody();
   });
@@ -314,16 +318,23 @@ function renderSepFloatBody() {
   if (!fl) return;
   var body = fl.querySelector('.sep-float-body');
   var all = getAllSeparators();
-  var canInsert = !!currentBuffer && !isTapeFormat() && canInsertFile();
+  // canInsertFile is CBM-DOS-only; in a CFS partition view, gate on the
+  // CFS empty-slot check instead so the float stays clickable on .hdd.
+  var inCfs = typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0;
+  var canInsert = inCfs
+    ? !!(hddBuffer && cfsFindEmptyDirSlot(hddBuffer, cfsDirLba))
+    : (!!currentBuffer && !isTapeFormat() && canInsertFile());
 
   var html = '';
   for (var i = 0; i < all.length; i++) {
     html += sepFloatItem(i, all[i], canInsert);
   }
   if (!canInsert) {
-    var why = !currentBuffer ? 'Open an editable disk to insert separators.'
-      : isTapeFormat() ? 'Tape images are read-only.'
-      : 'Directory is full — no room for another entry.';
+    var why = inCfs
+      ? 'Directory is full — no room for another entry.'
+      : (!currentBuffer ? 'Open an editable disk to insert separators.'
+         : isTapeFormat() ? 'Tape images are read-only.'
+         : 'Directory is full — no room for another entry.');
     html += '<div class="sep-float-hint">' + escHtml(why) + '</div>';
   }
   body.innerHTML = html;
@@ -431,5 +442,79 @@ document.getElementById('sep-submenu').addEventListener('click', function(e) {
   var all = getAllSeparators();
   if (isNaN(idx) || idx < 0 || idx >= all.length) return;
   closeMenus();
+  if (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0) {
+    insertCfsSeparator(all[idx]);
+    return;
+  }
   insertSeparator(all[idx]);
 });
+
+// CFS analogue of insertSeparator: write a Closed-DEL entry whose name
+// holds the separator pattern, then shift the slot backward through the
+// dir chain so it lands right after the current selection (same trick
+// the CBM-DOS path uses via insertAndPosition).
+function insertCfsSeparator(pattern) {
+  if (typeof cfsPartitionIdx === 'undefined' || cfsPartitionIdx < 0) return;
+  if (!hddBuffer || !cfsDirEntries) return;
+  if (!cfsFindEmptyDirSlot(hddBuffer, cfsDirLba)) {
+    showModal('Insert Separator', ['No empty directory slot available.']);
+    return;
+  }
+  // Expand the pattern to a concrete 16-byte array. {byte: N} repeats N
+  // for the whole name; {bytes: [...]} carries an explicit pattern that
+  // shorter than 16 bytes leaves $A0-padded by cfsInsertSeparator.
+  var patBytes;
+  if (pattern.byte !== undefined) {
+    patBytes = new Array(16);
+    for (var pi = 0; pi < 16; pi++) patBytes[pi] = pattern.byte & 0xFF;
+  } else {
+    patBytes = (pattern.bytes || []).slice(0, 16);
+  }
+  var selBefore = (selectedEntryIndex >= 0 && cfsDirEntries[selectedEntryIndex])
+    ? { dirLba: cfsDirEntries[selectedEntryIndex].dirLba, slotIndex: cfsDirEntries[selectedEntryIndex].index }
+    : null;
+  pushUndo();
+  var res = cfsInsertSeparator(hddBuffer, cfsDirLba, patBytes);
+  if (!res.ok) {
+    showModal('Insert Separator failed', [res.error || 'Unknown error.']);
+    if (typeof popUndo === 'function') popUndo();
+    return;
+  }
+  // Same shift-backward dance as opt-insert so the new row lands right
+  // after the selection instead of wherever the first free slot happened
+  // to live.
+  if (selBefore) {
+    var allSlots = cfsCollectDirSlots(hddBuffer, cfsDirLba);
+    var selIdx = -1, newIdx = -1;
+    for (var si = 0; si < allSlots.length; si++) {
+      if (allSlots[si].dirLba === selBefore.dirLba && allSlots[si].slotIndex === selBefore.slotIndex) selIdx = si;
+      if (allSlots[si].dirLba === res.dirLba && allSlots[si].slotIndex === res.slotIndex) newIdx = si;
+    }
+    if (selIdx >= 0 && newIdx > selIdx + 1) {
+      var cur = newIdx;
+      var target = selIdx + 1;
+      while (cur !== target) {
+        cfsSwapDirSlots(hddBuffer, allSlots[cur], allSlots[cur - 1]);
+        cur--;
+      }
+      res.dirLba = allSlots[target].dirLba;
+      res.slotIndex = allSlots[target].slotIndex;
+    }
+  }
+  refreshIde64View();
+  // Drop the selection on the new separator row.
+  for (var ni = 0; ni < cfsDirEntries.length; ni++) {
+    var ent = cfsDirEntries[ni];
+    if (ent && ent.dirLba === res.dirLba && ent.index === res.slotIndex) {
+      selectedEntryIndex = ni;
+      selectedEntries = [ni];
+      var pickRow = document.querySelector('.dir-entry[data-cfs-entry="' + ni + '"]');
+      if (pickRow) {
+        document.querySelectorAll('.dir-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
+        pickRow.classList.add('selected');
+      }
+      updateEntryMenuState();
+      break;
+    }
+  }
+}

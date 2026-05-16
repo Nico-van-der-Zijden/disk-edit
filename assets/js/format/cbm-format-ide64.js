@@ -344,6 +344,41 @@ function cfsBamLocation(partitionStart, absLba) {
   };
 }
 
+// Count the allocated sectors in a partition by scanning every bitmap
+// group's bytes and popcount-ing the cleared (= used) bits. Each bitmap
+// covers 4096 sectors at partition_start + N * 4096; bits 1 = free,
+// 0 = used (MSB-first). The last byte of the last group may have
+// trailing bits past partitionEndLba — masked off before counting.
+function cfsCountUsedBlocks(buffer, partitionStart, partitionEndLba) {
+  if (!buffer) return 0;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var totalSectors = partitionEndLba - partitionStart + 1;
+  if (totalSectors <= 0) return 0;
+  function popcount(v) {
+    v = v - ((v >>> 1) & 0x55);
+    v = (v & 0x33) + ((v >>> 2) & 0x33);
+    return (v + (v >>> 4)) & 0x0F;
+  }
+  var used = 0;
+  var groupCount = Math.ceil(totalSectors / 4096);
+  for (var g = 0; g < groupCount; g++) {
+    var sectorsInGroup = Math.min(4096, totalSectors - g * 4096);
+    var bmOff = (partitionStart + g * 4096) * IDE64_SECTOR_SIZE;
+    if (bmOff + IDE64_SECTOR_SIZE > data.length) break;
+    var fullBytes = Math.floor(sectorsInGroup / 8);
+    var freeBits = 0;
+    for (var b = 0; b < fullBytes; b++) freeBits += popcount(data[bmOff + b]);
+    // Partial trailing byte: only count the top `sectorsInGroup % 8` bits.
+    var rem = sectorsInGroup - fullBytes * 8;
+    if (rem > 0) {
+      var mask = (0xFF << (8 - rem)) & 0xFF;
+      freeBits += popcount(data[bmOff + fullBytes] & mask);
+    }
+    used += sectorsInGroup - freeBits;
+  }
+  return used;
+}
+
 function cfsIsSectorFree(buffer, partitionStart, absLba) {
   var loc = cfsBamLocation(partitionStart, absLba);
   if (!loc) return false;
@@ -1071,6 +1106,49 @@ function cfsCollectDirSlots(buffer, firstDirLba) {
     dirLba = (nextPtr.lba && nextPtr.addr > 0) ? nextPtr.addr : 0;
   }
   return slots;
+}
+
+// Insert a separator dir entry — like cfsInsertPlaceholderEntry but the
+// 16-byte name slot carries a separator byte pattern (typically CBM
+// reversed-PETSCII glyphs) and the attr byte at $18 is `0xF8` (Closed +
+// D + R + W + X + ftype DEL). The Closed bit distinguishes a separator
+// from a scratched entry — our renderer skips scratched DEL entries
+// (Closed=0) when Show Deleted is off, but separators with Closed=1
+// stay visible. D/R/W/X are all set so VICE's CFS listing renders the
+// row without a "<" read-only marker; just the Closed bit alone
+// (matching the CBM-DOS 0x80 trick) makes VICE flag the row as
+// unwriteable in CFS view.
+function cfsInsertSeparator(buffer, parentDirLba, patternBytes) {
+  if (!buffer || !parentDirLba) return { ok: false, error: 'invalid arguments' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var slot = cfsFindEmptyDirSlot(buffer, parentDirLba);
+  if (!slot) return { ok: false, error: 'no empty directory slot' };
+  var eo = slot.dirLba * IDE64_SECTOR_SIZE + slot.slotIndex * CFS_DIR_ENTRY_SIZE;
+  if (eo + CFS_DIR_ENTRY_SIZE > data.length) return { ok: false, error: 'dir entry out of range' };
+
+  var dirNextBits = data[eo + 0x14] & 0x30;
+  for (var z = 0; z < CFS_DIR_ENTRY_SIZE; z++) data[eo + z] = 0;
+
+  // Pattern bytes fill the 16-byte name field. Two pattern shapes are
+  // supported, mirroring the CBM-DOS separators format: a single repeat
+  // byte (opts.byte path elsewhere) or an array of explicit bytes.
+  var pat = patternBytes || [];
+  var pLen = pat.length;
+  for (var i = 0; i < 16; i++) {
+    data[eo + i] = i < pLen ? (pat[i] & 0xFF) : 0xA0;
+  }
+  // No size, no tree pointer (just dir-next bits preserved in $14).
+  data[eo + 0x14] = dirNextBits;
+  data[eo + 0x18] = 0xF8; // Closed + D + R + W + X + ftype DEL
+  // typeSuffix "DEL" — VICE's CFS listing reads the three-byte suffix
+  // at $19..$1B for the type column. Leaving it zero makes VICE print
+  // nothing (only the < / read-only marker shows, even with W set).
+  data[eo + 0x19] = 0x44; // 'D'
+  data[eo + 0x1A] = 0x45; // 'E'
+  data[eo + 0x1B] = 0x4C; // 'L'
+  cfsTouchEntryMtime(buffer, slot.dirLba, slot.slotIndex);
+
+  return { ok: true, dirLba: slot.dirLba, slotIndex: slot.slotIndex };
 }
 
 // Insert a placeholder dir entry — zero size, no tree pointer, no data

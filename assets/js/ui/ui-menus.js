@@ -145,10 +145,18 @@ contextMenu.addEventListener('click', function(e) {
   if (subOption && !subOption.classList.contains('disabled')) {
     closeContextMenu();
     if (subOption.dataset.sepIdx !== undefined) {
-      // Separator submenu uses delegation — call insertSeparator directly
+      // Separator submenu uses delegation — call the right insert helper
+      // for the active view. CFS partitions need insertCfsSeparator;
+      // CBM-DOS shapes use insertSeparator.
       var idx = parseInt(subOption.dataset.sepIdx, 10);
       var all = getAllSeparators();
-      if (!isNaN(idx) && idx >= 0 && idx < all.length) insertSeparator(all[idx]);
+      if (!isNaN(idx) && idx >= 0 && idx < all.length) {
+        if (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0) {
+          insertCfsSeparator(all[idx]);
+        } else {
+          insertSeparator(all[idx]);
+        }
+      }
     } else {
       // Align and file type have per-element listeners — click the original
       var selector = '';
@@ -582,8 +590,8 @@ function updateEntryMenuState() {
   // / Edit T-S / View As stuck on display:none from a prior render.
   // Each individual disabled-state check below still runs to set the
   // correct disabled class for the new view.
-  var _cfsHiddenIds = ['opt-lock', 'opt-splat', 'opt-move-up',
-    'opt-move-down', 'opt-change-ts', 'opt-view-as', 'opt-scratch', 'opt-unscratch'];
+  var _cfsHiddenIds = ['opt-move-up', 'opt-move-down', 'opt-change-ts',
+    'opt-view-as', 'opt-scratch', 'opt-unscratch'];
   for (var _ri = 0; _ri < _cfsHiddenIds.length; _ri++) {
     var _re = document.getElementById(_cfsHiddenIds[_ri]);
     if (_re) _re.style.display = '';
@@ -913,14 +921,26 @@ function updateEntryMenuState() {
     // would break IDEDOS's name-match recognition. Allow only on
     // editable entries.
     document.getElementById('opt-case').classList.toggle('disabled', !cfsEditableEntry);
-    // Lock / Splat: CBM-DOS-only concepts. CFS has separate D/R/W/X
-    // permission bits rather than a single LOCK flag, and splatting the
-    // Closed bit isn't a useful CFS operation. Worse, the CBM-DOS click
-    // handlers XOR data[selectedEntryIndex + 2] — in CFS view that's a
-    // slot index, so the bit-flip lands somewhere in the boot sector.
-    // Hide both items entirely to keep the menu honest.
-    document.getElementById('opt-lock').style.display = 'none';
-    document.getElementById('opt-splat').style.display = 'none';
+    // Lock / Splat: handlers route through CFS-aware attr-byte XOR
+    // (writeable bit 0x10 for lock, Closed bit 0x80 for splat). Labels
+    // flip based on current state so the user sees Lock vs Unlock /
+    // Splat vs Unsplat correctly. Splat is refused on DEL entries —
+    // scratched files share the not-Closed state and we don't want
+    // toggling them to create a weird mid-recovery state.
+    var cfsLockEl = document.getElementById('opt-lock');
+    var cfsSplatEl = document.getElementById('opt-splat');
+    cfsLockEl.style.display = '';
+    cfsSplatEl.style.display = '';
+    cfsLockEl.classList.toggle('disabled', !cfsEditableEntry);
+    cfsSplatEl.classList.toggle('disabled', !cfsEditableEntry || cfsIsDeleted);
+    if (cfsHasEntry) {
+      var attrByte = cfsEntrySel.attrByte || 0;
+      cfsLockEl.textContent = (attrByte & 0x10) ? 'Lock File' : 'Unlock File';
+      cfsSplatEl.textContent = (attrByte & 0x80) ? 'Splat File' : 'Unsplat File';
+    } else {
+      cfsLockEl.textContent = 'Lock File';
+      cfsSplatEl.textContent = 'Splat File';
+    }
     // Other CBM-DOS-only ops: Move Up/Down, Edit Track/Sector, View As.
     // They either don't translate to CFS at all (track/sector isn't a
     // thing — files use a B-tree by LBA) or would corrupt hddBuffer at
@@ -943,6 +963,8 @@ function updateEntryMenuState() {
     // checks both truly-empty and DEL-fallback slots, mirroring import).
     var cfsHasFreeSlot = !!cfsFindEmptyDirSlot(hddBuffer, cfsDirLba);
     document.getElementById('opt-insert').classList.toggle('disabled', !cfsHasFreeSlot);
+    // Insert → Separator submenu: same gate as opt-insert.
+    document.getElementById('opt-insert-sep').classList.toggle('disabled', !cfsHasFreeSlot);
     // Align: handler routes to alignCfsFilename in CFS view. Gate on
     // the same editable-entry flag we use for Rename / Scratch so the
     // system <<DELETED FILES>> entry stays protected.
