@@ -930,10 +930,81 @@ document.getElementById('opt-splat').addEventListener('click', (e) => {
   renderDisk(info);
 });
 
-document.getElementById('opt-scratch').addEventListener('click', (e) => {
+// Walk a CFS directory's chain and count every live entry inside it
+// (recursively). Used to show "X files / Y dirs" in the Delete Directory
+// confirmation so the user sees the cascade scope before committing.
+function _cfsCountDirContents(buffer, firstDirLba, depth) {
+  if (depth == null) depth = 0;
+  if (depth > 32) return { files: 0, dirs: 0 }; // depth guard
+  var entries = readCfsDirectory(buffer, firstDirLba) || [];
+  var files = 0, dirs = 0;
+  for (var i = 0; i < entries.length; i++) {
+    var e = entries[i];
+    if (!e || e.empty || e.isSelfRef) continue;
+    if (e.ftype === CFS_FTYPE.DEL) continue; // already deleted, no cascade
+    if (e.ftype === CFS_FTYPE.DIR) {
+      dirs++;
+      if (e.dataTreePtr && e.dataTreePtr.lba) {
+        var sub = _cfsCountDirContents(buffer, e.dataTreePtr.addr, depth + 1);
+        files += sub.files;
+        dirs += sub.dirs;
+      }
+    } else {
+      files++;
+    }
+  }
+  return { files: files, dirs: dirs };
+}
+
+document.getElementById('opt-scratch').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+  // CFS view: scratch routes through cfsDeleteFile (frees data + tree
+  // sectors in the partition bitmap, marks the dir entry deleted while
+  // keeping the tree pointer for recovery context).
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var entry = cfsDirEntries[selectedEntryIndex];
+    if (!entry || entry.empty) return;
+    // System-managed "<<DELETED FILES>>" entry — scratching it would
+    // orphan the partition's deldir mechanism. Refuse loudly.
+    if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(entry)) {
+      showModal('Protected entry', ['The <<DELETED FILES>> entry is system-managed and can\'t be scratched.']);
+      return;
+    }
+    var part = hddPartitions && hddPartitions[cfsPartitionIdx];
+    if (!part) return;
+    // Directory deletes cascade — confirm first, listing what's inside
+    // so the user knows the scope. File deletes stay silent (one entry,
+    // recoverable via Unscratch).
+    if (entry.ftype === CFS_FTYPE.DIR) {
+      var counts = (entry.dataTreePtr && entry.dataTreePtr.lba)
+        ? _cfsCountDirContents(hddBuffer, entry.dataTreePtr.addr)
+        : { files: 0, dirs: 0 };
+      var contentsBits = [];
+      if (counts.files) contentsBits.push(counts.files + ' file' + (counts.files === 1 ? '' : 's'));
+      if (counts.dirs) contentsBits.push(counts.dirs + ' subdirector' + (counts.dirs === 1 ? 'y' : 'ies'));
+      var contentsLabel = contentsBits.length ? contentsBits.join(' + ') : 'empty';
+      var choice = await showChoiceModal(
+        'Delete Directory',
+        'Delete directory "' + petsciiToReadable(entry.name) + '" (' + contentsLabel + ')? It will be recoverable via Restore Directory until the data sectors are reallocated.',
+        [
+          { label: 'Cancel', value: false, secondary: true },
+          { label: 'Delete', value: true }
+        ]
+      );
+      if (!choice) return;
+    }
+    pushUndo();
+    var res = cfsDeleteFile(hddBuffer, part.startLba, part.endLba, entry);
+    if (!res.ok) {
+      showModal('Scratch failed', [res.error || 'Unknown error.']);
+      if (typeof popUndo === 'function') popUndo();
+      return;
+    }
+    refreshIde64View();
+    return;
+  }
   pushUndo();
   var data = new Uint8Array(currentBuffer);
   var entryOff = selectedEntryIndex;
@@ -958,6 +1029,36 @@ document.getElementById('opt-unscratch').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+  // CFS view: route through cfsUnscratchEntry. Restores ftype from the
+  // preserved typeSuffix and reclaims the (still-free) sectors. Aborts
+  // cleanly if any of them have been allocated to something else.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var entry = cfsDirEntries[selectedEntryIndex];
+    if (!entry || entry.empty) return;
+    var part = hddPartitions && hddPartitions[cfsPartitionIdx];
+    if (!part) return;
+    pushUndo();
+    var res = cfsUnscratchEntry(hddBuffer, part.startLba, part.endLba, entry);
+    if (!res.ok) {
+      showModal('Unscratch failed', [res.error || 'Unknown error.']);
+      if (typeof popUndo === 'function') popUndo();
+      return;
+    }
+    // Recursive dir restores can partially succeed (children whose data
+    // sectors were reallocated stay marked DEL). Tell the user when that
+    // happens so they're not confused by leftover deleted entries inside
+    // an otherwise-live directory.
+    if (res.childrenFailed) {
+      showModal('Restore — partial success', [
+        'Restored "' + petsciiToReadable(entry.name) + '"' +
+          (res.childrenRestored ? ' plus ' + res.childrenRestored + ' nested entr' + (res.childrenRestored === 1 ? 'y' : 'ies') : '') + '.',
+        res.childrenFailed + ' nested entr' + (res.childrenFailed === 1 ? 'y' : 'ies') +
+          ' could not be restored (data sectors were reallocated). They remain marked deleted inside the directory.',
+      ]);
+    }
+    refreshIde64View();
+    return;
+  }
   pushUndo();
   var data = new Uint8Array(currentBuffer);
   var entryOff = selectedEntryIndex;

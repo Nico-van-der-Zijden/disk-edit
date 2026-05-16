@@ -206,6 +206,15 @@ function tryShowEntryContextMenu(target, x, y) {
     document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
     entry.classList.add('selected');
     updateEntryMenuState();
+  } else if (entry && entry.dataset.cfsEntry !== undefined) {
+    // CFS file / subdir row — select via data-cfs-entry. The index is
+    // the absolute slot in cfsDirEntries (across all chained dir
+    // sectors), not a byte offset.
+    document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
+    entry.classList.add('selected');
+    selectedEntryIndex = parseInt(entry.dataset.cfsEntry, 10);
+    selectedEntries = [selectedEntryIndex];
+    updateEntryMenuState();
   } else if (entry && entry.dataset.offset) {
     var offset = parseInt(entry.dataset.offset, 10);
     // Right-click on a file outside the current multi-selection retargets
@@ -585,6 +594,8 @@ function updateEntryMenuState() {
   var cNewBtn = document.getElementById('opt-cmdc-new-partition');
   var cRenBtn = document.getElementById('opt-cmdc-rename-partition');
   var cDelBtn = document.getElementById('opt-cmdc-delete-partition');
+  var cAttrBtn = document.getElementById('opt-hdd-partition-attrs');
+  var cRestoreBtn = document.getElementById('opt-hdd-partition-restore');
   var cImpBtn = document.getElementById('opt-cmdc-import-partition');
   var cExpBtn = document.getElementById('opt-cmdc-export-partition');
   var cSep1 = document.getElementById('sep-cmdc-partitions');
@@ -596,6 +607,10 @@ function updateEntryMenuState() {
   cNewBtn.style.display = partDisplay;
   cRenBtn.style.display = partDisplay;
   cDelBtn.style.display = partDisplay;
+  // Partition Attributes is HDD-only — CMD containers don't carry the
+  // HIDDEN / WRITEABLE flag bits this dialog edits.
+  cAttrBtn.style.display = hddListView ? '' : 'none';
+  cRestoreBtn.style.display = hddListView ? '' : 'none';
   // Import/Export stay CMD-only for now — CFS partition I/O is a
   // separate workflow (no .dnp/.d64-style flat dump).
   var ioDisplay = containerList ? '' : 'none';
@@ -622,11 +637,19 @@ function updateEntryMenuState() {
     var hddSelEl = document.querySelector('.dir-entry.selected[data-hdd-part]');
     var selHddIdx = hddSelEl ? parseInt(hddSelEl.dataset.hddPart, 10) : -1;
     var selHddPart = (selHddIdx >= 0 && hddPartitions) ? hddPartitions[selHddIdx] : null;
-    var hasFreeSlot = hddPartitions && hddPartitions.some(function(p) { return p.empty; });
+    // Empty + soft-deleted slots are both reusable for a new partition.
+    var hasFreeSlot = hddPartitions && hddPartitions.some(function(p) { return p.empty || p.deleted; });
     cNewBtn.classList.toggle('disabled', !hasFreeSlot);
-    var canModifyHdd = !!selHddPart && !selHddPart.empty;
-    cRenBtn.classList.toggle('disabled', !canModifyHdd);
-    cDelBtn.classList.toggle('disabled', !canModifyHdd);
+    // Rename / Delete / Attrs apply to live partitions only — a deleted
+    // slot has no live name to rename, can't be deleted again, and
+    // shouldn't appear to have editable attrs. Restore Partition is the
+    // mirror action: enabled only when the selected slot is deleted.
+    var isLiveHdd = !!selHddPart && !selHddPart.empty && !selHddPart.deleted;
+    var isDeletedHdd = !!selHddPart && selHddPart.deleted;
+    cRenBtn.classList.toggle('disabled', !isLiveHdd);
+    cDelBtn.classList.toggle('disabled', !isLiveHdd);
+    cAttrBtn.classList.toggle('disabled', !isLiveHdd);
+    cRestoreBtn.classList.toggle('disabled', !isDeletedHdd);
   }
   // Multi-select compatible operations (all disabled for tape / container list except copy/export)
   document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection || noEdit);
@@ -817,5 +840,90 @@ function updateEntryMenuState() {
     }
   }
   if (typeof refreshToolbarState === 'function') refreshToolbarState();
+
+  // ── CFS dir-view overrides ───────────────────────────────────────
+  // The toggles above are CBM-DOS-shaped (selectedEntryIndex = byte
+  // offset, file-type bits in `entryOff + 2`, etc). Inside a CFS
+  // partition selectedEntryIndex is the absolute slot index in
+  // cfsDirEntries — so those checks misfire. Re-evaluate the three
+  // entry-level options we route through to CFS handlers.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var cfsEntrySel = (selectedEntryIndex >= 0 && selectedEntryIndex < cfsDirEntries.length)
+      ? cfsDirEntries[selectedEntryIndex] : null;
+    var cfsHasEntry = !!cfsEntrySel && !cfsEntrySel.empty;
+    var cfsIsDeleted = cfsHasEntry && cfsEntrySel.ftype === CFS_FTYPE.DEL;
+    // System-managed "<<DELETED FILES>>" entry sits in every CFS
+    // partition root and points at the partition's deldir LBA. Protect
+    // it the same way DHD protects its SYSTEM partition. The canonical
+    // detector lives in ui-ide64.js as _cfsEntryIsDeldirRef and uses the
+    // partition entry's cfsDeletedDir pointer — that signal beats name
+    // / slot heuristics since neither is guaranteed stable.
+    var cfsIsDeldirRef = cfsHasEntry && typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(cfsEntrySel);
+    var cfsEditableEntry = cfsHasEntry && !cfsIsDeleted && !cfsIsDeldirRef;
+    document.getElementById('opt-rename').classList.toggle('disabled', !cfsEditableEntry);
+    document.getElementById('opt-add-partition').classList.toggle('disabled', false);
+    // Scratch: any non-empty, non-already-deleted, non-system entry.
+    // Label flips to "Delete Directory" for DIR entries — directory
+    // deletes cascade (every child is scratched too), and the label
+    // change gives the user a heads-up before they pick the action.
+    var cfsScratchEl = document.getElementById('opt-scratch');
+    cfsScratchEl.style.display = cfsEditableEntry ? '' : 'none';
+    cfsScratchEl.classList.toggle('disabled', !cfsEditableEntry);
+    if (cfsHasEntry && cfsEntrySel.ftype === CFS_FTYPE.DIR) {
+      cfsScratchEl.textContent = 'Delete Directory';
+    } else {
+      cfsScratchEl.textContent = 'Scratch File';
+    }
+    // Unscratch: only on soft-deleted entries; cfsUnscratchEntry verifies
+    // bitmap state at click time and aborts cleanly if the data sectors
+    // have been reallocated, so the menu item is enabled whenever the
+    // entry is in DEL state. Label tracks the original type — a DEL DIR
+    // restore is recursive, so it gets a different label so the user
+    // knows it'll bring back the directory's contents too.
+    var cfsUnscratchEl = document.getElementById('opt-unscratch');
+    cfsUnscratchEl.style.display = cfsIsDeleted ? '' : 'none';
+    cfsUnscratchEl.classList.toggle('disabled', !cfsIsDeleted);
+    if (cfsIsDeleted && cfsEntrySel && cfsEntrySel.typeSuffix === 'DIR') {
+      cfsUnscratchEl.textContent = 'Restore Directory';
+    } else {
+      cfsUnscratchEl.textContent = 'Unscratch File';
+    }
+    // Change/Set File Size: only meaningful for NORMAL / REL entries —
+    // DIR / LNK / DEL have no editable byte-count field (or restoring
+    // size on a DEL would just write garbage relative to a freed tree).
+    // Override the CBM-DOS gating that left these enabled in CFS view.
+    var cfsSizeEditable = cfsEditableEntry &&
+      cfsEntrySel.ftype !== CFS_FTYPE.DIR &&
+      cfsEntrySel.ftype !== CFS_FTYPE.LNK;
+    document.getElementById('opt-block-size').classList.toggle('disabled', !cfsSizeEditable);
+    document.getElementById('opt-recalc-size').classList.toggle('disabled', !cfsSizeEditable);
+    // Name Case: case-flipping the system "<<DELETED FILES>>" entry
+    // would break IDEDOS's name-match recognition. Allow only on
+    // editable entries.
+    document.getElementById('opt-case').classList.toggle('disabled', !cfsEditableEntry);
+    // Lock / Splat: CBM-DOS-only concepts. CFS has separate D/R/W/X
+    // permission bits rather than a single LOCK flag, and splatting the
+    // Closed bit isn't a useful CFS operation. Worse, the CBM-DOS click
+    // handlers XOR data[selectedEntryIndex + 2] — in CFS view that's a
+    // slot index, so the bit-flip lands somewhere in the boot sector.
+    // Hide both items entirely to keep the menu honest.
+    document.getElementById('opt-lock').style.display = 'none';
+    document.getElementById('opt-splat').style.display = 'none';
+    // Other CBM-DOS-only ops: Remove Entry, Move Up/Down, Align, Edit
+    // Track/Sector, View As. They either don't translate to CFS at all
+    // (track/sector isn't a thing — files use a B-tree by LBA) or would
+    // corrupt hddBuffer at random offsets since the click handlers all
+    // assume selectedEntryIndex is a CBM-DOS byte offset, not a CFS
+    // slot index. Same hide-them-entirely treatment as Lock/Splat.
+    document.getElementById('opt-remove').style.display = 'none';
+    document.getElementById('opt-move-up').style.display = 'none';
+    document.getElementById('opt-move-down').style.display = 'none';
+    document.getElementById('opt-align').style.display = 'none';
+    document.getElementById('opt-change-ts').style.display = 'none';
+    document.getElementById('opt-view-as').style.display = 'none';
+    // Show-Deleted toggle works the same way in CFS view — keep it
+    // enabled whenever the partition view is open.
+    document.getElementById('opt-show-deleted').classList.toggle('disabled', false);
+  }
 }
 

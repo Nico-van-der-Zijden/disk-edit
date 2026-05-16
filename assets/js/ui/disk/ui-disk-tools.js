@@ -1301,6 +1301,12 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
   if (!currentBuffer) return;
   closeMenus();
 
+  // CFS view: route to the IDE64 subdir-create flow.
+  if (cfsPartitionIdx >= 0 && hddBuffer && hddPartitions) {
+    showCfsNewSubdirDialog();
+    return;
+  }
+
   // Linked directory: header sector + dir chain (e.g. CMD Native DIR type)
   if (currentFormat.subdirLinked) {
     var name = await showInputModal('Directory Name', 'SUBDIR');

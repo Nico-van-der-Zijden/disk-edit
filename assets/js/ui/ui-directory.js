@@ -570,7 +570,12 @@ function showTypeDropdown(typeSpan, entryOff) {
 
 // ── Edit block size ───────────────────────────────────────────────────
 // Max value for block size field: 16-bit unsigned (2 bytes in directory entry)
-const MAX_BLOCKS = 65535;
+// VICE's directory listing caps the displayed block count at 65024 even
+// though the on-disk field is 16 bits (max 65535). Setting higher values
+// is technically valid CBM-DOS, but anything > 65024 silently truncates
+// in VICE's `LOAD"$",8` output, so cap user edits here to match what's
+// actually viewable. Same cap applies to CFS block-size edits.
+const MAX_BLOCKS = 65024;
 
 // Check if a scratched file's sectors are still free (recoverable)
 // Returns 'yes' (all free + chain ends cleanly), 'partial' (some free, or
@@ -1168,6 +1173,13 @@ document.getElementById('opt-rename').addEventListener('click', (e) => {
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
   const selected = document.querySelector('.dir-entry.selected');
+  if (!selected) return;
+  // CFS dir entry — different byte layout from CBM-DOS so it needs a
+  // dedicated inline editor.
+  if (selected.dataset.cfsEntry !== undefined) {
+    startInlineRenameCfsEntry(selected);
+    return;
+  }
   startRenameEntry(selected);
 });
 
@@ -1328,6 +1340,16 @@ document.getElementById('opt-block-size').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+  // CFS view: byte-offset semantics in startEditBlockSize don't apply
+  // (rows use data-cfs-entry; size is a 4-byte field at $10..$13 of the
+  // dir entry). startInlineEditCfsBlockSize replicates the CBM-DOS UX —
+  // inline blocks input on the .dir-blocks span — and writes the result
+  // as `blocks × 254` via cfsWriteFileSize.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var selectedCfs = document.querySelector('.dir-entry.selected[data-cfs-entry]');
+    if (selectedCfs) startInlineEditCfsBlockSize(selectedCfs);
+    return;
+  }
   const selected = document.querySelector('.dir-entry.selected');
   startEditBlockSize(selected);
 });
@@ -1358,6 +1380,24 @@ document.getElementById('opt-recalc-size').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+  // CFS view: countActualBlocks + writeBlockSize would interpret the
+  // CFS slot index as a CBM-DOS byte offset and write garbage into the
+  // boot sector. Route through CFS helpers — count allocated data
+  // sectors via the tree walk, then write size = sectors * 512 (upper
+  // bound; the last sector may be partially used, but that detail isn't
+  // recoverable from the on-disk layout).
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var part = hddPartitions && hddPartitions[cfsPartitionIdx];
+    if (!part) return;
+    var entry = cfsDirEntries[selectedEntryIndex];
+    if (!entry || entry.empty) return;
+    if (entry.ftype === CFS_FTYPE.DIR || entry.ftype === CFS_FTYPE.LNK || entry.ftype === CFS_FTYPE.DEL) return;
+    pushUndo();
+    var sectors = cfsCountFileDataSectors(hddBuffer, part.startLba, part.endLba, entry);
+    cfsWriteFileSize(hddBuffer, entry.dirLba, entry.index, sectors * 512, entry.ftype);
+    refreshIde64View();
+    return;
+  }
   pushUndo();
   var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
   for (var ri = 0; ri < entries.length; ri++) {

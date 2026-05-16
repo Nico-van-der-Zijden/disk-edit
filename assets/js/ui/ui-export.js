@@ -18,11 +18,48 @@ function changeNameCase(entryOff, mode) {
   }
 }
 
+// CFS analogue: name lives at $00..$0F of the 32-byte dir entry (no $05
+// offset). Same PETSCII byte conventions ($41-$5A ↔ $C1-$DA), terminated
+// by $A0 or $00 (CFS uses both depending on who wrote the entry).
+function changeCfsNameCase(entry, mode) {
+  if (!entry || entry.dirLba == null) return;
+  var data = new Uint8Array(hddBuffer);
+  var off = entry.dirLba * 512 + entry.index * 32;
+  for (var i = 0; i < 16; i++) {
+    var b = data[off + i];
+    if (b === 0xA0 || b === 0x00) break;
+    if (mode === 'upper') {
+      if (b >= 0x41 && b <= 0x5A) data[off + i] = b + 0x80;
+    } else if (mode === 'lower') {
+      if (b >= 0xC1 && b <= 0xDA) data[off + i] = b - 0x80;
+    } else {
+      if (b >= 0x41 && b <= 0x5A) data[off + i] = b + 0x80;
+      else if (b >= 0xC1 && b <= 0xDA) data[off + i] = b - 0x80;
+    }
+  }
+}
+
 ['upper', 'lower', 'toggle'].forEach(function(mode) {
   document.getElementById('opt-case-' + mode).addEventListener('click', function(e) {
     e.stopPropagation();
     if (!currentBuffer || selectedEntryIndex < 0) return;
     closeMenus();
+    // CFS view: changeNameCase writes at entryOff + 5 which is wrong
+    // (CFS dir name lives at +0). Route through the CFS-aware variant.
+    if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+      var entry = cfsDirEntries[selectedEntryIndex];
+      if (!entry || entry.empty) return;
+      // Block the system-managed "<<DELETED FILES>>" entry — its name
+      // is part of IDEDOS's recognition pattern, no edits.
+      if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(entry)) {
+        showModal('Protected entry', ['The <<DELETED FILES>> entry is system-managed and can\'t be renamed or case-flipped.']);
+        return;
+      }
+      pushUndo();
+      changeCfsNameCase(entry, mode);
+      refreshIde64View();
+      return;
+    }
     pushUndo();
     var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
     for (var i = 0; i < entries.length; i++) changeNameCase(entries[i], mode);

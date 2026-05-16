@@ -285,6 +285,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.121', title: 'IDE64 .hdd — recover anything: unscratch files, restore directories, restore deleted partitions', items: [
+      'Scratched files, directories, and partitions are now recoverable. Unscratch File brings back a single deleted file; Restore Directory recursively brings back a deleted folder along with every nested file and subdir; Restore Partition flips a soft-deleted partition slot back to live. Each recovery checks that the data sectors haven\'t been reallocated and reports cleanly if part of the tree is unrecoverable',
+      'Verified byte-for-byte against IDEDOS: scratching a directory + a file matches the on-disk state IDEDOS produces, including the recursive child-marking and the partition-table backup mirror at the last sector of the image. Soft-deleting a partition now clears just the VALID bit (preserves name + LBA + pointers) and bumps the boot-sector generation counter, same as IDEDOS',
+      'Delete Directory confirmation lists the cascade scope ("N files + M subdirectories") before scratching. Show Deleted toggle works in the CFS view too — flips deleted entries on/off in the listing without leaving the partition',
+      'Change File Size and Set Actual File Size now work for CFS files (double-click the blocks column, type, Enter — same UX as D64). Cap raised to 65024 blocks across all formats; values higher than that don\'t display correctly in VICE\'s dir listing',
+      'Right-click menu on CFS entries no longer shows CBM-DOS-specific ops that don\'t translate (Move Up/Down, Align, Edit T/S, Lock, Splat, Remove Entry, View As). The system &lt;&lt;DELETED FILES&gt;&gt; entry is protected from rename / scratch / case-flip',
+      'New CFS partitions are created writeable by default. Deleting a partition no longer strands its LBA range — the space becomes available for a new partition immediately',
+    ]},
     { ver: '1.3.120', title: 'IDE64 .hdd — PETSCII filenames + unified ".." navigation', items: [
       'Filenames and the directory-header partition name now decode as PETSCII (PUA codepoints) so the C64 font renders glyphs the same way it does for D64 / DHD entries. Plain-text contexts (tooltips, modal titles + bodies, download filenames, viewer headers, rename-input value) feed the name through petsciiToReadable so they don\'t come out as ??? boxes',
       'CFS directory view now uses a single ".." row (same shape as the DHD / D64 / DNP parent row: folder-open icon, left-arrow blocks column). Click or double-click goes up one level — into the parent subdirectory, or out to the partition list when at the partition root. Drops the earlier "« back to partition list" + "↑ up to ..." stacked rows',

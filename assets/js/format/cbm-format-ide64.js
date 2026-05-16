@@ -379,29 +379,92 @@ function cfsWriteDirEntryAttrByte(buffer, dirLba, slotIndex, newAttrByte) {
   return true;
 }
 
-// Delete a CFS file: walk the entire B-tree freeing every tree-node
-// sector + every data sector it references, then mark the directory
-// entry as deleted (ftype=0, Closed bit cleared, other attribute bits
-// preserved for recovery tools). The tree pointer field stays —
-// matches the IDEDOS pattern where deleted entries keep their original
-// metadata.
-//
-// Tree walk visits each node once (seen-set), collects the node's LBA
-// + the LBAs of all 128 data-pointer slots, and recurses into the 8
-// treelink slots when the current depth-from-root is less than the
-// file's total tree depth. Every CFS tree sector serves simultaneously
-// as a leaf AND an internal node, so each non-leaf node contributes
-// both data sectors AND child tree sectors.
-function cfsDeleteFile(buffer, partitionStart, partitionEndLba, entry) {
-  if (!buffer || !entry || entry.dirLba == null) return { ok: false, error: 'invalid entry' };
-  if (!entry.dataTreePtr || !entry.dataTreePtr.lba) {
-    return { ok: false, error: 'no data tree pointer' };
-  }
+// Overwrite the file-size field at offset $10..$13 of a dir entry. The
+// field is a 32-bit little-endian byte count for NORMAL/DIR/LNK; REL
+// files use only the low 24 bits (byte 3 carries REL-specific metadata)
+// so this helper preserves that byte for REL entries. Caller is
+// responsible for snapshotting the buffer for undo + re-rendering.
+function cfsWriteFileSize(buffer, dirLba, slotIndex, newSize, ftype) {
+  if (!buffer || slotIndex < 0 || slotIndex >= CFS_DIR_ENTRIES_PER_SECTOR) return false;
   var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-  var treeLba = entry.dataTreePtr.addr;
-  if (treeLba <= 0) return { ok: false, error: 'invalid tree pointer' };
+  var off = dirLba * IDE64_SECTOR_SIZE + slotIndex * CFS_DIR_ENTRY_SIZE;
+  if (off + 0x14 > data.length) return false;
+  var sz = Math.max(0, Math.floor(newSize)) >>> 0;
+  data[off + 0x10] = sz & 0xFF;
+  data[off + 0x11] = (sz >>> 8) & 0xFF;
+  data[off + 0x12] = (sz >>> 16) & 0xFF;
+  if (ftype !== CFS_FTYPE.REL) {
+    data[off + 0x13] = (sz >>> 24) & 0xFF;
+  }
+  return true;
+}
 
+// Walk a file's B-tree and count the data sectors it actually has
+// allocated (non-zero LBA pointers, within the partition). For DIR
+// entries, walks the dir chain via _cfsReadDirNext and counts sectors
+// in the chain. Returns 0 for LNK / DEL / out-of-range trees. Result is
+// in CFS sectors (512 B each); multiply by 512 for an upper-bound byte
+// count when restoring a corrupted size field.
+function cfsCountFileDataSectors(buffer, partitionStart, partitionEndLba, entry) {
+  if (!buffer || !entry) return 0;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  if (entry.ftype === CFS_FTYPE.DEL || entry.ftype === CFS_FTYPE.LNK) return 0;
+  if (!entry.dataTreePtr || !entry.dataTreePtr.lba) return 0;
+  var rootLba = entry.dataTreePtr.addr;
+  if (rootLba <= 0 || rootLba < partitionStart || rootLba > partitionEndLba) return 0;
+
+  if (entry.ftype === CFS_FTYPE.DIR) {
+    var visited = {};
+    var count = 0;
+    var lba = rootLba;
+    var hops = 0;
+    while (lba && !visited[lba] && hops < 64) {
+      visited[lba] = true;
+      hops++;
+      count++;
+      var nextPtr = _cfsReadDirNext(data, lba * IDE64_SECTOR_SIZE);
+      lba = (nextPtr.lba && nextPtr.addr > 0) ? nextPtr.addr : 0;
+    }
+    return count;
+  }
+
+  // File: walk B-tree counting unique data-sector pointers (skip tree
+  // nodes themselves; we're measuring file content, not overhead).
   var depth = _cfsComputeTreeDepth(entry.size);
+  var seenNode = {};
+  var seenData = {};
+  var dataCount = 0;
+  function walk(nodeLba, level) {
+    if (!nodeLba || nodeLba < partitionStart || nodeLba > partitionEndLba) return;
+    if (seenNode[nodeLba]) return;
+    seenNode[nodeLba] = true;
+    var nodeBase = nodeLba * IDE64_SECTOR_SIZE;
+    if (nodeBase + IDE64_SECTOR_SIZE > data.length) return;
+    for (var pi = 0; pi < 128; pi++) {
+      var dp = _readIde64Pointer(data, nodeBase + pi * 4);
+      if (dp.lba && dp.addr > 0 && dp.addr >= partitionStart && dp.addr <= partitionEndLba) {
+        if (!seenData[dp.addr]) { seenData[dp.addr] = true; dataCount++; }
+      }
+    }
+    if (level < depth) {
+      for (var s = 0; s < 8; s++) {
+        var link = _cfsReadTreeLink(data, nodeBase + s * 64);
+        if (link.lba && link.addr > 0) walk(link.addr, level + 1);
+      }
+    }
+  }
+  walk(rootLba, 0);
+  return dataCount;
+}
+
+// Walk a file's entire B-tree, freeing every tree-node sector + every
+// data sector it references in the partition bitmap. Visits each node
+// once via the seen-set; collects the node's own LBA + the 128 data-
+// pointer slots, and recurses into the 8 treelink slots when current
+// depth-from-root is less than the file's total tree depth.
+function _cfsFreeFileTree(data, partitionStart, partitionEndLba, treeLba, fileSize) {
+  if (!treeLba || treeLba < partitionStart || treeLba > partitionEndLba) return;
+  var depth = _cfsComputeTreeDepth(fileSize);
   var seen = {};
   function walk(nodeLba, levelFromRoot) {
     if (!nodeLba || nodeLba < partitionStart || nodeLba > partitionEndLba) return;
@@ -409,16 +472,12 @@ function cfsDeleteFile(buffer, partitionStart, partitionEndLba, entry) {
     seen[nodeLba] = true;
     var nodeBase = nodeLba * IDE64_SECTOR_SIZE;
     if (nodeBase + IDE64_SECTOR_SIZE > data.length) return;
-    // Free every data pointer the node holds (every node acts as a
-    // leaf for its own 64 KiB-worth of file offsets).
     for (var ptrIdx = 0; ptrIdx < 128; ptrIdx++) {
       var dp = _readIde64Pointer(data, nodeBase + ptrIdx * 4);
       if (dp.lba && dp.addr > 0 && dp.addr >= partitionStart && dp.addr <= partitionEndLba) {
         cfsMarkSectorFree(data, partitionStart, dp.addr);
       }
     }
-    // Recurse into the 8 treelink slots if we're not yet at the deepest
-    // level the file needs.
     if (levelFromRoot < depth) {
       for (var slot = 0; slot < 8; slot++) {
         var link = _cfsReadTreeLink(data, nodeBase + slot * 64);
@@ -427,19 +486,241 @@ function cfsDeleteFile(buffer, partitionStart, partitionEndLba, entry) {
         }
       }
     }
-    // Free the node itself last so we've already read its links.
     cfsMarkSectorFree(data, partitionStart, nodeLba);
   }
   walk(treeLba, 0);
+}
+
+// Recursively delete every non-empty child entry in a directory's chain,
+// then free the dir chain's own sectors via bitmap. Each child is run
+// through cfsDeleteFile so subdirs unwind the same way IDEDOS does:
+// children get their attr byte flipped to 0x78 (DEL, not-Closed) inside
+// the dir sectors *before* those sectors are freed. The bytes survive in
+// place — only the bitmap bit changes — so the post-delete on-disk state
+// matches IDEDOS byte-for-byte.
+function _cfsDeleteDirContents(data, partitionStart, partitionEndLba, firstDirLba) {
+  if (!firstDirLba || firstDirLba < partitionStart || firstDirLba > partitionEndLba) return;
+  var children = readCfsDirectory(data, firstDirLba) || [];
+  for (var ci = 0; ci < children.length; ci++) {
+    var child = children[ci];
+    if (!child || child.empty) continue;
+    if (child.isSelfRef) continue;
+    if (child.ftype === CFS_FTYPE.DEL) continue; // already deleted; data sectors freed earlier
+    cfsDeleteFile(data, partitionStart, partitionEndLba, child);
+  }
+  // Free every sector in the dir chain. Re-walk via _cfsReadDirNext —
+  // entries are still readable byte-wise even after children flipped
+  // their attr bytes, since dir-next is bit-sliced across $14 of every
+  // entry (not $18).
+  var visited = {};
+  var dirLba = firstDirLba;
+  var hops = 0;
+  while (dirLba && !visited[dirLba] && hops < 64) {
+    visited[dirLba] = true;
+    hops++;
+    var nextPtr = _cfsReadDirNext(data, dirLba * IDE64_SECTOR_SIZE);
+    cfsMarkSectorFree(data, partitionStart, dirLba);
+    dirLba = (nextPtr.lba && nextPtr.addr > 0) ? nextPtr.addr : 0;
+  }
+}
+
+// Delete a CFS directory entry. Dispatches on ftype:
+//   DIR  — recurse into the directory, deleting each child first, then
+//          free the directory's own sector chain.
+//   NORMAL/REL — walk the B-tree, freeing tree-node + data sectors.
+//   LNK  — no allocated data sectors (the target name lives in the entry
+//          itself), so nothing to free.
+//   DEL  — already deleted; refuse so callers see the no-op.
+// In all cases the parent dir entry's attr byte is flipped to 0x78 —
+// ftype → 0, Closed bit cleared, D/R/W/X bits preserved. Name, size,
+// tree pointer, typeSuffix, mtime are all left intact so the entry stays
+// recoverable via cfsUnscratchEntry. Matches IDEDOS scratch byte-for-byte.
+function cfsDeleteFile(buffer, partitionStart, partitionEndLba, entry) {
+  if (!buffer || !entry || entry.dirLba == null) return { ok: false, error: 'invalid entry' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  if (entry.ftype === CFS_FTYPE.DEL) return { ok: false, error: 'already deleted' };
+
+  if (entry.ftype === CFS_FTYPE.DIR) {
+    if (!entry.dataTreePtr || !entry.dataTreePtr.lba) {
+      return { ok: false, error: 'no directory pointer' };
+    }
+    _cfsDeleteDirContents(data, partitionStart, partitionEndLba, entry.dataTreePtr.addr);
+  } else if (entry.ftype === CFS_FTYPE.LNK) {
+    // LNKs have no data sectors to free.
+  } else {
+    if (!entry.dataTreePtr || !entry.dataTreePtr.lba) {
+      return { ok: false, error: 'no data tree pointer' };
+    }
+    var treeLba = entry.dataTreePtr.addr;
+    if (treeLba <= 0) return { ok: false, error: 'invalid tree pointer' };
+    _cfsFreeFileTree(data, partitionStart, partitionEndLba, treeLba, entry.size);
+  }
 
   // Mark dir entry as deleted: ftype → 0, clear Closed bit. Other attr
   // bits preserved for recovery context.
   var entryOff = entry.dirLba * IDE64_SECTOR_SIZE + entry.index * CFS_DIR_ENTRY_SIZE;
   if (entryOff + 0x19 > data.length) return { ok: false, error: 'dir entry out of range' };
   var attr = data[entryOff + 0x18];
-  attr = (attr & 0x78); // clear Closed (0x80) and file type (low 3 bits); keep D/R/W/X (bits 6-3)
+  attr = (attr & 0x78);
   data[entryOff + 0x18] = attr;
   return { ok: true };
+}
+
+// Map the (preserved) typeSuffix on a soft-deleted entry back to the
+// original ftype + Closed bit. cfsDeleteFile keeps the suffix bytes
+// untouched, so this is unambiguous for every type CFS supports.
+function _cfsFtypeFromSuffix(typeSuffix) {
+  switch ((typeSuffix || '').toUpperCase()) {
+    case 'DIR': return CFS_FTYPE.DIR;
+    case 'LNK': return CFS_FTYPE.LNK;
+    case 'REL': return CFS_FTYPE.REL;
+    case 'PRG':
+    case 'SEQ':
+    case 'USR': return CFS_FTYPE.NORMAL;
+    default: return -1;
+  }
+}
+
+// Collect every sector the entry's data would occupy if restored. For
+// files this is the B-tree node list + its data sectors; for dirs it's
+// the dir sector chain. Returns null on an unwalkable tree (e.g. a tree
+// pointer outside the partition).
+function _cfsCollectEntrySectors(data, partitionStart, partitionEndLba, entry) {
+  var sectors = [];
+  if (!entry.dataTreePtr || !entry.dataTreePtr.lba) return sectors;
+  var rootLba = entry.dataTreePtr.addr;
+  if (rootLba <= 0 || rootLba < partitionStart || rootLba > partitionEndLba) return null;
+
+  if (entry.ftype === CFS_FTYPE.DIR ||
+      (entry.ftype === CFS_FTYPE.DEL && entry.typeSuffix === 'DIR')) {
+    var visited = {};
+    var lba = rootLba;
+    var hops = 0;
+    while (lba && !visited[lba] && hops < 64) {
+      visited[lba] = true;
+      hops++;
+      if (lba < partitionStart || lba > partitionEndLba) return null;
+      sectors.push(lba);
+      var nextPtr = _cfsReadDirNext(data, lba * IDE64_SECTOR_SIZE);
+      lba = (nextPtr.lba && nextPtr.addr > 0) ? nextPtr.addr : 0;
+    }
+    return sectors;
+  }
+
+  if (entry.ftype === CFS_FTYPE.LNK ||
+      (entry.ftype === CFS_FTYPE.DEL && entry.typeSuffix === 'LNK')) {
+    return sectors; // LNKs have no allocated data sectors
+  }
+
+  // File: walk B-tree gathering tree-node + data-pointer LBAs.
+  var depth = _cfsComputeTreeDepth(entry.size);
+  var seen = {};
+  var bad = false;
+  function walk(nodeLba, levelFromRoot) {
+    if (bad) return;
+    if (!nodeLba || nodeLba < partitionStart || nodeLba > partitionEndLba) { bad = true; return; }
+    if (seen[nodeLba]) return;
+    seen[nodeLba] = true;
+    sectors.push(nodeLba);
+    var nodeBase = nodeLba * IDE64_SECTOR_SIZE;
+    if (nodeBase + IDE64_SECTOR_SIZE > data.length) { bad = true; return; }
+    for (var ptrIdx = 0; ptrIdx < 128; ptrIdx++) {
+      var dp = _readIde64Pointer(data, nodeBase + ptrIdx * 4);
+      if (dp.lba && dp.addr > 0) {
+        if (dp.addr < partitionStart || dp.addr > partitionEndLba) continue;
+        sectors.push(dp.addr);
+      }
+    }
+    if (levelFromRoot < depth) {
+      for (var slot = 0; slot < 8; slot++) {
+        var link = _cfsReadTreeLink(data, nodeBase + slot * 64);
+        if (link.lba && link.addr > 0) walk(link.addr, levelFromRoot + 1);
+      }
+    }
+  }
+  walk(rootLba, 0);
+  return bad ? null : sectors;
+}
+
+// Restore a soft-deleted entry. The entry must still have its preserved
+// metadata (name, size, tree pointer, typeSuffix) — cfsDeleteFile keeps
+// all of that. Unscratch:
+//   1. Derive the original ftype from typeSuffix.
+//   2. Collect every sector the entry's data/dir tree references.
+//   3. Refuse if *any* of those sectors is currently allocated to
+//      something else (its data has been overwritten); otherwise mark
+//      every sector used and flip the attr byte back: original ftype
+//      OR'd with the Closed bit, D/R/W/X preserved.
+// When the restored entry is a directory, walk the dir chain and
+// recursively unscratch every DEL child too — IDEDOS's recursive scratch
+// (the pattern we replicate in cfsDeleteFile) leaves children individually
+// marked DEL with their data sectors freed, so restoring the parent
+// without its contents would yield an empty live directory.
+// Best-effort: children whose data sectors have been reallocated stay
+// marked DEL; the return value reports how many were restored vs failed.
+function cfsUnscratchEntry(buffer, partitionStart, partitionEndLba, entry) {
+  if (!buffer || !entry || entry.dirLba == null) return { ok: false, error: 'invalid entry' };
+  if (entry.ftype !== CFS_FTYPE.DEL) return { ok: false, error: 'entry is not deleted' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+
+  var origFtype = _cfsFtypeFromSuffix(entry.typeSuffix);
+  if (origFtype < 0) return { ok: false, error: 'unrecognised typeSuffix "' + (entry.typeSuffix || '') + '"' };
+
+  // Collect-then-validate so we don't mutate the bitmap on a half-walk.
+  var sectors = _cfsCollectEntrySectors(data, partitionStart, partitionEndLba, {
+    ftype: entry.ftype,
+    typeSuffix: entry.typeSuffix,
+    size: entry.size,
+    dataTreePtr: entry.dataTreePtr,
+  });
+  if (sectors === null) return { ok: false, error: 'tree walk hit an out-of-range pointer' };
+
+  // Every sector this entry would occupy must currently be free. If a
+  // later allocation grabbed any of them, the data on those sectors is
+  // someone else's — refuse rather than corrupt both files.
+  for (var si = 0; si < sectors.length; si++) {
+    if (!cfsIsSectorFree(data, partitionStart, sectors[si])) {
+      return { ok: false, error: 'data sector LBA ' + sectors[si] + ' is allocated to another file; cannot recover' };
+    }
+  }
+
+  // Reclaim every sector + restore the attr byte.
+  for (var sj = 0; sj < sectors.length; sj++) {
+    cfsMarkSectorUsed(data, partitionStart, sectors[sj]);
+  }
+  var entryOff = entry.dirLba * IDE64_SECTOR_SIZE + entry.index * CFS_DIR_ENTRY_SIZE;
+  if (entryOff + 0x19 > data.length) return { ok: false, error: 'dir entry out of range' };
+  var attr = data[entryOff + 0x18];
+  attr = (attr & 0x78) | 0x80 | (origFtype & 0x07);
+  data[entryOff + 0x18] = attr;
+
+  var childrenRestored = 0;
+  var childrenFailed = 0;
+  // Recurse into directories: every DEL child we can recover follows the
+  // same restore protocol. Sub-DIRs recurse further via the same call.
+  if (origFtype === CFS_FTYPE.DIR && entry.dataTreePtr && entry.dataTreePtr.lba) {
+    var children = readCfsDirectory(data, entry.dataTreePtr.addr) || [];
+    for (var ci = 0; ci < children.length; ci++) {
+      var child = children[ci];
+      if (!child || child.empty) continue;
+      if (child.isSelfRef) continue;
+      if (child.ftype !== CFS_FTYPE.DEL) continue;
+      var cres = cfsUnscratchEntry(data, partitionStart, partitionEndLba, child);
+      if (cres.ok) {
+        childrenRestored += 1 + (cres.childrenRestored || 0);
+        childrenFailed += (cres.childrenFailed || 0);
+      } else {
+        childrenFailed += 1;
+      }
+    }
+  }
+  return {
+    ok: true,
+    restoredFtype: origFtype,
+    sectorsReclaimed: sectors.length,
+    childrenRestored: childrenRestored,
+    childrenFailed: childrenFailed,
+  };
 }
 
 // Find the first empty slot in a directory chain, returning
@@ -451,6 +732,13 @@ function cfsFindEmptyDirSlot(buffer, firstDirLba) {
   var visited = {};
   var dirLba = firstDirLba;
   var hops = 0;
+  // Two-pass within the walk: prefer a truly-empty slot in this sector,
+  // but remember the first soft-deleted slot we see across the chain so
+  // we can fall back to it if no empty slot exists. Reusing a deleted
+  // slot invalidates unscratch for that entry, so we only do it when
+  // there's no other choice. Importers zero the 32-byte slot before
+  // writing, so a deleted slot is safe to hand out.
+  var fallback = null;
   while (dirLba && !visited[dirLba] && hops < 64) {
     visited[dirLba] = true;
     hops++;
@@ -463,11 +751,20 @@ function cfsFindEmptyDirSlot(buffer, firstDirLba) {
         if (data[eo + z] !== 0) { allZero = false; break; }
       }
       if (allZero) return { dirLba: dirLba, slotIndex: slot };
+      // Soft-deleted slot: ftype bits in $18 == 0, but the rest of the
+      // entry still has data. Skip slot 0 of the first sector (it's the
+      // dir's self-reference, not a file entry — its ftype is DIR=3 so
+      // this guard is belt-and-braces).
+      if (fallback === null && !(dirLba === firstDirLba && slot === 0)) {
+        if ((data[eo + 0x18] & CFS_FTYPE_MASK) === CFS_FTYPE.DEL) {
+          fallback = { dirLba: dirLba, slotIndex: slot };
+        }
+      }
     }
     var nextPtr = _cfsReadDirNext(data, base);
     dirLba = (nextPtr.lba && nextPtr.addr > 0) ? nextPtr.addr : 0;
   }
-  return null;
+  return fallback;
 }
 
 // Maximum tree depth this writer supports. Each depth covers ≈ 8× the
@@ -715,9 +1012,84 @@ function cfsInitPartitionStorage(buffer, partitionStart, partitionEndLba, partit
   return { ok: true, rootDirLba: rootdirLba, deletedDirLba: deldirLba };
 }
 
-// Zero the partition-table entry at `slotIdx`. Doesn't touch the
-// partition's data sectors on disk — that's a separate "wipe" step
-// callers can run if they want a clean reuse of the LBA range.
+// Read the LBA of the backup partition directory from boot $1C..$1F.
+// IDEDOS maintains an exact mirror of the primary partition dir at this
+// LBA (the last sector of the image on disks we've inspected). Returns
+// null if the pointer's LBA flag is clear or the target falls outside
+// the buffer.
+function _cfsReadBackupPartDirLba(data) {
+  var p = _readIde64Pointer(data, 0x1C);
+  if (!p.lba || p.addr === null || p.addr === 0) return null;
+  if (p.addr === 1) return null; // backup = primary; skip mirroring
+  var off = p.addr * IDE64_SECTOR_SIZE;
+  if (off + IDE64_SECTOR_SIZE > data.length) return null;
+  return p.addr;
+}
+
+// Copy the entire 512-byte primary partition directory at LBA 1 to the
+// backup LBA referenced by boot $1C. Called from every helper that
+// mutates the partition table so the backup never drifts.
+function _cfsMirrorPartitionTableToBackup(data) {
+  var backupLba = _cfsReadBackupPartDirLba(data);
+  if (backupLba === null) return;
+  var srcBase = 1 * IDE64_SECTOR_SIZE;
+  var dstBase = backupLba * IDE64_SECTOR_SIZE;
+  for (var i = 0; i < IDE64_SECTOR_SIZE; i++) data[dstBase + i] = data[srcBase + i];
+}
+
+// Increment boot-sector byte $03 (wraps at 256). Empirically observed
+// to bump on every partition scratch in IDEDOS — looks like a partition-
+// table generation/dirty stamp. Whether IDEDOS also bumps it on add /
+// rename / attr changes is unverified, so callers in those paths leave
+// it alone; only scratch + restore touch it.
+function _cfsBumpPartTableGeneration(data) {
+  data[0x03] = (data[0x03] + 1) & 0xFF;
+}
+
+// Soft-delete a partition table entry: clear the VALID bit (bit 7 of
+// the start-pointer byte 0) and mirror the change to the backup
+// partition directory. Name, type, start/end LBAs, delDir, rootDir, and
+// HIDDEN/WRITEABLE flags are all preserved so cfsRestorePartition can
+// flip the entry live again. The partition's data sectors stay
+// allocated (the per-partition bitmap, root dir, file contents) — only
+// the entry's "valid" gate changes. Matches IDEDOS scratch byte-for-
+// byte (also bumps boot $03).
+function cfsSoftDeletePartition(buffer, slotIdx) {
+  if (slotIdx < 0 || slotIdx >= IDE64_PARTITION_ENTRIES) return { ok: false, error: 'invalid slot index' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var eo = 1 * IDE64_SECTOR_SIZE + slotIdx * IDE64_PARTITION_ENTRY_SIZE;
+  if (eo + 0x11 > data.length) return { ok: false, error: 'partition table out of range' };
+  if ((data[eo + 0x10] & 0x80) === 0) return { ok: false, error: 'partition is already deleted' };
+  data[eo + 0x10] &= ~0x80;
+  _cfsMirrorPartitionTableToBackup(data);
+  _cfsBumpPartTableGeneration(data);
+  return { ok: true };
+}
+
+// Inverse of cfsSoftDeletePartition: set VALID, mirror to backup, bump
+// the generation counter. Refuses if the entry doesn't have type bits +
+// pointers we'd expect (e.g. a fully-zeroed slot from the older
+// cfsRemovePartitionEntry path — that path destroyed the metadata).
+function cfsRestorePartition(buffer, slotIdx) {
+  if (slotIdx < 0 || slotIdx >= IDE64_PARTITION_ENTRIES) return { ok: false, error: 'invalid slot index' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var eo = 1 * IDE64_SECTOR_SIZE + slotIdx * IDE64_PARTITION_ENTRY_SIZE;
+  if (eo + IDE64_PARTITION_ENTRY_SIZE > data.length) return { ok: false, error: 'partition table out of range' };
+  if ((data[eo + 0x10] & 0x80) !== 0) return { ok: false, error: 'partition is not deleted' };
+  // Sanity: end pointer must carry a non-zero type (the entry is meaningful).
+  var endB0 = data[eo + 0x14];
+  if ((endB0 & 0xB0) === 0) return { ok: false, error: 'partition entry has no type bits; cannot restore' };
+  data[eo + 0x10] |= 0x80;
+  _cfsMirrorPartitionTableToBackup(data);
+  _cfsBumpPartTableGeneration(data);
+  return { ok: true };
+}
+
+// Zero the partition-table entry at `slotIdx` (hard delete — loses the
+// metadata IDEDOS-style soft-delete preserves). Kept for the "Wipe Slot"
+// path; callers who want IDEDOS-compatible scratch use
+// cfsSoftDeletePartition instead. Mirrors the cleared entry to the
+// backup partition directory.
 // Returns { ok, error? }.
 function cfsRemovePartitionEntry(buffer, slotIdx) {
   if (slotIdx < 0 || slotIdx >= IDE64_PARTITION_ENTRIES) return { ok: false, error: 'invalid slot index' };
@@ -725,6 +1097,36 @@ function cfsRemovePartitionEntry(buffer, slotIdx) {
   var eo = 1 * IDE64_SECTOR_SIZE + slotIdx * IDE64_PARTITION_ENTRY_SIZE;
   if (eo + IDE64_PARTITION_ENTRY_SIZE > data.length) return { ok: false, error: 'partition table out of range' };
   for (var z = 0; z < IDE64_PARTITION_ENTRY_SIZE; z++) data[eo + z] = 0;
+  _cfsMirrorPartitionTableToBackup(data);
+  return { ok: true };
+}
+
+// Set the disk's default partition slot index. Writes byte $01 of the
+// boot sector (LBA 0) — IDEDOS reads this on mount to pick which
+// partition to auto-select. Returns { ok, error? }.
+function cfsSetDefaultPartition(buffer, slotIdx) {
+  if (slotIdx < 0 || slotIdx >= IDE64_PARTITION_ENTRIES) return { ok: false, error: 'invalid slot index' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  if (data.length < 2) return { ok: false, error: 'buffer too small' };
+  data[0x01] = slotIdx & 0xFF;
+  return { ok: true };
+}
+
+// Update the HIDDEN / WRITEABLE bits in the start-pointer byte of the
+// partition entry at `slotIdx`. The other bits (VALID, LBA, low-nibble
+// LBA address bits) are preserved so the entry stays usable.
+// Returns { ok, error? }.
+function cfsWritePartitionFlags(buffer, slotIdx, hidden, writeable) {
+  if (slotIdx < 0 || slotIdx >= IDE64_PARTITION_ENTRIES) return { ok: false, error: 'invalid slot index' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var eo = 1 * IDE64_SECTOR_SIZE + slotIdx * IDE64_PARTITION_ENTRY_SIZE;
+  if (eo + 0x11 > data.length) return { ok: false, error: 'partition table out of range' };
+  var startB0 = data[eo + 0x10];
+  startB0 &= ~0x30; // clear bits 5 (HIDDEN) and 4 (WRITEABLE)
+  if (hidden) startB0 |= 0x20;
+  if (writeable) startB0 |= 0x10;
+  data[eo + 0x10] = startB0;
+  _cfsMirrorPartitionTableToBackup(data);
   return { ok: true };
 }
 
@@ -738,15 +1140,20 @@ function cfsRenamePartition(buffer, slotIdx, newName) {
   for (var i = 0; i < 16; i++) {
     data[eo + i] = i < newName.length ? (newName.charCodeAt(i) & 0xFF) : 0x20;
   }
+  _cfsMirrorPartitionTableToBackup(data);
   return { ok: true };
 }
 
 // Write a partition entry at slot `slotIdx` in the partition directory
 // (LBA 1). Pointer bytes follow the conventions seen in ide.hdd:
-//   $10..$13 start ptr: VALID|LBA (0xC0 high nibble)
+//   $10..$13 start ptr: VALID|LBA|WRITEABLE (0xD0 high nibble)
 //   $14..$17 end ptr:   LBA|TYPE-bit-0 (CFS = bit 4) → byte0 0x50
 //   $18..$1B deldir:    LBA flag only (0x40)
 //   $1C..$1F rootdir:   LBA flag only (0x40)
+// IDEDOS creates partitions with WRITEABLE set by default (verified
+// against ide.hdd: slot 0 start-ptr.b0 = 0xD0). Users can drop the flag
+// later via the Partition Attributes dialog if they want a read-only
+// partition.
 function cfsAddPartitionToTable(buffer, slotIdx, partitionName, startLba, endLba, rootDirLba, deldirLba, type) {
   if (slotIdx < 0 || slotIdx >= IDE64_PARTITION_ENTRIES) return { ok: false, error: 'invalid slot index' };
   var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
@@ -759,8 +1166,8 @@ function cfsAddPartitionToTable(buffer, slotIdx, partitionName, startLba, endLba
   for (var n = 0; n < 16; n++) {
     data[eo + n] = n < partitionName.length ? (partitionName.charCodeAt(n) & 0xFF) : 0x20;
   }
-  // Start pointer
-  data[eo + 0x10] = 0xC0 | ((startLba >>> 24) & 0x0F);
+  // Start pointer (VALID|LBA|WRITEABLE)
+  data[eo + 0x10] = 0xD0 | ((startLba >>> 24) & 0x0F);
   data[eo + 0x11] = (startLba >>> 16) & 0xFF;
   data[eo + 0x12] = (startLba >>> 8) & 0xFF;
   data[eo + 0x13] = startLba & 0xFF;
@@ -782,6 +1189,7 @@ function cfsAddPartitionToTable(buffer, slotIdx, partitionName, startLba, endLba
   data[eo + 0x1D] = (rootDirLba >>> 16) & 0xFF;
   data[eo + 0x1E] = (rootDirLba >>> 8) & 0xFF;
   data[eo + 0x1F] = rootDirLba & 0xFF;
+  _cfsMirrorPartitionTableToBackup(data);
   return { ok: true };
 }
 
@@ -802,9 +1210,17 @@ function createEmptyHdd(sizeMib, opts) {
   for (var mi = 0; mi < IDE64_MAGIC_STRING.length; mi++) {
     d[IDE64_MAGIC_OFFSET + mi] = IDE64_MAGIC_STRING.charCodeAt(mi);
   }
-  // @partition-directory pointer → LBA 1 (LBA flag only)
+  // @partition-directory pointer → LBA 1 (LBA flag only). The backup
+  // pointer at $1C goes to the last sector of the image — IDEDOS keeps
+  // an exact mirror of the partition directory there so a corrupt or
+  // unreadable LBA 1 can be recovered. cfsAddPartitionToTable + every
+  // partition-table mutator mirrors writes to that LBA automatically.
   d[0x18] = 0x40; d[0x19] = 0x00; d[0x1A] = 0x00; d[0x1B] = 0x01;
-  d[0x1C] = 0x40; d[0x1D] = 0x00; d[0x1E] = 0x00; d[0x1F] = 0x01;
+  var backupLba = totalLbas - 1;
+  d[0x1C] = 0x40 | ((backupLba >>> 24) & 0x0F);
+  d[0x1D] = (backupLba >>> 16) & 0xFF;
+  d[0x1E] = (backupLba >>> 8) & 0xFF;
+  d[0x1F] = backupLba & 0xFF;
   // Disk label at $20 (16 B, space-padded)
   for (var li = 0; li < 16; li++) {
     d[0x20 + li] = li < label.length ? (label.charCodeAt(li) & 0xFF) : 0x20;
@@ -1171,7 +1587,12 @@ function readIde64Partitions(buffer) {
     var endPtr = _readIde64Pointer(data, off + 0x14);
     var startValid = (startPtr.raw0 & 0x80) !== 0;
     var type = _ide64PartTypeFromEnd(endPtr.raw0);
-    var empty = !startValid || type === 0x00;
+    // Distinguish "truly empty" from "soft-deleted". A soft-deleted slot
+    // still has its type bits + name + LBAs preserved (IDEDOS scratch
+    // only flips the VALID bit), so we can list and restore it. A truly
+    // empty slot has no type → nothing to recover.
+    var empty = type === 0x00;
+    var deleted = !empty && !startValid;
 
     var startLba = startPtr.lba ? startPtr.addr : null;
     // End-pointer's high nibble (bits 3..0 of byte 0) carries LBA bits
@@ -1192,6 +1613,7 @@ function readIde64Partitions(buffer) {
       type: type,
       typeName: IDE64_PART_TYPE_NAMES[type] || ('Type ' + type),
       empty: empty,
+      deleted: deleted,
       startValid: startValid,
       startLba: startLba,
       endLba: endLba,

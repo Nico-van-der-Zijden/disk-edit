@@ -1256,6 +1256,16 @@ document.getElementById('opt-show-deleted').addEventListener('click', (e) => {
   showDeleted = !showDeleted;
   localStorage.setItem('cbm-showDeleted', showDeleted);
   document.getElementById('check-deleted').innerHTML = showDeleted ? '<i class="fa-solid fa-check"></i>' : '';
+  // In either IDE64 view (partition list or inside a CFS partition),
+  // refreshIde64View handles re-rendering with the new filter applied.
+  if (typeof isIde64ContainerView === 'function' && isIde64ContainerView()) {
+    refreshIde64View();
+    return;
+  }
+  if (typeof hddBuffer !== 'undefined' && hddBuffer && typeof hddPartitions !== 'undefined' && hddPartitions) {
+    refreshIde64View();
+    return;
+  }
   const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 });

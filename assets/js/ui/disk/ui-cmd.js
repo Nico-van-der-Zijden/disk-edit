@@ -785,6 +785,26 @@ document.getElementById('opt-cmdc-delete-partition').addEventListener('click', f
   }
 });
 
+document.getElementById('opt-hdd-partition-attrs').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  if (this.classList.contains('disabled')) return;
+  var selEl = document.querySelector('.dir-entry.selected[data-hdd-part]');
+  var idx = selEl ? parseInt(selEl.dataset.hddPart, 10) : -1;
+  if (idx >= 0) showHddPartitionAttrsDialog(idx);
+});
+
+// Restore a soft-deleted partition. Enabled only when the selected row's
+// p.deleted is true; updateEntryMenuState handles the visibility toggle.
+document.getElementById('opt-hdd-partition-restore').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  if (this.classList.contains('disabled')) return;
+  var selEl = document.querySelector('.dir-entry.selected[data-hdd-part]');
+  var idx = selEl ? parseInt(selEl.dataset.hddPart, 10) : -1;
+  if (idx >= 0) confirmHddPartitionRestore(idx);
+});
+
 // Type code → file extension + accepted import sizes. `sizes: null`
 // means variable-size (DNP — any 64 KiB multiple up to 16 MiB).
 var CMDC_IMPORT_EXPORT_TYPES = {

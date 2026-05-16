@@ -379,6 +379,56 @@
     white-space: pre;
   }
 
+  /* HDD partition-list columns — always visible. The CBM-disk
+     toggle-able dir-ts / dir-addr classes are display:none by default
+     (they need .show-tracksector / .show-addresses to appear), so
+     reusing them hid the IDE64 partition Start LBA + Flags. */
+  .dir-hdd-start {
+    width: 11ch;
+    text-align: left;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 12px;
+    white-space: pre;
+  }
+
+  .dir-hdd-flags {
+    width: 6ch;
+    text-align: left;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 12px;
+    white-space: pre;
+  }
+
+  /* Hidden HDD partition — dim the name to hint at the firmware-hidden
+     state, while keeping the row interactive (right-click / dblclick
+     still work). */
+  .dir-name.hdd-hidden {
+    opacity: 0.45;
+  }
+
+  /* 2ch column dedicated to the "*" default-partition indicator, sat
+     just before .dir-type so the type strings line up across rows
+     whether or not the partition is default. Same colour as the type
+     and pulled tight against it (cancels the .dir-entry { gap: 8px }
+     so * sits next to the type letters rather than floating).  */
+  .dir-hdd-default {
+    width: 2ch;
+    text-align: left;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    font-size: 12px;
+    white-space: pre;
+    margin-right: -6px;
+  }
+
+  /* Read-only "<" marker after the partition type — small left margin
+     so it doesn't smack into the last letter of the type name. */
+  .dir-type .hdd-readonly {
+    margin-left: 3px;
+  }
+
   .dir-grip {
     width: 16px;
     flex-shrink: 0;
