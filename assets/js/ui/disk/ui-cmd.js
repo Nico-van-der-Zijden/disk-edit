@@ -138,6 +138,20 @@ async function openCmdContainerAsTab(buffer, fileName, containerKey) {
   // currentFormat is set to the container alias so save-as picks the
   // right extension; the tab body shows the partition list instead of
   // a directory while cmdcPartitionIdx === -1.
+  //
+  // Null the IDE64 globals first — if the previous tab was an .hdd
+  // they'd otherwise leak through (renderDisk happens to render CMD
+  // correctly because the CMD branch runs first, but menu-state /
+  // dispatch checks use isIde64ContainerView() and would mistake this
+  // for an HDD tab).
+  hddBuffer = null;
+  hddFileName = null;
+  hddBootInfo = null;
+  hddPartitions = null;
+  cfsPartitionIdx = -1;
+  cfsDirLba = 0;
+  cfsDirEntries = null;
+  cfsDirStack = [];
   cmdcBuffer = buffer;
   cmdcFileName = fileName;
   cmdcPartitions = info.partitions;
@@ -711,7 +725,7 @@ async function deleteCmdContainerPartition() {
   }
   var choice = await showChoiceModal(
     'Delete Partition',
-    'Delete partition "' + part.name + '" (' + part.typeName + ', ' + part.sizeBlocks + ' blocks)?',
+    'Delete partition "' + petsciiToReadable(part.name) + '" (' + part.typeName + ', ' + part.sizeBlocks + ' blocks)?',
     [
       { label: 'Cancel', value: false, secondary: true },
       { label: 'Delete', value: true }
@@ -737,21 +751,38 @@ document.getElementById('opt-cmdc-new-partition').addEventListener('click', func
   e.stopPropagation();
   closeMenus();
   if (this.classList.contains('disabled')) return;
-  addCmdContainerPartition();
+  // Same menu item serves both CMD containers and IDE64 .hdd; dispatch
+  // based on which container view is active.
+  if (typeof isIde64ContainerView === 'function' && isIde64ContainerView() && cfsPartitionIdx < 0 && !isCmdContainerListView()) {
+    showHddPartitionEditor(-1);
+  } else {
+    addCmdContainerPartition();
+  }
 });
 
 document.getElementById('opt-cmdc-rename-partition').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
   if (this.classList.contains('disabled')) return;
-  renameCmdContainerPartition();
+  if (typeof isIde64ContainerView === 'function' && isIde64ContainerView() && cfsPartitionIdx < 0 && !isCmdContainerListView()) {
+    var selEl = document.querySelector('.dir-entry.selected[data-hdd-part]');
+    if (selEl) startInlineRenameHddPartition(selEl);
+  } else {
+    renameCmdContainerPartition();
+  }
 });
 
 document.getElementById('opt-cmdc-delete-partition').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
   if (this.classList.contains('disabled')) return;
-  deleteCmdContainerPartition();
+  if (typeof isIde64ContainerView === 'function' && isIde64ContainerView() && cfsPartitionIdx < 0 && !isCmdContainerListView()) {
+    var selEl2 = document.querySelector('.dir-entry.selected[data-hdd-part]');
+    var idx2 = selEl2 ? parseInt(selEl2.dataset.hddPart, 10) : -1;
+    if (idx2 >= 0) confirmHddPartitionDelete(idx2);
+  } else {
+    deleteCmdContainerPartition();
+  }
 });
 
 // Type code → file extension + accepted import sizes. `sizes: null`

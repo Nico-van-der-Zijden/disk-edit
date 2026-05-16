@@ -474,7 +474,7 @@ describe('CFS delete + import (Phase 4b)', function() {
     assert.strictEqual(p0.empty, false);
     assert.strictEqual(p0.type, 0x01);
     assert.strictEqual(p0.typeName, 'CFS');
-    assert.strictEqual(p0.name, 'MAIN');
+    assert.strictEqual(petsciiToReadable(p0.name), 'MAIN');
     assert.strictEqual(p0.startLba, 2);
     assert.strictEqual(p0.endLba, 4 * 1024 * 1024 / 512 - 1);
 
@@ -522,7 +522,7 @@ describe('CFS delete + import (Phase 4b)', function() {
     var info = readIde64Partitions(buf);
     var active = info.partitions.filter(function(p) { return !p.empty; });
     assert.strictEqual(active.length, 2);
-    assert.strictEqual(active[1].name, 'SECOND');
+    assert.strictEqual(petsciiToReadable(active[1].name), 'SECOND');
     assert.strictEqual(active[1].startLba, p2Start);
 
     // Drilling into the new partition works

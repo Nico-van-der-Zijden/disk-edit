@@ -112,7 +112,7 @@ describe('IDE64 / CFS 0.11 detection', function() {
     assert.ok(info);
     assert.strictEqual(info.partitions.length, 16);
 
-    assert.strictEqual(info.partitions[0].name, 'BOOT');
+    assert.strictEqual(petsciiToReadable(info.partitions[0].name), 'BOOT');
     assert.strictEqual(info.partitions[0].type, 0x01);
     assert.strictEqual(info.partitions[0].typeName, 'CFS');
     assert.strictEqual(info.partitions[0].startLba, 2);
@@ -123,12 +123,12 @@ describe('IDE64 / CFS 0.11 detection', function() {
     assert.strictEqual(info.partitions[0].writeable, true);
     assert.strictEqual(info.partitions[0].empty, false);
 
-    assert.strictEqual(info.partitions[1].name, 'GAMES');
+    assert.strictEqual(petsciiToReadable(info.partitions[1].name), 'GAMES');
     assert.strictEqual(info.partitions[1].type, 0x02);
     assert.strictEqual(info.partitions[1].typeName, 'GEOS');
     assert.strictEqual(info.partitions[1].writeable, false);
 
-    assert.strictEqual(info.partitions[2].name, 'HIDDEN');
+    assert.strictEqual(petsciiToReadable(info.partitions[2].name), 'HIDDEN');
     assert.strictEqual(info.partitions[2].hidden, true);
 
     // Slot 3..15 are empty

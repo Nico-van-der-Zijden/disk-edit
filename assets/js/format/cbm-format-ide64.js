@@ -715,13 +715,39 @@ function cfsInitPartitionStorage(buffer, partitionStart, partitionEndLba, partit
   return { ok: true, rootDirLba: rootdirLba, deletedDirLba: deldirLba };
 }
 
+// Zero the partition-table entry at `slotIdx`. Doesn't touch the
+// partition's data sectors on disk — that's a separate "wipe" step
+// callers can run if they want a clean reuse of the LBA range.
+// Returns { ok, error? }.
+function cfsRemovePartitionEntry(buffer, slotIdx) {
+  if (slotIdx < 0 || slotIdx >= IDE64_PARTITION_ENTRIES) return { ok: false, error: 'invalid slot index' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var eo = 1 * IDE64_SECTOR_SIZE + slotIdx * IDE64_PARTITION_ENTRY_SIZE;
+  if (eo + IDE64_PARTITION_ENTRY_SIZE > data.length) return { ok: false, error: 'partition table out of range' };
+  for (var z = 0; z < IDE64_PARTITION_ENTRY_SIZE; z++) data[eo + z] = 0;
+  return { ok: true };
+}
+
+// Update just the 16-byte name field of a partition table entry. Used
+// by the Rename Partition action. Returns { ok, error? }.
+function cfsRenamePartition(buffer, slotIdx, newName) {
+  if (slotIdx < 0 || slotIdx >= IDE64_PARTITION_ENTRIES) return { ok: false, error: 'invalid slot index' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var eo = 1 * IDE64_SECTOR_SIZE + slotIdx * IDE64_PARTITION_ENTRY_SIZE;
+  if (eo + 16 > data.length) return { ok: false, error: 'partition table out of range' };
+  for (var i = 0; i < 16; i++) {
+    data[eo + i] = i < newName.length ? (newName.charCodeAt(i) & 0xFF) : 0x20;
+  }
+  return { ok: true };
+}
+
 // Write a partition entry at slot `slotIdx` in the partition directory
 // (LBA 1). Pointer bytes follow the conventions seen in ide.hdd:
 //   $10..$13 start ptr: VALID|LBA (0xC0 high nibble)
 //   $14..$17 end ptr:   LBA|TYPE-bit-0 (CFS = bit 4) → byte0 0x50
 //   $18..$1B deldir:    LBA flag only (0x40)
 //   $1C..$1F rootdir:   LBA flag only (0x40)
-function cfsAddPartitionToTable(buffer, slotIdx, partitionName, startLba, endLba, rootDirLba, deldirLba) {
+function cfsAddPartitionToTable(buffer, slotIdx, partitionName, startLba, endLba, rootDirLba, deldirLba, type) {
   if (slotIdx < 0 || slotIdx >= IDE64_PARTITION_ENTRIES) return { ok: false, error: 'invalid slot index' };
   var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
   var partTableLba = 1; // CFS partition directory is at LBA 1 by convention
@@ -738,8 +764,11 @@ function cfsAddPartitionToTable(buffer, slotIdx, partitionName, startLba, endLba
   data[eo + 0x11] = (startLba >>> 16) & 0xFF;
   data[eo + 0x12] = (startLba >>> 8) & 0xFF;
   data[eo + 0x13] = startLba & 0xFF;
-  // End pointer with TYPE=CFS (bit 4 of byte 0)
-  data[eo + 0x14] = 0x50 | ((endLba >>> 24) & 0x0F);
+  // End pointer with TYPE encoded in bits 7/5/4 of byte 0 (same scheme
+  // as the parser uses). CFS = type 1 (bit 4), GEOS = type 2 (bit 5).
+  var t = type != null ? type : 0x01;
+  var typeBits = ((t & 0x01) ? 0x10 : 0) | ((t & 0x02) ? 0x20 : 0) | ((t & 0x04) ? 0x80 : 0);
+  data[eo + 0x14] = 0x40 | typeBits | ((endLba >>> 24) & 0x0F);
   data[eo + 0x15] = (endLba >>> 16) & 0xFF;
   data[eo + 0x16] = (endLba >>> 8) & 0xFF;
   data[eo + 0x17] = endLba & 0xFF;
@@ -1119,16 +1148,16 @@ function readIde64Partitions(buffer) {
 
     var nameBytes = [];
     for (var j = 0; j < 16; j++) nameBytes.push(data[off + j]);
-    // Trim trailing CBM ($A0) / null padding for display.
-    var name = '';
-    for (var k = 0; k < 16; k++) {
-      var c = nameBytes[k];
-      if (c === 0xA0 || c === 0x00) break;
-      name += String.fromCharCode(c);
+    // Decode as PETSCII (returns PUA codepoints the C64-font CSS can
+    // render). readPetsciiString stops at $A0 / $00; we also strip
+    // trailing spaces because fresh partitions we create are space-
+    // padded.
+    var nlen = 16;
+    for (var nb = 0; nb < 16; nb++) {
+      if (data[off + nb] === 0xA0 || data[off + nb] === 0x00) { nlen = nb; break; }
     }
-    // Also trim trailing spaces — fresh partitions we create are space-
-    // padded (matching the boot-sector label convention).
-    name = name.replace(/ +$/, '');
+    while (nlen > 0 && data[off + nlen - 1] === 0x20) nlen--;
+    var name = readPetsciiString(data, off, nlen, false);
 
     var startPtr = _readIde64Pointer(data, off + 0x10);
     var endPtr = _readIde64Pointer(data, off + 0x14);

@@ -100,15 +100,19 @@ function renderIde64PartitionList() {
     '</div>' +
     '<div class="dir-listing">';
 
+  // Render only populated slots — matches the CMD container view, which
+  // doesn't list empty entries. Empty slots are reachable via the File →
+  // New Partition menu item.
   var openCount = 0;
   for (var i = 0; i < hddPartitions.length; i++) {
     var p = hddPartitions[i];
-    var enterable = p.type === 0x01; // CFS — others not supported yet
-    if (!p.empty) openCount++;
+    if (p.empty) continue;
+    var enterable = p.type === 0x01; // CFS — other types stay informational
+    openCount++;
 
     var sizeBlocks = '';
     var sizeLabel = '';
-    if (p.sizeSectors !== null && !p.empty) {
+    if (p.sizeSectors !== null) {
       // Each CFS sector = 512 B = 2 CBM blocks; show CBM-block count to
       // match the convention used elsewhere in the editor.
       sizeBlocks = (p.sizeSectors * 2).toString();
@@ -123,24 +127,17 @@ function renderIde64PartitionList() {
       : '(CHS)';
 
     var flagBits = [];
-    if (!p.empty) {
-      if (p.hidden) flagBits.push('H');
-      if (p.writeable) flagBits.push('W');
-      if (p.lba) flagBits.push('L');
-      if (i === defaultPart) flagBits.push('*');
-    }
+    if (p.hidden) flagBits.push('H');
+    if (p.writeable) flagBits.push('W');
+    if (p.lba) flagBits.push('L');
+    if (i === defaultPart) flagBits.push('*');
     var flagStr = flagBits.join('');
 
-    var nameDisplay = p.empty
-      ? '(empty)'
-      : (p.name || ('Partition ' + i));
-
-    var extraCls = p.empty ? ' deleted' : (enterable ? '' : ' disabled-row');
-    var rowTitle = p.empty
-      ? 'Slot ' + i + ' — empty'
-      : (p.typeName + (sizeLabel ? ' — ' + sizeLabel : '') +
-         (i === defaultPart ? ' — default partition' : '') +
-         (enterable ? '' : ' — entering this partition type is not yet supported'));
+    var nameDisplay = p.name || ('Partition ' + i);
+    var extraCls = enterable ? '' : ' disabled-row';
+    var rowTitle = p.typeName + (sizeLabel ? ' — ' + sizeLabel : '') +
+                   (i === defaultPart ? ' — default partition' : '') +
+                   (enterable ? '' : ' — entering this partition type is not yet supported');
 
     html +=
       '<div class="dir-entry' + extraCls + '" data-hdd-part="' + i + '" title="' + escHtml(rowTitle) + '">' +
@@ -151,22 +148,6 @@ function renderIde64PartitionList() {
         '<span class="dir-slot">' + p.index + '</span>' +
         '<span class="dir-ts">' + startHex + '</span>' +
         '<span class="dir-addr">' + escHtml(flagStr) + '</span>' +
-        '<span class="dir-icons"></span>' +
-      '</div>';
-  }
-
-  // "+ New partition" row — enabled if there's a free slot
-  var hasFreeSlot = hddPartitions.some(function(p) { return p.empty; });
-  if (hasFreeSlot) {
-    html +=
-      '<div class="dir-entry dir-parent-row" data-hdd-newpart="1">' +
-        '<span class="dir-grip"></span>' +
-        '<span class="dir-blocks"></span>' +
-        '<span class="dir-name">+ New CFS partition&hellip;</span>' +
-        '<span class="dir-type"></span>' +
-        '<span class="dir-slot"></span>' +
-        '<span class="dir-ts"></span>' +
-        '<span class="dir-addr"></span>' +
         '<span class="dir-icons"></span>' +
       '</div>';
   }
@@ -199,11 +180,6 @@ function renderIde64PartitionList() {
         ]);
       }
     });
-  });
-  // + New partition row
-  content.querySelectorAll('.dir-entry[data-hdd-newpart]').forEach(function(row) {
-    row.addEventListener('click', function() { showCfsNewPartitionDialog(); });
-    row.addEventListener('dblclick', function() { showCfsNewPartitionDialog(); });
   });
 
   selectedEntryIndex = -1;
@@ -667,7 +643,8 @@ function showCfsRenameDialog(entry) {
   setTimeout(function() { input.focus(); input.select(); }, 0);
   footer.innerHTML = '<button id="cfs-rename-ok">OK</button> <button id="cfs-rename-cancel">Cancel</button>';
   function commit() {
-    var newName = input.value;
+    var newName = _sanitiseCfsName(input.value, 'Rename');
+    if (newName == null) return;
     if (newName === entry.name) {
       document.getElementById('modal-overlay').classList.remove('open');
       return;
@@ -690,62 +667,203 @@ function showCfsRenameDialog(entry) {
   });
 }
 
-// ── New CFS partition in an existing .hdd (Phase 5e) ──────────────────
-// Picks the first free 16-entry partition slot, asks the user for a
-// name + size, places the new partition just past the highest existing
-// end-LBA (or after the partition table at LBA 1 if the image is empty),
-// then runs cfsInitPartitionStorage + cfsAddPartitionToTable.
-function showCfsNewPartitionDialog() {
+// Validate a CFS partition / dir / file name. Returns the sanitised
+// name on success or null with an error message via showModal.
+// Disallows `/` since CFS uses it as the path separator in cfsResolvePath
+// (and the IDEDOS firmware treats slashes the same way).
+function _sanitiseCfsName(input, title) {
+  var trimmed = (input || '').trim();
+  if (!trimmed) return null;
+  if (trimmed.indexOf('/') >= 0) {
+    showModal(title || 'Invalid name', [
+      'The name can\'t contain a "/" — it\'s the path separator on CFS.',
+    ]);
+    return null;
+  }
+  return trimmed.slice(0, 16);
+}
+
+// Inline rename for an HDD partition row. Mirrors the DHD/RAMLink/FD
+// pattern (startRenameEntry from ui-directory.js): drop in a PETSCII
+// editor + the on-screen PETSCII keyboard. Writes 16 bytes at the
+// partition entry's $00..$0F (different from CBM-DOS's +$05 layout)
+// and pads short names with $A0 like CBM convention.
+function startInlineRenameHddPartition(entryEl) {
+  if (!hddBuffer || !entryEl) return;
+  var slotIdx = parseInt(entryEl.dataset.hddPart, 10);
+  if (isNaN(slotIdx) || slotIdx < 0) return;
+  var p = hddPartitions && hddPartitions[slotIdx];
+  if (!p || p.empty) return;
+  var nameSpan = entryEl.querySelector('.dir-name');
+  if (!nameSpan || nameSpan.querySelector('.petscii-editor')) return;
+  if (typeof cancelActiveEdits === 'function') cancelActiveEdits();
+
+  // Read the 16 raw name bytes from the partition table entry. Mark
+  // the editor's initial length at the first $A0 (CBM padding) or $00.
+  var disk = new Uint8Array(hddBuffer);
+  var entryOff = 1 * 512 + slotIdx * 32; // partition table at LBA 1
+  var origBytes = new Uint8Array(16);
+  var origLen = 16;
+  for (var i = 0; i < 16; i++) {
+    origBytes[i] = disk[entryOff + i];
+    if ((origBytes[i] === 0xA0 || origBytes[i] === 0x00) && origLen === 16) origLen = i;
+  }
+  // Also trim trailing spaces from the display length so the editor's
+  // caret sits right after the visible text on space-padded names.
+  while (origLen > 0 && origBytes[origLen - 1] === 0x20) origLen--;
+
+  var editor = createPetsciiEditor({
+    maxLen: 16,
+    initialBytes: origBytes,
+    initialLen: origLen,
+    className: 'name-input'
+  });
+
+  nameSpan.textContent = '';
+  nameSpan.appendChild(editor);
+  nameSpan.classList.add('editing');
+  var wasDraggable = entryEl.draggable;
+  entryEl.draggable = false;
+  editor.focus();
+  editor._setCaret(origLen);
+  setTimeout(function() {
+    if (document.activeElement !== editor) {
+      editor.focus();
+      editor._setCaret(editor._lastCursorPos);
+    }
+  }, 0);
+  showPetsciiPicker(editor, 16);
+
+  var reverted = false;
+  var finished = false;
+
+  function cleanup() {
+    nameSpan.classList.remove('editing');
+    entryEl.draggable = wasDraggable;
+    hidePetsciiPicker();
+    if (typeof activeEditEl !== 'undefined') {
+      activeEditEl = null;
+      activeEditCleanup = null;
+    }
+  }
+
+  function commit() {
+    if (reverted || finished) return;
+    finished = true;
+    var newBytes = editor.getBytes(16, 0xA0);
+    // Reject names containing a "/" — CFS uses it as path separator.
+    var hasSlash = false;
+    for (var bi = 0; bi < 16; bi++) {
+      if (newBytes[bi] === 0xA0) break;
+      if (newBytes[bi] === 0x2F) { hasSlash = true; break; }
+    }
+    if (hasSlash) {
+      showModal('Rename Partition', ['The name can\'t contain a "/" — it\'s the path separator on CFS.']);
+      // Revert UI but keep the buffer untouched.
+      cleanup();
+      refreshIde64View();
+      return;
+    }
+    var differs = false;
+    for (var di = 0; di < 16; di++) {
+      if (newBytes[di] !== disk[entryOff + di]) { differs = true; break; }
+    }
+    if (differs) {
+      pushUndo();
+      var data = new Uint8Array(hddBuffer);
+      for (var wi = 0; wi < 16; wi++) data[entryOff + wi] = newBytes[wi];
+    }
+    cleanup();
+    var info = readIde64Partitions(hddBuffer);
+    if (info) {
+      hddBootInfo = info;
+      hddPartitions = info.partitions;
+    }
+    refreshIde64View();
+  }
+  function revert() {
+    if (finished) return;
+    finished = true;
+    reverted = true;
+    cleanup();
+    refreshIde64View();
+  }
+
+  editor.addEventListener('blur', function() {
+    if (petsciiPicker && petsciiPicker.clicking) {
+      editor.focus();
+      editor._setCaret(editor._lastCursorPos || 0);
+      return;
+    }
+    commit();
+  });
+  editor.addEventListener('keydown', function(ev) {
+    if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); commit(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); revert(); }
+  });
+  if (typeof registerActiveEdit === 'function') registerActiveEdit(nameSpan, revert);
+}
+
+// ── HDD partition editor (Phase 6 cosmetics) ──────────────────────────
+// New-partition dialog: slot picker, name, start LBA, size in MiB.
+// Rename is now inline (startInlineRenameHddPartition) — this function
+// only handles New from now on, even though it accepts the same -1
+// sentinel the dispatch uses.
+function showHddPartitionEditor(idx) {
   if (!hddBuffer || !hddPartitions) return;
-  // First empty slot
-  var slotIdx = -1;
-  for (var i = 0; i < hddPartitions.length; i++) {
-    if (hddPartitions[i].empty) { slotIdx = i; break; }
-  }
-  if (slotIdx < 0) {
-    showModal('New partition', ['All 16 partition slots are in use.']);
-    return;
-  }
-  // Highest existing end LBA + 1 → start for the new partition. Bumped
-  // up to a 4096-LBA boundary so the new partition's first bitmap sits
-  // at the natural chunk boundary (matches what we see in ide.hdd).
-  var nextStart = 2; // first non-system LBA in the image
+  // Rename is handled by the inline editor (startInlineRenameHddPartition)
+  // — this function only covers New now.
+  if (idx != null && idx >= 0) return;
+  var totalLbas = hddBuffer.byteLength / 512;
+
+  var defaultStart = 2;
   for (var pi = 0; pi < hddPartitions.length; pi++) {
     var p = hddPartitions[pi];
-    if (!p.empty && p.endLba != null && p.endLba + 1 > nextStart) nextStart = p.endLba + 1;
+    if (!p.empty && p.endLba != null && p.endLba + 1 > defaultStart) defaultStart = p.endLba + 1;
   }
-  // Available LBAs from nextStart to (totalLbas - 1)
-  var totalLbas = hddBuffer.byteLength / 512;
-  var availLbas = totalLbas - nextStart;
-  if (availLbas < 8) {
+  var maxLbas = totalLbas - defaultStart;
+  if (maxLbas < 8) {
     showModal('New partition', ['Not enough free space left in this .hdd image.']);
     return;
+  }
+  var maxMib = Math.max(1, Math.floor(maxLbas * 512 / (1024 * 1024)));
+  var defaultMib = Math.min(maxMib, 4);
+
+  var firstEmpty = hddPartitions.findIndex(function(pp) { return pp.empty; });
+  var slotOpts = '';
+  for (var si = 0; si < hddPartitions.length; si++) {
+    if (hddPartitions[si].empty) {
+      slotOpts += '<option value="' + si + '"' + (si === firstEmpty ? ' selected' : '') + '>Slot ' + si + '</option>';
+    }
   }
 
   var titleEl = document.getElementById('modal-title');
   var body = document.getElementById('modal-body');
   var footer = document.querySelector('#modal-overlay .modal-footer');
   titleEl.textContent = 'New CFS partition';
-  var maxMib = Math.floor(availLbas * 512 / (1024 * 1024));
-  if (maxMib < 1) maxMib = 1;
-  var defaultMib = Math.min(maxMib, 4);
-  body.innerHTML =
-    '<div class="text-md mb-md">Name (up to 16 characters):</div>' +
-    '<input type="text" id="cfs-newpart-name" maxlength="16" value="PARTITION" style="width:100%;font-family:monospace;font-size:14px;padding:6px" />' +
-    '<div class="text-md mb-md" style="margin-top:12px">Size (MiB, max ' + maxMib + '):</div>' +
-    '<input type="number" id="cfs-newpart-size" min="1" max="' + maxMib + '" value="' + defaultMib + '" style="width:120px;font-family:monospace;font-size:14px;padding:6px" />' +
-    '<div class="text-sm text-muted" style="margin-top:8px">Slot ' + slotIdx + ' will be used, starting at LBA $' + nextStart.toString(16).toUpperCase() + '.</div>';
-  footer.innerHTML = '<button id="cfs-newpart-ok">Create</button> <button id="cfs-newpart-cancel">Cancel</button>';
-  function commit() {
-    var partitionName = (document.getElementById('cfs-newpart-name').value || '').trim() || 'PARTITION';
-    var mib = parseInt(document.getElementById('cfs-newpart-size').value, 10);
-    if (!mib || mib < 1) return;
-    if (mib > maxMib) mib = maxMib;
-    var sizeLbas = Math.floor(mib * 1024 * 1024 / 512);
-    var startLba = nextStart;
-    var endLba = startLba + sizeLbas - 1;
-    if (endLba >= totalLbas) endLba = totalLbas - 1;
 
+  body.innerHTML =
+    '<div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;font-family:inherit">' +
+      '<label for="hdd-pe-slot">Slot:</label>' +
+      '<select id="hdd-pe-slot" style="font-family:monospace;font-size:14px;padding:4px">' + slotOpts + '</select>' +
+      '<label for="hdd-pe-name">Name:</label>' +
+      '<input type="text" id="hdd-pe-name" maxlength="16" value="PARTITION" style="font-family:monospace;font-size:14px;padding:6px" />' +
+      '<label for="hdd-pe-start">Start LBA:</label>' +
+      '<input type="number" id="hdd-pe-start" min="2" max="' + (totalLbas - 8) + '" value="' + defaultStart + '" style="width:160px;font-family:monospace;font-size:14px;padding:6px" />' +
+      '<label for="hdd-pe-size">Size (MiB):</label>' +
+      '<input type="number" id="hdd-pe-size" min="1" max="' + maxMib + '" value="' + defaultMib + '" style="width:160px;font-family:monospace;font-size:14px;padding:6px" />' +
+    '</div>';
+
+  footer.innerHTML = '<button id="hdd-pe-ok">Create</button> <button id="hdd-pe-cancel">Cancel</button>';
+
+  function commit() {
+    var partitionName = _sanitiseCfsName(document.getElementById('hdd-pe-name').value, 'New partition');
+    if (partitionName == null) return;
+    var slot = parseInt(document.getElementById('hdd-pe-slot').value, 10);
+    var startLba = parseInt(document.getElementById('hdd-pe-start').value, 10);
+    var mib = parseInt(document.getElementById('hdd-pe-size').value, 10);
+    if (!startLba || startLba < 2 || !mib || mib < 1) return;
+    var endLba = Math.min(totalLbas - 1, startLba + Math.floor(mib * 1024 * 1024 / 512) - 1);
     pushUndo();
     var init = cfsInitPartitionStorage(hddBuffer, startLba, endLba, partitionName);
     if (!init.ok) {
@@ -753,13 +871,12 @@ function showCfsNewPartitionDialog() {
       if (typeof popUndo === 'function') popUndo();
       return;
     }
-    var add = cfsAddPartitionToTable(hddBuffer, slotIdx, partitionName, startLba, endLba, init.rootDirLba, init.deletedDirLba);
+    var add = cfsAddPartitionToTable(hddBuffer, slot, partitionName, startLba, endLba, init.rootDirLba, init.deletedDirLba, 0x01);
     if (!add.ok) {
       showModal('New partition failed', [add.error || 'Could not write the partition entry.']);
       if (typeof popUndo === 'function') popUndo();
       return;
     }
-    // Re-parse the partition table so the row appears immediately.
     var info = readIde64Partitions(hddBuffer);
     if (info) {
       hddBootInfo = info;
@@ -768,10 +885,47 @@ function showCfsNewPartitionDialog() {
     document.getElementById('modal-overlay').classList.remove('open');
     refreshIde64View();
   }
-  document.getElementById('cfs-newpart-ok').addEventListener('click', commit);
-  document.getElementById('cfs-newpart-cancel').addEventListener('click', function() {
+  document.getElementById('hdd-pe-ok').addEventListener('click', commit);
+  document.getElementById('hdd-pe-cancel').addEventListener('click', function() {
     document.getElementById('modal-overlay').classList.remove('open');
   });
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+// Delete confirmation for a partition slot. Matches the DHD/RAMLink/FD
+// delete dialog shape (showChoiceModal with the same "Delete partition
+// "<name>" (<type>, <blocks>)" wording) for cross-container consistency.
+// CFS partition names are ASCII so no PETSCII conversion is needed.
+async function confirmHddPartitionDelete(idx) {
+  if (!hddBuffer || !hddPartitions) return;
+  var p = hddPartitions[idx];
+  if (!p || p.empty) return;
+  var blocks = p.sizeSectors !== null ? (p.sizeSectors * 2) : '?';
+  // p.name may carry PUA-PETSCII codepoints — petsciiToReadable strips
+  // them down to plain ASCII for the modal text.
+  var nameForModal = petsciiToReadable(p.name || '') || ('slot ' + idx);
+  var choice = await showChoiceModal(
+    'Delete Partition',
+    'Delete partition "' + nameForModal + '" (' + p.typeName + ', ' + blocks + ' blocks)?',
+    [
+      { label: 'Cancel', value: false, secondary: true },
+      { label: 'Delete', value: true }
+    ]
+  );
+  if (!choice) return;
+  pushUndo();
+  var res = cfsRemovePartitionEntry(hddBuffer, idx);
+  if (!res.ok) {
+    showModal('Delete partition failed', [res.error || 'Unknown error.']);
+    if (typeof popUndo === 'function') popUndo();
+    return;
+  }
+  var info = readIde64Partitions(hddBuffer);
+  if (info) {
+    hddBootInfo = info;
+    hddPartitions = info.partitions;
+  }
+  refreshIde64View();
 }
 
 // ── CFS new subdirectory (Phase 5b) ───────────────────────────────────
@@ -792,11 +946,8 @@ function showCfsNewSubdirDialog() {
   setTimeout(function() { input.focus(); }, 0);
   footer.innerHTML = '<button id="cfs-newdir-ok">Create</button> <button id="cfs-newdir-cancel">Cancel</button>';
   function commit() {
-    var newName = input.value.trim();
-    if (!newName) {
-      document.getElementById('modal-overlay').classList.remove('open');
-      return;
-    }
+    var newName = _sanitiseCfsName(input.value, 'New subdirectory');
+    if (newName == null) return;
     pushUndo();
     var res = cfsCreateSubdir(hddBuffer, part.startLba, part.endLba, cfsDirLba, newName);
     if (!res.ok) {
@@ -815,6 +966,7 @@ function showCfsNewSubdirDialog() {
     if (e.key === 'Enter') commit();
     else if (e.key === 'Escape') document.getElementById('modal-overlay').classList.remove('open');
   });
+  document.getElementById('modal-overlay').classList.add('open');
 }
 
 // ── CFS import single-sector file (Phase 4b) ──────────────────────────

@@ -199,6 +199,13 @@ function tryShowEntryContextMenu(target, x, y) {
     document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
     entry.classList.add('selected');
     updateEntryMenuState();
+  } else if (entry && entry.dataset.hddPart !== undefined) {
+    // IDE64 .hdd partition row — same idea as the CMD branch above.
+    // Without selecting on right-click, Rename / Delete Partition stay
+    // disabled and hideDisabledContextItems drops them from the popup.
+    document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
+    entry.classList.add('selected');
+    updateEntryMenuState();
   } else if (entry && entry.dataset.offset) {
     var offset = parseInt(entry.dataset.offset, 10);
     // Right-click on a file outside the current multi-selection retargets
@@ -570,8 +577,11 @@ function updateEntryMenuState() {
   var noNesting = inPartition && !currentFormat.subdirLinked; // D81: no nesting; DNP: nesting allowed
   document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || noNesting || !currentBuffer || !currentFormat.supportsSubdirs || !canInsertFile() || noEdit);
 
-  // CMD container partition management — only meaningful (and only
-  // visible) on the container's partition-list view.
+  // CMD / IDE64 container partition management — only meaningful (and
+  // only visible) on a container's partition-list view. Both families
+  // share the same File → New / Rename / Delete Partition menu items;
+  // dispatch happens in the click handlers (ui-cmd.js for CMD, ui-ide64.js
+  // for IDE64).
   var cNewBtn = document.getElementById('opt-cmdc-new-partition');
   var cRenBtn = document.getElementById('opt-cmdc-rename-partition');
   var cDelBtn = document.getElementById('opt-cmdc-delete-partition');
@@ -579,14 +589,20 @@ function updateEntryMenuState() {
   var cExpBtn = document.getElementById('opt-cmdc-export-partition');
   var cSep1 = document.getElementById('sep-cmdc-partitions');
   var cSep2 = document.getElementById('sep-cmdc-partition-io');
-  var partDisplay = containerList ? '' : 'none';
+  // Defensive: prefer CMD when both globals look active (shouldn't
+  // happen post-fix, but a stale global is worth guarding against).
+  var hddListView = !containerList && (typeof isIde64ContainerView === 'function') && isIde64ContainerView() && cfsPartitionIdx < 0;
+  var partDisplay = (containerList || hddListView) ? '' : 'none';
   cNewBtn.style.display = partDisplay;
   cRenBtn.style.display = partDisplay;
   cDelBtn.style.display = partDisplay;
-  cImpBtn.style.display = partDisplay;
-  cExpBtn.style.display = partDisplay;
+  // Import/Export stay CMD-only for now — CFS partition I/O is a
+  // separate workflow (no .dnp/.d64-style flat dump).
+  var ioDisplay = containerList ? '' : 'none';
+  cImpBtn.style.display = ioDisplay;
+  cExpBtn.style.display = ioDisplay;
   if (cSep1) cSep1.style.display = partDisplay;
-  if (cSep2) cSep2.style.display = partDisplay;
+  if (cSep2) cSep2.style.display = ioDisplay;
   if (containerList) {
     var listSelEl = document.querySelector('.dir-entry.selected[data-cmdc-part]');
     var selPartIdx = listSelEl ? parseInt(listSelEl.dataset.cmdcPart, 10) : -1;
@@ -602,6 +618,15 @@ function updateEntryMenuState() {
     cImpBtn.classList.toggle('disabled', !canAddCmdContainerPartition());
     var canExport = !!selPart && (selPart.type >= 0x01 && selPart.type <= 0x04);
     cExpBtn.classList.toggle('disabled', !canExport);
+  } else if (hddListView) {
+    var hddSelEl = document.querySelector('.dir-entry.selected[data-hdd-part]');
+    var selHddIdx = hddSelEl ? parseInt(hddSelEl.dataset.hddPart, 10) : -1;
+    var selHddPart = (selHddIdx >= 0 && hddPartitions) ? hddPartitions[selHddIdx] : null;
+    var hasFreeSlot = hddPartitions && hddPartitions.some(function(p) { return p.empty; });
+    cNewBtn.classList.toggle('disabled', !hasFreeSlot);
+    var canModifyHdd = !!selHddPart && !selHddPart.empty;
+    cRenBtn.classList.toggle('disabled', !canModifyHdd);
+    cDelBtn.classList.toggle('disabled', !canModifyHdd);
   }
   // Multi-select compatible operations (all disabled for tape / container list except copy/export)
   document.getElementById('opt-remove').classList.toggle('disabled', !hasSelection || noEdit);

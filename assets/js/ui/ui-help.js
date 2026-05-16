@@ -285,6 +285,15 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.119', title: 'IDE64 .hdd — container view polish, partition rename/delete via the menu', items: [
+      'Partition list now hides empty slots and uses the same File → New / Rename / Delete Partition menu items (with right-click context-menu) that the CMD container view uses. Selection-on-right-click works; menu items hide when nothing is selectable',
+      'Rename Partition is an inline PETSCII editor on the row (same UX as DHD/RAMLink/FD) with the on-screen PETSCII keyboard. Names decode as PETSCII (PUA codepoints render via the C64 font in the list, plain ASCII in modals)',
+      'Type picker dropped from New Partition — only CFS gets created. The spec lists GEOS too but no reference driver implements GEOS-on-IDE64 partitions; cfsfdisk can tag a slot but the firmware ignores it. Recognised on read, never offered on write',
+      'Delete Partition uses the same showChoiceModal shape as DHD ("Delete partition "<name>" (CFS, <blocks> blocks)?"). DHD\'s own delete modal now runs the name through petsciiToReadable so PETSCII glyphs in plain-modal text render as ASCII',
+      'Name validation: "/" rejected across rename / new-partition / new-subdir / file-rename dialogs (it\'s the path separator on CFS)',
+      'Fix: opening a DHD on top of an .hdd tab no longer leaks hddPartitions into the DHD view. "New Partition" on a freshly-created DHD works again',
+      'Fix: three modal dialogs were missing the open-overlay call (partition delete confirm, partition editor, new-subdirectory)',
+    ]},
     { ver: '1.3.118', title: 'IDE64 .hdd — full write parity (multi-sector files, subdirs, new partitions, new disks)', items: [
       'Multi-sector imports up to 4 MiB. The writer walks the B-tree at any depth, allocating intermediate nodes on demand. Treelinks encoded across bits 5..4 of byte 0 of 16 data pointers in each 64-byte sub-region — same scheme the reader uses; verified end-to-end up to depth 2 (700 KiB files)',
       'Delete works for files of any size now: walks the whole tree recursively, frees every tree-node and data sector. Replaces the earlier 64 KiB cap',
