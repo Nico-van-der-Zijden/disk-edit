@@ -227,6 +227,259 @@ function _cfsReadDirNext(data, sectorBase) {
   return { raw0: b0, lba: lba, addr: addr };
 }
 
+// ── CFS bitmap allocator (Phase 4b) ───────────────────────────────────
+//
+// Each partition has a chain of allocation bitmaps. Bitmap N sits at
+// absolute LBA `partition_start + N * 4096` and covers the 4096 sectors
+// in that chunk (including itself). Bit-order is MSB-first within each
+// byte (byte 0 bit 7 = first sector in chunk, byte 0 bit 0 = 8th).
+// Convention is 1 = free, 0 = used, like the rest of the CMD family.
+//
+// Verified against the 8 MiB ide.hdd reference image: bitmaps at LBAs
+// 2, 4098, 8194, 12290 — exactly 4096 LBAs apart from partition_start
+// (= 2). Each bitmap covers 4096 sectors and the bitmap LBA itself is
+// always marked used (bit 7 of byte 0 = 0).
+
+// Locate the bitmap covering a given absolute LBA.
+function cfsBamLocation(partitionStart, absLba) {
+  var rel = absLba - partitionStart;
+  if (rel < 0) return null;
+  var chunkIdx = Math.floor(rel / 4096);
+  var bitmapLba = partitionStart + chunkIdx * 4096;
+  var bitInChunk = rel & 0xFFF;
+  return {
+    bitmapLba: bitmapLba,
+    byteIdx: bitInChunk >>> 3,
+    bitMask: 0x80 >>> (bitInChunk & 7),
+    bitInChunk: bitInChunk,
+  };
+}
+
+function cfsIsSectorFree(buffer, partitionStart, absLba) {
+  var loc = cfsBamLocation(partitionStart, absLba);
+  if (!loc) return false;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var off = loc.bitmapLba * IDE64_SECTOR_SIZE + loc.byteIdx;
+  if (off < 0 || off >= data.length) return false;
+  return (data[off] & loc.bitMask) !== 0;
+}
+
+function cfsMarkSectorUsed(buffer, partitionStart, absLba) {
+  var loc = cfsBamLocation(partitionStart, absLba);
+  if (!loc) return false;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var off = loc.bitmapLba * IDE64_SECTOR_SIZE + loc.byteIdx;
+  if (off < 0 || off >= data.length) return false;
+  data[off] &= ~loc.bitMask;
+  return true;
+}
+
+function cfsMarkSectorFree(buffer, partitionStart, absLba) {
+  var loc = cfsBamLocation(partitionStart, absLba);
+  if (!loc) return false;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var off = loc.bitmapLba * IDE64_SECTOR_SIZE + loc.byteIdx;
+  if (off < 0 || off >= data.length) return false;
+  data[off] |= loc.bitMask;
+  return true;
+}
+
+// Find and reserve the first free sector ≥ `searchStartLba`, return its
+// absolute LBA. Returns -1 if none free up to `partitionEndLba` (inclusive).
+// Caller is responsible for snapshotting the buffer for undo first.
+function cfsAllocSector(buffer, partitionStart, partitionEndLba, searchStartLba) {
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var start = (searchStartLba != null) ? Math.max(searchStartLba, partitionStart) : partitionStart;
+  for (var lba = start; lba <= partitionEndLba; lba++) {
+    if (cfsIsSectorFree(data, partitionStart, lba)) {
+      cfsMarkSectorUsed(data, partitionStart, lba);
+      return lba;
+    }
+  }
+  return -1;
+}
+
+// ── CFS write helpers (Phase 4a, no bitmap touch) ─────────────────────
+// Direct in-place edits of a directory entry's static fields. Caller is
+// responsible for snapshotting the buffer for undo and re-rendering.
+
+// Write the 16-byte filename field at $00..$0F. The new name is truncated
+// or space-padded to 16 bytes. Returns true on success.
+function cfsWriteDirEntryName(buffer, dirLba, slotIndex, newName) {
+  if (!buffer || slotIndex < 0 || slotIndex >= CFS_DIR_ENTRIES_PER_SECTOR) return false;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var off = dirLba * IDE64_SECTOR_SIZE + slotIndex * CFS_DIR_ENTRY_SIZE;
+  if (off + 16 > data.length) return false;
+  for (var i = 0; i < 16; i++) {
+    data[off + i] = i < newName.length ? (newName.charCodeAt(i) & 0xFF) : 0x20;
+  }
+  return true;
+}
+
+// Update the attribute byte at $18 — typically used to toggle R/W/X
+// permission bits (bits 5/4/3). The low 3 bits are the file type and
+// must be preserved across an attr-only edit, so callers pass the full
+// byte (existing-byte high bits OR'd with new-perms / cleared as wanted).
+function cfsWriteDirEntryAttrByte(buffer, dirLba, slotIndex, newAttrByte) {
+  if (!buffer || slotIndex < 0 || slotIndex >= CFS_DIR_ENTRIES_PER_SECTOR) return false;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var off = dirLba * IDE64_SECTOR_SIZE + slotIndex * CFS_DIR_ENTRY_SIZE;
+  if (off + 0x19 > data.length) return false;
+  data[off + 0x18] = newAttrByte & 0xFF;
+  return true;
+}
+
+// Delete a CFS file: free its tree root + all data pointers in the
+// tree, then mark the directory entry as deleted (ftype=0, Closed bit
+// cleared, other attribute bits preserved for recovery tools). The
+// tree pointer field stays — matches the IDEDOS pattern where deleted
+// entries keep their original metadata.
+//
+// Phase 4b: handles single-level trees only (files ≤ 64 KiB). Multi-
+// level trees (>64 KiB files) are refused; that's Phase 5 work.
+//
+// Returns { ok: bool, error?: string }.
+function cfsDeleteFile(buffer, partitionStart, partitionEndLba, entry) {
+  if (!buffer || !entry || entry.dirLba == null) return { ok: false, error: 'invalid entry' };
+  if (entry.size > 65536) {
+    return { ok: false, error: 'file > 64 KiB — multi-level tree deletion not yet supported' };
+  }
+  if (!entry.dataTreePtr || !entry.dataTreePtr.lba) {
+    return { ok: false, error: 'no data tree pointer' };
+  }
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var treeLba = entry.dataTreePtr.addr;
+  if (treeLba <= 0) return { ok: false, error: 'invalid tree pointer' };
+
+  // Free every data pointer in the leaf tree
+  var treeBase = treeLba * IDE64_SECTOR_SIZE;
+  if (treeBase + IDE64_SECTOR_SIZE > data.length) return { ok: false, error: 'tree sector out of range' };
+  for (var ptrIdx = 0; ptrIdx < 128; ptrIdx++) {
+    var off = treeBase + ptrIdx * 4;
+    var dp = _readIde64Pointer(data, off);
+    if (dp.lba && dp.addr > 0 && dp.addr >= partitionStart && dp.addr <= partitionEndLba) {
+      cfsMarkSectorFree(data, partitionStart, dp.addr);
+    }
+  }
+  // Free the tree sector itself
+  cfsMarkSectorFree(data, partitionStart, treeLba);
+
+  // Mark dir entry as deleted: ftype → 0, clear Closed bit. Other attr
+  // bits preserved for recovery context.
+  var entryOff = entry.dirLba * IDE64_SECTOR_SIZE + entry.index * CFS_DIR_ENTRY_SIZE;
+  if (entryOff + 0x19 > data.length) return { ok: false, error: 'dir entry out of range' };
+  var attr = data[entryOff + 0x18];
+  attr = (attr & 0x78); // clear Closed (0x80) and file type (low 3 bits); keep D/R/W/X (bits 6-3)
+  data[entryOff + 0x18] = attr;
+  return { ok: true };
+}
+
+// Find the first empty slot in a directory chain, returning
+// { dirLba, slotIndex } or null if every existing dir sector is full.
+// Phase 4b doesn't grow the chain — that's Phase 5 (extend_dir analogue).
+function cfsFindEmptyDirSlot(buffer, firstDirLba) {
+  if (!buffer || !firstDirLba) return null;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var visited = {};
+  var dirLba = firstDirLba;
+  var hops = 0;
+  while (dirLba && !visited[dirLba] && hops < 64) {
+    visited[dirLba] = true;
+    hops++;
+    var base = dirLba * IDE64_SECTOR_SIZE;
+    if (base + IDE64_SECTOR_SIZE > data.length) return null;
+    for (var slot = 0; slot < CFS_DIR_ENTRIES_PER_SECTOR; slot++) {
+      var eo = base + slot * CFS_DIR_ENTRY_SIZE;
+      var allZero = true;
+      for (var z = 0; z < CFS_DIR_ENTRY_SIZE; z++) {
+        if (data[eo + z] !== 0) { allZero = false; break; }
+      }
+      if (allZero) return { dirLba: dirLba, slotIndex: slot };
+    }
+    var nextPtr = _cfsReadDirNext(data, base);
+    dirLba = (nextPtr.lba && nextPtr.addr > 0) ? nextPtr.addr : 0;
+  }
+  return null;
+}
+
+// Import a single-sector PRG/SEQ/USR (payload ≤ 512 bytes) into a CFS
+// directory. Allocates a tree-root sector + one data sector, writes the
+// payload, fills tree[0..3] with the data pointer, finds an empty dir
+// slot in the chain, writes the entry.
+//
+// Returns { ok, error?, dirLba?, slotIndex? }. Refuses files > 512 bytes
+// — multi-sector imports are Phase 5.
+function cfsImportSingleSectorFile(buffer, partitionStart, partitionEndLba, firstDirLba, name, payload, opts) {
+  opts = opts || {};
+  if (!buffer || !firstDirLba) return { ok: false, error: 'invalid args' };
+  if (!payload || payload.length === 0) return { ok: false, error: 'empty payload' };
+  if (payload.length > IDE64_SECTOR_SIZE) {
+    return { ok: false, error: 'payload > 512 B — multi-sector imports not yet supported' };
+  }
+
+  var slot = cfsFindEmptyDirSlot(buffer, firstDirLba);
+  if (!slot) return { ok: false, error: 'no empty directory slot' };
+
+  // Reserve a starting LBA past the system area. Avoid the dir's own
+  // first sector (firstDirLba) and the bitmap LBAs.
+  var startSearch = firstDirLba + 1;
+  var treeLba = cfsAllocSector(buffer, partitionStart, partitionEndLba, startSearch);
+  if (treeLba < 0) return { ok: false, error: 'no free sectors for tree' };
+  var dataLba = cfsAllocSector(buffer, partitionStart, partitionEndLba, treeLba + 1);
+  if (dataLba < 0) {
+    // Roll back the tree allocation if we can't get a data sector
+    cfsMarkSectorFree(buffer, partitionStart, treeLba);
+    return { ok: false, error: 'no free sectors for data' };
+  }
+
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+
+  // Write payload into data sector. Pad/zero anything past payload.
+  var dataBase = dataLba * IDE64_SECTOR_SIZE;
+  for (var i = 0; i < IDE64_SECTOR_SIZE; i++) {
+    data[dataBase + i] = i < payload.length ? payload[i] : 0;
+  }
+
+  // Tree root: zero whole sector, write data pointer at offset 0
+  var treeBase = treeLba * IDE64_SECTOR_SIZE;
+  for (var t = 0; t < IDE64_SECTOR_SIZE; t++) data[treeBase + t] = 0;
+  // 28-bit LBA pointer, LBA flag set
+  data[treeBase + 0] = 0x40 | ((dataLba >>> 24) & 0x0F);
+  data[treeBase + 1] = (dataLba >>> 16) & 0xFF;
+  data[treeBase + 2] = (dataLba >>> 8) & 0xFF;
+  data[treeBase + 3] = dataLba & 0xFF;
+
+  // Directory entry
+  var eo = slot.dirLba * IDE64_SECTOR_SIZE + slot.slotIndex * CFS_DIR_ENTRY_SIZE;
+  // Zero the slot first
+  for (var z = 0; z < CFS_DIR_ENTRY_SIZE; z++) data[eo + z] = 0;
+  // Name (16 B, space-padded)
+  for (var n = 0; n < 16; n++) {
+    data[eo + n] = n < name.length ? (name.charCodeAt(n) & 0xFF) : 0x20;
+  }
+  // Size (32-bit LE)
+  data[eo + 0x10] = payload.length & 0xFF;
+  data[eo + 0x11] = (payload.length >>> 8) & 0xFF;
+  data[eo + 0x12] = (payload.length >>> 16) & 0xFF;
+  data[eo + 0x13] = (payload.length >>> 24) & 0xFF;
+  // Data-tree pointer (LBA + VALID-equivalent flag pattern)
+  data[eo + 0x14] = 0xC0 | ((treeLba >>> 24) & 0x0F);
+  data[eo + 0x15] = (treeLba >>> 16) & 0xFF;
+  data[eo + 0x16] = (treeLba >>> 8) & 0xFF;
+  data[eo + 0x17] = treeLba & 0xFF;
+  // Attribute byte: Closed + D/R/W/X + ftype (default NORMAL = 1)
+  var ftype = (opts.ftype != null) ? opts.ftype : CFS_FTYPE.NORMAL;
+  data[eo + 0x18] = 0xF8 | (ftype & 0x07);
+  // Type suffix (3 B, space-padded)
+  var suf = opts.typeSuffix || 'PRG';
+  for (var s = 0; s < 3; s++) {
+    data[eo + 0x19 + s] = s < suf.length ? (suf.charCodeAt(s) & 0xFF) : 0x20;
+  }
+  // Timestamp = 0 (no mtime). User can set via UI later.
+
+  return { ok: true, dirLba: slot.dirLba, slotIndex: slot.slotIndex, treeLba: treeLba, dataLba: dataLba };
+}
+
 // Resolve a slash-separated CFS path against `buffer`, starting at the
 // directory at `startDirLba`. Returns the matched entry or null when
 // any component is missing or a non-DIR is encountered mid-path. Names

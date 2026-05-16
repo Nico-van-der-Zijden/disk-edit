@@ -52,6 +52,19 @@ function openIde64AsTab(buffer, fileName) {
 }
 
 function refreshIde64View() {
+  // Re-sync hddBuffer from currentBuffer in case popUndo (or another
+  // buffer-rewriting path) handed us a fresh reference. The partition
+  // table and dir reads below all read through hddBuffer.
+  if (currentBuffer && hddBuffer !== currentBuffer) {
+    hddBuffer = currentBuffer;
+    if (typeof readIde64Partitions === 'function') {
+      var info = readIde64Partitions(hddBuffer);
+      if (info) {
+        hddBootInfo = info;
+        hddPartitions = info.partitions;
+      }
+    }
+  }
   if (cfsPartitionIdx >= 0) {
     renderCfsDirectoryView();
   } else {
@@ -317,6 +330,17 @@ function renderCfsDirectoryView() {
         '<span class="dir-icons"></span>' +
       '</div>';
   }
+  // Import row (Phase 4b — single-sector files only)
+  html +=
+    '<div class="dir-entry dir-parent-row" data-cfs-import="1">' +
+      '<span class="dir-grip"></span>' +
+      '<span class="dir-blocks"></span>' +
+      '<span class="dir-name">+ Import file&hellip; (≤ 512 B)</span>' +
+      '<span class="dir-type"></span>' +
+      '<span class="dir-cfs-mtime"></span>' +
+      '<span class="dir-cfs-attrs"></span>' +
+      '<span class="dir-icons"></span>' +
+    '</div>';
 
   var fileCount = 0;
   for (var i = 0; i < cfsDirEntries.length; i++) {
@@ -380,6 +404,11 @@ function renderCfsDirectoryView() {
   content.querySelectorAll('.dir-entry[data-cfs-up]').forEach(function(row) {
     row.addEventListener('click', function() { leaveCfsSubdir(); });
     row.addEventListener('dblclick', function() { leaveCfsSubdir(); });
+  });
+  // Import file row
+  content.querySelectorAll('.dir-entry[data-cfs-import]').forEach(function(row) {
+    row.addEventListener('click', function() { showCfsImportPicker(); });
+    row.addEventListener('dblclick', function() { showCfsImportPicker(); });
   });
 
   // File rows: click selects; dblclick on DIR is reserved for Phase 3
@@ -540,12 +569,15 @@ function showCfsFileHexViewer(entry) {
 
   var body = showViewerModal('Hex — ' + entry.name, html, 'large');
 
-  // Footer: View as / Download / Close
+  // Footer: View as / Rename / Attrs / Download / Close
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML =
     '<button id="cfs-view-petscii">PETSCII</button> ' +
     '<button id="cfs-view-basic">BASIC</button> ' +
+    '<button id="cfs-rename">Rename&hellip;</button> ' +
+    '<button id="cfs-attrs">Attributes&hellip;</button> ' +
     '<button id="cfs-dl">Download</button> ' +
+    '<button id="cfs-delete">Delete</button> ' +
     '<button id="modal-close">Close</button>';
 
   // PETSCII view — opens a second modal via the shared viewer with our bytes.
@@ -557,6 +589,15 @@ function showCfsFileHexViewer(entry) {
   document.getElementById('cfs-view-basic').addEventListener('click', function() {
     showFileBasicViewer(0, { data: payload, name: entry.name });
   });
+  document.getElementById('cfs-rename').addEventListener('click', function() {
+    showCfsRenameDialog(entry);
+  });
+  document.getElementById('cfs-attrs').addEventListener('click', function() {
+    showCfsAttrsDialog(entry);
+  });
+  document.getElementById('cfs-delete').addEventListener('click', function() {
+    showCfsDeleteConfirm(entry);
+  });
   document.getElementById('cfs-dl').addEventListener('click', function() {
     var blob = new Blob([payload], { type: 'application/octet-stream' });
     var a = document.createElement('a');
@@ -566,6 +607,178 @@ function showCfsFileHexViewer(entry) {
     URL.revokeObjectURL(a.href);
   });
   document.getElementById('modal-close').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+}
+
+// ── CFS rename dialog (Phase 4a) ──────────────────────────────────────
+// Plain text input. CFS names are 16 bytes, space-padded; the field
+// accepts any printable ASCII. The PETSCII editor used by CBM-DOS isn't
+// quite right here — CFS stores names verbatim (ASCII for the reference
+// images I've seen), not as PETSCII.
+function showCfsRenameDialog(entry) {
+  if (!entry || entry.dirLba == null) return;
+  var titleEl = document.getElementById('modal-title');
+  var body = document.getElementById('modal-body');
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  titleEl.textContent = 'Rename — ' + entry.name;
+  body.innerHTML =
+    '<div class="text-md mb-md">New name (up to 16 characters):</div>' +
+    '<input type="text" id="cfs-rename-input" maxlength="16" style="width:100%;font-family:monospace;font-size:14px;padding:6px" />';
+  var input = document.getElementById('cfs-rename-input');
+  input.value = entry.name;
+  setTimeout(function() { input.focus(); input.select(); }, 0);
+  footer.innerHTML = '<button id="cfs-rename-ok">OK</button> <button id="cfs-rename-cancel">Cancel</button>';
+  function commit() {
+    var newName = input.value;
+    if (newName === entry.name) {
+      document.getElementById('modal-overlay').classList.remove('open');
+      return;
+    }
+    pushUndo();
+    if (cfsWriteDirEntryName(hddBuffer, entry.dirLba, entry.index, newName)) {
+      document.getElementById('modal-overlay').classList.remove('open');
+      refreshIde64View();
+    } else {
+      showModal('Rename failed', ['Could not write the new name.']);
+    }
+  }
+  document.getElementById('cfs-rename-ok').addEventListener('click', commit);
+  document.getElementById('cfs-rename-cancel').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') commit();
+    else if (e.key === 'Escape') document.getElementById('modal-overlay').classList.remove('open');
+  });
+}
+
+// ── CFS import single-sector file (Phase 4b) ──────────────────────────
+// Pops a native file picker. On selection: if the file is ≤ 512 bytes,
+// allocates a tree + data sector and creates a dir entry. Larger files
+// are refused with a "Phase 5" placeholder.
+function showCfsImportPicker() {
+  if (cfsPartitionIdx < 0 || !hddPartitions) return;
+  var part = hddPartitions[cfsPartitionIdx];
+  if (!part) return;
+  var input = document.createElement('input');
+  input.type = 'file';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+  input.addEventListener('change', function() {
+    var file = input.files && input.files[0];
+    document.body.removeChild(input);
+    if (!file) return;
+    if (file.size > 512) {
+      showModal('Import not supported', [
+        '"' + file.name + '" is ' + file.size + ' bytes.',
+        'Single-sector import (≤ 512 B) is the Phase 4b scope; multi-sector imports come in Phase 5.',
+      ]);
+      return;
+    }
+    file.arrayBuffer().then(function(buf) {
+      var payload = new Uint8Array(buf);
+      // Build a name from the source filename: drop extension, uppercase,
+      // truncate to 16 chars, sanitize non-alphanumerics to underscores.
+      var baseName = file.name.replace(/\.[^.]+$/, '').toUpperCase().replace(/[^A-Z0-9_-]/g, '_').slice(0, 16);
+      if (!baseName) baseName = 'IMPORTED';
+      // Type suffix from extension (if present and 1-3 chars)
+      var ext = (file.name.match(/\.([^.]+)$/) || [])[1] || 'PRG';
+      ext = ext.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'PRG';
+
+      pushUndo();
+      var res = cfsImportSingleSectorFile(hddBuffer, part.startLba, part.endLba, cfsDirLba, baseName, payload, {
+        ftype: CFS_FTYPE.NORMAL,
+        typeSuffix: ext,
+      });
+      if (!res.ok) {
+        showModal('Import failed', [res.error || 'Unknown error.']);
+        // Undo to roll back any partial allocation
+        if (typeof popUndo === 'function') popUndo();
+        return;
+      }
+      refreshIde64View();
+    });
+  });
+  input.click();
+}
+
+// ── CFS delete (Phase 4b) ─────────────────────────────────────────────
+// Frees the file's data + tree sectors in the bitmap and marks the dir
+// entry as deleted. Confirmation modal before mutation.
+function showCfsDeleteConfirm(entry) {
+  if (!entry || cfsPartitionIdx < 0 || !hddPartitions) return;
+  var part = hddPartitions[cfsPartitionIdx];
+  if (!part) return;
+  var titleEl = document.getElementById('modal-title');
+  var body = document.getElementById('modal-body');
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  titleEl.textContent = 'Delete file';
+  body.innerHTML =
+    '<div class="text-md mb-md">Delete <b>' + escHtml(entry.name) + '</b> (' + entry.size + ' bytes)?</div>' +
+    '<div class="text-sm text-muted">Data sectors are returned to the partition\'s free-block pool. The directory entry is marked deleted with the original tree pointer preserved (recovery context).</div>';
+  footer.innerHTML = '<button id="cfs-del-ok">Delete</button> <button id="cfs-del-cancel">Cancel</button>';
+  document.getElementById('cfs-del-ok').addEventListener('click', function() {
+    pushUndo();
+    var res = cfsDeleteFile(hddBuffer, part.startLba, part.endLba, entry);
+    if (!res.ok) {
+      showModal('Delete failed', [res.error || 'Unknown error.']);
+      return;
+    }
+    document.getElementById('modal-overlay').classList.remove('open');
+    refreshIde64View();
+  });
+  document.getElementById('cfs-del-cancel').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('open');
+  });
+}
+
+// ── CFS attribute editor (Phase 4a) ───────────────────────────────────
+// Edits bits 7..3 of the attribute byte at dir-entry +$18 (Closed +
+// Deleteable + Readable + Writeable + Executable). Bits 2..0 are the
+// file type and are preserved as-is — type changes are a separate flow.
+function showCfsAttrsDialog(entry) {
+  if (!entry || entry.dirLba == null) return;
+  var titleEl = document.getElementById('modal-title');
+  var body = document.getElementById('modal-body');
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  titleEl.textContent = 'Attributes — ' + entry.name;
+  var attr = entry.attrByte;
+  body.innerHTML =
+    '<div class="text-md mb-md">File: <b>' + escHtml(entry.name) + '</b></div>' +
+    '<label style="display:block;margin:6px 0"><input type="checkbox" id="cfs-attr-c"' +
+      ((attr & 0x80) ? ' checked' : '') + ' /> Closed (active file, not deleted)</label>' +
+    '<label style="display:block;margin:6px 0"><input type="checkbox" id="cfs-attr-d"' +
+      ((attr & 0x40) ? ' checked' : '') + ' /> Deleteable</label>' +
+    '<label style="display:block;margin:6px 0"><input type="checkbox" id="cfs-attr-r"' +
+      ((attr & 0x20) ? ' checked' : '') + ' /> Readable</label>' +
+    '<label style="display:block;margin:6px 0"><input type="checkbox" id="cfs-attr-w"' +
+      ((attr & 0x10) ? ' checked' : '') + ' /> Writeable</label>' +
+    '<label style="display:block;margin:6px 0"><input type="checkbox" id="cfs-attr-x"' +
+      ((attr & 0x08) ? ' checked' : '') + ' /> Executable</label>' +
+    '<div class="text-sm text-muted" style="margin-top:8px">File type (' +
+      escHtml(_cfsFtypeLabel(entry.ftype)) + ') is preserved.</div>';
+  footer.innerHTML = '<button id="cfs-attrs-ok">OK</button> <button id="cfs-attrs-cancel">Cancel</button>';
+  document.getElementById('cfs-attrs-ok').addEventListener('click', function() {
+    var newAttr = entry.attrByte & 0x07; // keep file type
+    if (document.getElementById('cfs-attr-c').checked) newAttr |= 0x80;
+    if (document.getElementById('cfs-attr-d').checked) newAttr |= 0x40;
+    if (document.getElementById('cfs-attr-r').checked) newAttr |= 0x20;
+    if (document.getElementById('cfs-attr-w').checked) newAttr |= 0x10;
+    if (document.getElementById('cfs-attr-x').checked) newAttr |= 0x08;
+    if (newAttr === entry.attrByte) {
+      document.getElementById('modal-overlay').classList.remove('open');
+      return;
+    }
+    pushUndo();
+    if (cfsWriteDirEntryAttrByte(hddBuffer, entry.dirLba, entry.index, newAttr)) {
+      document.getElementById('modal-overlay').classList.remove('open');
+      refreshIde64View();
+    } else {
+      showModal('Attribute change failed', ['Could not write the attribute byte.']);
+    }
+  });
+  document.getElementById('cfs-attrs-cancel').addEventListener('click', function() {
     document.getElementById('modal-overlay').classList.remove('open');
   });
 }
