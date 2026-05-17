@@ -90,6 +90,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
           'TASS V5.x source viewer',
           'BAM viewer + radial Disk Map + integrity checks',
           'G64 Layout viewer (sectors + raw GCR rings)',
+          'IDE64 disk map + CFS bitmap heat map',
         ]) +
         card('Disk tools', [
           'Validate, recalculate BAM, fill free',

@@ -118,9 +118,12 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 ### IDE64 .hdd / CFS 0.11
 - Open .hdd images, view the 16-slot partition table, enter CFS partitions and navigate subdirectories
 - Full read/write inside a CFS partition: rename, scratch / unscratch, restore directory, restore partition, insert / remove / align / name case / lock / splat / separators, multi-select, drag-to-reorder, drag-drop import/export, file-type changes, all View-As viewers, Run in Emulator, Save as Separator
-- Disk-level: Validate, Sort Directory, Scan for Lost Files (Quick + Deep), Export Disk, CFS-aware View BAM with Density / Ownership colour modes
+- Directory chain auto-extends — paste / import keeps allocating new dir sectors via the bit-sliced dir-next pointer when the current dir is full
+- Disk-level: Validate (overlap detection + cycle guard + fix bitmap), Sort Directory, Scan for Lost Files (Quick + Deep), Export Disk, CFS-aware View BAM with Density / Ownership colour modes
+- Disk Map strip at the container level — MBR, partition table, partitions (live / deleted / hidden), gaps, backup partition-table mirror; click for details, double-click a CFS partition to drill in
 - New images from 4 to 512 MiB via File → New → IDE64 HDD with a cfsfdisk-compatible byte layout (MBR partition entry + boot total-LBA count) — mountable in VICE with auto-detect
 - Byte-equal to IDEDOS for scratch / unscratch / restore (including the partition-table backup mirror at the last sector); B-tree files up to 4 GiB; CFS data sectors decoded with the correct stride-4 byte slicing
+- Partition sizes shown in MiB / KiB across all container views (HDD + CMD HD / RAMLink / FD2000-4000 / DNP); toggle to CBM blocks via Options → Partition Sizes in MiB
 
 ### Other
 - Multi-tab interface for working with multiple disks, with unsaved-changes warnings on close / reload / Close All
@@ -212,6 +215,7 @@ assets/
       disk/                       Disk-level operations
         ui-cmd.js                 CMD container UI (RAMLink, FD2000/4000, CMD HD partitions)
         ui-ide64.js               IDE64 .hdd container UI: partition list + CFS directory view, file ops, validate, sort, scan-for-lost-files
+        ui-ide64-disk-map.js      IDE64 .hdd disk-map strip (MBR / partition table / partitions / gaps / backup mirror)
         ui-disk-bam.js            BAM viewer modal, error byte viewer
         ui-disk-bam-cfs.js        CFS-aware BAM viewer (64×64 heat map, Density / Ownership modes)
         ui-disk-compare.js        Compare with… (sector-diff modal)

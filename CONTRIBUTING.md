@@ -60,6 +60,7 @@ Key files (paths relative to `assets/js/`):
 | `ui/ui-init.js` | Drag and drop, theme toggle, initialization |
 | `ui/disk/ui-cmd.js` | CMD container UI (RAMLink, FD2000/4000, CMD HD partition table, partition import/export) |
 | `ui/disk/ui-ide64.js` | IDE64 .hdd container UI: partition list, CFS directory view, file ops, validate, sort, scan-for-lost-files |
+| `ui/disk/ui-ide64-disk-map.js` | IDE64 .hdd disk-map strip viewer (MBR / partition table / partitions / gaps / backup mirror), opened from View BAM on the partition list |
 | `ui/disk/ui-disk-bam.js` | BAM viewer modal, error byte viewer |
 | `ui/disk/ui-disk-bam-cfs.js` | CFS-aware BAM viewer (64×64 heat map with Density / Ownership colour modes) |
 | `ui/disk/ui-disk-compare.js` | Compare with… (sector-diff modal) |
