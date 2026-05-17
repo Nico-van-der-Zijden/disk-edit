@@ -215,9 +215,8 @@ assets/
       disk/                       Disk-level operations
         ui-cmd.js                 CMD container UI (RAMLink, FD2000/4000, CMD HD partitions)
         ui-ide64.js               IDE64 .hdd container UI: partition list + CFS directory view, file ops, validate, sort, scan-for-lost-files
-        ui-ide64-disk-map.js      IDE64 .hdd disk-map strip (MBR / partition table / partitions / gaps / backup mirror)
+        ui-ide64-disk-map.js      IDE64 .hdd BAM modal: Partitions tab (disk-map strip) + per-partition heat map (64×64, Density / Ownership)
         ui-disk-bam.js            BAM viewer modal, error byte viewer
-        ui-disk-bam-cfs.js        CFS-aware BAM viewer (64×64 heat map, Density / Ownership modes)
         ui-disk-compare.js        Compare with… (sector-diff modal)
         ui-disk-geos.js           GEOS file info, Convert to GEOS
         ui-disk-tools.js          Lost files, fill free, optimize, resize DNP, MD5, interleave

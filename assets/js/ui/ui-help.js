@@ -291,6 +291,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.3', title: 'IDE64 .hdd — disk map + heat map share one tabbed modal', items: [
+      'View BAM on an .hdd image now opens a single tabbed modal. The Partitions tab shows the disk-map strip; a second tab labelled with the current partition\'s name shows the CFS bitmap heat map. Default tab is the partition heat map when you\'re inside a CFS partition, the disk map otherwise',
+      'Double-click a partition region in the disk map to load that partition\'s heat map into the second tab — switches tabs without changing the underlying disk view. Works for both live and soft-deleted CFS partitions',
+      'Modal frame is now a fixed 720px so the body width stays the same across tab switches. The CFS bitmap grid lost its 520px cap; it now fills the modal body just like the disk-map strip',
+    ]},
     { ver: '1.4.2', title: 'IDE64 .hdd — disk map, modal polish, dir auto-extend', items: [
       'View BAM on the HDD partition-list view now opens a horizontal Disk Map strip — MBR, partition table, every live / deleted / hidden partition, gaps of unallocated space, and the backup partition-table mirror at the last sector. Click a region for details, double-click a CFS partition to drill in. Inside a CFS partition View BAM still opens the per-partition heat map',
       'Pasting into a CFS partition now extends the directory chain when every existing dir sector is full — same dir-next bit-slicing IDEDOS uses. No more "No empty directory slot available." errors when a directory exceeds 14 files',
