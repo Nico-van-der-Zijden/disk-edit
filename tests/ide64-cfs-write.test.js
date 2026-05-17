@@ -112,7 +112,7 @@ describe('CFS bitmap helpers (Phase 4b)', function() {
   it('matches the ide.hdd reference bitmap (when present)', function() {
     var fs = require('fs');
     var path = require('path');
-    var p = path.join(__dirname, '..', 'disks', 'ide.hdd');
+    var p = path.join(__dirname, 'fixtures', 'ide.hdd');
     if (!fs.existsSync(p)) return;
     var buf = fs.readFileSync(p).buffer;
     var info = readIde64Partitions(buf);
@@ -1324,7 +1324,7 @@ describe('cfsRemoveDirEntry (hard remove)', function() {
     // next-pointer requires non-zero contribution from slot 3 byte $14.
     var fs = require('fs');
     var path = require('path');
-    var refPath = path.join(__dirname, '..', 'disks', 'ide.hdd');
+    var refPath = path.join(__dirname, 'fixtures', 'ide.hdd');
     if (!fs.existsSync(refPath)) return; // user-supplied fixture
     var buf = new Uint8Array(fs.readFileSync(refPath)).buffer;
     var data = new Uint8Array(buf);
@@ -1607,18 +1607,17 @@ describe('CFS partition soft-delete / restore (Phase D)', function() {
   });
 });
 
-// Byte-exact behavior against the user's IDEDOS test images. Only runs
-// when "ide - 1part.hdd" + "ide - 2part.hdd" are present in disks/ —
-// user-supplied + gitignored. Filenames in our copy are swapped from the
-// state they describe: ide - 1part.hdd is the 2-partition "before" state
-// (both slots valid), ide - 2part.hdd is the 1-partition "after delete"
-// state (slot 0 has V=0).
+// Byte-exact behavior against IDEDOS reference images. Only runs when
+// "ide - 1part.hdd" + "ide - 2part.hdd" are present in tests/fixtures/
+// (gitignored). Filenames are swapped from the state they describe:
+// ide - 1part.hdd is the 2-partition "before" state (both slots valid),
+// ide - 2part.hdd is the 1-partition "after delete" state (slot 0 V=0).
 describe('CFS partition delete — IDEDOS reference comparison', function() {
   it('matches IDEDOS byte-for-byte when scratching slot 0 of a 2-partition image', function() {
     var fs = require('fs');
     var path = require('path');
-    var beforePath = path.join(__dirname, '..', 'disks', 'ide - 1part.hdd'); // 2-partition state
-    var afterPath = path.join(__dirname, '..', 'disks', 'ide - 2part.hdd'); // 1-partition state
+    var beforePath = path.join(__dirname, 'fixtures', 'ide - 1part.hdd'); // 2-partition state
+    var afterPath = path.join(__dirname, 'fixtures', 'ide - 2part.hdd'); // 1-partition state
     if (!fs.existsSync(beforePath) || !fs.existsSync(afterPath)) return;
 
     var beforeBytes = fs.readFileSync(beforePath);
@@ -1647,16 +1646,16 @@ describe('CFS partition delete — IDEDOS reference comparison', function() {
   });
 });
 
-// Byte-exact behavior against the user's IDEDOS test images. Only runs
-// when both ide.hdd and "ide - delete.hdd" are present in disks/ — they
-// are user-supplied + gitignored. This test is the ground truth: our
-// delete must produce the same on-disk state IDEDOS produces.
+// Byte-exact behavior against IDEDOS reference images. Only runs when
+// both ide.hdd and "ide - delete.hdd" are present in tests/fixtures/
+// (gitignored). Ground truth: our delete must produce the same on-disk
+// state IDEDOS produces.
 describe('CFS delete — IDEDOS reference comparison', function() {
   it('matches IDEDOS byte-for-byte when scratching CREATURES (dir) + "-- CREATURES2 --" (file)', function() {
     var fs = require('fs');
     var path = require('path');
-    var refPath = path.join(__dirname, '..', 'disks', 'ide.hdd');
-    var delPath = path.join(__dirname, '..', 'disks', 'ide - delete.hdd');
+    var refPath = path.join(__dirname, 'fixtures', 'ide.hdd');
+    var delPath = path.join(__dirname, 'fixtures', 'ide - delete.hdd');
     if (!fs.existsSync(refPath) || !fs.existsSync(delPath)) return;
 
     var ref = fs.readFileSync(refPath).buffer;

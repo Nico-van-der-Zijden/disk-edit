@@ -143,7 +143,7 @@ describe('CFS directory parser', function() {
   it('reads from real reference image: VICE PARTITION 1 has self-ref + %DELETED FILES%', function() {
     var fs = require('fs');
     var path = require('path');
-    var refPath = path.join(__dirname, '..', 'disks', 'ide-reference.hdd');
+    var refPath = path.join(__dirname, 'fixtures', 'ide-reference.hdd');
     if (!fs.existsSync(refPath)) {
       // Reference image not present locally — skip rather than fail.
       return;

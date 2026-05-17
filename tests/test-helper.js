@@ -65,8 +65,7 @@ loadScript('assets/js/ui/viewers/ui-viewer-basic.js');
 loadScript('assets/js/ui/viewers/ui-viewer-geowrite.js');
 
 // Helper: load a test fixture disk and set globals. Fixtures live in
-// tests/fixtures/ (gitignored — keep local copies separate from disks/,
-// which is a scratch dir users clear regularly).
+// tests/fixtures/ (gitignored — keep local copies).
 function loadDisk(filename) {
   var diskPath = path.join(__dirname, 'fixtures', filename);
   var buf = new Uint8Array(fs.readFileSync(diskPath)).buffer;
