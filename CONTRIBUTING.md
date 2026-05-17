@@ -33,9 +33,9 @@ The codebase is organized as global functions across multiple JS files loaded in
 
 ```
 assets/js/
-  format/    Disk format parsers and decoders (cbm-format*, cbm-tape, cbm-archive, cbm-editor, restore64-scanners)
+  format/    Disk format parsers and decoders (cbm-format*, cbm-format-ide64, cbm-tape, cbm-archive, cbm-editor, restore64-scanners)
   ui/        UI infrastructure and app shell (modals, menus, directory, fileops, screen, search, export, …)
-  ui/disk/   Disk-level operations (CMD container UI, BAM viewer, compare, GEOS info, lost-files/optimize/MD5/…)
+  ui/disk/   Disk-level operations (CMD container UI, IDE64 .hdd UI, BAM viewer, CFS BAM viewer, compare, GEOS info, lost-files/optimize/MD5/…)
   ui/viewers/ Per-file-type viewers (graphics, BASIC, geoWrite, REL, VLIR, fileinfo, TASS)
 ```
 
@@ -46,6 +46,7 @@ Key files (paths relative to `assets/js/`):
 | `format/cbm-format.js` | Disk format table, sector geometry, BAM, file reading, shared helpers (`forEachFileSector`, `isVlirFile`, `readFileData`, …) |
 | `format/cbm-format-petscii.js` | PETSCII ↔ Unicode mapping, screen-code tables |
 | `format/cbm-format-cmd.js` | CMD container parsers (RAMLink, FD2000/4000 D1M/D2M/D4M, CMD HD DHD) |
+| `format/cbm-format-ide64.js` | IDE64 .hdd reader + writer, CFS 0.11 filesystem (B-tree files, bit-sliced dir-next pointers, stride-4 byte-slice codec for data sectors, partition table + MBR + boot total-LBA-count, soft delete + restore for files / dirs / partitions) |
 | `format/cbm-format-geos.js` | GEOS file types, VLIR records, info-block decoding, bitmap decompression |
 | `format/cbm-sector-allocator.js` | Real-drive sector allocation: `buildTrueAllocationMap`, `allocateSectors` (used across cbm-editor, ui-directory, ui-fileops, ui-disk-tools) |
 | `format/cbm-editor.js` | Version, app state, undo, BAM integrity, disk validation, disk optimizer |
@@ -58,7 +59,9 @@ Key files (paths relative to `assets/js/`):
 | `ui/ui-export.js` | Bulk export (ZIP, CSV, HTML, PNG), ZipCode, file chains |
 | `ui/ui-init.js` | Drag and drop, theme toggle, initialization |
 | `ui/disk/ui-cmd.js` | CMD container UI (RAMLink, FD2000/4000, CMD HD partition table, partition import/export) |
+| `ui/disk/ui-ide64.js` | IDE64 .hdd container UI: partition list, CFS directory view, file ops, validate, sort, scan-for-lost-files |
 | `ui/disk/ui-disk-bam.js` | BAM viewer modal, error byte viewer |
+| `ui/disk/ui-disk-bam-cfs.js` | CFS-aware BAM viewer (64×64 heat map with Density / Ownership colour modes) |
 | `ui/disk/ui-disk-compare.js` | Compare with… (sector-diff modal) |
 | `ui/disk/ui-disk-tools.js` | Lost files, fill free, optimize, resize DNP, MD5, interleave |
 | `ui/viewers/ui-viewer-graphics.js` | C64/GEOS graphics renderers (24+ formats) |
@@ -204,8 +207,14 @@ Uses the `node:test` runner that's built into Node — no dependencies. The file
 | `petscii.test.js` | PETSCII → PUA / ASCII, `readPetsciiString`, hex helpers |
 | `dnp.test.js` | DNP create/resize, `findDnpHighTrackOwners`, CMD BAM helpers |
 | `lnx.test.js` | LYNX archive parser variants |
+| `dhd.test.js` | CMD HD container: partition table, create/grow/shrink, byte-exact compatibility |
 | `directory.test.js` | Directory editing helpers (insert/remove/sort/swap/align/changeType, clampInt, isTrackSectorInRange) |
 | `graphics.test.js` | Graphics-parser round-trip across 12 bitmap layouts |
+| `ide64-detect.test.js` | IDE64 .hdd detection, partition table parsing |
+| `ide64-cfs-read.test.js` | CFS file reader: B-tree walk, byte-slice decode, LNK follow |
+| `ide64-cfs-dir.test.js` | CFS directory navigation, subdirs, multi-sector dirs |
+| `ide64-cfs-subdir.test.js` | CFS subdirectory create / delete / restore cascades |
+| `ide64-cfs-write.test.js` | CFS write path: import, rename, scratch, partition create/delete (some tests use gitignored `disks/ide*.hdd` reference images and skip silently if absent) |
 
 Run with:
 

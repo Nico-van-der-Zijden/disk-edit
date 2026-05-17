@@ -25,6 +25,7 @@ An online, cross-platform alternative to desktop tools like DirMaster, CBMXfer a
 | D4M | CMD FD-4000 | Extra density 3.5" (81 tracks, 160 spt) |
 | RML / RL | CMD RAMLink | Container of up to 31 partitions (Native, 1541, 1571, 1581) |
 | DHD | CMD HD | Hard-drive container of up to 254 partitions (Native, 1541, 1571, 1581); grows when partitions are added and shrinks when they are removed |
+| HDD | IDE64 | IDE64 hard-disk image with CFS 0.11 filesystem — up to 16 partitions, subdirectories, LNK symlinks, B-tree files up to 4 GiB; full read/write |
 | T64 | Tape | Tape archive container (read-only) |
 | TAP | Tape | Raw tape pulse data (read-only) |
 | CVT | GEOS | GEOS Convert file format |
@@ -50,6 +51,7 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 | DNP | n × 65,536 | — | Any multiple of 65,536 that doesn't match a sized format above |
 | RML / RL | 1/2/4/8/16 MiB | — | CMD RAMLink container — opens to a partition list |
 | DHD | Variable | — | CMD HD container — fresh image is 264 KiB and grows per partition; max ≈ 4 GiB |
+| HDD | Variable | — | Magic: `C64 CFS V 0.11B ` at offset $0008 (boot sector) |
 | G64 | Variable | — | Magic: `GCR-1541` at offset 0 |
 | X64 | Variable | — | Magic: `C1541` at offset 0 |
 | T64 | Variable | — | Magic: `C64` at offset 0 |
@@ -113,6 +115,13 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 - DNP track resize with auto-compaction (Disk → Disk Tools → Resize Image…)
 - RAMLink (.rml / .rl) and FD-2000/FD-4000 containers open to a partition list — double-click a partition to enter; add / delete / rename partitions with byte-exact compatibility against VICE and the original CMD ROMs
 
+### IDE64 .hdd / CFS 0.11
+- Open .hdd images, view the 16-slot partition table, enter CFS partitions and navigate subdirectories
+- Full read/write inside a CFS partition: rename, scratch / unscratch, restore directory, restore partition, insert / remove / align / name case / lock / splat / separators, multi-select, drag-to-reorder, drag-drop import/export, file-type changes, all View-As viewers, Run in Emulator, Save as Separator
+- Disk-level: Validate, Sort Directory, Scan for Lost Files (Quick + Deep), Export Disk, CFS-aware View BAM with Density / Ownership colour modes
+- New images from 4 to 512 MiB via File → New → IDE64 HDD with a cfsfdisk-compatible byte layout (MBR partition entry + boot total-LBA count) — mountable in VICE with auto-detect
+- Byte-equal to IDEDOS for scratch / unscratch / restore (including the partition-table backup mirror at the last sector); B-tree files up to 4 GiB; CFS data sectors decoded with the correct stride-4 byte slicing
+
 ### Other
 - Multi-tab interface for working with multiple disks, with unsaved-changes warnings on close / reload / Close All
 - 40+ keyboard shortcuts
@@ -171,7 +180,8 @@ assets/
       cbm-format.js               Core: disk format table, sector geometry, BAM, file reading
       cbm-format-petscii.js       PETSCII ↔ Unicode mapping, screen-code tables
       cbm-format-gcr.js           G64 GCR decoder
-      cbm-format-cmd.js           CMD container parsers (RAMLink, FD2000/4000 D1M/D2M/D4M)
+      cbm-format-cmd.js           CMD container parsers (RAMLink, FD2000/4000 D1M/D2M/D4M, CMD HD DHD)
+      cbm-format-ide64.js         IDE64 .hdd reader + writer, CFS 0.11 filesystem (B-tree files, bitmap, partition table)
       cbm-format-geos.js          GEOS file types, VLIR records, info block, bitmap decompress
       cbm-sector-allocator.js     Real-drive sector allocation (buildTrueAllocationMap, allocateSectors)
       cbm-format-lnx.js           Lynx (.lnx) archive reader
@@ -200,8 +210,10 @@ assets/
       ui-help.js                  About, credits, keyboard shortcuts, changelog
       ui-mobile-menu.js           Mobile menu wiring
       disk/                       Disk-level operations
-        ui-cmd.js                 CMD container UI (RAMLink, FD2000/4000 partitions)
+        ui-cmd.js                 CMD container UI (RAMLink, FD2000/4000, CMD HD partitions)
+        ui-ide64.js               IDE64 .hdd container UI: partition list + CFS directory view, file ops, validate, sort, scan-for-lost-files
         ui-disk-bam.js            BAM viewer modal, error byte viewer
+        ui-disk-bam-cfs.js        CFS-aware BAM viewer (64×64 heat map, Density / Ownership modes)
         ui-disk-compare.js        Compare with… (sector-diff modal)
         ui-disk-geos.js           GEOS file info, Convert to GEOS
         ui-disk-tools.js          Lost files, fill free, optimize, resize DNP, MD5, interleave
@@ -218,15 +230,21 @@ assets/
   webfonts/              C64 Pro Mono font + FontAwesome webfonts
 build.ps1               Build script (PowerShell)
 build.sh                Build script (macOS/Linux)
-tests/                  Automated test suite (Node.js built-in runner)
-  bam.test.js           BAM integrity, sector ops, forEachFileSector
-  format.test.js        Sector geometry, disk parsing, readFileData
-  geos.test.js          GEOS signature + VLIR record parsing
-  petscii.test.js       PETSCII / PUA conversion
-  dnp.test.js           DNP format, resize, high-track owners
-  lnx.test.js           LNX archive parser
-  directory.test.js     Directory editing helpers (insert/remove/sort/rename)
-  graphics.test.js      Graphics format round-trips (12 bitmap layouts)
+tests/                       Automated test suite (Node.js built-in runner)
+  bam.test.js                BAM integrity, sector ops, forEachFileSector
+  format.test.js             Sector geometry, disk parsing, readFileData
+  geos.test.js               GEOS signature + VLIR record parsing
+  petscii.test.js            PETSCII / PUA conversion
+  dnp.test.js                DNP format, resize, high-track owners
+  dhd.test.js                CMD HD container: partition table, create/grow/shrink
+  lnx.test.js                LNX archive parser
+  directory.test.js          Directory editing helpers (insert/remove/sort/rename)
+  graphics.test.js           Graphics format round-trips (12 bitmap layouts)
+  ide64-detect.test.js       IDE64 .hdd detection, partition table parsing
+  ide64-cfs-read.test.js     CFS file reader: B-tree walk, byte-slice decode, LNK follow
+  ide64-cfs-dir.test.js      CFS directory navigation, subdirs, multi-sector dirs
+  ide64-cfs-subdir.test.js   CFS subdirectory create / delete / restore cascades
+  ide64-cfs-write.test.js    CFS write path: import, rename, scratch, partition create/delete
 dist/                   Build output (ignored)
 ExampleDisks/           Example disk images for testing
 ```
@@ -262,6 +280,8 @@ Covers sector geometry, BAM operations, PETSCII conversion, GEOS VLIR helpers, D
 - [CSDb](https://csdb.dk/) — C64 Scene Database
 - [Zimmers.net](https://www.zimmers.net/anonftp/pub/cbm/) — CBM file archive and GEOS format documentation
 - [JiffyDOS V6 User's Manual](https://archive.org/details/JiffyDos_V6_Users_Manual) — Sector interleave and fast loader reference
+- [IDEDOS / CFS 0.11 spec](https://singularcrew.hu/idedos/cfs.html) by Soci/Singular — IDE64 cartridge firmware and filesystem documentation
+- [fusecfs](http://c64.rulez.org/pub/c64/IDE64/source/fusecfs/) + [cfsfdisk](http://c64.rulez.org/pub/c64/IDE64/source/cfsfdisk/) by Soci/Singular (GPL) — reference FUSE driver and partition utility; canonical byte-level layout for the .hdd reader/writer
 
 ## License
 

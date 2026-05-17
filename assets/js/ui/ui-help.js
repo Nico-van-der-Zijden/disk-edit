@@ -170,6 +170,7 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '<b>IDE64 references:</b><br>' +
       '&bull; <a href="https://singularcrew.hu/idedos/" target="_blank" class="link">IDEDOS</a> and <a href="https://singularcrew.hu/idedos/cfs.html" target="_blank" class="link">CFS 0.11 spec</a> by Soci/Singular — IDE64 cartridge firmware and filesystem documentation<br>' +
       '&bull; <a href="http://c64.rulez.org/pub/c64/IDE64/source/fusecfs/" target="_blank" class="link">fusecfs</a> by Soci/Singular (GPL) — reference FUSE driver; canonical byte-level partition layout and pointer codec for the .hdd reader<br>' +
+      '&bull; <a href="http://c64.rulez.org/pub/c64/IDE64/source/cfsfdisk/" target="_blank" class="link">cfsfdisk</a> by Soci/Singular (GPL) — partition utility; reference for the MBR partition entry, boot-sector total-LBA-count, and byte padding used by new .hdd images<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
   footer.innerHTML = '<button id="modal-close">OK</button>';
