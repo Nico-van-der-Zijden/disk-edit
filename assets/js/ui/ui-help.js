@@ -39,6 +39,10 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
           '<b>RAMLink</b> &middot; ' +
           '<b>DHD</b> (CMD HD)' +
         '</span>' +
+        '<span class="about-format-cat">IDE64</span>' +
+        '<span class="about-format-list">' +
+          '<b>HDD</b> (CFS 0.11 — B-tree files, subdirs, LNK)' +
+        '</span>' +
         '<span class="about-format-cat">Tape</span>' +
         '<span class="about-format-list">' +
           '<b>T64</b> &middot; ' +
