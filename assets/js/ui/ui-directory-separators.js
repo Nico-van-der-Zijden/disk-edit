@@ -212,12 +212,21 @@ document.getElementById('opt-edit-separators').addEventListener('click', functio
 
 document.getElementById('opt-save-sep').addEventListener('click', async function(e) {
   e.stopPropagation();
-  if (!currentBuffer || selectedEntryIndex < 0) return;
+  if (selectedEntryIndex < 0) return;
   closeMenus();
 
-  var data = new Uint8Array(currentBuffer);
+  // CFS view: pull the 16 name bytes from cfsDirEntries[idx].nameBytes
+  // instead of reading currentBuffer at a CBM-DOS byte offset.
   var bytes = [];
-  for (var i = 0; i < 16; i++) bytes.push(data[selectedEntryIndex + 5 + i]);
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var cfsEntry = cfsDirEntries[selectedEntryIndex];
+    if (!cfsEntry || cfsEntry.empty || !cfsEntry.nameBytes) return;
+    for (var ci = 0; ci < 16; ci++) bytes.push(cfsEntry.nameBytes[ci] || 0);
+  } else {
+    if (!currentBuffer) return;
+    var data = new Uint8Array(currentBuffer);
+    for (var i = 0; i < 16; i++) bytes.push(data[selectedEntryIndex + 5 + i]);
+  }
 
   if (separatorExists(bytes)) {
     showModal('Save as Separator', ['This separator already exists.']);

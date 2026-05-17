@@ -1083,6 +1083,16 @@ function updateEntryMenuState() {
     // Show-Deleted toggle works the same way in CFS view — keep it
     // enabled whenever the partition view is open.
     document.getElementById('opt-show-deleted').classList.toggle('disabled', false);
+    // Run in Emulator: PRG entries only (NORMAL ftype + "PRG" suffix);
+    // single-select. The click handler reads via cfsLoadFileForViewer.
+    var cfsIsPrg = cfsHasEntry && cfsEntrySel.ftype === CFS_FTYPE.NORMAL &&
+                   cfsEntrySel.typeSuffix === 'PRG';
+    document.getElementById('opt-run-in-emulator').classList.toggle('disabled', !cfsIsPrg || multiSelect);
+    // Save Current as New Separator: in CFS view, picks up the entry's
+    // 16-byte name bytes (cfsEntrySel.nameBytes) instead of reading from
+    // currentBuffer at a CBM-DOS byte offset. Enabled on any non-empty
+    // editable entry.
+    document.getElementById('opt-save-sep').classList.toggle('disabled', !cfsEditableEntry);
   }
 }
 

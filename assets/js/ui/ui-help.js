@@ -285,6 +285,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.129', title: 'IDE64 .hdd — Run in Emulator + Save as Separator now work in CFS view', items: [
+      'Run in Emulator works for CFS PRGs. Click handler reads via the B-tree walker (cfsLoadFileForViewer) instead of CBM-DOS readFileData and hands the bytes to the existing openInEmulator path. Menu state gates the option on any NORMAL+PRG entry, single-select',
+      'Save Current as New Separator works in CFS view. Reads the 16 name bytes from cfsDirEntries[idx].nameBytes (which the CFS reader already populates) instead of reading currentBuffer at a CBM-DOS byte offset (which would pick up garbage)',
+    ]},
     { ver: '1.3.128', title: 'IDE64 .hdd — File Type submenu, View As viewers reused from CBM-DOS', items: [
       'File → File Type works for CFS files (DEL / SEQ / PRG / USR / REL). DEL marks the entry as scratched without freeing sectors (mirrors what Scratch writes to the attr byte). DIR / LNK entries can\'t change type. Double-click the type column on a row opens the same dropdown — same UX as D64',
       'D64 type dropdown now filters by the format\'s actual fileTypes list. Was showing CBM and DIR on every D64 even though those types aren\'t supported there; now D64 / D71 / D81 / D80 / D82 show only DEL / SEQ / PRG / USR / REL. CMD container partitions still show CBM where it applies, DNP shows DIR',

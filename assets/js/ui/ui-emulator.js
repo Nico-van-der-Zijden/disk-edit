@@ -84,8 +84,32 @@ document.getElementById('opt-open-in-emulator').addEventListener('click', functi
 // ── File menu: Run in Emulator (selected PRG) ─────────────────────────
 document.getElementById('opt-run-in-emulator').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer || selectedEntryIndex < 0) return;
+  if (selectedEntryIndex < 0) return;
 
+  // CFS view: read via the B-tree walker (selectedEntryIndex is a slot
+  // index into cfsDirEntries, not a CBM-DOS byte offset).
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var cfsEntry = cfsDirEntries[selectedEntryIndex];
+    if (!cfsEntry || cfsEntry.empty) return;
+    if (cfsEntry.ftype === CFS_FTYPE.DIR ||
+        cfsEntry.ftype === CFS_FTYPE.LNK ||
+        cfsEntry.ftype === CFS_FTYPE.DEL) return;
+    var pl = (typeof cfsLoadFileForViewer === 'function') ? cfsLoadFileForViewer(cfsEntry) : null;
+    if (!pl || !pl.data || pl.data.length === 0 || pl.error) {
+      if (typeof showModal === 'function') {
+        showModal('Run in Emulator', [
+          'Could not read this file.',
+          (pl && pl.error) || 'File data unreadable.',
+        ]);
+      }
+      return;
+    }
+    openInEmulator(pl.data, (pl.name || 'program').trim() + '.prg');
+    closeMenus();
+    return;
+  }
+
+  if (!currentBuffer) return;
   var name;
   if (isTapeFormat()) {
     var tapeEntry = getTapeEntry(selectedEntryIndex);
