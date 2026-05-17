@@ -339,11 +339,18 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // Enter: edit selected filename
+  // Enter: edit selected filename (CFS branch uses the CFS-aware
+  // inline rename helper since startRenameEntry reads data-offset which
+  // CFS rows don't have).
   if (e.key === 'Enter' && selectedEntryIndex >= 0) {
     e.preventDefault();
     const selected = document.querySelector('.dir-entry.selected');
-    if (selected) startRenameEntry(selected);
+    if (!selected) return;
+    if (cfsPartitionIdx >= 0 && cfsDirEntries && selected.dataset.cfsEntry !== undefined) {
+      if (typeof startInlineRenameCfsEntry === 'function') startInlineRenameCfsEntry(selected);
+      return;
+    }
+    startRenameEntry(selected);
     return;
   }
 
@@ -359,8 +366,18 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // Delete: remove selected entry (not for tape formats)
-  if (e.key === 'Delete' && selectedEntryIndex >= 0 && currentBuffer && !isTapeFormat()) {
+  // Delete: remove selected entry (not for tape formats). CFS branch
+  // routes through the opt-remove menu handler so the CFS-aware path
+  // (cfsRemoveDirEntry, sector free) runs instead of the CBM-DOS
+  // removeFileEntry which would corrupt the buffer.
+  if (e.key === 'Delete' && selectedEntryIndex >= 0 && !isTapeFormat()) {
+    if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+      e.preventDefault();
+      var rmEl = document.getElementById('opt-remove');
+      if (!rmEl.classList.contains('disabled')) rmEl.click();
+      return;
+    }
+    if (!currentBuffer) return;
     e.preventDefault();
     pushUndo();
     var toRemove = selectedEntries.length > 0 ? selectedEntries.slice() : [selectedEntryIndex];
@@ -382,12 +399,17 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl+Z: undo
+  // Ctrl+Z: undo. CFS branch re-renders via refreshIde64View since
+  // parseCurrentDir is CBM-DOS-only.
   if (e.ctrlKey && e.key === 'z' && currentBuffer) {
     e.preventDefault();
     if (popUndo()) {
-      var info = parseCurrentDir(currentBuffer);
-      renderDisk(info);
+      if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+        if (typeof refreshIde64View === 'function') refreshIde64View();
+      } else {
+        var info = parseCurrentDir(currentBuffer);
+        renderDisk(info);
+      }
       updateMenuState();
       updateEntryMenuState();
     }
@@ -416,9 +438,22 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl+A: select all files
+  // Ctrl+A: select all files. CFS rows carry data-cfs-entry (slot
+  // indices in cfsDirEntries) instead of data-offset; select via that.
   if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'a' && currentBuffer) {
     e.preventDefault();
+    if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+      var cfsRows = document.querySelectorAll('.dir-entry[data-cfs-entry]');
+      selectedEntries = [];
+      cfsRows.forEach(function(el) {
+        el.classList.add('selected');
+        var ci = parseInt(el.dataset.cfsEntry, 10);
+        if (!isNaN(ci)) selectedEntries.push(ci);
+      });
+      if (selectedEntries.length > 0) selectedEntryIndex = selectedEntries[0];
+      updateEntryMenuState();
+      return;
+    }
     var entries = document.querySelectorAll('.dir-entry:not(.dir-header-row):not(.dir-parent-row)');
     selectedEntries = [];
     entries.forEach(function(el) {
@@ -519,6 +554,32 @@ document.addEventListener('keydown', (e) => {
 
   const dir = e.key === 'ArrowUp' ? -1 : 1;
 
+  // CFS view: row attr is data-cfs-entry (slot index in cfsDirEntries),
+  // not data-offset. Ctrl+Arrow → move via moveCfsEntries; plain Arrow
+  // → walk rows and update selection.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    if (e.ctrlKey) {
+      if (typeof moveCfsEntries === 'function') moveCfsEntries(dir);
+      return;
+    }
+    var cfsRowsArr = Array.prototype.slice.call(document.querySelectorAll('.dir-entry[data-cfs-entry]'));
+    if (cfsRowsArr.length === 0) return;
+    var curIdx2 = -1;
+    for (var ri = 0; ri < cfsRowsArr.length; ri++) {
+      if (parseInt(cfsRowsArr[ri].dataset.cfsEntry, 10) === selectedEntryIndex) { curIdx2 = ri; break; }
+    }
+    var newIdx2;
+    if (curIdx2 < 0) newIdx2 = dir === 1 ? 0 : cfsRowsArr.length - 1;
+    else newIdx2 = Math.max(0, Math.min(cfsRowsArr.length - 1, curIdx2 + dir));
+    cfsRowsArr.forEach(function(r) { r.classList.remove('selected'); });
+    cfsRowsArr[newIdx2].classList.add('selected');
+    selectedEntryIndex = parseInt(cfsRowsArr[newIdx2].dataset.cfsEntry, 10);
+    selectedEntries = [selectedEntryIndex];
+    updateEntryMenuState();
+    cfsRowsArr[newIdx2].scrollIntoView({ block: 'nearest' });
+    return;
+  }
+
   // CMD container partition list: rows aren't regular dir entries
   // (no data-offset, no selectedEntryIndex), so the standard arrow
   // navigation skips them. Walk data-cmdc-part rows here, mirror
@@ -596,7 +657,7 @@ function updateEntryMenuState() {
   // / Edit T-S / View As stuck on display:none from a prior render.
   // Each individual disabled-state check below still runs to set the
   // correct disabled class for the new view.
-  var _cfsHiddenIds = ['opt-move-up', 'opt-move-down', 'opt-change-ts',
+  var _cfsHiddenIds = ['opt-change-ts',
     'opt-scratch', 'opt-unscratch'];
   for (var _ri = 0; _ri < _cfsHiddenIds.length; _ri++) {
     var _re = document.getElementById(_cfsHiddenIds[_ri]);
@@ -998,15 +1059,44 @@ function updateEntryMenuState() {
       var cm = document.getElementById('check-type-' + tci);
       if (cm) cm.innerHTML = (tci === cfsCheckIdx) ? '<i class="fa-solid fa-check"></i>' : '';
     }
-    // Other CBM-DOS-only ops: Move Up/Down, Edit Track/Sector, View As.
-    // They either don't translate to CFS at all (track/sector isn't a
-    // thing — files use a B-tree by LBA) or would corrupt hddBuffer at
-    // random offsets since the click handlers all assume
-    // selectedEntryIndex is a CBM-DOS byte offset, not a CFS slot
-    // index. Same hide-them-entirely treatment as Lock/Splat.
-    document.getElementById('opt-move-up').style.display = 'none';
-    document.getElementById('opt-move-down').style.display = 'none';
+    // Edit Track/Sector stays hidden in CFS (no T/S — files use a B-tree
+    // by LBA, and the existing CBM-DOS editor would corrupt hddBuffer
+    // at random offsets since selectedEntryIndex is a slot index here).
     document.getElementById('opt-change-ts').style.display = 'none';
+    // Move Up / Move Down: route to moveCfsEntries which respects the
+    // self-ref / deldir-ref protected slots and the last-used bound.
+    // Disabled when the (sorted) lowest selected slot is already at the
+    // first-user position (up) or the highest is at the last-used slot
+    // (down). Multi-select supported, same as CBM-DOS.
+    var cfsMoveCandidates = [];
+    var cfsPicked = selectedEntries.length > 1 ? selectedEntries : [selectedEntryIndex];
+    for (var mci = 0; mci < cfsPicked.length; mci++) {
+      var mcEnt = cfsDirEntries[cfsPicked[mci]];
+      if (!mcEnt || mcEnt.empty) continue;
+      if (mcEnt.isSelfRef) continue;
+      if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(mcEnt)) continue;
+      cfsMoveCandidates.push(cfsPicked[mci]);
+    }
+    var cfsFirstUserSlot = 0;
+    for (var mfu = 0; mfu < cfsDirEntries.length; mfu++) {
+      var mfuEnt = cfsDirEntries[mfu];
+      if (!mfuEnt) continue;
+      if (mfuEnt.isSelfRef) continue;
+      if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(mfuEnt)) continue;
+      cfsFirstUserSlot = mfu;
+      break;
+    }
+    var cfsLastUsed = -1;
+    for (var mlu = cfsDirEntries.length - 1; mlu >= 0; mlu--) {
+      if (cfsDirEntries[mlu] && !cfsDirEntries[mlu].empty) { cfsLastUsed = mlu; break; }
+    }
+    var cfsMoveSorted = cfsMoveCandidates.slice().sort(function(a, b) { return a - b; });
+    var cfsCanMoveUp = cfsMoveSorted.length > 0 && cfsMoveSorted[0] > cfsFirstUserSlot;
+    var cfsCanMoveDown = cfsMoveSorted.length > 0 &&
+                         cfsLastUsed >= 0 &&
+                         cfsMoveSorted[cfsMoveSorted.length - 1] < cfsLastUsed;
+    document.getElementById('opt-move-up').classList.toggle('disabled', !cfsCanMoveUp);
+    document.getElementById('opt-move-down').classList.toggle('disabled', !cfsCanMoveDown);
     // View As submenu: the universal viewers (Hex / Disasm / PETSCII /
     // BASIC / Graphics / TASS) accept a `preloaded` arg that bypasses
     // readFileData, so they all work in CFS via the cfsLoadFileForViewer

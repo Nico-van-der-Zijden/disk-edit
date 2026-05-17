@@ -285,6 +285,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.130', title: 'IDE64 .hdd — Move Up/Down, drag-to-reorder, keyboard shortcuts in CFS view', items: [
+      'Move Up / Move Down works for CFS dir entries (File menu + Ctrl+Arrow). Multi-select supported, same as CBM-DOS. cfsSwapDirEntries preserves the bit-sliced dir-next pointer at byte $14 of each slot so the chain stays intact across swaps; cross-sector swaps work too',
+      'Drag a CFS row onto another to reorder. Same UX as D64: dropping on the top half of a target row inserts above, bottom half inserts below; adjacent rows swap. Refuses moves that would touch the self-ref or <<DELETED FILES>> reference. The existing OS-export drag (drop on a folder window) still works alongside',
+      'Keyboard shortcuts now work in CFS view: Arrow Up/Down navigates, Ctrl+Arrow moves entries, Enter renames, Delete removes, Ctrl+A selects all, Ctrl+Z undoes (re-renders the CFS view), and Ctrl-modified shortcuts that click menu items (Copy/Paste/Lock/Splat/Align/Name Case/Add Directory/Export/Insert) work because the menu items themselves are CFS-wired',
+      'Selection now survives the CFS re-render. Was being reset to empty at the end of every renderCfsDirectoryView; now we snapshot the selected slot indices first and re-apply them on the new DOM rows, so chained operations (Ctrl+Down × N) keep the selection visible',
+    ]},
     { ver: '1.3.129', title: 'IDE64 .hdd — Run in Emulator + Save as Separator now work in CFS view', items: [
       'Run in Emulator works for CFS PRGs. Click handler reads via the B-tree walker (cfsLoadFileForViewer) instead of CBM-DOS readFileData and hands the bytes to the existing openInEmulator path. Menu state gates the option on any NORMAL+PRG entry, single-select',
       'Save Current as New Separator works in CFS view. Reads the 16 name bytes from cfsDirEntries[idx].nameBytes (which the CFS reader already populates) instead of reading currentBuffer at a CBM-DOS byte offset (which would pick up garbage)',

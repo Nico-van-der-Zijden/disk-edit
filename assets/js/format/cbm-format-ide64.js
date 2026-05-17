@@ -510,6 +510,38 @@ function cfsChangeFileType(buffer, dirLba, slotIndex, cbmTypeIdx) {
   return true;
 }
 
+// Swap two CFS directory entries in place. The 32-byte slots get
+// exchanged byte-for-byte EXCEPT bits 5..4 of byte $14, which are
+// part of the sector-wide bit-sliced dir-next pointer encoding —
+// those stay pinned to their original slot position so the pointer
+// doesn't change when entries move. Used by Move Up / Move Down.
+// Both slots can be in the same or different dir sectors (cross-sector
+// swap supports moving across the bit-sliced chain boundary).
+function cfsSwapDirEntries(buffer, dirLbaA, slotIndexA, dirLbaB, slotIndexB) {
+  if (!buffer) return false;
+  if (slotIndexA < 0 || slotIndexA >= CFS_DIR_ENTRIES_PER_SECTOR) return false;
+  if (slotIndexB < 0 || slotIndexB >= CFS_DIR_ENTRIES_PER_SECTOR) return false;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var offA = dirLbaA * IDE64_SECTOR_SIZE + slotIndexA * CFS_DIR_ENTRY_SIZE;
+  var offB = dirLbaB * IDE64_SECTOR_SIZE + slotIndexB * CFS_DIR_ENTRY_SIZE;
+  if (offA + CFS_DIR_ENTRY_SIZE > data.length) return false;
+  if (offB + CFS_DIR_ENTRY_SIZE > data.length) return false;
+  // Snapshot the dir-next bits at both positions before the swap so we
+  // can restore them after — bits 5..4 of byte $14 in each slot encode
+  // the next-dir-sector pointer for the *containing sector*, not a
+  // property of the entry, so they shouldn't travel with the move.
+  var nextBitsA = data[offA + 0x14] & 0x30;
+  var nextBitsB = data[offB + 0x14] & 0x30;
+  for (var i = 0; i < CFS_DIR_ENTRY_SIZE; i++) {
+    var tmp = data[offA + i];
+    data[offA + i] = data[offB + i];
+    data[offB + i] = tmp;
+  }
+  data[offA + 0x14] = (data[offA + 0x14] & 0xCF) | nextBitsA;
+  data[offB + 0x14] = (data[offB + 0x14] & 0xCF) | nextBitsB;
+  return true;
+}
+
 // Overwrite the file-size field at offset $10..$13 of a dir entry. The
 // field is a 32-bit little-endian byte count for NORMAL/DIR/LNK; REL
 // files use only the low 24 bits (byte 3 carries REL-specific metadata)

@@ -1562,15 +1562,19 @@ document.getElementById('opt-change-ts').addEventListener('click', (e) => {
 
 document.getElementById('opt-move-up').addEventListener('click', (e) => {
   e.stopPropagation();
-  if (!currentBuffer || selectedEntryIndex < 0) return;
+  if (selectedEntryIndex < 0) return;
   closeMenus();
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) { moveCfsEntries(-1); return; }
+  if (!currentBuffer) return;
   moveEntry(-1);
 });
 
 document.getElementById('opt-move-down').addEventListener('click', (e) => {
   e.stopPropagation();
-  if (!currentBuffer || selectedEntryIndex < 0) return;
+  if (selectedEntryIndex < 0) return;
   closeMenus();
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) { moveCfsEntries(1); return; }
+  if (!currentBuffer) return;
   moveEntry(1);
 });
 

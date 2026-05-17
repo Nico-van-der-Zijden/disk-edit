@@ -11,6 +11,12 @@ function isIde64ContainerView() {
   return !!hddBuffer && !!hddPartitions;
 }
 
+// Active drag source for CFS row reordering. Set by per-row dragstart in
+// renderCfsDirectoryView, cleared on drop / dragend. Module-level so all
+// row handlers in the current dir share it (mirrors dragSrcOffset in
+// ui-render.js for CBM-DOS rows).
+var _dragSrcCfsIdx = null;
+
 // True when we're inside a CFS partition (Phase 2+ view). Distinguished
 // from the partition-list view by cfsPartitionIdx >= 0.
 function isCfsPartitionView() {
@@ -572,6 +578,89 @@ function renderCfsDirectoryView() {
       }
       updateEntryMenuState();
     });
+    // ── Drag-to-reorder within the CFS dir listing ────────────────
+    // Mirrors the CBM-DOS row handlers in ui-render.js. The global
+    // dragstart in ui-init.js still wires DownloadURL for export to OS;
+    // these handlers add the internal reorder path. dragSrcCfsIdx
+    // shared across the listener set via the per-tab closure (set on
+    // dragstart, cleared on dragend / drop).
+    row.addEventListener('dragstart', function(ev) {
+      _dragSrcCfsIdx = idx;
+      row.classList.add('dragging');
+      ev.dataTransfer.effectAllowed = 'copyMove';
+      // Custom drag image: clone the row so it stays visible.
+      var ghost = row.cloneNode(true);
+      ghost.classList.add('drag-ghost');
+      ghost.classList.remove('selected', 'dragging');
+      ghost.style.width = row.offsetWidth + 'px';
+      document.body.appendChild(ghost);
+      ev.dataTransfer.setDragImage(ghost, 20, ghost.offsetHeight / 2);
+      setTimeout(function() { ghost.remove(); }, 0);
+    });
+    row.addEventListener('dragend', function() {
+      row.classList.remove('dragging');
+      content.querySelectorAll('.dir-entry').forEach(function(r) {
+        r.classList.remove('drag-over-top', 'drag-over-bottom');
+      });
+      _dragSrcCfsIdx = null;
+    });
+    row.addEventListener('dragover', function(ev) {
+      if (_dragSrcCfsIdx === null || _dragSrcCfsIdx === undefined) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = 'move';
+      content.querySelectorAll('.dir-entry').forEach(function(r) {
+        r.classList.remove('drag-over-top', 'drag-over-bottom');
+      });
+      var rect = row.getBoundingClientRect();
+      var midY = rect.top + rect.height / 2;
+      if (ev.clientY < midY) row.classList.add('drag-over-top');
+      else row.classList.add('drag-over-bottom');
+    });
+    row.addEventListener('dragleave', function() {
+      row.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+    row.addEventListener('drop', function(ev) {
+      ev.preventDefault();
+      content.querySelectorAll('.dir-entry').forEach(function(r) {
+        r.classList.remove('drag-over-top', 'drag-over-bottom');
+      });
+      var src = _dragSrcCfsIdx;
+      _dragSrcCfsIdx = null;
+      if (src === null || src === undefined) return;
+      var target = idx;
+      if (src === target) return;
+      // Refuse to move past system entries (self-ref / deldir-ref) and
+      // refuse to move the source if it IS a system entry.
+      var srcEnt = cfsDirEntries[src];
+      var tgtEnt = cfsDirEntries[target];
+      if (!srcEnt || !tgtEnt) return;
+      if (srcEnt.isSelfRef || (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(srcEnt))) return;
+      if (tgtEnt.isSelfRef || (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(tgtEnt))) return;
+      // Edge-aware target adjustment: dropping on the top half of a row
+      // means "insert above"; bottom half means "insert below". For
+      // adjacent rows skip this adjustment (otherwise we resolve back
+      // to the source's own slot and do nothing).
+      var rect = row.getBoundingClientRect();
+      var midY = rect.top + rect.height / 2;
+      if (Math.abs(target - src) !== 1) {
+        if (ev.clientY >= midY && target < src) target++;
+        else if (ev.clientY < midY && target > src) target--;
+      }
+      if (src === target) return;
+      if (typeof pushUndo === 'function') pushUndo();
+      var dir = target > src ? 1 : -1;
+      var cur = src;
+      while (cur !== target) {
+        var a = cfsDirEntries[cur];
+        var b = cfsDirEntries[cur + dir];
+        if (!a || !b) break;
+        cfsSwapDirEntries(hddBuffer, a.dirLba, a.index, b.dirLba, b.index);
+        cur += dir;
+      }
+      selectedEntries = [target];
+      selectedEntryIndex = target;
+      refreshIde64View();
+    });
     row.addEventListener('dblclick', function(ev) {
       // Dblclick UX mirrors CBM-DOS (ui-render.js): column-aware on file
       // rows, navigation on partitions/dirs. Blocks column → inline
@@ -612,8 +701,30 @@ function renderCfsDirectoryView() {
     });
   });
 
+  // Restore selection that survived the re-render (e.g. after Move
+  // Up/Down so the user can chain Ctrl+Arrow presses). Defaults to
+  // cleared if no prior selection or the slot indices no longer exist.
+  var restoreSel = selectedEntries.slice();
+  var restorePrimary = selectedEntryIndex;
   selectedEntryIndex = -1;
   selectedEntries = [];
+  if (restoreSel.length > 0) {
+    var restoreRows = Array.prototype.slice.call(content.querySelectorAll('.dir-entry[data-cfs-entry]'));
+    var byIdx = {};
+    restoreRows.forEach(function(r) { byIdx[parseInt(r.dataset.cfsEntry, 10)] = r; });
+    for (var rsi = 0; rsi < restoreSel.length; rsi++) {
+      var rr = byIdx[restoreSel[rsi]];
+      if (rr) {
+        rr.classList.add('selected');
+        selectedEntries.push(restoreSel[rsi]);
+      }
+    }
+    if (selectedEntries.indexOf(restorePrimary) >= 0) selectedEntryIndex = restorePrimary;
+    else if (selectedEntries.length > 0) selectedEntryIndex = selectedEntries[selectedEntries.length - 1];
+    var primaryRow = byIdx[selectedEntryIndex];
+    if (primaryRow) primaryRow.scrollIntoView({ block: 'nearest' });
+  }
+  if (selectedEntries.length === 0) selectedEntryIndex = -1;
   updateEntryMenuState();
 }
 
@@ -690,6 +801,86 @@ function showCfsLinkTarget(entry) {
   } else {
     showCfsFileHexViewer(current);
   }
+}
+
+// Move selected CFS entries up (direction=-1) or down (direction=1) by
+// one slot each. Mirrors the CBM-DOS moveEntry behaviour:
+//   * Single + multi-select both supported (multi keeps relative order)
+//   * Bottom bound = last non-empty slot in the dir chain
+//   * Top bound = first user-movable slot (skips self-ref + deldir-ref)
+//   * Selection follows the moved rows after the swap
+// CFS dir entries are 32 bytes each in a chain of 16-entry sectors; the
+// swap helper preserves the bit-sliced dir-next pointer bits at byte $14
+// so the chain links stay intact.
+function moveCfsEntries(direction) {
+  if (cfsPartitionIdx < 0 || !cfsDirEntries) return;
+  if (selectedEntryIndex < 0) return;
+  var picked = selectedEntries.length > 1 ? selectedEntries.slice() : [selectedEntryIndex];
+  // Drop any protected slots (self-ref + deldir-ref) — they can't move.
+  var indices = [];
+  for (var i = 0; i < picked.length; i++) {
+    var ent = cfsDirEntries[picked[i]];
+    if (!ent || ent.empty) continue;
+    if (ent.isSelfRef) continue;
+    if (_cfsEntryIsDeldirRef && _cfsEntryIsDeldirRef(ent)) continue;
+    indices.push(picked[i]);
+  }
+  if (indices.length === 0) return;
+  indices.sort(function(a, b) { return a - b; });
+
+  // First user-movable slot = first slot whose entry isn't self-ref /
+  // deldir-ref. Anything above that is system-managed and we don't
+  // swap into it. For a typical root: slot 0 self-ref, slot 1 deldir,
+  // slot 2 = first user slot. Subdir self-refs use slot 0 only.
+  var firstUserSlot = 0;
+  for (var fu = 0; fu < cfsDirEntries.length; fu++) {
+    var fuEnt = cfsDirEntries[fu];
+    if (!fuEnt) continue;
+    if (fuEnt.isSelfRef) continue;
+    if (_cfsEntryIsDeldirRef && _cfsEntryIsDeldirRef(fuEnt)) continue;
+    firstUserSlot = fu;
+    break;
+  }
+
+  // Last non-empty slot — anything past it is empty and not interesting
+  // as a swap target (would just trade an entry into a void).
+  var lastUsed = -1;
+  for (var lu = cfsDirEntries.length - 1; lu >= 0; lu--) {
+    var luEnt = cfsDirEntries[lu];
+    if (luEnt && !luEnt.empty) { lastUsed = lu; break; }
+  }
+  if (lastUsed < 0) return;
+
+  if (direction < 0 && indices[0] <= firstUserSlot) return;
+  if (direction > 0 && indices[indices.length - 1] >= lastUsed) return;
+
+  if (typeof pushUndo === 'function') pushUndo();
+
+  // Top-to-bottom for up, bottom-to-top for down — same direction
+  // discipline CBM-DOS uses to keep adjacent swaps in the same selection
+  // from clobbering each other.
+  if (direction < 0) {
+    for (var u = 0; u < indices.length; u++) {
+      var srcU = cfsDirEntries[indices[u]];
+      var dstU = cfsDirEntries[indices[u] - 1];
+      if (!srcU || !dstU) continue;
+      cfsSwapDirEntries(hddBuffer, srcU.dirLba, srcU.index, dstU.dirLba, dstU.index);
+      indices[u]--;
+    }
+  } else {
+    for (var d = indices.length - 1; d >= 0; d--) {
+      var srcD = cfsDirEntries[indices[d]];
+      var dstD = cfsDirEntries[indices[d] + 1];
+      if (!srcD || !dstD) continue;
+      cfsSwapDirEntries(hddBuffer, srcD.dirLba, srcD.index, dstD.dirLba, dstD.index);
+      indices[d]++;
+    }
+  }
+
+  // Selection follows the moved rows.
+  selectedEntries = indices.slice();
+  selectedEntryIndex = selectedEntries[0];
+  refreshIde64View();
 }
 
 // Build the `preloaded = { data, name, isPrg, error }` object that the
