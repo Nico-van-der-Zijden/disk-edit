@@ -207,7 +207,13 @@ function updateMenuState() {
   var hddCtx3 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
   document.getElementById('opt-edit-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx3);
   document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx3);
-  document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk || noEdit);
+  // View BAM: CBM-DOS shows the BAM-sector + per-T:S allocation map.
+  // CFS shows an aggregated heat-map / file-ownership view of the
+  // partition bitmap (see ui-disk-bam-cfs.js). Disabled on the HDD
+  // partition-list view — no specific partition to visualise from there.
+  var hddListView5 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView() &&
+                     (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx < 0);
+  document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk || noEdit || hddListView5);
   document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || noEdit || !hasErrorBytes(currentBuffer));
   // Convert to GEOS Format: CBM-DOS-only layer (BAM-aware, T:S-based
   // GEOS dir structure). CFS doesn't have a GEOS counterpart.
@@ -240,7 +246,13 @@ function updateMenuState() {
   var hddListView4 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView() &&
                      (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx < 0);
   document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || noEdit || hddListView4);
-  document.getElementById('opt-compact-dir').classList.toggle('disabled', !hasDisk || noEdit);
+  // Compact Directory removes scratched-entry gaps and consolidates
+  // the dir chain — CBM-DOS shape. CFS scratch leaves DEL entries in
+  // place on purpose (so Unscratch can recover them); a CFS-shaped
+  // Compact would have to purge those entries, defeating recovery.
+  // Disable in the .hdd context until there's a concrete use case.
+  var hddCtx10 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
+  document.getElementById('opt-compact-dir').classList.toggle('disabled', !hasDisk || noEdit || hddCtx10);
   // File Chains visualises a CBM-DOS file's T:S chain. CFS files use
   // B-tree addressing — no chain to walk. Disable across the IDE64
   // .hdd context; if a "View File Tree" modal is needed later we'll

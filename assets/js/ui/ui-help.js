@@ -285,6 +285,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.133', title: 'IDE64 .hdd — CFS bitmap viewer, plus Compact Directory disabled', items: [
+      'View BAM works inside a CFS partition now — opens an aggregated 64×64 heat map of the partition\'s allocation bitmap. Density mode colours each cell by used/total ratio; toggle to Ownership mode to colour cells by the file owning the majority of LBAs in that cell (good for spotting fragmentation). System sectors (bitmap chain, deldir, dir chain) are brown; lost sectors are red. Click a cell for the LBA range + the list of files in it; hover shows a quick used-count tooltip. Disabled on the HDD partition-list view',
+      'Compact Directory disabled in the IDE64 .hdd context. CFS scratch leaves DEL entries in place on purpose so Unscratch can recover them — a CFS-shaped Compact would purge those entries and defeat recovery',
+    ]},
     { ver: '1.3.132', title: 'IDE64 .hdd — Disk menu parity: Validate / Sort / Scan for Lost Files / Export Disk', items: [
       'Sort Directory works in CFS (Name / Blocks asc/desc). The CFS sort preserves the bit-sliced dir-next pointer at byte $14 of every slot and pins the self-ref + <<DELETED FILES>> system entries. Disabled on the HDD partition-list view (no dir to sort there)',
       'Validate for CFS: walks every dir entry\'s B-tree to build the reachable LBA set, reconciles against the partition bitmap, reports missing (file claims sectors marked free — corrupt) and lost (bitmap says used but no file claims them — wasted space). Offers Fix Bitmap if there are discrepancies',
