@@ -469,6 +469,47 @@ function cfsWriteDirEntryAttrByte(buffer, dirLba, slotIndex, newAttrByte) {
   return true;
 }
 
+// Change the file type of an existing dir entry. Maps CBM-DOS type
+// indices (the values the File → File Type submenu uses) to the CFS
+// ftype + typeSuffix pair:
+//   0 DEL → ftype DEL (0)    + typeSuffix preserved + Closed cleared
+//   1 SEQ → ftype NORMAL (1) + "SEQ"
+//   2 PRG → ftype NORMAL (1) + "PRG"
+//   3 USR → ftype NORMAL (1) + "USR"
+//   4 REL → ftype REL (2)    + "REL"
+// CBM (5) is refused — CBM partition files don't exist in CFS. Caller
+// should refuse DIR / LNK at the UI layer (changing a directory's ftype
+// would orphan its children + tree). DEL mirrors what cfsDeleteFile
+// does to the attr byte but does NOT free data sectors — that's the
+// distinction vs Scratch.
+function cfsChangeFileType(buffer, dirLba, slotIndex, cbmTypeIdx) {
+  if (!buffer || slotIndex < 0 || slotIndex >= CFS_DIR_ENTRIES_PER_SECTOR) return false;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var off = dirLba * IDE64_SECTOR_SIZE + slotIndex * CFS_DIR_ENTRY_SIZE;
+  if (off + 0x1C > data.length) return false;
+  if (cbmTypeIdx === 0) {
+    // DEL: ftype = 0, Closed bit cleared, typeSuffix preserved (so the
+    // original kind is still visible in the dir listing — matches what
+    // cfsDeleteFile writes for scratched files).
+    data[off + 0x18] = data[off + 0x18] & 0x78;
+    cfsTouchEntryMtime(buffer, dirLba, slotIndex);
+    return true;
+  }
+  var map = { 1: { ftype: CFS_FTYPE.NORMAL, suffix: 'SEQ' },
+              2: { ftype: CFS_FTYPE.NORMAL, suffix: 'PRG' },
+              3: { ftype: CFS_FTYPE.NORMAL, suffix: 'USR' },
+              4: { ftype: CFS_FTYPE.REL,    suffix: 'REL' } };
+  var m = map[cbmTypeIdx];
+  if (!m) return false;
+  var attr = data[off + 0x18];
+  data[off + 0x18] = (attr & 0xF8) | (m.ftype & 0x07);
+  data[off + 0x19] = m.suffix.charCodeAt(0);
+  data[off + 0x1A] = m.suffix.charCodeAt(1);
+  data[off + 0x1B] = m.suffix.charCodeAt(2);
+  cfsTouchEntryMtime(buffer, dirLba, slotIndex);
+  return true;
+}
+
 // Overwrite the file-size field at offset $10..$13 of a dir entry. The
 // field is a 32-bit little-endian byte count for NORMAL/DIR/LNK; REL
 // files use only the low 24 bits (byte 3 carries REL-specific metadata)

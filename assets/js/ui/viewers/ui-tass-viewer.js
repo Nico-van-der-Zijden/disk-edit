@@ -935,12 +935,20 @@ function tassRenderLineHtml(line) {
   return html;
 }
 
-function showFileTassViewer(entryOff) {
-  if (!currentBuffer) return;
-  var data = new Uint8Array(currentBuffer);
-  var result = readFileData(currentBuffer, entryOff);
-  var fileData = result.data;
-  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+function showFileTassViewer(entryOff, preloaded) {
+  // preloaded = { data, name } for CFS callers.
+  var fileData, name, result;
+  if (preloaded) {
+    fileData = preloaded.data;
+    name = preloaded.name || '';
+    result = { error: preloaded.error || null };
+  } else {
+    if (!currentBuffer) return;
+    var data = new Uint8Array(currentBuffer);
+    result = readFileData(currentBuffer, entryOff);
+    fileData = result.data;
+    name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+  }
 
   var loadAddr = fileData[0] | (fileData[1] << 8);
   var payload = fileData.subarray(2);

@@ -214,18 +214,29 @@ function byteHex(b) {
 }
 
 // ── File hex viewer (read-only) ───────────────────────────────────────
-function showFileHexViewer(entryOff) {
-  if (!currentBuffer) return;
-  var data = new Uint8Array(currentBuffer);
-  var result = readFileData(currentBuffer, entryOff);
-  var fileData = result.data;
-  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+function showFileHexViewer(entryOff, preloaded) {
+  // preloaded = { data, name, isPrg?, error? } lets callers from outside
+  // the CBM-DOS pipeline (CFS) drive this viewer with their own bytes
+  // instead of going through readFileData.
+  var fileData, name, typeIdx, result;
+  if (preloaded) {
+    fileData = preloaded.data;
+    name = preloaded.name || '';
+    typeIdx = preloaded.isPrg ? 2 : -1;
+    result = { error: preloaded.error || null };
+  } else {
+    if (!currentBuffer) return;
+    var data = new Uint8Array(currentBuffer);
+    result = readFileData(currentBuffer, entryOff);
+    fileData = result.data;
+    name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+    typeIdx = data[entryOff + 2] & 0x07;
+  }
 
   // PRG files start with a 2-byte load address. Skip those bytes in the hex
   // view (they aren't actual content) and label the row offsets as the
   // corresponding C64 memory address so the addresses match what the program
   // sees at run time.
-  var typeIdx = data[entryOff + 2] & 0x07;
   var isPrg = typeIdx === 2 && fileData.length >= 2;
   var baseAddr = 0;
   var payload = fileData;
@@ -280,12 +291,21 @@ function showFileHexViewer(entryOff) {
   };
 }
 
-function showFileDisasmViewer(entryOff) {
-  if (!currentBuffer) return;
-  var data = new Uint8Array(currentBuffer);
-  var result = readFileData(currentBuffer, entryOff);
-  var fileData = result.data;
-  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+function showFileDisasmViewer(entryOff, preloaded) {
+  // preloaded = { data, name } lets CFS callers feed pre-read bytes
+  // directly instead of going through readFileData.
+  var fileData, name, result;
+  if (preloaded) {
+    fileData = preloaded.data;
+    name = preloaded.name || '';
+    result = { error: preloaded.error || null };
+  } else {
+    if (!currentBuffer) return;
+    var data = new Uint8Array(currentBuffer);
+    result = readFileData(currentBuffer, entryOff);
+    fileData = result.data;
+    name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+  }
 
   var loadAddr = fileData.length >= 2 ? (fileData[0] | (fileData[1] << 8)) : 0;
   var codeData = fileData.subarray(2);

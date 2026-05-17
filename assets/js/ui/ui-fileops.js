@@ -1303,6 +1303,20 @@ document.querySelectorAll('#opt-change-type .submenu .option').forEach(el => {
     if (!currentBuffer || selectedEntryIndex < 0) return;
     closeMenus();
     var typeIdx = parseInt(el.dataset.typeidx, 10);
+    // CFS view: dispatch to cfsChangeFileType which maps the CBM type
+    // index to CFS ftype + 3-char typeSuffix. DEL (0) + CBM (5) aren't
+    // valid CFS targets — the menu state disables them in CFS view.
+    if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+      pushUndo();
+      var cfsEntries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+      for (var ci = 0; ci < cfsEntries.length; ci++) {
+        var entry = cfsDirEntries[cfsEntries[ci]];
+        if (!entry || entry.empty) continue;
+        cfsChangeFileType(hddBuffer, entry.dirLba, entry.index, typeIdx);
+      }
+      refreshIde64View();
+      return;
+    }
     var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
     for (var i = 0; i < entries.length; i++) changeFileType(entries[i], typeIdx);
   });

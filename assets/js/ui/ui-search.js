@@ -440,62 +440,66 @@ document.getElementById('opt-goto-sector').addEventListener('click', function(e)
   showGoToSector();
 });
 
+// Common adapter: returns the entry's bytes wrapped as the `preloaded`
+// shape the viewers accept ({ data, name, isPrg, error }), or null if
+// not in CFS context. Centralises the CFS file-read so each viewer's
+// click handler only has to ask once.
+function _cfsViewerPreload() {
+  if (cfsPartitionIdx < 0 || !cfsDirEntries) return null;
+  if (selectedEntryIndex < 0) return null;
+  var entry = cfsDirEntries[selectedEntryIndex];
+  if (!entry || entry.empty) return null;
+  if (entry.ftype === CFS_FTYPE.DIR || entry.ftype === CFS_FTYPE.LNK || entry.ftype === CFS_FTYPE.DEL) return null;
+  return (typeof cfsLoadFileForViewer === 'function') ? cfsLoadFileForViewer(entry) : null;
+}
+
 document.getElementById('opt-view-hex').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer || selectedEntryIndex < 0) return;
+  if (!currentBuffer && cfsPartitionIdx < 0) return;
   closeMenus();
-  // CFS view: showFileHexViewer interprets selectedEntryIndex as a CBM
-  // byte-offset, which is wrong for CFS (it's a slot index there).
-  // Route through the CFS-aware viewer, which reads via the B-tree
-  // walker and offers Hex / PETSCII / BASIC / Disassembly tabs.
-  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-    var entry = cfsDirEntries[selectedEntryIndex];
-    if (!entry || entry.empty) return;
-    if (entry.ftype === CFS_FTYPE.DIR || entry.ftype === CFS_FTYPE.LNK || entry.ftype === CFS_FTYPE.DEL) return;
-    if (typeof showCfsFileHexViewer === 'function') showCfsFileHexViewer(entry);
-    return;
-  }
+  var pl = _cfsViewerPreload();
+  if (pl) { showFileHexViewer(null, pl); return; }
+  if (selectedEntryIndex < 0) return;
   showFileHexViewer(selectedEntryIndex);
-});
-
-// CFS-only direct-access hex viewer (no submenu nesting). The
-// View As submenu's enable rules are entangled with CBM-DOS gates and
-// hideDisabledContextItems; this item bypasses all that.
-document.getElementById('opt-cfs-view-hex').addEventListener('click', function(e) {
-  e.stopPropagation();
-  if (cfsPartitionIdx < 0 || !cfsDirEntries) return;
-  closeMenus();
-  var entry = cfsDirEntries[selectedEntryIndex];
-  if (!entry || entry.empty) return;
-  if (entry.ftype === CFS_FTYPE.DIR || entry.ftype === CFS_FTYPE.LNK || entry.ftype === CFS_FTYPE.DEL) return;
-  if (typeof showCfsFileHexViewer === 'function') showCfsFileHexViewer(entry);
 });
 
 document.getElementById('opt-view-disasm').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer || selectedEntryIndex < 0) return;
+  if (!currentBuffer && cfsPartitionIdx < 0) return;
   closeMenus();
+  var pl = _cfsViewerPreload();
+  if (pl) { showFileDisasmViewer(null, pl); return; }
+  if (selectedEntryIndex < 0) return;
   showFileDisasmViewer(selectedEntryIndex);
 });
 
 document.getElementById('opt-view-petscii').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer || selectedEntryIndex < 0) return;
+  if (!currentBuffer && cfsPartitionIdx < 0) return;
   closeMenus();
+  var pl = _cfsViewerPreload();
+  if (pl) { showFilePetsciiViewer(null, pl); return; }
+  if (selectedEntryIndex < 0) return;
   showFilePetsciiViewer(selectedEntryIndex);
 });
 
 document.getElementById('opt-view-basic').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer || selectedEntryIndex < 0) return;
+  if (!currentBuffer && cfsPartitionIdx < 0) return;
   closeMenus();
+  var pl = _cfsViewerPreload();
+  if (pl) { showFileBasicViewer(null, pl); return; }
+  if (selectedEntryIndex < 0) return;
   showFileBasicViewer(selectedEntryIndex);
 });
 
 document.getElementById('opt-view-tass').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer || selectedEntryIndex < 0) return;
+  if (!currentBuffer && cfsPartitionIdx < 0) return;
   closeMenus();
+  var pl = _cfsViewerPreload();
+  if (pl) { showFileTassViewer(null, pl); return; }
+  if (selectedEntryIndex < 0) return;
   showFileTassViewer(selectedEntryIndex);
 });
 
@@ -522,8 +526,11 @@ document.getElementById('opt-view-rel').addEventListener('click', function(e) {
 
 document.getElementById('opt-view-gfx').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer || selectedEntryIndex < 0) return;
+  if (!currentBuffer && cfsPartitionIdx < 0) return;
   closeMenus();
+  var pl = _cfsViewerPreload();
+  if (pl) { showFileGfxViewer(null, pl); return; }
+  if (selectedEntryIndex < 0) return;
   showFileGfxViewer(selectedEntryIndex);
 });
 

@@ -602,23 +602,6 @@ function updateEntryMenuState() {
     var _re = document.getElementById(_cfsHiddenIds[_ri]);
     if (_re) _re.style.display = '';
   }
-  // opt-cfs-view-hex is CFS-only. Settle it here at the top so it's not
-  // gated on the big override block at the bottom running to completion.
-  // Inside a CFS partition: show, enable iff a live file/REL entry is
-  // selected. Anywhere else: hide.
-  var _cfsHexEl = document.getElementById('opt-cfs-view-hex');
-  if (_cfsHexEl) {
-    if (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0 && cfsDirEntries) {
-      var _cfsSel = (selectedEntryIndex >= 0 && selectedEntryIndex < cfsDirEntries.length)
-        ? cfsDirEntries[selectedEntryIndex] : null;
-      var _cfsHexOk = !!_cfsSel && !_cfsSel.empty &&
-        (_cfsSel.ftype === CFS_FTYPE.NORMAL || _cfsSel.ftype === CFS_FTYPE.REL);
-      _cfsHexEl.style.display = '';
-      _cfsHexEl.classList.toggle('disabled', !_cfsHexOk);
-    } else {
-      _cfsHexEl.style.display = 'none';
-    }
-  }
   // Single-select only operations (all disabled for tape / container list)
   document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
   document.getElementById('opt-insert').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || noEdit);
@@ -982,6 +965,39 @@ function updateEntryMenuState() {
       cfsLockEl.textContent = 'Lock File';
       cfsSplatEl.textContent = 'Splat File';
     }
+    // File Type submenu: DEL / NORMAL (SEQ/PRG/USR) / REL are valid CFS
+    // ftype targets. CBM (5) is disabled (no CBM partition files in CFS).
+    // DIR / LNK entries can't change type at all — switching a DIR to a
+    // file would orphan its children. Self-ref / deldir-ref are blocked
+    // by cfsEditableEntry already.
+    var cfsTypeChangeable = cfsEditableEntry &&
+      cfsEntrySel.ftype !== CFS_FTYPE.DIR &&
+      cfsEntrySel.ftype !== CFS_FTYPE.LNK;
+    var cfsTypeEl = document.getElementById('opt-change-type');
+    cfsTypeEl.classList.toggle('disabled', !cfsTypeChangeable);
+    for (var ti = 0; ti <= 5; ti++) {
+      var cfsTypeOpt = document.querySelector('#opt-change-type [data-typeidx="' + ti + '"]');
+      if (!cfsTypeOpt) continue;
+      var validForCfs = (ti >= 0 && ti <= 4); // CBM (5) not valid
+      cfsTypeOpt.classList.toggle('disabled', !validForCfs || !cfsTypeChangeable);
+    }
+    // Current-type check mark: map CFS ftype + suffix back to a CBM idx.
+    var cfsCheckIdx = -1;
+    if (cfsHasEntry) {
+      if (cfsEntrySel.ftype === CFS_FTYPE.NORMAL) {
+        if (cfsEntrySel.typeSuffix === 'SEQ') cfsCheckIdx = 1;
+        else if (cfsEntrySel.typeSuffix === 'PRG') cfsCheckIdx = 2;
+        else if (cfsEntrySel.typeSuffix === 'USR') cfsCheckIdx = 3;
+      } else if (cfsEntrySel.ftype === CFS_FTYPE.REL) {
+        cfsCheckIdx = 4;
+      } else if (cfsEntrySel.ftype === CFS_FTYPE.DEL) {
+        cfsCheckIdx = 0;
+      }
+    }
+    for (var tci = 0; tci <= 5; tci++) {
+      var cm = document.getElementById('check-type-' + tci);
+      if (cm) cm.innerHTML = (tci === cfsCheckIdx) ? '<i class="fa-solid fa-check"></i>' : '';
+    }
     // Other CBM-DOS-only ops: Move Up/Down, Edit Track/Sector, View As.
     // They either don't translate to CFS at all (track/sector isn't a
     // thing — files use a B-tree by LBA) or would corrupt hddBuffer at
@@ -991,28 +1007,43 @@ function updateEntryMenuState() {
     document.getElementById('opt-move-up').style.display = 'none';
     document.getElementById('opt-move-down').style.display = 'none';
     document.getElementById('opt-change-ts').style.display = 'none';
-    // View As: opt-view-hex routes through showCfsFileHexViewer in CFS
-    // view. Other sub-options (Disassembly / PETSCII / BASIC) read via
-    // the CBM-DOS byte-offset path; for now hide them via CSS so only
-    // Hex shows in the submenu. Gated on a live file/REL entry.
-    // (opt-cfs-view-hex visibility/enable is handled at the top of
-    // updateEntryMenuState so it survives errors in this block.)
-    var cfsViewAsEl = document.getElementById('opt-view-as');
-    cfsViewAsEl.style.display = '';
-    cfsViewAsEl.classList.toggle('disabled', !cfsExportable);
-    // Within the submenu, only Hex is wired for CFS. The other viewers
-    // (Disassembly / PETSCII / BASIC / Graphics / VLIR / REL / TASS /
-    // geoWrite) all read selectedEntryIndex as a CBM-DOS byte offset,
-    // which is wrong here.
+    // View As submenu: the universal viewers (Hex / Disasm / PETSCII /
+    // BASIC / Graphics / TASS) accept a `preloaded` arg that bypasses
+    // readFileData, so they all work in CFS via the cfsLoadFileForViewer
+    // adapter. Each is gated on a live file/REL entry that has data.
+    // BASIC additionally needs the first 2 bytes to be a known load
+    // address; Graphics / TASS sniff their own magic at click time.
+    // geoWrite / VLIR / REL stay disabled in CFS — they're CBM-DOS
+    // GEOS/REL specific and don't apply to CFS content.
+    document.getElementById('opt-view-as').classList.toggle('disabled', !cfsExportable);
     document.getElementById('opt-view-hex').classList.toggle('disabled', !cfsExportable);
-    document.getElementById('opt-view-disasm').classList.add('disabled');
-    document.getElementById('opt-view-petscii').classList.add('disabled');
-    document.getElementById('opt-view-basic').classList.add('disabled');
-    document.getElementById('opt-view-gfx').classList.add('disabled');
+    document.getElementById('opt-view-disasm').classList.toggle('disabled', !cfsExportable);
+    document.getElementById('opt-view-petscii').classList.toggle('disabled', !cfsExportable);
+    var cfsBasicEnabled = false;
+    if (cfsExportable && cfsEntrySel && cfsEntrySel.dataTreePtr && cfsEntrySel.dataTreePtr.lba) {
+      // Peek at the first data sector's first 2 bytes (byte-sliced
+      // accessor: byte 0 lives at offset 0, byte 1 at offset 4) to read
+      // the load address without fetching the whole file.
+      var firstLba = cfsEntrySel.dataTreePtr.addr;
+      var firstPtr = _readIde64Pointer(new Uint8Array(hddBuffer), firstLba * 512);
+      if (firstPtr && firstPtr.lba && firstPtr.addr > 0) {
+        var dBase = firstPtr.addr * 512;
+        var dArr = new Uint8Array(hddBuffer);
+        if (dBase + 5 <= dArr.length) {
+          var loadAddr = dArr[dBase] | (dArr[dBase + 4] << 8);
+          cfsBasicEnabled = (typeof BASIC_LOAD_ADDRS === 'object') &&
+                            (BASIC_LOAD_ADDRS[loadAddr] !== undefined);
+        }
+      }
+    }
+    document.getElementById('opt-view-basic').classList.toggle('disabled', !cfsBasicEnabled);
+    document.getElementById('opt-view-gfx').classList.toggle('disabled', !cfsExportable);
+    document.getElementById('opt-view-tass').classList.toggle('disabled', !cfsExportable);
+    // GEOS / REL-specific viewers stay disabled in CFS — they read
+    // CBM-DOS-only fields (GEOS info-block T/S, REL side-sector chain).
     document.getElementById('opt-view-geowrite').classList.add('disabled');
     document.getElementById('opt-view-vlir').classList.add('disabled');
     document.getElementById('opt-view-rel').classList.add('disabled');
-    document.getElementById('opt-view-tass').classList.add('disabled');
     // Remove Entry: hard delete — frees the data sectors (recursive for
     // dirs) and zeros the 32-byte slot. Loses unscratch for the entry,
     // but keeps the bitmap clean. Enabled on any editable entry (DEL

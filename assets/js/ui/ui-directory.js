@@ -559,7 +559,13 @@ function showTypeDropdown(typeSpan, entryOff) {
   const dropdown = document.createElement('div');
   dropdown.className = 'type-dropdown';
 
+  // Only list types valid for the current format (DISK_FORMATS.fileTypes).
+  // D64/D71/D81/etc. don't support CBM (partition) or DIR types; only
+  // CMD containers and DNP do. Filtering here keeps the dropdown honest
+  // — was showing all 7 types regardless of format before.
+  var allowedTypes = (currentFormat && currentFormat.fileTypes) || [0, 1, 2, 3, 4];
   FILE_TYPES.forEach((typeName, idx) => {
+    if (allowedTypes.indexOf(idx) < 0) return;
     const opt = document.createElement('div');
     opt.className = 'type-option';
     const check = document.createElement('span');

@@ -1209,15 +1209,24 @@ function renderGfxToCanvas(ctx, fmt, fileData, colors) {
   }
 }
 
-function showFileGfxViewer(entryOff) {
-  if (!currentBuffer) return;
-  var data = new Uint8Array(currentBuffer);
-  var result = readFileData(currentBuffer, entryOff);
-  var fileData = result.data;
-  var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+function showFileGfxViewer(entryOff, preloaded) {
+  // preloaded = { data, name } for CFS callers. GEOS detection only runs
+  // on the CBM-DOS path (it reads the dir entry's typeIdx + GEOS header
+  // T/S — neither exists in CFS dir entries).
+  var fileData, name;
+  if (preloaded) {
+    fileData = preloaded.data;
+    name = preloaded.name || '';
+  } else {
+    if (!currentBuffer) return;
+    var data = new Uint8Array(currentBuffer);
+    var result = readFileData(currentBuffer, entryOff);
+    fileData = result.data;
+    name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
+  }
 
-  // Check for GEOS graphics first, then standard formats
-  var geosMatches = detectGeosGfxFormats(entryOff);
+  // Check for GEOS graphics first (CBM-DOS only), then standard formats.
+  var geosMatches = preloaded ? [] : detectGeosGfxFormats(entryOff);
   var matches = geosMatches.concat(detectGfxFormats(fileData));
   if (matches.length === 0) {
     showModal('Graphics View', ['Unrecognized graphics format (' + fileData.length + ' bytes).']);

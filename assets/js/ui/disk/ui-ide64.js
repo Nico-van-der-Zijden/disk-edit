@@ -575,14 +575,24 @@ function renderCfsDirectoryView() {
     row.addEventListener('dblclick', function(ev) {
       // Dblclick UX mirrors CBM-DOS (ui-render.js): column-aware on file
       // rows, navigation on partitions/dirs. Blocks column → inline
-      // block-size edit. DIR entries → enter the directory regardless
-      // of where the click landed (same as a CBM partition row). LNK
-      // entries → follow the link. DEL → not actionable. Anything else
-      // on a regular file → inline rename (matches CBM-DOS's
-      // dblclick-on-name → startRenameEntry default).
+      // block-size edit. Type column → type dropdown (DEL/SEQ/PRG/USR/REL).
+      // DIR entries → enter the directory regardless of where the click
+      // landed (same as a CBM partition row). LNK entries → follow the
+      // link. DEL → not actionable. Anything else on a regular file →
+      // inline rename (matches CBM-DOS's dblclick-on-name default).
       if (ev.target && ev.target.classList && ev.target.classList.contains('dir-blocks')) {
         startInlineEditCfsBlockSize(row);
         return;
+      }
+      if (ev.target && ev.target.classList && ev.target.classList.contains('dir-type')) {
+        // Type column dropdown — only for NORMAL/REL/DEL entries.
+        // DIR/LNK and the self-ref / deldir-ref are off-limits.
+        if (entry.ftype !== CFS_FTYPE.DIR && entry.ftype !== CFS_FTYPE.LNK &&
+            !entry.isSelfRef &&
+            !(typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(entry))) {
+          showCfsTypeDropdown(ev.target, entry);
+          return;
+        }
       }
       if (entry.ftype === CFS_FTYPE.DIR) {
         enterCfsSubdir(entry);
@@ -680,6 +690,19 @@ function showCfsLinkTarget(entry) {
   } else {
     showCfsFileHexViewer(current);
   }
+}
+
+// Build the `preloaded = { data, name, isPrg, error }` object that the
+// shared viewers (showFileHexViewer / showFileDisasmViewer /
+// showFilePetsciiViewer / showFileBasicViewer / showFileGfxViewer /
+// showFileTassViewer) accept. CFS-aware callers use this to drive those
+// viewers without going through the CBM-DOS readFileData pipeline.
+function cfsLoadFileForViewer(entry) {
+  if (!entry || !entry.dataTreePtr || !entry.dataTreePtr.lba) return null;
+  var res = readCfsFileData(hddBuffer, entry.dataTreePtr.addr, entry.size);
+  var name = petsciiToReadable(entry.name).trim();
+  var isPrg = (entry.ftype === CFS_FTYPE.NORMAL) && (entry.typeSuffix === 'PRG');
+  return { data: res.data, name: name, isPrg: isPrg, error: res.error };
 }
 
 // ── CFS file content viewer (Phase 3a, hex + download) ────────────────
@@ -986,6 +1009,66 @@ function startInlineRenameCfsEntry(entryEl) {
     else if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); revert(); }
   });
   if (typeof registerActiveEdit === 'function') registerActiveEdit(nameSpan, revert);
+}
+
+// Type dropdown for a CFS dir entry. Mirrors the CBM-DOS
+// showTypeDropdown UX — dblclick the type column, pick a type, commit.
+// CFS types offered: DEL / SEQ / PRG / USR / REL (no CBM — CBM partition
+// files aren't a CFS concept; no DIR/LNK — switching to those would
+// orphan or misinterpret data). Caller is responsible for refusing
+// DIR/LNK source entries.
+function showCfsTypeDropdown(typeSpan, entry) {
+  if (!hddBuffer || !entry) return;
+  if (typeof cancelActiveEdits === 'function') cancelActiveEdits();
+  var existing = document.querySelector('.type-dropdown');
+  if (existing) existing.remove();
+
+  // Map current entry → CBM type idx for the check mark.
+  var currentIdx = -1;
+  if (entry.ftype === CFS_FTYPE.NORMAL) {
+    if (entry.typeSuffix === 'SEQ') currentIdx = 1;
+    else if (entry.typeSuffix === 'PRG') currentIdx = 2;
+    else if (entry.typeSuffix === 'USR') currentIdx = 3;
+  } else if (entry.ftype === CFS_FTYPE.REL) currentIdx = 4;
+  else if (entry.ftype === CFS_FTYPE.DEL) currentIdx = 0;
+
+  var dropdown = document.createElement('div');
+  dropdown.className = 'type-dropdown';
+  var labels = ['DEL', 'SEQ', 'PRG', 'USR', 'REL'];
+  labels.forEach(function(label, idx) {
+    var opt = document.createElement('div');
+    opt.className = 'type-option';
+    var check = document.createElement('span');
+    check.className = 'check';
+    check.innerHTML = (idx === currentIdx) ? '<i class="fa-solid fa-check"></i>' : '';
+    opt.appendChild(check);
+    opt.appendChild(document.createTextNode(label));
+    opt.addEventListener('click', function(e) {
+      e.stopPropagation();
+      dropdown.remove();
+      if (idx === currentIdx) return;
+      if (typeof pushUndo === 'function') pushUndo();
+      cfsChangeFileType(hddBuffer, entry.dirLba, entry.index, idx);
+      refreshIde64View();
+    });
+    dropdown.appendChild(opt);
+  });
+  document.body.appendChild(dropdown);
+
+  // Position above the type span; fall back below if no room.
+  var rect = typeSpan.getBoundingClientRect();
+  dropdown.style.left = rect.left + 'px';
+  var dropH = dropdown.offsetHeight;
+  if (rect.top - dropH > 0) dropdown.style.top = (rect.top - dropH) + 'px';
+  else dropdown.style.top = rect.bottom + 'px';
+
+  function closeDropdown(e) {
+    if (!dropdown.contains(e.target)) {
+      dropdown.remove();
+      document.removeEventListener('click', closeDropdown);
+    }
+  }
+  setTimeout(function() { document.addEventListener('click', closeDropdown); }, 0);
 }
 
 // Inline block-size edit for a CFS directory entry. Mirrors the

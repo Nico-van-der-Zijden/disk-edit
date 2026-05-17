@@ -285,6 +285,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.128', title: 'IDE64 .hdd — File Type submenu, View As viewers reused from CBM-DOS', items: [
+      'File → File Type works for CFS files (DEL / SEQ / PRG / USR / REL). DEL marks the entry as scratched without freeing sectors (mirrors what Scratch writes to the attr byte). DIR / LNK entries can\'t change type. Double-click the type column on a row opens the same dropdown — same UX as D64',
+      'D64 type dropdown now filters by the format\'s actual fileTypes list. Was showing CBM and DIR on every D64 even though those types aren\'t supported there; now D64 / D71 / D81 / D80 / D82 show only DEL / SEQ / PRG / USR / REL. CMD container partitions still show CBM where it applies, DNP shows DIR',
+      'View As → Hex / Disassembly / PETSCII / BASIC / Graphics / TASS work for CFS files now, reusing the same viewers as CBM-DOS. The viewers gained a `preloaded` arg that bypasses readFileData; CFS clicks read the file via the B-tree walker and pass the bytes straight through. BASIC viewer auto-enables only when the file\'s first 2 bytes are a known load address. geoWrite / VLIR / REL stay CBM-DOS-only (they read GEOS / REL-side-sector metadata that doesn\'t exist in CFS)',
+    ]},
     { ver: '1.3.127', title: 'IDE64 .hdd — boot sector total-LBA-count, MBR partition entry, 256/512 MiB sizes', items: [
       'Boot sector bytes 4-7 now encode the disk\'s total LBA count instead of always being hardcoded to 0x4000 (8 MiB worth). cfsfdisk reads this field and reports "Boot sector/actual geometry mismatch" if it differs from the drive size reported by IDE IDENTIFY. VICE\'s IDE64 auto-detect also reads this field, so the right value lets you skip the manual C/H/S setup',
       'New hdd images now include a PC BIOS-style MBR partition table entry (type 0xCF) at offset $1BE + the 0x55AA boot signature at $1FE. cfsfdisk no longer warns "Did not found any CFS partition entry in PC BIOS partition table". The CFS partition spans LBA 1 through the last LBA of the image; CHS fields use the FF/FF/FF "ignore CHS, use LBA" sentinel so any size works',
