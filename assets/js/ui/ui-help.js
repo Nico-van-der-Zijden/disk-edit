@@ -290,6 +290,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.1', title: 'IDE64 .hdd — validator polish', items: [
+      'Validate now reports overlapping allocations — sectors claimed by more than one file (or a file + a system structure). The log lines name both owners so you can tell which file shares which sector. This is real corruption: at least one of the owners is reading garbage',
+      'Scan for Lost Files (Deep) is less noisy. The plausible-pointer threshold went from 4 → 8 of 16 contiguous slots, so a junk sector with a few accidentally-LBA-shaped bytes no longer shows up as a "lost file" candidate',
+      'B-tree walker now bails out cleanly on circular trees (malformed images with a tree node pointing back at one of its ancestors) instead of running to the depth limit. Costs nothing on healthy disks',
+      'Validator log uses the entry\'s parsed name instead of a raw byte read, so filenames in the overlap / missing / lost reports come out as plain ASCII rather than control glyphs',
+    ]},
     { ver: '1.4.0', title: 'IDE64 .hdd', items: [
       'Open IDE64 .hdd images. The 16-slot partition table renders CMD-container style; double-click a CFS partition to enter it. New / Rename / Delete Partition work, and File → New → IDE64 HDD creates fresh images from 4 to 512 MiB with a cfsfdisk-compatible byte layout (MBR + boot total-LBA count) so VICE\'s IDE64 auto-detect picks them up without the manual C/H/S dance',
       'Full read/write inside a CFS partition, with the same UX as D64 / D71 / etc: subdirectory navigation with breadcrumb + ".." row, LNK following, PETSCII filenames, multi-select, drag-to-reorder, keyboard shortcuts, drag-drop import/export, Rename, Scratch / Unscratch, Restore Directory, Restore Partition, Insert / Remove / Align / Name Case / Lock / Splat / Separators, File Type changes, View As Hex / Disassembly / PETSCII / BASIC / Graphics / TASS, Run in Emulator, Save as Separator',
