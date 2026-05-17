@@ -330,6 +330,27 @@ function _cfsReadDirNext(data, sectorBase) {
   return { raw0: b0, lba: lba, addr: addr };
 }
 
+// Inverse of _cfsReadDirNext: distribute a 4-byte dir-next pointer across
+// bits 5..4 of byte $14 of every slot in the sector. Each group of 4 slots
+// carries one output byte, with positions matching the reader (the first
+// slot in the group contributes bits 7..6, the second 5..4, third 3..2,
+// fourth 1..0). Other bits of each slot's $14 are preserved.
+function _cfsWriteDirNext(data, sectorBase, addr) {
+  var b0 = (addr ? 0x40 : 0) | ((addr >>> 24) & 0x0F);
+  var b1 = (addr >>> 16) & 0xFF;
+  var b2 = (addr >>> 8) & 0xFF;
+  var b3 = addr & 0xFF;
+  var bytes = [b0, b1, b2, b3];
+  for (var i = 0; i < 4; i++) {
+    var entryBase = sectorBase + 0x180 - i * 0x80;
+    var b = bytes[i];
+    data[entryBase + 0x14] = (data[entryBase + 0x14] & ~0x30) | ((b >>> 2) & 0x30);
+    data[entryBase + 0x34] = (data[entryBase + 0x34] & ~0x30) | (b & 0x30);
+    data[entryBase + 0x54] = (data[entryBase + 0x54] & ~0x30) | ((b << 2) & 0x30);
+    data[entryBase + 0x74] = (data[entryBase + 0x74] & ~0x30) | ((b << 4) & 0x30);
+  }
+}
+
 // ── CFS bitmap allocator (Phase 4b) ───────────────────────────────────
 //
 // Each partition has a chain of allocation bitmaps. Bitmap N sits at
@@ -1267,6 +1288,37 @@ function cfsFindEmptyDirSlot(buffer, firstDirLba) {
   return fallback;
 }
 
+// Find an empty slot in the dir chain; if every existing sector in the
+// chain is full, allocate a new dir sector and link it via the bit-sliced
+// dir-next pointer at byte $14 of the previous sector's slots. Returns
+//   { dirLba, slotIndex, extendedFromLba, newSectorAllocated }
+// where extendedFromLba is -1 / newSectorAllocated is -1 when no extension
+// was needed. On caller failure both are non-negative and the caller must:
+//   * free newSectorAllocated from the bitmap
+//   * call _cfsWriteDirNext(data, extendedFromLba * sectorSize, 0) to
+//     unlink the chain
+// Returns null if no sector can be allocated to extend the chain.
+function _cfsFindOrExtendDirSlot(buffer, partitionStart, partitionEndLba, firstDirLba) {
+  var existing = cfsFindEmptyDirSlot(buffer, firstDirLba);
+  if (existing) return { dirLba: existing.dirLba, slotIndex: existing.slotIndex, extendedFromLba: -1, newSectorAllocated: -1 };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  // Walk to the last sector in the chain.
+  var lastDirLba = firstDirLba;
+  var visited = {};
+  while (true) {
+    visited[lastDirLba] = true;
+    var nextPtr = _cfsReadDirNext(data, lastDirLba * IDE64_SECTOR_SIZE);
+    if (!nextPtr.lba || !nextPtr.addr || visited[nextPtr.addr]) break;
+    lastDirLba = nextPtr.addr;
+  }
+  var newDirLba = cfsAllocSector(buffer, partitionStart, partitionEndLba, lastDirLba + 1);
+  if (newDirLba < 0) return null;
+  var newBase = newDirLba * IDE64_SECTOR_SIZE;
+  for (var z = 0; z < IDE64_SECTOR_SIZE; z++) data[newBase + z] = 0;
+  _cfsWriteDirNext(data, lastDirLba * IDE64_SECTOR_SIZE, newDirLba);
+  return { dirLba: newDirLba, slotIndex: 0, extendedFromLba: lastDirLba, newSectorAllocated: newDirLba };
+}
+
 // Maximum tree depth this writer supports. Each depth covers ≈ 8× the
 // previous; depth 5 = ≈ 38 GiB which is way past anything sane to host
 // in a single CFS file. Reads handle arbitrary depths already (the C
@@ -1345,22 +1397,28 @@ function cfsImportFile(buffer, partitionStart, partitionEndLba, firstDirLba, nam
     return { ok: false, error: 'file size requires tree depth > ' + CFS_MAX_IMPORT_DEPTH };
   }
 
-  var slot = cfsFindEmptyDirSlot(buffer, firstDirLba);
-  if (!slot) return { ok: false, error: 'no empty directory slot' };
+  var slot = _cfsFindOrExtendDirSlot(buffer, partitionStart, partitionEndLba, firstDirLba);
+  if (!slot) return { ok: false, error: 'no free sector to extend the dir chain' };
 
   var sectorsNeeded = Math.ceil(payload.length / IDE64_SECTOR_SIZE);
   var allocated = [];
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  // If we extended the dir chain to make room for this entry, the new dir
+  // sector goes into the rollback list along with the data sectors. The
+  // dir-next we wrote in the previous sector also needs reverting.
+  if (slot.newSectorAllocated >= 0) allocated.push(slot.newSectorAllocated);
   function rollback() {
     for (var ri = 0; ri < allocated.length; ri++) {
       cfsMarkSectorFree(buffer, partitionStart, allocated[ri]);
     }
+    if (slot.extendedFromLba >= 0) {
+      _cfsWriteDirNext(data, slot.extendedFromLba * IDE64_SECTOR_SIZE, 0);
+    }
   }
 
   var treeLba = cfsAllocSector(buffer, partitionStart, partitionEndLba, firstDirLba + 1);
-  if (treeLba < 0) return { ok: false, error: 'no free sector for tree root' };
+  if (treeLba < 0) { rollback(); return { ok: false, error: 'no free sector for tree root' }; }
   allocated.push(treeLba);
-
-  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
   // Zero the root so we start from clean state (bits 5..4 of all
   // pointer slots == 0, no stale treelinks).
   var treeBase = treeLba * IDE64_SECTOR_SIZE;
@@ -1955,13 +2013,17 @@ function cfsCreateSubdir(buffer, partitionStart, partitionEndLba, parentDirLba, 
   if (!buffer || !parentDirLba) return { ok: false, error: 'invalid args' };
   if (!name || name.length === 0) return { ok: false, error: 'empty name' };
 
-  var slot = cfsFindEmptyDirSlot(buffer, parentDirLba);
-  if (!slot) return { ok: false, error: 'no empty slot in parent dir' };
+  var slot = _cfsFindOrExtendDirSlot(buffer, partitionStart, partitionEndLba, parentDirLba);
+  if (!slot) return { ok: false, error: 'no free sector to extend the parent dir chain' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
 
   var newDirLba = cfsAllocSector(buffer, partitionStart, partitionEndLba, parentDirLba + 1);
-  if (newDirLba < 0) return { ok: false, error: 'no free sector for new directory' };
-
-  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  if (newDirLba < 0) {
+    // Roll back the chain extension if we performed one.
+    if (slot.newSectorAllocated >= 0) cfsMarkSectorFree(buffer, partitionStart, slot.newSectorAllocated);
+    if (slot.extendedFromLba >= 0) _cfsWriteDirNext(data, slot.extendedFromLba * IDE64_SECTOR_SIZE, 0);
+    return { ok: false, error: 'no free sector for new directory' };
+  }
 
   // Zero the new directory sector, then write its self-reference at slot 0.
   var newDirBase = newDirLba * IDE64_SECTOR_SIZE;

@@ -167,9 +167,15 @@ function showChoiceModal(title, message, buttons, items) {
     document.getElementById('modal-title').textContent = title;
     var body = document.getElementById('modal-body');
     body.innerHTML = '';
-    var p = document.createElement('div');
-    p.textContent = message;
-    body.appendChild(p);
+    // Split on \n so callers can put follow-up sentences on their own line
+    // without resorting to innerHTML. Each segment becomes its own block.
+    var segs = String(message == null ? '' : message).split('\n');
+    for (var sIdx = 0; sIdx < segs.length; sIdx++) {
+      var p = document.createElement('div');
+      p.textContent = segs[sIdx];
+      if (sIdx > 0) p.style.marginTop = '8px';
+      body.appendChild(p);
+    }
 
     if (items && items.length) {
       var ul = document.createElement('ul');
@@ -225,6 +231,22 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.getElementById('modal-overlay').classList.contains('open')) {
     hidePetsciiPicker();
     document.getElementById('modal-overlay').classList.remove('open');
+  }
+
+  // Enter inside an open modal triggers its primary action — the footer
+  // button that doesn't carry .modal-btn-secondary, matching the visual
+  // "bright" styling. Textareas + contenteditables keep their newline
+  // behaviour, and a focused button keeps the browser default so Tab + Enter
+  // still works on a non-primary button.
+  if (e.key === 'Enter' && document.getElementById('modal-overlay').classList.contains('open')) {
+    var ae = document.activeElement;
+    if (ae && (ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+    if (ae && ae.tagName === 'BUTTON') return;
+    var primary = document.querySelector('#modal-overlay .modal-footer button:not(.modal-btn-secondary):not(:disabled)');
+    if (primary) {
+      e.preventDefault();
+      primary.click();
+    }
   }
 
   // While a viewer modal is open, scroll its content with the cursor / page

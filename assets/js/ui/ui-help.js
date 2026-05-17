@@ -290,6 +290,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.2', title: 'IDE64 .hdd — disk map, modal polish, dir auto-extend', items: [
+      'View BAM on the HDD partition-list view now opens a horizontal Disk Map strip — MBR, partition table, every live / deleted / hidden partition, gaps of unallocated space, and the backup partition-table mirror at the last sector. Click a region for details, double-click a CFS partition to drill in. Inside a CFS partition View BAM still opens the per-partition heat map',
+      'Pasting into a CFS partition now extends the directory chain when every existing dir sector is full — same dir-next bit-slicing IDEDOS uses. No more "No empty directory slot available." errors when a directory exceeds 14 files',
+      'New partition modal restyled to match the CMD-container picker (table layout, modal-input class, Cancel on the left). Name field auto-uppercases as you type — CFS names are raw ASCII, so lowercase letters were rendering as PETSCII graphic glyphs in the partition list',
+      'New Options → Partition Sizes in MiB toggle (default on). HDD + CMD-container partition lists now show "512 MiB" / "1.50 MiB" instead of a CBM block count — fits the column, matches what IDEDOS / cfsfdisk / VICE show. Flip the toggle for the old block-count view',
+      'Modal Enter key triggers the bright (primary) button — matches the visual styling. Delete-partition confirmation now puts the recoverability sentence on its own line. Number-input spinner arrows hidden (they rendered as low-contrast specks in dark theme)',
+      'Disk Map fixes: MBR / partition-table / backup markers now actually paint above the partition fill instead of being hidden underneath; default-partition indicator reads the boot byte as 0-based to match the partition-list view',
+    ]},
     { ver: '1.4.1', title: 'IDE64 .hdd — validator polish', items: [
       'Validate now reports overlapping allocations — sectors claimed by more than one file (or a file + a system structure). The log lines name both owners so you can tell which file shares which sector. This is real corruption: at least one of the owners is reading garbage',
       'Scan for Lost Files (Deep) is less noisy. The plausible-pointer threshold went from 4 → 8 of 16 contiguous slots, so a junk sector with a few accidentally-LBA-shaped bytes no longer shows up as a "lost file" candidate',

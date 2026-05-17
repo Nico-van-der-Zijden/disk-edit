@@ -347,10 +347,10 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
   if (cfsPartitionIdx >= 0 && cfsDirEntries) {
     var cPart = hddPartitions && hddPartitions[cfsPartitionIdx];
     if (!cPart) return;
-    if (!cfsFindEmptyDirSlot(hddBuffer, cfsDirLba)) {
-      showModal('Paste', ['No empty directory slot available.']);
-      return;
-    }
+    // cfsImportFile auto-extends the dir chain when every existing dir
+    // sector is full, so we don't pre-block here. If extension itself
+    // fails (the partition is out of free sectors), the per-file result
+    // surfaces the error in the partial-paste summary.
     var cfsTypeIdxToSuffix = { 1: 'SEQ', 2: 'PRG', 3: 'USR', 4: 'REL' };
     var cfsFtypeFromIdx = { 1: CFS_FTYPE.NORMAL, 2: CFS_FTYPE.NORMAL, 3: CFS_FTYPE.NORMAL, 4: CFS_FTYPE.REL };
     var cTotal = clipboard.length;

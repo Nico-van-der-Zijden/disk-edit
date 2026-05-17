@@ -213,7 +213,7 @@ function renderCmdContainerPartitionList() {
     '</div>' +
     '<div class="dir-entry dir-header-row">' +
       '<span class="dir-grip"></span>' +
-      '<span class="dir-blocks">Size</span>' +
+      '<span class="dir-blocks dir-blocks-container">Size</span>' +
       '<span class="dir-name">Partition</span>' +
       '<span class="dir-type">Type</span>' +
       '<span class="dir-slot">#</span>' +
@@ -266,10 +266,15 @@ function renderCmdContainerPartitionList() {
         : (freeForTooltip + ' free of ' + p.sizeBlocks + ' blocks');
     }
     var extraAttrs = ' title="' + escHtml(rowTitle) + '"';
+    // CMD blocks are 256 B each — pass that to formatPartitionSize so the
+    // MiB / KiB conversion is correct (CFS uses 512 B sectors, but for
+    // CMD-Native / 1541 / 71 / 81 partitions the on-disk block size is
+    // always 256 bytes).
+    var sizeStr = formatPartitionSize(p.sizeBlocks * 256, p.sizeBlocks);
     html +=
       '<div class="dir-entry' + extraCls + '" data-cmdc-part="' + i + '" data-offset="' + entryAbs + '"' + extraAttrs + '>' +
         '<span class="dir-grip"></span>' +
-        '<span class="dir-blocks">' + p.sizeBlocks + '</span>' +
+        '<span class="dir-blocks dir-blocks-container">' + sizeStr + '</span>' +
         '<span class="dir-name">"' + escHtml(p.name) + '"</span>' +
         '<span class="dir-type">' + escHtml(p.typeName) + '</span>' +
         '<span class="dir-slot">' + p.index + '</span>' +
@@ -723,9 +728,12 @@ async function deleteCmdContainerPartition() {
     showModal('Container', ['The SYSTEM partition can\'t be deleted.']);
     return;
   }
+  var sizeStr = partitionSizeInMib
+    ? formatPartitionSize(part.sizeBlocks * 256, part.sizeBlocks)
+    : (part.sizeBlocks + ' blocks');
   var choice = await showChoiceModal(
     'Delete Partition',
-    'Delete partition "' + petsciiToReadable(part.name) + '" (' + part.typeName + ', ' + part.sizeBlocks + ' blocks)?',
+    'Delete partition "' + petsciiToReadable(part.name) + '" (' + part.typeName + ', ' + sizeStr + ')?',
     [
       { label: 'Cancel', value: false, secondary: true },
       { label: 'Delete', value: true }

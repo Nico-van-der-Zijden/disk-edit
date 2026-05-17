@@ -258,6 +258,19 @@
     border-color: var(--accent);
   }
 
+  /* Hide the number-input spinner buttons on modal-input fields. The
+     browser-default arrows render in a low-contrast color that's barely
+     visible in dark theme; users can type the value or use keyboard
+     up/down. Matches what .blocks-input already does for inline edits. */
+  .modal-input[type="number"] {
+    -moz-appearance: textfield;
+  }
+  .modal-input[type="number"]::-webkit-inner-spin-button,
+  .modal-input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
   /* ── Phones ──────────────────────────────────────────────────────────
      Below 600px the size classes (sm/md/lg/xl/xxl, 460–1100px) make every
      modal wider than the screen and force horizontal page scroll. Drop

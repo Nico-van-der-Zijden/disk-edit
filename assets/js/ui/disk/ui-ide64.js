@@ -118,7 +118,7 @@ function renderIde64PartitionList() {
     '</div>' +
     '<div class="dir-entry dir-header-row">' +
       '<span class="dir-grip"></span>' +
-      '<span class="dir-blocks">Size</span>' +
+      '<span class="dir-blocks dir-blocks-container">Size</span>' +
       '<span class="dir-name">Partition</span>' +
       '<span class="dir-hdd-default"></span>' +
       '<span class="dir-type">Type</span>' +
@@ -142,15 +142,16 @@ function renderIde64PartitionList() {
     var enterable = p.type === 0x01 && !p.deleted; // CFS — other types stay informational; deleted not enterable
     openCount++;
 
-    var sizeBlocks = '';
-    var sizeLabel = '';
+    // Size string honours the global Partition Sizes in MiB toggle (Options
+    // menu). MiB by default — CBM blocks would be 7+ digits on a 512 MiB
+    // CFS partition. Tooltip below still includes the MiB label for clarity.
+    var sizeBlocks = p.sizeSectors !== null ? (p.sizeSectors * 2) : null;
+    var sizeStr = p.sizeSectors !== null ? formatPartitionSize(p.sizeBytes, sizeBlocks) : '';
+    var mibLabel = '';
     if (p.sizeSectors !== null) {
-      // Each CFS sector = 512 B = 2 CBM blocks; show CBM-block count to
-      // match the convention used elsewhere in the editor.
-      sizeBlocks = (p.sizeSectors * 2).toString();
-      var mib = p.sizeBytes / (1024 * 1024);
-      sizeLabel = mib >= 1
-        ? mib.toFixed(mib < 10 ? 2 : 1) + ' MiB'
+      var mibVal = p.sizeBytes / (1024 * 1024);
+      mibLabel = mibVal >= 1
+        ? (mibVal < 10 ? mibVal.toFixed(2) : Math.round(mibVal)) + ' MiB'
         : (p.sizeBytes / 1024).toFixed(1) + ' KiB';
     }
 
@@ -174,7 +175,7 @@ function renderIde64PartitionList() {
     // can space it from the type letters.
     var typeHtml = escHtml(p.typeName) + (p.writeable ? '' : '<span class="hdd-readonly">&lt;</span>');
     var nameCls = 'dir-name' + (p.hidden ? ' hdd-hidden' : '');
-    var rowTitle = p.typeName + (sizeLabel ? ' — ' + sizeLabel : '') +
+    var rowTitle = p.typeName + (mibLabel ? ' — ' + mibLabel : '') +
                    (i === defaultPart ? ' — default partition' : '') +
                    (p.hidden ? ' — hidden' : '') +
                    (!p.writeable ? ' — read-only' : '') +
@@ -183,7 +184,7 @@ function renderIde64PartitionList() {
     html +=
       '<div class="dir-entry' + extraCls + '" data-hdd-part="' + i + '" title="' + escHtml(rowTitle) + '">' +
         '<span class="dir-grip"></span>' +
-        '<span class="dir-blocks">' + sizeBlocks + '</span>' +
+        '<span class="dir-blocks dir-blocks-container">' + sizeStr + '</span>' +
         '<span class="' + nameCls + '">"' + escHtml(nameDisplay) + '"</span>' +
         '<span class="dir-hdd-default">' + defaultMark + '</span>' +
         '<span class="dir-type">' + typeHtml + '</span>' +
@@ -1480,13 +1481,16 @@ function showHddPartitionEditor(idx) {
   // are labelled so the user knows they're overwriting a recoverable
   // entry; commit() will zero any deleted slot that overlaps the new
   // partition's LBA range.
+  // Empty + soft-deleted slots are both reusable. We don't surface the
+  // "deleted" state in the dropdown — the LBA range chosen below decides
+  // which (if any) deleted partitions get overwritten, not which slot the
+  // user picks. Labelling a slot "(deleted)" implied otherwise.
   var reusable = function(pp) { return pp.empty || pp.deleted; };
   var firstReusable = hddPartitions.findIndex(reusable);
   var slotOpts = '';
   for (var si = 0; si < hddPartitions.length; si++) {
     if (!reusable(hddPartitions[si])) continue;
-    var label = 'Slot ' + si + (hddPartitions[si].deleted ? ' (deleted)' : '');
-    slotOpts += '<option value="' + si + '"' + (si === firstReusable ? ' selected' : '') + '>' + label + '</option>';
+    slotOpts += '<option value="' + si + '"' + (si === firstReusable ? ' selected' : '') + '>Slot ' + si + '</option>';
   }
 
   var titleEl = document.getElementById('modal-title');
@@ -1494,22 +1498,38 @@ function showHddPartitionEditor(idx) {
   var footer = document.querySelector('#modal-overlay .modal-footer');
   titleEl.textContent = 'New CFS partition';
 
+  // Table-row layout matching the CMD-container "New Partition" modal so
+  // every disk-container picker uses the same styling. Name auto-uppercases
+  // as the user types — CFS names are raw ASCII, and lowercase a-z ($61-$7A)
+  // decode to PETSCII graphics in the partition-list font, so anything
+  // mixed-case would render as garbage glyphs.
   body.innerHTML =
-    '<div style="display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center;font-family:inherit">' +
-      '<label for="hdd-pe-slot">Slot:</label>' +
-      '<select id="hdd-pe-slot" style="font-family:monospace;font-size:14px;padding:4px">' + slotOpts + '</select>' +
-      '<label for="hdd-pe-name">Name:</label>' +
-      '<input type="text" id="hdd-pe-name" maxlength="16" value="PARTITION" style="font-family:monospace;font-size:14px;padding:6px" />' +
-      '<label for="hdd-pe-start">Start LBA:</label>' +
-      '<input type="number" id="hdd-pe-start" min="2" max="' + (totalLbas - 8) + '" value="' + defaultStart + '" style="width:160px;font-family:monospace;font-size:14px;padding:6px" />' +
-      '<label for="hdd-pe-size">Size (MiB):</label>' +
-      '<input type="number" id="hdd-pe-size" min="1" max="' + maxMib + '" value="' + defaultMib + '" style="width:160px;font-family:monospace;font-size:14px;padding:6px" />' +
-    '</div>';
+    '<table style="width:100%;border-collapse:collapse">' +
+      '<tr>' +
+        '<th style="text-align:left;padding:6px 12px 6px 0;vertical-align:middle;width:80px;font-weight:normal;opacity:0.7">Slot</th>' +
+        '<td style="padding:6px 0"><select id="hdd-pe-slot" class="modal-input">' + slotOpts + '</select></td>' +
+      '</tr>' +
+      '<tr>' +
+        '<th style="text-align:left;padding:6px 12px 6px 0;vertical-align:middle;width:80px;font-weight:normal;opacity:0.7">Name</th>' +
+        '<td style="padding:6px 0"><input type="text" id="hdd-pe-name" class="modal-input" maxlength="16" value="PARTITION" style="text-transform:uppercase" /></td>' +
+      '</tr>' +
+      '<tr>' +
+        '<th style="text-align:left;padding:6px 12px 6px 0;vertical-align:middle;width:80px;font-weight:normal;opacity:0.7">Start LBA</th>' +
+        '<td style="padding:6px 0"><input type="number" id="hdd-pe-start" class="modal-input" min="2" max="' + (totalLbas - 8) + '" value="' + defaultStart + '" /></td>' +
+      '</tr>' +
+      '<tr>' +
+        '<th style="text-align:left;padding:6px 12px 6px 0;vertical-align:middle;width:80px;font-weight:normal;opacity:0.7">Size (MiB)</th>' +
+        '<td style="padding:6px 0"><input type="number" id="hdd-pe-size" class="modal-input" min="1" max="' + maxMib + '" value="' + defaultMib + '" /></td>' +
+      '</tr>' +
+    '</table>';
 
-  footer.innerHTML = '<button id="hdd-pe-ok">Create</button> <button id="hdd-pe-cancel">Cancel</button>';
+  footer.innerHTML =
+    '<button id="hdd-pe-cancel" class="modal-btn-secondary">Cancel</button> ' +
+    '<button id="hdd-pe-ok">Create</button>';
 
   function commit() {
-    var partitionName = _sanitiseCfsName(document.getElementById('hdd-pe-name').value, 'New partition');
+    var raw = (document.getElementById('hdd-pe-name').value || '').toUpperCase();
+    var partitionName = _sanitiseCfsName(raw, 'New partition');
     if (partitionName == null) return;
     var slot = parseInt(document.getElementById('hdd-pe-slot').value, 10);
     var startLba = parseInt(document.getElementById('hdd-pe-start').value, 10);
@@ -1651,13 +1671,16 @@ async function confirmHddPartitionDelete(idx) {
   if (!hddBuffer || !hddPartitions) return;
   var p = hddPartitions[idx];
   if (!p || p.empty || p.deleted) return;
-  var blocks = p.sizeSectors !== null ? (p.sizeSectors * 2) : '?';
+  var sizeBlocks = p.sizeSectors !== null ? (p.sizeSectors * 2) : null;
+  var sizeStr = p.sizeSectors !== null
+    ? (partitionSizeInMib ? formatPartitionSize(p.sizeBytes, sizeBlocks) : sizeBlocks + ' blocks')
+    : '? blocks';
   // p.name may carry PUA-PETSCII codepoints — petsciiToReadable strips
   // them down to plain ASCII for the modal text.
   var nameForModal = petsciiToReadable(p.name || '') || ('slot ' + idx);
   var choice = await showChoiceModal(
     'Delete Partition',
-    'Delete partition "' + nameForModal + '" (' + p.typeName + ', ' + blocks + ' blocks)? It will be recoverable via Restore Partition until the slot is reused.',
+    'Delete partition "' + nameForModal + '" (' + p.typeName + ', ' + sizeStr + ')?\nIt will be recoverable via Restore Partition until the slot is reused.',
     [
       { label: 'Cancel', value: false, secondary: true },
       { label: 'Delete', value: true }

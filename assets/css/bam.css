@@ -305,3 +305,83 @@
   margin: 0;
   padding: 0;
 }
+
+
+/* ── IDE64 .hdd Disk Map ──────────────────────────────────────────── */
+.hdd-map-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12px;
+}
+.hdd-map-stats {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+}
+.hdd-map-strip {
+  position: relative;
+  width: 100%;
+  height: 56px;
+  background: #1c2030;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.hdd-map-region {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 3px;
+  cursor: pointer;
+  border-right: 1px solid rgba(0,0,0,0.35);
+}
+/* System sectors (MBR / partition table / backup mirror) are 1 LBA each.
+   At realistic disk sizes (megabytes+) that's <0.001% of the strip, so we
+   give them a clickable min-width and bump z-index to render above the
+   adjacent partition fill — otherwise the partition's larger region paints
+   right over them. */
+.hdd-map-region.hdd-map-mbr,
+.hdd-map-region.hdd-map-parttab,
+.hdd-map-region.hdd-map-parttab-backup {
+  min-width: 4px;
+  z-index: 1;
+}
+.hdd-map-region:hover {
+  outline: 1px solid #fff;
+  outline-offset: -1px;
+  z-index: 2;
+}
+.hdd-map-region.selected {
+  outline: 2px solid #ffcc00;
+  outline-offset: -2px;
+  z-index: 3;
+}
+.hdd-map-axis {
+  display: flex;
+  justify-content: space-between;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.hdd-map-legend {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 4px 0;
+}
+.hdd-map-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.hdd-map-detail {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+  min-height: 60px;
+}

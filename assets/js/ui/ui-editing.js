@@ -198,7 +198,10 @@ function updateMenuState() {
   // bitmap chain at read time, so the editor doesn't apply.
   document.getElementById('opt-edit-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
   document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
-  document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk || noEdit || hddListView);
+  // View BAM: inside a CFS partition the CFS bitmap viewer fires; on the
+  // HDD partition list the disk-map strip fires. Either way it's enabled
+  // whenever we have a disk.
+  document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || noEdit || !hasErrorBytes(currentBuffer));
   // GEOS isn't a CFS concept.
   document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || noEdit || hasGeosSignature(currentBuffer) || hddCtx);

@@ -226,6 +226,13 @@
     flex-shrink: 0;
   }
 
+  /* Container partition rows (CMD HD, RAMLink, FD2000/4000, IDE64 .hdd)
+     render size as a MiB string ("512 MiB", "1.50 MiB") or a 5-7 digit
+     block count — either way needs more room than the 48px CBM-DOS width. */
+  .dir-blocks.dir-blocks-container {
+    width: 80px;
+  }
+
   .blocks-input {
     width: 100%;
     background: var(--bg);

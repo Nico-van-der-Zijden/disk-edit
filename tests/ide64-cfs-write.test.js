@@ -550,6 +550,44 @@ describe('CFS delete + import (Phase 4b)', function() {
     assert.strictEqual(resolved.ftype, CFS_FTYPE.DIR);
   });
 
+  it('cfsImportFile auto-extends the dir chain when the current dir is full', function() {
+    var buf = createEmptyHdd(4);
+    var info = readIde64Partitions(buf);
+    var part = info.partitions[0];
+    var rootLba = part.cfsRootDir.addr;
+
+    // Fresh root has slot 0 = self-ref, slot 1 = %DELETED FILES%, slots
+    // 2..15 empty (14 file slots). Import 20 files: the first 14 land in
+    // the root sector, the next 6 must land in a freshly-allocated
+    // chained dir sector.
+    var payload = new Uint8Array([1, 2, 3, 4]);
+    for (var i = 0; i < 20; i++) {
+      var nm = 'F' + (i < 10 ? '0' : '') + i;
+      var r = cfsImportFile(buf, part.startLba, part.endLba, rootLba, nm, payload);
+      assert.ok(r.ok, 'import ' + nm + ' failed: ' + (r.error || ''));
+    }
+
+    // readCfsDirectory walks the whole chain. All 20 plus the 2 system
+    // entries should be visible.
+    var all = readCfsDirectory(buf, rootLba);
+    var fileNames = all.filter(function(e) { return !e.empty && !e.isSelfRef && e.ftype === CFS_FTYPE.NORMAL; })
+                      .map(function(e) { return petsciiToReadable(e.name); });
+    assert.strictEqual(fileNames.length, 20);
+    for (var k = 0; k < 20; k++) {
+      var expected = 'F' + (k < 10 ? '0' : '') + k;
+      assert.ok(fileNames.indexOf(expected) >= 0, 'missing ' + expected);
+    }
+
+    // Confirm the chain actually extended: the root sector's dir-next
+    // pointer should now be non-zero and point somewhere inside the
+    // partition.
+    var d = new Uint8Array(buf);
+    var nextPtr = _cfsReadDirNext(d, rootLba * 512);
+    assert.ok(nextPtr.lba, 'root sector dir-next was not extended');
+    assert.ok(nextPtr.addr > rootLba && nextPtr.addr <= part.endLba,
+              'extended dir LBA ' + nextPtr.addr + ' out of partition range');
+  });
+
   it('cfsImportFile rolls back partial allocations on bitmap exhaustion', function() {
     var buf = new ArrayBuffer(2 * 1024 * 1024);
     var d = new Uint8Array(buf);

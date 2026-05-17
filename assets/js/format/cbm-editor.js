@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 4, build: 1 };
+var APP_VERSION = { major: 1, minor: 4, build: 2 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -11,6 +11,22 @@ var selectedEntries = []; // multi-select: array of entryOff values
 var showAddresses = localStorage.getItem('cbm-showAddresses') !== 'false';
 var showTrackSector = localStorage.getItem('cbm-showTrackSector') !== 'false';
 var hexColoring = localStorage.getItem('cbm-hexColoring') || 'none'; // none | hexyl | rgb | nybble
+// Toggle: render partition sizes in container views (CMD HD / RAMLink /
+// FD2000-4000 / IDE64 .hdd) as MiB / KiB instead of CBM block counts.
+// Default on — every native tool that touches these containers sizes them
+// in MiB anyway, and a 512 MiB CFS partition is 2,097,148 CBM blocks
+// (7 digits) which doesn't fit the directory's block column.
+var partitionSizeInMib = localStorage.getItem('cbm-partitionSizeMib') !== 'false';
+function formatPartitionSize(sizeBytes, sizeBlocks) {
+  if (!partitionSizeInMib) {
+    if (sizeBlocks == null) return '';
+    return String(sizeBlocks);
+  }
+  if (sizeBytes == null) return '';
+  var mib = sizeBytes / (1024 * 1024);
+  if (mib >= 1) return (mib < 10 ? mib.toFixed(2) : Math.round(mib).toString()) + ' MiB';
+  return (sizeBytes / 1024).toFixed(1) + ' KiB';
+}
 function setHexColoring(name) {
   hexColoring = name;
   localStorage.setItem('cbm-hexColoring', name);

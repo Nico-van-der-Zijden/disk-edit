@@ -41,6 +41,18 @@ document.getElementById('opt-show-toolbar').addEventListener('click', (e) => {
   applyToolbarVisibility();
 });
 
+document.getElementById('opt-partition-size-mib').addEventListener('click', (e) => {
+  e.stopPropagation();
+  closeMenus();
+  partitionSizeInMib = !partitionSizeInMib;
+  localStorage.setItem('cbm-partitionSizeMib', partitionSizeInMib);
+  document.getElementById('check-partition-size-mib').innerHTML = partitionSizeInMib ? '<i class="fa-solid fa-check"></i>' : '';
+  // Re-render whichever container view is currently visible. Both
+  // refresh functions are no-ops when their globals aren't set.
+  if (typeof refreshCmdContainerView === 'function') refreshCmdContainerView();
+  if (typeof refreshIde64View === 'function') refreshIde64View();
+});
+
 // ── Export/Import Settings ────────────────────────────────────────────
 document.getElementById('opt-export-settings').addEventListener('click', function(e) {
   e.stopPropagation();

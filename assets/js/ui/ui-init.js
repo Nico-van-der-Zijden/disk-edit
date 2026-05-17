@@ -269,6 +269,7 @@ document.getElementById('check-picker-all').innerHTML = petsciiPicker.defaultAll
 document.getElementById('check-picker-stick').innerHTML = petsciiPicker.stick ? '<i class="fa-solid fa-check"></i>' : '';
 refreshHexColoringChecks();
 document.getElementById('check-toolbar').innerHTML = toolbarVisible ? '<i class="fa-solid fa-check"></i>' : '';
+document.getElementById('check-partition-size-mib').innerHTML = partitionSizeInMib ? '<i class="fa-solid fa-check"></i>' : '';
 applyToolbarVisibility();
 refreshToolbarState();
 
