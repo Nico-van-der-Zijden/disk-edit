@@ -299,11 +299,13 @@ function updateMenuState() {
   var hddCtx4 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
   document.getElementById('opt-open-in-emulator').classList.toggle('disabled', !hasDisk || containerList || hddCtx4);
   // Find walks T:S sectors via the format's sectorsPerTrack — CBM-DOS
-  // only. Skip the whole IDE64 .hdd context; CFS file content search
-  // would need its own walker.
+  // only. Skip the whole IDE64 .hdd context for both Find and Find in
+  // All Tabs (the all-tabs iterator already skips .hdd tabs, but having
+  // it visibly enabled on an .hdd tab gives a confusing "no results"
+  // when the user expects to search what's in front of them).
   var hddCtx2 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
   document.getElementById('opt-find').classList.toggle('disabled', !hasDisk || containerList || hddCtx2);
-  document.getElementById('opt-find-tabs').classList.toggle('disabled', tabs.length === 0);
+  document.getElementById('opt-find-tabs').classList.toggle('disabled', tabs.length === 0 || hddCtx2);
   // Go to Sector is CBM-DOS-only (modal walks T/S, not LBA), so disable
   // across the entire IDE64 .hdd context. updateMenuState runs on every
   // tab switch so it re-enables automatically on a D64/etc tab.
