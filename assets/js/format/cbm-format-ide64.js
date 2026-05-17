@@ -1475,11 +1475,12 @@ function cfsAddPartitionToTable(buffer, slotIdx, partitionName, startLba, endLba
   if (eo + IDE64_PARTITION_ENTRY_SIZE > data.length) return { ok: false, error: 'partition table out of range' };
   for (var z = 0; z < IDE64_PARTITION_ENTRY_SIZE; z++) data[eo + z] = 0;
 
-  // Name (16 B, $00-padded — matches cfsfdisk's clean.hdd convention.
-  // VICE/IDEDOS recognises both $A0 and $00 as terminators but cfsfdisk
-  // writes $00 for partition entries specifically, so we match that.
+  // Name (16 B, $A0-padded — current cfsfdisk convention (per clean-test-4.hdd
+  // 128 MB output). An older cfsfdisk-created clean.hdd used $00 padding;
+  // both are accepted by IDE64 at runtime, but matching the current tool
+  // matters for cfsfdisk-based partition validation.
   for (var n = 0; n < 16; n++) {
-    data[eo + n] = n < partitionName.length ? (partitionName.charCodeAt(n) & 0xFF) : 0x00;
+    data[eo + n] = n < partitionName.length ? (partitionName.charCodeAt(n) & 0xFF) : 0xA0;
   }
   // Start pointer (VALID|LBA|WRITEABLE)
   data[eo + 0x10] = 0xD0 | ((startLba >>> 24) & 0x0F);
@@ -1522,11 +1523,16 @@ function createEmptyHdd(sizeMib, opts) {
 
   // Boot sector at LBA 0
   d[0x01] = 0; // default partition
-  // cfsfdisk leaves bytes 0-3 as 00 00 00 00 and writes the pair
-  // 40 00 40 00 at bytes 4-7 — looks like a 4-byte LBA-flagged pointer
-  // ($00004000) of unknown purpose but every cfsfdisk-created image has
-  // it. Reproduce the pattern so IDEDOS's boot-sector validation passes.
-  d[0x04] = 0x40; d[0x05] = 0x00; d[0x06] = 0x40; d[0x07] = 0x00;
+  // Bytes 4-7: total-LBA-count as a 4-byte LBA-flagged pointer
+  // (bit 6 of byte 0 set + 28-bit address = totalLbas). For 8 MiB this
+  // is 40 00 40 00 = LBA 0x4000 = 16384 sectors; for 128 MiB it's
+  // 40 04 00 00 = LBA 0x40000. cfsfdisk reads this and reports
+  // "Boot sector/actual geometry mismatch" if it doesn't match the drive's
+  // reported size from IDE IDENTIFY.
+  d[0x04] = 0x40 | ((totalLbas >>> 24) & 0x0F);
+  d[0x05] = (totalLbas >>> 16) & 0xFF;
+  d[0x06] = (totalLbas >>> 8) & 0xFF;
+  d[0x07] = totalLbas & 0xFF;
   for (var mi = 0; mi < IDE64_MAGIC_STRING.length; mi++) {
     d[IDE64_MAGIC_OFFSET + mi] = IDE64_MAGIC_STRING.charCodeAt(mi);
   }
@@ -1546,6 +1552,26 @@ function createEmptyHdd(sizeMib, opts) {
     d[0x20 + li] = li < label.length ? (label.charCodeAt(li) & 0xFF) : 0x20;
   }
   // Partition table at LBA 1 starts zeroed (matches ArrayBuffer default).
+
+  // PC BIOS-style MBR partition table at $1BE..$1FD + 0x55AA boot
+  // signature at $1FE..$1FF. cfsfdisk reads this to share the disk with
+  // other operating systems; missing it triggers a "Did not found any
+  // CFS partition entry in PC BIOS partition table" warning (not fatal —
+  // cfsfdisk falls back to whole-disk mode — but we may as well write it).
+  // Partition entry 0: type 0xCF (IDE64 CFS), start LBA 1, length = totalLbas-1.
+  // CHS fields use the max-value sentinel (FF/FF/FF) per modern convention —
+  // means "ignore CHS, use LBA"; works for any image size.
+  d[0x1BE] = 0x00;             // boot flag (not bootable)
+  d[0x1BF] = 0xFF; d[0x1C0] = 0xFF; d[0x1C1] = 0xFF; // start CHS = max
+  d[0x1C2] = 0xCF;             // partition type = CFS
+  d[0x1C3] = 0xFF; d[0x1C4] = 0xFF; d[0x1C5] = 0xFF; // end CHS = max
+  d[0x1C6] = 0x01; d[0x1C7] = 0x00; d[0x1C8] = 0x00; d[0x1C9] = 0x00; // start LBA = 1
+  var sectorCount = totalLbas - 1;
+  d[0x1CA] = sectorCount & 0xFF;
+  d[0x1CB] = (sectorCount >>> 8) & 0xFF;
+  d[0x1CC] = (sectorCount >>> 16) & 0xFF;
+  d[0x1CD] = (sectorCount >>> 24) & 0xFF;
+  d[0x1FE] = 0x55; d[0x1FF] = 0xAA;
 
   var partStart = 2;
   var partEnd = totalLbas - 1;

@@ -285,6 +285,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.127', title: 'IDE64 .hdd — boot sector total-LBA-count, MBR partition entry, 256/512 MiB sizes', items: [
+      'Boot sector bytes 4-7 now encode the disk\'s total LBA count instead of always being hardcoded to 0x4000 (8 MiB worth). cfsfdisk reads this field and reports "Boot sector/actual geometry mismatch" if it differs from the drive size reported by IDE IDENTIFY. VICE\'s IDE64 auto-detect also reads this field, so the right value lets you skip the manual C/H/S setup',
+      'New hdd images now include a PC BIOS-style MBR partition table entry (type 0xCF) at offset $1BE + the 0x55AA boot signature at $1FE. cfsfdisk no longer warns "Did not found any CFS partition entry in PC BIOS partition table". The CFS partition spans LBA 1 through the last LBA of the image; CHS fields use the FF/FF/FF "ignore CHS, use LBA" sentinel so any size works',
+      '256 MiB and 512 MiB hdd sizes added to File → New → IDE64 HDD. Existing sizes (4 / 8 / 16 / 32 / 64 / 128) unchanged',
+    ]},
     { ver: '1.3.126', title: 'IDE64 .hdd — file data is byte-sliced (stride 4), not sequential', items: [
       'Files imported into a CFS partition now actually load in IDE64. CFS data sectors store file bytes byte-sliced with stride 4 (file byte N at sector offset (N & 0x7F) * 4 + (N >> 7)), not sequential as we\'d assumed. Every read and write went through the wrong encoding — IDE64 saw garbage where we wrote LEVELSQUEEZ V4.1, BASIC LOAD reported "out of memory" because the corrupted bytes happened to encode a high-memory load address. Both the reader and the importer now apply the slicing; round-trips through DirMaster confirm correctness',
       'Hex views of existing CFS files now show their real content. Files like STORMLORD+6 that looked "packed" with random-looking start bytes (01 6e 21 78 …) decode to plain BASIC SYS stubs (01 08 0B 08 14 00 9E 32 …). Any .prg you exported from a CFS partition before this fix is wrong — re-export now',
@@ -341,7 +346,7 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
       'Delete works for files of any size now: walks the whole tree recursively, frees every tree-node and data sector. Replaces the earlier 64 KiB cap',
       'New: + New subdirectory&hellip; row in the directory view (creates a sector with self-ref + parent pointer, registers in the parent dir)',
       'New: + New CFS partition&hellip; row at the bottom of the partition-list view (picks the next free 16-slot entry, asks for a name + size in MiB, initialises the bitmap chain + root dir + deleted-dir)',
-      'New: File &rarr; New &rarr; IDE64 HDD with 4 / 8 / 16 / 32 / 64 / 128 MiB sizes. Creates a fresh image with one CFS partition spanning the whole disk',
+      'New: File &rarr; New &rarr; IDE64 HDD with 4 / 8 / 16 / 32 / 64 / 128 / 256 / 512 MiB sizes. Creates a fresh image with one CFS partition spanning the whole disk',
     ]},
     { ver: '1.3.117', title: 'IDE64 .hdd — rename, attributes, delete, import (small files)', items: [
       'CFS file viewer modal: new Rename, Attributes, and Delete buttons. Rename writes a 16-byte ASCII name. Attributes toggles the C/D/R/W/X bits. Delete frees the file\'s data + tree sectors in the partition bitmap and marks the directory entry deleted',
