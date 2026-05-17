@@ -1,8 +1,132 @@
 // ── Disk menu: Scan for Lost Files ───────────────────────────────────
 document.getElementById('opt-scan-orphans').addEventListener('click', async function(e) {
   e.stopPropagation();
-  if (!currentBuffer) return;
   closeMenus();
+
+  // CFS branch: hunt orphan tree-node sectors (USED in bitmap, not
+  // reachable from any dir entry, looks like a valid tree node) and
+  // reconstruct the file content via the byte-slice decoder. Export
+  // lets the user save the recovered bytes; Restore creates a fresh
+  // dir entry pointing at the existing tree LBA (no sector rewrite).
+  if (cfsPartitionIdx >= 0 && cfsDirEntries && hddPartitions) {
+    var cfsPart = hddPartitions[cfsPartitionIdx];
+    var deep = false;
+    if (typeof showChoiceModal === 'function') {
+      var modeChoice = await showChoiceModal(
+        'Scan for Lost Files',
+        'Quick = scan only sectors marked used in the bitmap. ' +
+        'Deep = also scan freed sectors for recently-scratched files (more false positives).',
+        [
+          { label: 'Cancel', value: null, secondary: true },
+          { label: 'Quick Scan', value: false },
+          { label: 'Deep Scan', value: true }
+        ]
+      );
+      if (modeChoice === null) return;
+      deep = !!modeChoice;
+    }
+    var cfsResults = cfsScanOrphans(hddBuffer, cfsPart, { deep: deep });
+    if (cfsResults.length === 0) {
+      showModal('Scan for Lost Files', [
+        'No lost files found in the partition.',
+        deep ? 'Deep scan also examined free sectors.' : 'Try Deep Scan to also check freed sectors.',
+      ]);
+      return;
+    }
+    document.getElementById('modal-title').textContent = 'Scan for Lost Files' + (deep ? ' — Deep Scan' : '');
+    var cfsBody = document.getElementById('modal-body');
+    cfsBody.innerHTML = '';
+    var cfsSum = document.createElement('div');
+    cfsSum.textContent = 'Found ' + cfsResults.length + ' orphan tree-node sector(s)' +
+      (deep ? ' (deep scan — some may be false positives).' : '.');
+    cfsSum.style.marginBottom = '12px';
+    cfsBody.appendChild(cfsSum);
+    for (var rri = 0; rri < cfsResults.length; rri++) {
+      (function(r, idx) {
+        var card = document.createElement('div');
+        card.className = 'modal-info-card';
+        var typeStr = r.suggestedType + (r.loadAddress !== null
+          ? ' ($' + r.loadAddress.toString(16).toUpperCase().padStart(4, '0') + ')' : '');
+        var sourceTag = r.fromFree ? ' <span style="color:var(--text-muted);font-style:italic">(from free space)</span>' : '';
+        card.innerHTML =
+          '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+            '<strong>#' + (idx + 1) + '</strong>' +
+            '<span style="font-size:12px;color:var(--text-muted)">Tree LBA $' +
+              r.treeLba.toString(16).toUpperCase() + sourceTag + '</span>' +
+          '</div>' +
+          '<div style="font-size:12px;margin-bottom:6px">' +
+            r.dataLbas.length + ' data sector(s), ' + r.data.length + ' bytes — ' + typeStr +
+          '</div>' +
+          '<div style="display:flex;gap:6px"></div>';
+        var btnRow = card.lastElementChild;
+
+        var expBtn = document.createElement('button');
+        expBtn.textContent = 'Export';
+        expBtn.className = 'btn-small';
+        expBtn.addEventListener('click', function() {
+          var ext = '.' + r.suggestedType.toLowerCase();
+          var blob = new Blob([r.data], { type: 'application/octet-stream' });
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'cfs_recovered_' + String(idx + 1).padStart(3, '0') + ext;
+          a.click();
+          URL.revokeObjectURL(a.href);
+        });
+        btnRow.appendChild(expBtn);
+
+        var resBtn = document.createElement('button');
+        resBtn.textContent = 'Restore';
+        resBtn.className = 'btn-small';
+        resBtn.addEventListener('click', async function() {
+          document.getElementById('modal-overlay').classList.remove('open');
+          var name = await showInputModal('Filename for Recovered File', 'RECOVERED' + (idx + 1));
+          if (!name) return;
+          name = String(name).toUpperCase().substring(0, 16);
+          // Find a free dir slot, write a new entry pointing at the
+          // existing tree LBA. No new sectors allocated — the tree
+          // and its data sectors are already in the bitmap.
+          var slot = cfsFindEmptyDirSlot(hddBuffer, cfsDirLba);
+          if (!slot) { showModal('Restore', ['No free directory slot.']); return; }
+          pushUndo();
+          var eo = slot.dirLba * 512 + slot.slotIndex * 32;
+          var wd = new Uint8Array(hddBuffer);
+          var dirNextBits = wd[eo + 0x14] & 0x30;
+          for (var z = 0; z < 32; z++) wd[eo + z] = 0;
+          for (var ni = 0; ni < 16; ni++) {
+            wd[eo + ni] = ni < name.length ? (name.charCodeAt(ni) & 0xFF) : 0x00;
+          }
+          wd[eo + 0x10] = r.data.length & 0xFF;
+          wd[eo + 0x11] = (r.data.length >>> 8) & 0xFF;
+          wd[eo + 0x12] = (r.data.length >>> 16) & 0xFF;
+          wd[eo + 0x13] = (r.data.length >>> 24) & 0xFF;
+          wd[eo + 0x14] = 0x40 | dirNextBits | ((r.treeLba >>> 24) & 0x0F);
+          wd[eo + 0x15] = (r.treeLba >>> 16) & 0xFF;
+          wd[eo + 0x16] = (r.treeLba >>> 8) & 0xFF;
+          wd[eo + 0x17] = r.treeLba & 0xFF;
+          var ftype = r.suggestedType === 'REL' ? 2 : 1; // NORMAL covers PRG/SEQ/USR
+          wd[eo + 0x18] = 0xF8 | (ftype & 0x07);
+          var suf = r.suggestedType.length === 3 ? r.suggestedType : 'PRG';
+          wd[eo + 0x19] = suf.charCodeAt(0);
+          wd[eo + 0x1A] = suf.charCodeAt(1);
+          wd[eo + 0x1B] = suf.charCodeAt(2);
+          cfsTouchEntryMtime(hddBuffer, slot.dirLba, slot.slotIndex);
+          refreshIde64View();
+          showModal('File Restored', ['"' + name + '" restored at tree LBA $' + r.treeLba.toString(16).toUpperCase() + ' (' + r.dataLbas.length + ' data sector(s)).']);
+        });
+        btnRow.appendChild(resBtn);
+        cfsBody.appendChild(card);
+      })(cfsResults[rri], rri);
+    }
+    var cfsFooter = document.querySelector('#modal-overlay .modal-footer');
+    cfsFooter.innerHTML = '<button id="modal-close">Close</button>';
+    document.getElementById('modal-close').addEventListener('click', function() {
+      document.getElementById('modal-overlay').classList.remove('open');
+    });
+    document.getElementById('modal-overlay').classList.add('open');
+    return;
+  }
+
+  if (!currentBuffer) return;
 
   var results = scanOrphanedChains(currentBuffer);
 
@@ -143,9 +267,21 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
 document.querySelectorAll('#opt-sort .submenu .option').forEach(el => {
   el.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (!currentBuffer) return;
     closeMenus();
-    sortDirectory(currentBuffer, el.dataset.sort);
+    var sortKey = el.dataset.sort;
+    // CFS view: route to cfsSortDirectory which walks the dir chain
+    // and preserves the bit-sliced dir-next bits at byte $14. The
+    // system entries (self-ref + %DELETED FILES%) stay pinned.
+    if (cfsPartitionIdx >= 0 && cfsDirEntries && hddPartitions) {
+      var part = hddPartitions[cfsPartitionIdx];
+      var deldirLba = (part && part.cfsDeletedDir && part.cfsDeletedDir.lba) ? part.cfsDeletedDir.addr : 0;
+      pushUndo();
+      cfsSortDirectory(hddBuffer, cfsDirLba, deldirLba, sortKey);
+      refreshIde64View();
+      return;
+    }
+    if (!currentBuffer) return;
+    sortDirectory(currentBuffer, sortKey);
     const info = parseCurrentDir(currentBuffer);
     renderDisk(info);
   });
@@ -646,23 +782,40 @@ document.getElementById('opt-resize-dnp').addEventListener('click', async functi
 // ── Disk menu: Export as Text ────────────────────────────────────────
 document.getElementById('opt-export-txt').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer) return;
   closeMenus();
-  var info = parseCurrentDir(currentBuffer);
   var lines = [];
-  lines.push('0 "' + petsciiToReadable(info.diskName).replace(/"/g, '') + '" ' + petsciiToReadable(info.diskId));
-  for (var i = 0; i < info.entries.length; i++) {
-    var en = info.entries[i];
-    if (en.deleted && !showDeleted) continue;
-    var nameR = petsciiToReadable(en.name);
-    lines.push(String(en.blocks).padStart(5) + ' "' + nameR + '"' + ' '.repeat(Math.max(0, 16 - nameR.length)) + ' ' + en.type.trim());
+  var fileBase;
+  if (cfsPartitionIdx >= 0 && cfsDirEntries && hddPartitions) {
+    var part = hddPartitions[cfsPartitionIdx];
+    var pName = part && part.name ? petsciiToReadable(part.name).replace(/"/g, '') : '';
+    lines.push('0 "' + pName + '" CFS');
+    for (var ci = 0; ci < cfsDirEntries.length; ci++) {
+      var ce = cfsDirEntries[ci];
+      if (!ce || ce.empty) continue;
+      if (ce.ftype === CFS_FTYPE.DEL && !showDeleted) continue;
+      var cName = petsciiToReadable(ce.name);
+      var blocks = ce.size ? Math.ceil(ce.size / 256) : 0;
+      lines.push(String(blocks).padStart(5) + ' "' + cName + '"' + ' '.repeat(Math.max(0, 16 - cName.length)) + ' ' + (ce.typeSuffix || ''));
+    }
+    fileBase = (pName.trim() || 'partition');
+  } else {
+    if (!currentBuffer) return;
+    var info = parseCurrentDir(currentBuffer);
+    lines.push('0 "' + petsciiToReadable(info.diskName).replace(/"/g, '') + '" ' + petsciiToReadable(info.diskId));
+    for (var i = 0; i < info.entries.length; i++) {
+      var en = info.entries[i];
+      if (en.deleted && !showDeleted) continue;
+      var nameR = petsciiToReadable(en.name);
+      lines.push(String(en.blocks).padStart(5) + ' "' + nameR + '"' + ' '.repeat(Math.max(0, 16 - nameR.length)) + ' ' + en.type.trim());
+    }
+    lines.push(info.freeBlocks + ' BLOCKS FREE.');
+    fileBase = currentFileName || 'disk';
   }
-  lines.push(info.freeBlocks + ' BLOCKS FREE.');
   var txt = lines.join('\n') + '\n';
   var blob = new Blob([txt], { type: 'text/plain' });
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = (currentFileName || 'disk') + '.txt';
+  a.download = fileBase + '.txt';
   a.click();
   URL.revokeObjectURL(a.href);
 });

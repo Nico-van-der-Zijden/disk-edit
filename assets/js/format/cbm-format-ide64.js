@@ -419,6 +419,261 @@ function cfsMarkSectorFree(buffer, partitionStart, absLba) {
   return true;
 }
 
+// Validate a CFS partition: build the set of LBAs that *should* be
+// USED according to the on-disk structures (every bitmap-chain sector,
+// the reserved partition-header sectors, the deldir, every dir-sector
+// in the root + subdir chains, and every tree-node + data-sector
+// reachable from a non-DEL dir entry), then compare to the bitmap.
+//
+// Returns { log, lostCount, missingCount, reachable } where:
+//   - lost     = LBAs the bitmap says are USED but no structure claims
+//                them. Wasted space; can be reclaimed.
+//   - missing  = LBAs a file/dir/tree-node claims but the bitmap says
+//                are FREE. Corrupt — the allocator will hand them out
+//                to a new file and clobber existing content.
+//   - reachable = { lba: true } for every LBA the walk reached, useful
+//                 for callers that want to rebuild the bitmap.
+//
+// If opts.fix is true, the bitmap is rewritten in place to mark every
+// reachable LBA as used and everything else (within the partition)
+// free. Caller is responsible for pushUndo before calling with fix=true.
+function cfsValidatePartition(buffer, partition, opts) {
+  opts = opts || {};
+  var log = [];
+  if (!buffer || !partition) { log.push('ERROR: invalid arguments'); return { log: log, lostCount: 0, missingCount: 0, reachable: {} }; }
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var partStart = partition.startLba;
+  var partEnd = partition.endLba;
+  if (partStart == null || partEnd == null) { log.push('ERROR: partition has no LBA bounds'); return { log: log, lostCount: 0, missingCount: 0, reachable: {} }; }
+
+  var reachable = {};
+  function reach(lba) {
+    if (lba < partStart || lba > partEnd) return;
+    reachable[lba] = true;
+  }
+
+  // ── 1. System sectors ─────────────────────────────────────────────
+  // Bitmap chain: one per 4096 LBAs starting at partStart.
+  for (var bm = 0; partStart + bm <= partEnd; bm += 4096) reach(partStart + bm);
+  // cfsfdisk reserves partStart+1 alongside the bitmap (purpose
+  // undocumented but every cfsfdisk image marks it USED, so claim it
+  // here to avoid a spurious "lost" finding).
+  reach(partStart + 1);
+  // Deldir + root dir LBAs (taken straight from the partition entry).
+  var deldirLba = (partition.cfsDeletedDir && partition.cfsDeletedDir.lba) ? partition.cfsDeletedDir.addr : 0;
+  var rootLba   = (partition.cfsRootDir    && partition.cfsRootDir.lba)    ? partition.cfsRootDir.addr    : 0;
+  if (deldirLba) reach(deldirLba);
+
+  // ── 2. Walk dir chains ────────────────────────────────────────────
+  // Follows the bit-sliced dir-next pointer to get every sector in a
+  // directory's chain. For each non-empty entry: walks the B-tree if
+  // it's a file (NORMAL/REL), the link sector if it's an LNK, or
+  // recurses into the subdir if it's a DIR.
+  var dirVisited = {};
+  function walkTree(treeRoot, fileSize) {
+    if (!treeRoot || treeRoot < partStart || treeRoot > partEnd) return;
+    var depth = _cfsComputeTreeDepth(fileSize);
+    var seen = {};
+    function w(nodeLba, level) {
+      if (!nodeLba || nodeLba < partStart || nodeLba > partEnd) return;
+      if (seen[nodeLba]) return;
+      seen[nodeLba] = true;
+      reach(nodeLba);
+      var nodeBase = nodeLba * IDE64_SECTOR_SIZE;
+      if (nodeBase + IDE64_SECTOR_SIZE > data.length) return;
+      for (var pi = 0; pi < 128; pi++) {
+        var dp = _readIde64Pointer(data, nodeBase + pi * 4);
+        if (dp.lba && dp.addr > 0) reach(dp.addr);
+      }
+      if (level < depth) {
+        for (var s = 0; s < 8; s++) {
+          var link = _cfsReadTreeLink(data, nodeBase + s * 64);
+          if (link.lba && link.addr > 0) w(link.addr, level + 1);
+        }
+      }
+    }
+    w(treeRoot, 0);
+  }
+  function walkDirChain(firstDirLba, label) {
+    if (!firstDirLba) return;
+    var lba = firstDirLba;
+    while (lba && !dirVisited[lba]) {
+      if (lba < partStart || lba > partEnd) {
+        log.push('  ERROR: ' + label + ': dir LBA $' + lba.toString(16) + ' outside partition');
+        return;
+      }
+      dirVisited[lba] = true;
+      reach(lba);
+      var entries = readCfsDirectorySector(data, lba);
+      if (!entries) break;
+      for (var i = 0; i < entries.length; i++) {
+        var en = entries[i];
+        if (en.empty) continue;
+        if (en.ftype === CFS_FTYPE.DEL) continue; // sectors freed at scratch time
+        if (!en.dataTreePtr || !en.dataTreePtr.lba) continue;
+        var addr = en.dataTreePtr.addr;
+        if (en.ftype === CFS_FTYPE.DIR) {
+          walkDirChain(addr, label + '/' + readPetsciiString(data, lba * IDE64_SECTOR_SIZE + i * 32, 16, false));
+        } else {
+          walkTree(addr, en.size || 0);
+        }
+      }
+      var nextPtr = _cfsReadDirNext(data, lba * IDE64_SECTOR_SIZE);
+      lba = (nextPtr.lba && nextPtr.addr > 0) ? nextPtr.addr : 0;
+    }
+  }
+  if (rootLba) walkDirChain(rootLba, '/');
+
+  // ── 3. Compare bitmap to reachable set ────────────────────────────
+  var lost = [];
+  var missing = [];
+  for (var lba = partStart; lba <= partEnd; lba++) {
+    var isUsed = !cfsIsSectorFree(data, partStart, lba);
+    var shouldBeUsed = !!reachable[lba];
+    if (isUsed && !shouldBeUsed) lost.push(lba);
+    else if (!isUsed && shouldBeUsed) missing.push(lba);
+  }
+
+  // ── 4. Report ─────────────────────────────────────────────────────
+  if (lost.length === 0 && missing.length === 0) {
+    log.push('Bitmap is consistent — every used sector is claimed by a file or system structure.');
+  } else {
+    if (missing.length > 0) {
+      log.push('ERROR: ' + missing.length + ' sector(s) claimed by a file but marked FREE in the bitmap.');
+      log.push('  These will be re-allocated on next file write, corrupting existing content.');
+      for (var mi = 0; mi < Math.min(missing.length, 10); mi++) {
+        log.push('    LBA $' + missing[mi].toString(16).toUpperCase());
+      }
+      if (missing.length > 10) log.push('    … and ' + (missing.length - 10) + ' more');
+    }
+    if (lost.length > 0) {
+      log.push((opts.fix ? '' : 'Warning: ') + lost.length + ' lost sector(s) marked USED in the bitmap but not claimed by any file.');
+      for (var li = 0; li < Math.min(lost.length, 10); li++) {
+        log.push('    LBA $' + lost[li].toString(16).toUpperCase());
+      }
+      if (lost.length > 10) log.push('    … and ' + (lost.length - 10) + ' more');
+    }
+  }
+
+  // ── 5. Optional bitmap rebuild ────────────────────────────────────
+  if (opts.fix && (lost.length > 0 || missing.length > 0)) {
+    for (var fl = 0; fl < lost.length; fl++) cfsMarkSectorFree(data, partStart, lost[fl]);
+    for (var fm = 0; fm < missing.length; fm++) cfsMarkSectorUsed(data, partStart, missing[fm]);
+    log.push('Bitmap rebuilt: ' + lost.length + ' freed, ' + missing.length + ' marked used.');
+  }
+
+  return { log: log, lostCount: lost.length, missingCount: missing.length, reachable: reachable };
+}
+
+// Scan a CFS partition for orphan tree-node sectors. Two modes:
+//
+//   opts.deep = false (default) — Quick scan: only checks LBAs that
+//     are marked USED in the bitmap but not reachable from any live
+//     dir entry. Finds inconsistencies; misses cleanly-scratched files
+//     (their sectors are freed in the bitmap, same way IDEDOS works).
+//
+//   opts.deep = true             — Deep scan: also scans LBAs the
+//     bitmap says are FREE, looking for tree-node-shaped data still
+//     sitting in unallocated space. Catches recently-scratched files
+//     whose tree + data sectors haven't been overwritten yet. Produces
+//     more false positives (random data that happens to look like a
+//     tree node) — the data-sector count + load-address sniff usually
+//     make legit recoveries obvious.
+//
+// In both modes each candidate's tree is walked, data sectors are read
+// through the byte-slice transform, and joined into a reconstructed
+// file body. Returns an array of
+//   { treeLba, dataLbas, data, suggestedType, loadAddress, fromFree }.
+function cfsScanOrphans(buffer, partition, opts) {
+  opts = opts || {};
+  if (!buffer || !partition) return [];
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var partStart = partition.startLba;
+  var partEnd = partition.endLba;
+  if (partStart == null || partEnd == null) return [];
+
+  // 1. Build the reachable set via the existing validate walker.
+  var v = cfsValidatePartition(buffer, partition, { fix: false });
+  var reachable = v.reachable;
+
+  // 2. Enumerate candidate LBAs. Quick mode: USED-but-unreachable
+  //    only. Deep mode: every non-reachable LBA (both USED and FREE)
+  //    so cleanly-scratched files still sitting in free space can be
+  //    discovered. Reachable LBAs are skipped in both modes — those
+  //    are claimed by a live dir entry already.
+  var candidates = [];
+  var fromFree = {};
+  for (var lba = partStart; lba <= partEnd; lba++) {
+    if (reachable[lba]) continue;
+    var isFree = cfsIsSectorFree(data, partStart, lba);
+    if (!opts.deep && isFree) continue;
+    var base = lba * IDE64_SECTOR_SIZE;
+    if (base + IDE64_SECTOR_SIZE > data.length) continue;
+    // Slot 0 must be a valid data pointer for this to be a tree node.
+    var first = _readIde64Pointer(data, base);
+    if (!first.lba || first.addr < partStart || first.addr > partEnd) continue;
+    // Count plausible LBA-flagged pointers in the first 16 slots.
+    var plausible = 0;
+    for (var s = 0; s < 16; s++) {
+      var dp = _readIde64Pointer(data, base + s * 4);
+      if (dp.lba && dp.addr >= partStart && dp.addr <= partEnd) plausible++;
+      else break;
+    }
+    // Deep mode raises the bar — random free-space data trips the
+    // 1-pointer threshold too easily, so require a denser cluster
+    // (at least 4 consecutive plausible pointers) before bothering
+    // to reconstruct the file. Quick mode keeps the original 1+
+    // threshold since USED-but-unreachable is already a strong signal.
+    var minPlausible = opts.deep ? 4 : 1;
+    if (plausible < minPlausible) continue;
+    candidates.push(lba);
+    if (isFree) fromFree[lba] = true;
+  }
+
+  // 3. For each candidate: walk the tree, build the file content.
+  //    Stop at the first slot whose pointer doesn't carry the LBA flag
+  //    (= end of pointer list in this node). Each referenced data
+  //    sector contributes 512 bytes of byte-sliced content.
+  var results = [];
+  for (var ci = 0; ci < candidates.length; ci++) {
+    var treeLba = candidates[ci];
+    var treeBase = treeLba * IDE64_SECTOR_SIZE;
+    var dataLbas = [];
+    for (var slot = 0; slot < 128; slot++) {
+      var p = _readIde64Pointer(data, treeBase + slot * 4);
+      if (!p.lba || p.addr <= 0) break;
+      if (p.addr < partStart || p.addr > partEnd) break;
+      dataLbas.push(p.addr);
+    }
+    if (dataLbas.length === 0) continue;
+    // Decode each data sector with the byte-slice transform.
+    var bytes = new Uint8Array(dataLbas.length * 512);
+    for (var di = 0; di < dataLbas.length; di++) {
+      var dBase = dataLbas[di] * 512;
+      if (dBase + 512 > data.length) break;
+      for (var bn = 0; bn < 512; bn++) {
+        var sliceOff = (bn & 0x7F) * 4 + (bn >>> 7);
+        bytes[di * 512 + bn] = data[dBase + sliceOff];
+      }
+    }
+    // Type sniff: bytes[0..1] interpreted as a load address. If it
+    // falls in BASIC-load-address range or any sensible C64 RAM range,
+    // call it PRG; otherwise SEQ.
+    var loadAddr = bytes.length >= 2 ? (bytes[0] | (bytes[1] << 8)) : 0;
+    var suggestedType = 'SEQ';
+    if (loadAddr >= 0x0400 && loadAddr <= 0xFF00) suggestedType = 'PRG';
+    results.push({
+      treeLba: treeLba,
+      dataLbas: dataLbas,
+      data: bytes,
+      suggestedType: suggestedType,
+      loadAddress: suggestedType === 'PRG' ? loadAddr : null,
+      fromFree: !!fromFree[treeLba],
+    });
+  }
+  return results;
+}
+
 // Find and reserve the first free sector ≥ `searchStartLba`, return its
 // absolute LBA. Returns -1 if none free up to `partitionEndLba` (inclusive).
 // Caller is responsible for snapshotting the buffer for undo first.
@@ -507,6 +762,117 @@ function cfsChangeFileType(buffer, dirLba, slotIndex, cbmTypeIdx) {
   data[off + 0x1A] = m.suffix.charCodeAt(1);
   data[off + 0x1B] = m.suffix.charCodeAt(2);
   cfsTouchEntryMtime(buffer, dirLba, slotIndex);
+  return true;
+}
+
+// Sort a CFS directory by name or size. Mirrors the CBM-DOS
+// sortDirectory: collects every non-empty, non-fixed entry across the
+// dir-sector chain, sorts by the requested key, writes them back to
+// the same slot positions in order, and zeros any trailing slots that
+// had entries before the sort.
+//
+// "Fixed" slots stay in place:
+//   - slot 0 of the first dir sector (self-ref of the partition/subdir)
+//   - any slot whose entry's tree pointer matches the partition's
+//     deldir-ref LBA (the %DELETED FILES% system entry in root dirs)
+//
+// Bits 5..4 of byte $14 at every slot (the bit-sliced dir-next pointer
+// contribution from that slot) are PRESERVED — they belong to the
+// sector position, not the entry. Caller is responsible for snapshotting
+// the buffer for undo + re-rendering.
+//
+// sortKey: 'name-asc' | 'name-desc' | 'blocks-asc' | 'blocks-desc'.
+// Block-count compare uses the file size divided by 256 (matching the
+// editor's displayed block count for CFS files).
+function cfsSortDirectory(buffer, firstDirLba, deldirLba, sortKey) {
+  if (!buffer || !firstDirLba) return false;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+
+  // Walk the dir chain, collecting (dirLba, slotIndex) for every slot.
+  var slotList = [];
+  var dirLba = firstDirLba;
+  var visited = {};
+  while (dirLba && !visited[dirLba]) {
+    visited[dirLba] = true;
+    for (var si = 0; si < CFS_DIR_ENTRIES_PER_SECTOR; si++) {
+      slotList.push({ dirLba: dirLba, slotIndex: si });
+    }
+    var nextPtr = _cfsReadDirNext(data, dirLba * IDE64_SECTOR_SIZE);
+    dirLba = (nextPtr.lba && nextPtr.addr > 0) ? nextPtr.addr : 0;
+  }
+  if (slotList.length === 0) return false;
+
+  // Snapshot every slot's 32 bytes + classify as fixed / sortable / empty.
+  var sortable = [];
+  var fixedSet = {};
+  for (var i = 0; i < slotList.length; i++) {
+    var sl = slotList[i];
+    var off = sl.dirLba * IDE64_SECTOR_SIZE + sl.slotIndex * CFS_DIR_ENTRY_SIZE;
+    var bytes = new Uint8Array(CFS_DIR_ENTRY_SIZE);
+    for (var b = 0; b < CFS_DIR_ENTRY_SIZE; b++) bytes[b] = data[off + b];
+
+    // Empty slot: skip in sortable list (fills at the end as zeros anyway).
+    var empty = true;
+    for (var z = 0; z < CFS_DIR_ENTRY_SIZE; z++) {
+      if (bytes[z] !== 0) { empty = false; break; }
+    }
+    if (empty) continue;
+
+    // First slot of the first dir sector = self-ref. Pin it.
+    if (i === 0) { fixedSet[i] = true; continue; }
+
+    // Deldir-ref (system %DELETED FILES%): tree pointer at $14..$17
+    // matches the partition's deldir LBA. Pin it.
+    if (deldirLba && deldirLba > 0) {
+      var dpLba = ((bytes[0x14] & 0x0F) << 24) | (bytes[0x15] << 16) | (bytes[0x16] << 8) | bytes[0x17];
+      if (dpLba === deldirLba) { fixedSet[i] = true; continue; }
+    }
+
+    // Compute sort keys.
+    var nameStr = '';
+    for (var nb = 0; nb < 16; nb++) {
+      var nc = bytes[nb];
+      if (nc === 0x00 || nc === 0xA0) break;
+      nameStr += String.fromCharCode(nc);
+    }
+    // Blocks = ceil(size/256). REL uses 24-bit size; the others 32-bit.
+    var ftype = bytes[0x18] & 0x07;
+    var sizeLo = bytes[0x10] | (bytes[0x11] << 8) | (bytes[0x12] << 16);
+    var sizeHi = bytes[0x13];
+    var byteCount = (ftype === 2 /*REL*/) ? sizeLo : (sizeLo + sizeHi * 0x1000000);
+    var blocks = byteCount === 0 ? 0 : Math.ceil(byteCount / 256);
+
+    sortable.push({ bytes: bytes, name: nameStr, blocks: blocks });
+  }
+
+  // Sort sortable[] by the requested key.
+  var cmp;
+  if (sortKey === 'name-asc') cmp = function(a, b) { return a.name < b.name ? -1 : a.name > b.name ? 1 : 0; };
+  else if (sortKey === 'name-desc') cmp = function(a, b) { return a.name < b.name ? 1 : a.name > b.name ? -1 : 0; };
+  else if (sortKey === 'blocks-asc') cmp = function(a, b) { return a.blocks - b.blocks; };
+  else if (sortKey === 'blocks-desc') cmp = function(a, b) { return b.blocks - a.blocks; };
+  else return false;
+  sortable.sort(cmp);
+
+  // Write back. Walk slotList in order; skip fixed slots (leave them
+  // intact); for each non-fixed slot, pop the next sortable entry and
+  // write it. After sortable is exhausted, zero remaining non-fixed
+  // slots (preserve byte $14 bits 5..4 at each).
+  var srcIdx = 0;
+  for (var w = 0; w < slotList.length; w++) {
+    if (fixedSet[w]) continue;
+    var ws = slotList[w];
+    var woff = ws.dirLba * IDE64_SECTOR_SIZE + ws.slotIndex * CFS_DIR_ENTRY_SIZE;
+    var dirNextBits = data[woff + 0x14] & 0x30;
+    if (srcIdx < sortable.length) {
+      var srcBytes = sortable[srcIdx++].bytes;
+      for (var c = 0; c < CFS_DIR_ENTRY_SIZE; c++) data[woff + c] = srcBytes[c];
+    } else {
+      for (var ze = 0; ze < CFS_DIR_ENTRY_SIZE; ze++) data[woff + ze] = 0;
+    }
+    // Restore the slot's dir-next contribution.
+    data[woff + 0x14] = (data[woff + 0x14] & 0xCF) | dirNextBits;
+  }
   return true;
 }
 

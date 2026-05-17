@@ -699,26 +699,48 @@ function buildZip(files) {
 
 document.getElementById('opt-export-all').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer) return;
   closeMenus();
-  var data = new Uint8Array(currentBuffer);
-  var info = parseCurrentDir(currentBuffer);
-  var extMap = { 1: '.seq', 2: '.prg', 3: '.usr', 4: '.rel' };
   var files = [];
+  var diskName;
+  // CFS view: walk cfsDirEntries via the B-tree reader; the same shape
+  // (name, ftype, typeSuffix, data) drops into buildZip below.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries && hddBuffer) {
+    for (var ci = 0; ci < cfsDirEntries.length; ci++) {
+      var ce = cfsDirEntries[ci];
+      if (!ce || ce.empty) continue;
+      if (ce.ftype === CFS_FTYPE.DIR || ce.ftype === CFS_FTYPE.LNK || ce.ftype === CFS_FTYPE.DEL) continue;
+      if (!ce.dataTreePtr || !ce.dataTreePtr.lba) continue;
+      var cRes = readCfsFileData(hddBuffer, ce.dataTreePtr.addr, ce.size);
+      if (cRes.error || !cRes.data || cRes.data.length === 0) continue;
+      var cName = petsciiToReadable(ce.name).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+      if (!cName) cName = 'file' + ci;
+      var ext = '.' + (ce.typeSuffix || 'prg').toLowerCase();
+      files.push({ name: cName + ext, data: cRes.data });
+    }
+    var part = hddPartitions && hddPartitions[cfsPartitionIdx];
+    diskName = (part && part.name ? petsciiToReadable(part.name) : 'partition')
+      .trim().replace(/[<>:"/\\|?*]/g, '_') || 'partition';
+  } else {
+    if (!currentBuffer) return;
+    var data = new Uint8Array(currentBuffer);
+    var info = parseCurrentDir(currentBuffer);
+    var extMap = { 1: '.seq', 2: '.prg', 3: '.usr', 4: '.rel' };
 
-  for (var i = 0; i < info.entries.length; i++) {
-    var en = info.entries[i];
-    if (en.deleted) continue;
-    var typeByte = data[en.entryOff + 2];
-    var typeIdx = typeByte & 0x07;
-    if (typeIdx < 1 || typeIdx > 4) continue;
-    // GEOS VLIR: dir T/S is the index sector, not file data — use Export CVT
-    if (isVlirFile(data, en.entryOff)) continue;
-    var result = readFileData(currentBuffer, en.entryOff);
-    if (result.error || result.data.length === 0) continue;
-    var name = petsciiToReadable(en.name || '').trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
-    if (!name) name = 'file' + i;
-    files.push({ name: name + (extMap[typeIdx] || '.prg'), data: result.data });
+    for (var i = 0; i < info.entries.length; i++) {
+      var en = info.entries[i];
+      if (en.deleted) continue;
+      var typeByte = data[en.entryOff + 2];
+      var typeIdx = typeByte & 0x07;
+      if (typeIdx < 1 || typeIdx > 4) continue;
+      // GEOS VLIR: dir T/S is the index sector, not file data — use Export CVT
+      if (isVlirFile(data, en.entryOff)) continue;
+      var result = readFileData(currentBuffer, en.entryOff);
+      if (result.error || result.data.length === 0) continue;
+      var name = petsciiToReadable(en.name || '').trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+      if (!name) name = 'file' + i;
+      files.push({ name: name + (extMap[typeIdx] || '.prg'), data: result.data });
+    }
+    diskName = petsciiToReadable(info.diskName || '').trim().replace(/[<>:"/\\|?*]/g, '_') || 'disk';
   }
 
   if (files.length === 0) {
@@ -727,7 +749,6 @@ document.getElementById('opt-export-all').addEventListener('click', function(e) 
   }
 
   var zip = buildZip(files);
-  var diskName = petsciiToReadable(info.diskName || '').trim().replace(/[<>:"/\\|?*]/g, '_') || 'disk';
   var blob = new Blob([zip], { type: 'application/zip' });
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -739,23 +760,41 @@ document.getElementById('opt-export-all').addEventListener('click', function(e) 
 // ── CSV Export ───────────────────────────────────────────────────────
 document.getElementById('opt-export-csv').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer) return;
   closeMenus();
-  var info = parseCurrentDir(currentBuffer);
-  var lines = ['Filename,Type,Blocks,Locked,Track,Sector'];
-  for (var i = 0; i < info.entries.length; i++) {
-    var en = info.entries[i];
-    if (!en.name && !en.type) continue;
-    var name = petsciiToReadable(en.name || '').replace(/"/g, '""').trim();
-    var type = (en.type || '').trim();
-    var blocks = en.blocks || 0;
-    var locked = en.locked ? 'Y' : 'N';
-    var ft = en.track || 0;
-    var fs = en.sector || 0;
-    lines.push('"' + name + '",' + type + ',' + blocks + ',' + locked + ',' + ft + ',' + fs);
+  var lines;
+  var diskName;
+  if (cfsPartitionIdx >= 0 && cfsDirEntries && hddPartitions) {
+    lines = ['Filename,Type,Blocks,Locked,LBA,Size'];
+    for (var ci = 0; ci < cfsDirEntries.length; ci++) {
+      var ce = cfsDirEntries[ci];
+      if (!ce || ce.empty) continue;
+      var cName = petsciiToReadable(ce.name).replace(/"/g, '""').trim();
+      var cType = (ce.typeSuffix || '').trim();
+      var cBlocks = ce.size ? Math.ceil(ce.size / 256) : 0;
+      var cLocked = (ce.attrByte & 0x10) ? 'N' : 'Y'; // writeable bit cleared = locked
+      var cLba = (ce.dataTreePtr && ce.dataTreePtr.addr) || 0;
+      lines.push('"' + cName + '",' + cType + ',' + cBlocks + ',' + cLocked + ',' + cLba + ',' + (ce.size || 0));
+    }
+    var part = hddPartitions[cfsPartitionIdx];
+    diskName = (part && part.name ? petsciiToReadable(part.name) : 'partition').trim().replace(/[<>:"/\\|?*]/g, '_') || 'partition';
+  } else {
+    if (!currentBuffer) return;
+    var info = parseCurrentDir(currentBuffer);
+    lines = ['Filename,Type,Blocks,Locked,Track,Sector'];
+    for (var i = 0; i < info.entries.length; i++) {
+      var en = info.entries[i];
+      if (!en.name && !en.type) continue;
+      var name = petsciiToReadable(en.name || '').replace(/"/g, '""').trim();
+      var type = (en.type || '').trim();
+      var blocks = en.blocks || 0;
+      var locked = en.locked ? 'Y' : 'N';
+      var ft = en.track || 0;
+      var fs = en.sector || 0;
+      lines.push('"' + name + '",' + type + ',' + blocks + ',' + locked + ',' + ft + ',' + fs);
+    }
+    diskName = petsciiToReadable(info.diskName || '').trim().replace(/[<>:"/\\|?*]/g, '_') || 'disk';
   }
   var csv = lines.join('\n');
-  var diskName = petsciiToReadable(info.diskName || '').trim().replace(/[<>:"/\\|?*]/g, '_') || 'disk';
   var blob = new Blob([csv], { type: 'text/csv' });
   var a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -767,8 +806,44 @@ document.getElementById('opt-export-csv').addEventListener('click', function(e) 
 // ── Directory Export as HTML ─────────────────────────────────────────
 document.getElementById('opt-export-html-dir').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer) return;
   closeMenus();
+  // CFS branch: build the listing from cfsDirEntries (partition name +
+  // typeSuffix + size). Wraps to the same template as the CBM-DOS path
+  // below so a single set of HTML/CSS handles both.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries && hddPartitions) {
+    var cfsPart = hddPartitions[cfsPartitionIdx];
+    var cfsPName = cfsPart && cfsPart.name ? petsciiToReadable(cfsPart.name).padEnd(16) : ''.padEnd(16);
+    var cfsTitleName = cfsPName.trim() || 'partition';
+    var cfsRows = [];
+    for (var cci = 0; cci < cfsDirEntries.length; cci++) {
+      var cce = cfsDirEntries[cci];
+      if (!cce || cce.empty) continue;
+      if (cce.ftype === CFS_FTYPE.DEL && !showDeleted) continue;
+      var ccBlocks = cce.size ? Math.ceil(cce.size / 256) : 0;
+      var ccName = '"' + petsciiToReadable(cce.name).padEnd(16) + '"';
+      var ccType = (cce.typeSuffix || 'PRG').trim();
+      cfsRows.push(String(ccBlocks).padStart(4) + ' ' + ccName + ' ' + escHtml(ccType));
+    }
+    var cfsHtml = '<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n' +
+      '<title>' + escHtml(cfsTitleName) + '</title>\n' +
+      '<style>\n' +
+      'body { background: #40318d; color: #6C5EB5; font-family: "C64 Pro Mono", "Courier New", monospace; font-size: 16px; padding: 20px; }\n' +
+      'pre { margin: 0; line-height: 1.4; }\n' +
+      '.dir { color: #6C5EB5; }\n' +
+      '</style>\n</head>\n<body>\n<pre class="dir">\n' +
+      '0 "' + escHtml(cfsPName) + '" CFS\n' +
+      cfsRows.join('\n') + (cfsRows.length ? '\n' : '') +
+      '</pre>\n</body>\n</html>';
+    var cfsSafe = cfsTitleName.replace(/[<>:"/\\|?*]/g, '_') || 'directory';
+    var cfsBlob = new Blob([cfsHtml], { type: 'text/html' });
+    var cfsA = document.createElement('a');
+    cfsA.href = URL.createObjectURL(cfsBlob);
+    cfsA.download = cfsSafe + '.html';
+    cfsA.click();
+    URL.revokeObjectURL(cfsA.href);
+    return;
+  }
+  if (!currentBuffer) return;
   var info = parseCurrentDir(currentBuffer);
   var diskName = petsciiToReadable(info.diskName || '').padEnd(currentFormat.nameLength);
   var diskId = petsciiToReadable(info.diskId || '');

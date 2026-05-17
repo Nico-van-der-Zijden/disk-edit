@@ -285,6 +285,15 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.132', title: 'IDE64 .hdd — Disk menu parity: Validate / Sort / Scan for Lost Files / Export Disk', items: [
+      'Sort Directory works in CFS (Name / Blocks asc/desc). The CFS sort preserves the bit-sliced dir-next pointer at byte $14 of every slot and pins the self-ref + <<DELETED FILES>> system entries. Disabled on the HDD partition-list view (no dir to sort there)',
+      'Validate for CFS: walks every dir entry\'s B-tree to build the reachable LBA set, reconciles against the partition bitmap, reports missing (file claims sectors marked free — corrupt) and lost (bitmap says used but no file claims them — wasted space). Offers Fix Bitmap if there are discrepancies',
+      'Scan for Lost Files for CFS: hunts orphan tree-node sectors and reconstructs the file content via the byte-slice decoder. Quick mode checks used-but-unreachable sectors; Deep mode also scans free space for recently-scratched files (more false positives, higher pointer-cluster threshold). Each candidate offers Export or Restore (Restore writes a fresh dir entry pointing at the existing tree LBA — no sector rewrite)',
+      'Export Disk works in CFS: Export All Files (zips every NORMAL/REL file via the B-tree walker), Export as Text / CSV / HTML (partition dir listing in each format). Export Directory as PNG stays CBM-DOS only — the C64-canvas render reads parseCurrentDir. All four listing exports disabled on the HDD partition-list view',
+      'Open Recent for .hdd now dispatches to openIde64AsTab — previously it fell through to the CBM-DOS parseDisk path and showed a corrupt view',
+      'Disabled in the IDE64 .hdd context: Edit Current Sector / Edit File Sector / Go to Sector / Find / GEOS File Info / Open in Emulator / Edit Blocks Free / Recalculate Blocks Free / Compare With… / File Chains / Decompress ZipCode / Fill Free Sectors / Optimize Disk / Convert to GEOS Format. All re-enable automatically on switch back to a D64 / D71 / etc. tab',
+      'Find in All Tabs now skips .hdd tabs in the iterator so cross-tab search doesn\'t crash on mixed sets. CFS-aware search + compare are on the memory todo list',
+    ]},
     { ver: '1.3.131', title: 'IDE64 .hdd — CBM-DOS-only menu items now disable cleanly in CFS view', items: [
       'Edit menu: Edit Current Sector / Edit File Sector now disabled on IDE64 .hdd tabs (both partition list and inside a CFS partition). They walk T:S via the format spec which CFS doesn\'t have. Re-enable automatically on switch back to a D64 / D71 / etc. tab',
       'Search menu: Go to Sector also disabled in the .hdd context (same reason — modal walks T:S, not LBA). Find disabled too; Find in All Tabs stays enabled but skips IDE64 tabs in the loop so it doesn\'t crash on mixed sets',

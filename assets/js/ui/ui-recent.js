@@ -144,6 +144,12 @@ function openRecentDisk(entry) {
       // CMD containers (RAMLink, FD2000/FD4000, CMD HD) open to the
       // partition list — double-click a partition to enter it.
       openCmdContainerAsTab(bufCopy, entry.name);
+    } else if (/\.hdd$/i.test(entry.name)) {
+      // IDE64 .hdd opens via its own dispatcher — CBM-DOS parseDisk
+      // would treat the magic bytes / partition table as random sector
+      // content and surface a "corrupt disk" view.
+      clearCmdContainerState();
+      openIde64AsTab(bufCopy, entry.name);
     } else {
       clearCmdContainerState();
       currentBuffer = bufCopy;

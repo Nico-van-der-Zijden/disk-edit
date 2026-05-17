@@ -186,14 +186,33 @@ function updateMenuState() {
   // gates them off (tape images are read-only).
   document.getElementById('opt-save').classList.toggle('disabled', !hasDisk || !getSaveFileName() || tape);
   document.getElementById('opt-save-as').classList.toggle('disabled', !hasDisk || tape);
-  document.getElementById('opt-validate').classList.toggle('disabled', !hasDisk || noEdit);
+  // Validate: enabled in CBM-DOS contexts and inside a CFS partition
+  // (CFS variant walks the B-tree + dir chains and reconciles against
+  // the partition bitmap). Disabled on the HDD partition-list view —
+  // no specific partition to validate from there.
+  var hddListView3 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView() &&
+                     (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx < 0);
+  document.getElementById('opt-validate').classList.toggle('disabled', !hasDisk || noEdit || hddListView3);
   document.getElementById('opt-show-deleted').classList.toggle('disabled', !hasDisk || noEdit);
-  document.getElementById('opt-sort').classList.toggle('disabled', !hasDisk || noEdit);
-  document.getElementById('opt-edit-free').classList.toggle('disabled', !hasDisk || noEdit);
-  document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk || noEdit);
+  // Sort Directory: enabled in CBM-DOS contexts AND inside a CFS
+  // partition (CFS sort route preserves the bit-sliced dir-next bits).
+  // Disabled on the IDE64 .hdd partition-list view (no dir to sort).
+  var hddListView2 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView() &&
+                     (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx < 0);
+  document.getElementById('opt-sort').classList.toggle('disabled', !hasDisk || noEdit || hddListView2);
+  // Blocks-free is a CBM-DOS BAM concept (2-byte counter in the BAM
+  // sector). CFS doesn't have it — partition free-block accounting is
+  // derived from the bitmap chain at read time, not a stored counter.
+  // Disable across the entire IDE64 .hdd context.
+  var hddCtx3 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
+  document.getElementById('opt-edit-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx3);
+  document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx3);
   document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || noEdit || !hasErrorBytes(currentBuffer));
-  document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || noEdit || hasGeosSignature(currentBuffer));
+  // Convert to GEOS Format: CBM-DOS-only layer (BAM-aware, T:S-based
+  // GEOS dir structure). CFS doesn't have a GEOS counterpart.
+  var hddCtx8 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
+  document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || noEdit || hasGeosSignature(currentBuffer) || hddCtx8);
   document.getElementById('opt-view-border').classList.toggle('disabled', !hasDisk || !hasGeosSignature(currentBuffer));
   document.getElementById('opt-restore-dos-version').classList.toggle('disabled', !hasDisk || noEdit || isSoftWriteProtected(currentBuffer) === null);
   // Install HD-DOS: only meaningful on a DHD container view, only enabled
@@ -214,22 +233,52 @@ function updateMenuState() {
     dhdDosLabel += ' (no donor cached)';
   }
   dhdDosBtn.textContent = dhdDosLabel;
-  document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || noEdit);
+  // Scan for Lost Files: enabled in CBM-DOS and inside a CFS partition
+  // (CFS variant hunts orphan tree-node sectors and reconstructs the
+  // file content via the byte-slice decoder). Disabled on the HDD
+  // partition-list view — no specific partition to scan from there.
+  var hddListView4 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView() &&
+                     (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx < 0);
+  document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || noEdit || hddListView4);
   document.getElementById('opt-compact-dir').classList.toggle('disabled', !hasDisk || noEdit);
-  document.getElementById('opt-file-chains').classList.toggle('disabled', !hasDisk || noEdit);
-  document.getElementById('opt-unzip').classList.toggle('disabled', !hasDisk || noEdit);
+  // File Chains visualises a CBM-DOS file's T:S chain. CFS files use
+  // B-tree addressing — no chain to walk. Disable across the IDE64
+  // .hdd context; if a "View File Tree" modal is needed later we'll
+  // add it as a separate item.
+  var hddCtx6 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
+  document.getElementById('opt-file-chains').classList.toggle('disabled', !hasDisk || noEdit || hddCtx6);
+  // Decompress ZipCode: ZipCode is a 1541-only transport format
+  // (1!disk.name … 4!disk.name PRG files inside a D64) — disable in
+  // the IDE64 .hdd context where it doesn't apply.
+  var hddCtx7 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
+  document.getElementById('opt-unzip').classList.toggle('disabled', !hasDisk || noEdit || hddCtx7);
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
-  document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || noEdit);
-  document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || noEdit);
+  // Fill Free Sectors + Optimize Disk: CBM-DOS BAM-based. CFS analogues
+  // are on the project todo list (project_cfs_disk_tools_remaining.md).
+  var hddCtx9 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
+  document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx9);
+  document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || noEdit || hddCtx9);
   document.getElementById('opt-resize-dnp').classList.toggle('disabled', !hasDisk || currentFormat !== DISK_FORMATS.dnp || !!currentPartition);
-  document.getElementById('opt-export-all').classList.toggle('disabled', !hasDisk || containerList);
-  document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk || containerList);
-  document.getElementById('opt-export-csv').classList.toggle('disabled', !hasDisk || containerList);
-  document.getElementById('opt-export-html-dir').classList.toggle('disabled', !hasDisk || containerList);
-  document.getElementById('opt-export-png-dir').classList.toggle('disabled', !hasDisk || containerList);
+  // Listing exports: enabled in any view that has a real directory.
+  // For CFS: enabled inside a partition (cfsPartitionIdx >= 0) where
+  // cfsDirEntries is populated. Disabled on the HDD partition-list
+  // view (no dir to export from there). PNG export stays CBM-DOS only
+  // for now (the C64-style canvas render reads parseCurrentDir).
+  var hddInList = (typeof isIde64ContainerView === 'function') && isIde64ContainerView() &&
+                  (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx < 0);
+  var hddCtxFull = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
+  document.getElementById('opt-export-all').classList.toggle('disabled', !hasDisk || containerList || hddInList);
+  document.getElementById('opt-export-txt').classList.toggle('disabled', !hasDisk || containerList || hddInList);
+  document.getElementById('opt-export-csv').classList.toggle('disabled', !hasDisk || containerList || hddInList);
+  document.getElementById('opt-export-html-dir').classList.toggle('disabled', !hasDisk || containerList || hddInList);
+  document.getElementById('opt-export-png-dir').classList.toggle('disabled', !hasDisk || containerList || hddCtxFull);
   document.getElementById('opt-md5').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-base64').classList.toggle('disabled', !hasDisk);
-  document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || noEdit);
+  // Compare With… walks T:S sectors via the format spec — CBM-DOS only.
+  // CFS-aware compare (B-tree walk + byte-slice decode per file, plus
+  // partition-level structural diff) is on the project todo list.
+  var hddCtx5 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
+  document.getElementById('opt-compare').classList.toggle('disabled', !hasDisk || noEdit || hddCtx5);
   document.getElementById('opt-g64-layout').classList.toggle('disabled', !currentG64Layout);
   // Disk Tools is normally disabled on a container list view (the items
   // inside operate on filesystems, not containers). But Install HD-DOS
@@ -242,7 +291,13 @@ function updateMenuState() {
   // Open in Emulator: any mountable disk image (including tape). Disabled
   // on the CMD container partition-list view — the container itself isn't
   // a disk EmulatorJS can mount; enter a partition first.
-  document.getElementById('opt-open-in-emulator').classList.toggle('disabled', !hasDisk || containerList);
+  // Open in Emulator hands the active disk image to EmulatorJS/VICE,
+  // which mounts D64/D71/D81/etc. as a drive image. IDE64 .hdd isn't
+  // a mountable disk for the emulator (and the CFS view inside one is
+  // a filesystem, not an image), so disable across the whole .hdd
+  // context — same logic as CMD container partition lists.
+  var hddCtx4 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
+  document.getElementById('opt-open-in-emulator').classList.toggle('disabled', !hasDisk || containerList || hddCtx4);
   // Find walks T:S sectors via the format's sectorsPerTrack — CBM-DOS
   // only. Skip the whole IDE64 .hdd context; CFS file content search
   // would need its own walker.
@@ -1231,10 +1286,46 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
   updateMenuState();
 });
 
-document.getElementById('opt-validate').addEventListener('click', (e) => {
+document.getElementById('opt-validate').addEventListener('click', async (e) => {
   e.stopPropagation();
-  if (!currentBuffer) return;
   closeMenus();
+  // CFS branch: walks every dir entry's B-tree to build the reachable
+  // LBA set, compares to the partition bitmap, reports orphans + missing.
+  // Offers a confirm modal before rewriting the bitmap if there are
+  // discrepancies (same dirty-only-on-change pattern as CBM-DOS below).
+  if (cfsPartitionIdx >= 0 && cfsDirEntries && hddPartitions) {
+    var cfsPart = hddPartitions[cfsPartitionIdx];
+    var firstPass = cfsValidatePartition(hddBuffer, cfsPart, { fix: false });
+    var totalIssues = firstPass.lostCount + firstPass.missingCount;
+    var fix = false;
+    if (totalIssues > 0) {
+      // Defer to showChoiceModal if available, else just show a plain
+      // modal with two buttons — same UX as Restore Partition flow.
+      if (typeof showChoiceModal === 'function') {
+        var ans = await showChoiceModal(
+          'Validate Partition',
+          'Found ' + firstPass.missingCount + ' missing + ' + firstPass.lostCount + ' lost sector(s). Rewrite the bitmap to match the actual file allocation?',
+          [
+            { label: 'Cancel', value: false, secondary: true },
+            { label: 'Fix Bitmap', value: true }
+          ]
+        );
+        fix = !!ans;
+      }
+    }
+    if (fix) {
+      var pre = hddBuffer.slice(0);
+      cfsValidatePartition(hddBuffer, cfsPart, { fix: true });
+      pushUndo(pre);
+      refreshIde64View();
+      var secondPass = cfsValidatePartition(hddBuffer, cfsPart, { fix: false });
+      showModal('Validate Partition', secondPass.log);
+    } else {
+      showModal('Validate Partition', firstPass.log);
+    }
+    return;
+  }
+  if (!currentBuffer) return;
   // Snapshot first, push undo only if validate actually changes a byte.
   // Calling pushUndo() unconditionally would mark a clean disk dirty
   // even when validate had nothing to fix.
