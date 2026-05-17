@@ -274,11 +274,22 @@ function readCfsFileData(buffer, treeRootLba, fileSize) {
     }
 
     if (dataSecLba !== null) {
-      var dataByteOff = dataSecLba * IDE64_SECTOR_SIZE + (offset & (IDE64_SECTOR_SIZE - 1));
-      if (dataByteOff + copyLen > data.length) {
+      var sectorBase = dataSecLba * IDE64_SECTOR_SIZE;
+      if (sectorBase + IDE64_SECTOR_SIZE > data.length) {
         return { data: result.subarray(0, resultIdx), error: 'data sector past end of image' };
       }
-      for (var b = 0; b < copyLen; b++) result[resultIdx + b] = data[dataByteOff + b];
+      // CFS data sectors are byte-sliced with stride 4: the N-th file
+      // byte within a 512-byte sector lives at sector offset
+      // (N & 0x7F) * 4 + (N >> 7). So file bytes 0..127 are at sector
+      // offsets 0, 4, 8, …, 508 (pass 0); bytes 128..255 are at offsets
+      // 1, 5, 9, …, 509 (pass 1); and so on. Reverse the slicing when
+      // reading. Verified against DirMaster's CFS export.
+      var byteInSector = offset & (IDE64_SECTOR_SIZE - 1);
+      for (var b = 0; b < copyLen; b++) {
+        var n = byteInSector + b;
+        var sliceOff = (n & 0x7F) * 4 + (n >>> 7);
+        result[resultIdx + b] = data[sectorBase + sliceOff];
+      }
     }
     // Sparse hole: result is zero-initialized, leave it.
 
@@ -434,13 +445,11 @@ function cfsWriteDirEntryName(buffer, dirLba, slotIndex, newName) {
   var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
   var off = dirLba * IDE64_SECTOR_SIZE + slotIndex * CFS_DIR_ENTRY_SIZE;
   if (off + 16 > data.length) return false;
-  // Pad with $A0 (PETSCII hard-space), not 0x20 — VICE and our own row
-  // renderer treat 0x20 as a displayable character, so space-padded
-  // names show their trailing spaces. $A0 is the recognised filename
-  // terminator (same convention CBM-DOS dir entries use), so trailing
-  // padding stays invisible.
+  // Pad with $00 — matches IDE64-native convention. Every existing file
+  // entry on ide.hdd and every cfsfdisk-created entry uses $00 padding
+  // for file names (display layers stop at $00 / $A0 / $20 anyway).
   for (var i = 0; i < 16; i++) {
-    data[off + i] = i < newName.length ? (newName.charCodeAt(i) & 0xFF) : 0xA0;
+    data[off + i] = i < newName.length ? (newName.charCodeAt(i) & 0xFF) : 0x00;
   }
   cfsTouchEntryMtime(buffer, dirLba, slotIndex);
   return true;
@@ -1001,11 +1010,19 @@ function cfsImportFile(buffer, partitionStart, partitionEndLba, firstDirLba, nam
     dataLbas.push(dlba);
     searchFrom = dlba + 1;
 
-    // Write 512 bytes of payload (last sector zero-padded)
+    // Write 512 bytes of payload, byte-sliced with stride 4 per CFS spec:
+    // file byte N (within sector) → sector offset (N & 0x7F) * 4 + (N >> 7).
+    // Verified against DirMaster's CFS reader. Without this, IDE64 reads
+    // every file as garbage (which is what was happening before this fix).
     var dbase = dlba * IDE64_SECTOR_SIZE;
     for (var byteI = 0; byteI < IDE64_SECTOR_SIZE; byteI++) {
+      data[dbase + byteI] = 0;
+    }
+    for (var byteI = 0; byteI < IDE64_SECTOR_SIZE; byteI++) {
       var pi = offsetInFile + byteI;
-      data[dbase + byteI] = pi < payload.length ? payload[pi] : 0;
+      if (pi >= payload.length) break;
+      var sliceOff = (byteI & 0x7F) * 4 + (byteI >>> 7);
+      data[dbase + sliceOff] = payload[pi];
     }
 
     // Write data pointer in leaf at index (offset/512) % 128
@@ -1019,10 +1036,12 @@ function cfsImportFile(buffer, partitionStart, partitionEndLba, firstDirLba, nam
   var eo = slot.dirLba * IDE64_SECTOR_SIZE + slot.slotIndex * CFS_DIR_ENTRY_SIZE;
   var dirNextBits = data[eo + 0x14] & 0x30;
   for (var z2 = 0; z2 < CFS_DIR_ENTRY_SIZE; z2++) data[eo + z2] = 0;
-  // Pad short names with $A0 (CBM/VICE-recognised terminator), not
-  // 0x20 — see cfsWriteDirEntryName for the rationale.
+  // Pad short names with $00 — matches IDE64-native convention (every
+  // file entry in ide.hdd uses $00 padding; cfsfdisk-created images
+  // match). Earlier we used $A0 (CBM-DOS terminator) but IDE64 expects
+  // $00 for file dir entries.
   for (var n = 0; n < 16; n++) {
-    data[eo + n] = n < name.length ? (name.charCodeAt(n) & 0xFF) : 0xA0;
+    data[eo + n] = n < name.length ? (name.charCodeAt(n) & 0xFF) : 0x00;
   }
   data[eo + 0x10] = payload.length & 0xFF;
   data[eo + 0x11] = (payload.length >>> 8) & 0xFF;
@@ -1140,7 +1159,7 @@ function cfsInsertSeparator(buffer, parentDirLba, patternBytes) {
   var pat = patternBytes || [];
   var pLen = pat.length;
   for (var i = 0; i < 16; i++) {
-    data[eo + i] = i < pLen ? (pat[i] & 0xFF) : 0xA0;
+    data[eo + i] = i < pLen ? (pat[i] & 0xFF) : 0x00;
   }
   // No size, no tree pointer (just dir-next bits preserved in $14).
   data[eo + 0x14] = dirNextBits;
@@ -1186,7 +1205,7 @@ function cfsInsertPlaceholderEntry(buffer, parentDirLba, name, opts) {
 
   var nameStr = String(name || '');
   for (var n = 0; n < 16; n++) {
-    data[eo + n] = n < nameStr.length ? (nameStr.charCodeAt(n) & 0xFF) : 0xA0;
+    data[eo + n] = n < nameStr.length ? (nameStr.charCodeAt(n) & 0xFF) : 0x00;
   }
   // size left at 0 ($10..$13 already zeroed)
   // tree pointer: no VALID / LBA flag, dir-next bits preserved
@@ -1250,24 +1269,26 @@ function cfsInitPartitionStorage(buffer, partitionStart, partitionEndLba, partit
   var rootBase = rootdirLba * IDE64_SECTOR_SIZE;
   for (var rz = 0; rz < IDE64_SECTOR_SIZE; rz++) data[rootBase + rz] = 0;
   var pname = partitionName || 'PARTITION';
-  // $A0-pad (CBM/VICE-recognised terminator) — same reason as
-  // cfsWriteDirEntryName. 0x20 here would show as trailing spaces in
-  // the CFS dir header when entering the partition.
+  // Self-ref name padded with $20 (space) — matches cfsfdisk's clean.hdd
+  // convention for the root-dir self-reference entry. Display layers
+  // strip trailing spaces; the underlying convention is what IDEDOS
+  // expects when validating the directory header.
   for (var rn = 0; rn < 16; rn++) {
-    data[rootBase + rn] = rn < pname.length ? (pname.charCodeAt(rn) & 0xFF) : 0xA0;
+    data[rootBase + rn] = rn < pname.length ? (pname.charCodeAt(rn) & 0xFF) : 0x20;
   }
-  // Self ptr at $10..$13
-  data[rootBase + 0x10] = 0x40 | ((rootdirLba >>> 24) & 0x0F);
+  // Self ptr at $10..$13 — VALID|LBA (0xC0) per cfsfdisk convention
+  data[rootBase + 0x10] = 0xC0 | ((rootdirLba >>> 24) & 0x0F);
   data[rootBase + 0x11] = (rootdirLba >>> 16) & 0xFF;
   data[rootBase + 0x12] = (rootdirLba >>> 8) & 0xFF;
   data[rootBase + 0x13] = rootdirLba & 0xFF;
-  // Parent ptr at $14..$17 (root has no parent, points to self)
-  data[rootBase + 0x14] = 0x40 | ((rootdirLba >>> 24) & 0x0F);
+  // Parent ptr at $14..$17 (root has no parent, points to self) — VALID|LBA
+  data[rootBase + 0x14] = 0xC0 | ((rootdirLba >>> 24) & 0x0F);
   data[rootBase + 0x15] = (rootdirLba >>> 16) & 0xFF;
   data[rootBase + 0x16] = (rootdirLba >>> 8) & 0xFF;
   data[rootBase + 0x17] = rootdirLba & 0xFF;
-  // Attr + "DIR" suffix
-  data[rootBase + 0x18] = 0x7B;
+  // Attr 0x3B — matches cfsfdisk's clean.hdd convention for root self-ref
+  // (bit 6 cleared compared to ide.hdd's older 0x7B convention).
+  data[rootBase + 0x18] = 0x3B;
   data[rootBase + 0x19] = 0x44; data[rootBase + 0x1A] = 0x49; data[rootBase + 0x1B] = 0x52;
 
   // %DELETED FILES% entry at slot 1 (mirrors what ide.hdd has)
@@ -1282,9 +1303,24 @@ function cfsInitPartitionStorage(buffer, partitionStart, partitionEndLba, partit
   data[dfBase + 0x18] = 0xAB; // matches the attr byte ide.hdd uses for this special entry
   data[dfBase + 0x19] = 0x44; data[dfBase + 0x1A] = 0x49; data[dfBase + 0x1B] = 0x52;
 
-  // Deleted-dir sector: zero (no deleted files yet).
+  // Deleted-dir sector: cfsfdisk writes a "%DELETED FILES%" self-ref
+  // entry at slot 0 (mirrors how the deldir is referenced from root).
+  // Format from clean.hdd: name + self-ptr at $10..$13 + parent-ptr
+  // (=root) at $14..$17 (both with VALID|LBA = 0xC0) + attr $2B + "DIR".
   var delBase = deldirLba * IDE64_SECTOR_SIZE;
   for (var dz = 0; dz < IDE64_SECTOR_SIZE; dz++) data[delBase + dz] = 0;
+  var delName = '%DELETED  FILES%';
+  for (var dln = 0; dln < 16; dln++) data[delBase + dln] = delName.charCodeAt(dln) & 0xFF;
+  data[delBase + 0x10] = 0xC0 | ((deldirLba >>> 24) & 0x0F);
+  data[delBase + 0x11] = (deldirLba >>> 16) & 0xFF;
+  data[delBase + 0x12] = (deldirLba >>> 8) & 0xFF;
+  data[delBase + 0x13] = deldirLba & 0xFF;
+  data[delBase + 0x14] = 0xC0 | ((rootdirLba >>> 24) & 0x0F);
+  data[delBase + 0x15] = (rootdirLba >>> 16) & 0xFF;
+  data[delBase + 0x16] = (rootdirLba >>> 8) & 0xFF;
+  data[delBase + 0x17] = rootdirLba & 0xFF;
+  data[delBase + 0x18] = 0x2B;
+  data[delBase + 0x19] = 0x44; data[delBase + 0x1A] = 0x49; data[delBase + 0x1B] = 0x52;
 
   return { ok: true, rootDirLba: rootdirLba, deletedDirLba: deldirLba };
 }
@@ -1439,10 +1475,11 @@ function cfsAddPartitionToTable(buffer, slotIdx, partitionName, startLba, endLba
   if (eo + IDE64_PARTITION_ENTRY_SIZE > data.length) return { ok: false, error: 'partition table out of range' };
   for (var z = 0; z < IDE64_PARTITION_ENTRY_SIZE; z++) data[eo + z] = 0;
 
-  // Name (16 B, $A0-padded — same terminator convention as dir-entry
-  // names; keeps VICE from showing trailing spaces on short names)
+  // Name (16 B, $00-padded — matches cfsfdisk's clean.hdd convention.
+  // VICE/IDEDOS recognises both $A0 and $00 as terminators but cfsfdisk
+  // writes $00 for partition entries specifically, so we match that.
   for (var n = 0; n < 16; n++) {
-    data[eo + n] = n < partitionName.length ? (partitionName.charCodeAt(n) & 0xFF) : 0xA0;
+    data[eo + n] = n < partitionName.length ? (partitionName.charCodeAt(n) & 0xFF) : 0x00;
   }
   // Start pointer (VALID|LBA|WRITEABLE)
   data[eo + 0x10] = 0xD0 | ((startLba >>> 24) & 0x0F);
@@ -1485,6 +1522,11 @@ function createEmptyHdd(sizeMib, opts) {
 
   // Boot sector at LBA 0
   d[0x01] = 0; // default partition
+  // cfsfdisk leaves bytes 0-3 as 00 00 00 00 and writes the pair
+  // 40 00 40 00 at bytes 4-7 — looks like a 4-byte LBA-flagged pointer
+  // ($00004000) of unknown purpose but every cfsfdisk-created image has
+  // it. Reproduce the pattern so IDEDOS's boot-sector validation passes.
+  d[0x04] = 0x40; d[0x05] = 0x00; d[0x06] = 0x40; d[0x07] = 0x00;
   for (var mi = 0; mi < IDE64_MAGIC_STRING.length; mi++) {
     d[IDE64_MAGIC_OFFSET + mi] = IDE64_MAGIC_STRING.charCodeAt(mi);
   }
@@ -1542,11 +1584,11 @@ function cfsCreateSubdir(buffer, partitionStart, partitionEndLba, parentDirLba, 
   // Zero the new directory sector, then write its self-reference at slot 0.
   var newDirBase = newDirLba * IDE64_SECTOR_SIZE;
   for (var z = 0; z < IDE64_SECTOR_SIZE; z++) data[newDirBase + z] = 0;
-  // Self-ref name: 16 bytes, $A0-padded so the CFS dir header doesn't
-  // display trailing spaces after the dir is entered (the row renderer
-  // stops at $A0 / $00 but treats $20 as a visible character now).
+  // Self-ref name: 16 bytes, $20-padded — matches cfsfdisk's clean.hdd
+  // convention for the root-dir self-reference and ide.hdd's PROFIRE/
+  // STORMLORD self-refs. The row renderer stops at $A0 / $00 / $20.
   for (var n = 0; n < 16; n++) {
-    data[newDirBase + n] = n < name.length ? (name.charCodeAt(n) & 0xFF) : 0xA0;
+    data[newDirBase + n] = n < name.length ? (name.charCodeAt(n) & 0xFF) : 0x20;
   }
   // $10..$13 — self pointer (LBA flag, addr = newDirLba)
   data[newDirBase + 0x10] = 0x40 | ((newDirLba >>> 24) & 0x0F);

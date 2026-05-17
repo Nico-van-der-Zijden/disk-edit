@@ -51,9 +51,13 @@ describe('CFS B-tree file reader', function() {
     var dataLba = 11;
     // Tree sector: write data pointer 0 → dataLba
     writeDataPointer(d, treeLba * 512 + 0, dataLba);
-    // Data sector: 'HELLO\0...'
+    // Data sector: 'HELLO, CFS!' byte-sliced per CFS spec — file byte N
+    // lives at sector offset (N & 0x7F) * 4 + (N >> 7).
     var payload = 'HELLO, CFS!';
-    for (var i = 0; i < payload.length; i++) d[dataLba * 512 + i] = payload.charCodeAt(i);
+    for (var i = 0; i < payload.length; i++) {
+      var sliceOff = (i & 0x7F) * 4 + (i >>> 7);
+      d[dataLba * 512 + sliceOff] = payload.charCodeAt(i);
+    }
 
     var res = readCfsFileData(buf, treeLba, payload.length);
     assert.strictEqual(res.error, null);

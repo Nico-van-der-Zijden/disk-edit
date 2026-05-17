@@ -172,6 +172,68 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
+  // CFS view: read each selected file via the B-tree walker, stash a
+  // clipboard entry shaped like the CBM-DOS entries below (typeIdx +
+  // 16-byte name + payload), plus a `cfsTypeSuffix` so pasting back
+  // into CFS preserves the original label. CFS files have no GEOS
+  // metadata to carry along; geosBytes are zeroed and infoBlock stays
+  // null. DIR / LNK / DEL entries are skipped — they have no file
+  // payload to copy.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var rawIdx = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
+    clipboard = [];
+    var cfsSkipped = [];
+    var cfsProgress = rawIdx.length > 1 ? showProgressModal('Copying Files') : null;
+    var cfsSuffixToTypeIdx = { SEQ: 1, PRG: 2, USR: 3, REL: 4 };
+    for (var cci = 0; cci < rawIdx.length; cci++) {
+      var ce = cfsDirEntries[rawIdx[cci]];
+      if (!ce || ce.empty) continue;
+      var ceName = petsciiToReadable(ce.name).trim() || '?';
+      if (ce.ftype === CFS_FTYPE.DIR || ce.ftype === CFS_FTYPE.LNK || ce.ftype === CFS_FTYPE.DEL) {
+        cfsSkipped.push({ name: ceName, reason: 'Not a file (dir / link / scratched)' });
+        continue;
+      }
+      if (!ce.dataTreePtr || !ce.dataTreePtr.lba) {
+        cfsSkipped.push({ name: ceName, reason: 'No data tree pointer' });
+        continue;
+      }
+      if (cfsProgress) await cfsProgress.update(cci, rawIdx.length, ceName);
+      var cRes = readCfsFileData(hddBuffer, ce.dataTreePtr.addr, ce.size);
+      if (cRes.error) { cfsSkipped.push({ name: ceName, reason: cRes.error }); continue; }
+      if (!cRes.data || cRes.data.length === 0) { cfsSkipped.push({ name: ceName, reason: 'Empty file' }); continue; }
+      // Build a 16-byte $A0-padded name (CBM convention, what
+      // writeFileToDisk expects). Source bytes come straight from the
+      // dir entry — preserves PETSCII reversed glyphs / hard-spaces.
+      var disk = new Uint8Array(hddBuffer);
+      var nameBytes = new Uint8Array(16);
+      var srcOff = ce.dirLba * 512 + ce.index * 32;
+      for (var nbi = 0; nbi < 16; nbi++) nameBytes[nbi] = disk[srcOff + nbi];
+      // Map typeSuffix → CBM-DOS typeIdx for pasting into a D64 etc.
+      // Falls back to PRG when the suffix is custom (CVT/TXT/etc).
+      var sufKey = (ce.typeSuffix || 'PRG').toUpperCase();
+      var typeIdxFromCfs = cfsSuffixToTypeIdx[sufKey] || 2;
+      clipboard.push({
+        typeIdx: typeIdxFromCfs,
+        nameBytes: nameBytes,
+        geosBytes: new Uint8Array(9),
+        geosInfoBlock: null,
+        data: new Uint8Array(cRes.data),
+        vlirRecords: null,
+        cfsTypeSuffix: ce.typeSuffix || sufKey,
+      });
+    }
+    if (rawIdx.length > 1) {
+      if (cfsSkipped.length > 0) {
+        var lines = [clipboard.length + ' file(s) copied to clipboard.'];
+        for (var sk = 0; sk < cfsSkipped.length; sk++) lines.push(cfsSkipped[sk].name + ' — ' + cfsSkipped[sk].reason);
+        showModal('Copy Complete', lines);
+      } else {
+        document.getElementById('modal-overlay').classList.remove('open');
+      }
+    }
+    updateEntryMenuState();
+    return;
+  }
   var data = new Uint8Array(currentBuffer);
   var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
   clipboard = [];
@@ -274,8 +336,61 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
 
 document.getElementById('opt-paste').addEventListener('click', async (e) => {
   e.stopPropagation();
-  if (clipboard.length === 0 || !currentBuffer || !canInsertFile()) return;
+  if (clipboard.length === 0) return;
   closeMenus();
+  // CFS view: paste each clipboard entry via cfsImportFile. Works for
+  // clipboard items copied from either a D64 (carries CBM typeIdx) or
+  // another CFS partition (additionally carries cfsTypeSuffix). GEOS
+  // metadata is dropped — CFS has no GEOS notion. DIR/LNK clipboard
+  // shapes don't exist (copy refuses on them), so the paste only ever
+  // handles file-style payloads.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+    var cPart = hddPartitions && hddPartitions[cfsPartitionIdx];
+    if (!cPart) return;
+    if (!cfsFindEmptyDirSlot(hddBuffer, cfsDirLba)) {
+      showModal('Paste', ['No empty directory slot available.']);
+      return;
+    }
+    var cfsTypeIdxToSuffix = { 1: 'SEQ', 2: 'PRG', 3: 'USR', 4: 'REL' };
+    var cfsFtypeFromIdx = { 1: CFS_FTYPE.NORMAL, 2: CFS_FTYPE.NORMAL, 3: CFS_FTYPE.NORMAL, 4: CFS_FTYPE.REL };
+    var cTotal = clipboard.length;
+    var cProgress = cTotal > 1 ? showProgressModal('Pasting Files') : null;
+    pushUndo();
+    var cPasted = 0;
+    var cSkipped = [];
+    for (var pi2 = 0; pi2 < cTotal; pi2++) {
+      var item = clipboard[pi2];
+      if (!item.data || item.vlirRecords) {
+        cSkipped.push((item.cfsTypeSuffix || cfsTypeIdxToSuffix[item.typeIdx] || '?') + ': cannot paste VLIR / empty');
+        continue;
+      }
+      // Build the CFS-side name string: read bytes from clipboard (stops
+      // at $A0 / $00 terminator) so reversed-PETSCII glyphs and
+      // hard-space padding survive the round-trip.
+      var pName = '';
+      for (var ni = 0; ni < 16; ni++) {
+        var nb = item.nameBytes[ni];
+        if (nb === 0xA0 || nb === 0x00) break;
+        pName += String.fromCharCode(nb);
+      }
+      if (!pName) pName = 'PASTED';
+      var pSuffix = item.cfsTypeSuffix || cfsTypeIdxToSuffix[item.typeIdx] || 'PRG';
+      var pFtype = cfsFtypeFromIdx[item.typeIdx] || CFS_FTYPE.NORMAL;
+      if (cProgress) await cProgress.update(pi2, cTotal, pName);
+      var pRes = cfsImportFile(hddBuffer, cPart.startLba, cPart.endLba, cfsDirLba, pName, item.data, {
+        ftype: pFtype, typeSuffix: pSuffix,
+      });
+      if (pRes.ok) cPasted++;
+      else cSkipped.push(pName + ' — ' + (pRes.error || 'unknown'));
+    }
+    if (cProgress) document.getElementById('modal-overlay').classList.remove('open');
+    refreshIde64View();
+    if (cSkipped.length > 0) {
+      showModal('Paste — partial', [cPasted + ' file(s) pasted.'].concat(cSkipped));
+    }
+    return;
+  }
+  if (!currentBuffer || !canInsertFile()) return;
 
   // Check if any GEOS files in clipboard and disk is not GEOS
   var hasGeos = clipboard.some(function(c) { return c.geosInfoBlock !== null; });

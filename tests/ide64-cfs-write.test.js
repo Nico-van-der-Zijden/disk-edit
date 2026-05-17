@@ -54,9 +54,9 @@ describe('CFS write — rename', function() {
     cfsWriteDirEntryName(buf, 10, 1, 'SHORT');
     got = [];
     for (var j = 0; j < 16; j++) got.push(d[off + j]);
-    // 'SHORT' + 11 × $A0 padding (CBM/VICE terminator)
+    // 'SHORT' + 11 × $00 padding (IDE64-native / cfsfdisk convention)
     var expected = [0x53,0x48,0x4F,0x52,0x54];
-    for (var k = 0; k < 11; k++) expected.push(0xA0);
+    for (var k = 0; k < 11; k++) expected.push(0x00);
     assert.deepStrictEqual(got, expected);
   });
 
@@ -1091,6 +1091,52 @@ describe('Lock / Splat attr-byte toggles (via cfsWriteDirEntryAttrByte)', functi
   });
 });
 
+describe('CFS copy/paste round-trip via cfsImportFile', function() {
+  it('imported file read-back matches the original payload', function() {
+    var buf = new ArrayBuffer(2 * 1024 * 1024);
+    var d = new Uint8Array(buf);
+    var partStart = 2, partEnd = 1000;
+    for (var i = 0; i < 512; i++) d[partStart * 512 + i] = 0xFF;
+    cfsMarkSectorUsed(buf, partStart, partStart);
+    cfsMarkSectorUsed(buf, partStart, 5);
+    writeCfsEntry(d, 5, 0, { name: 'D', ftype: 3, typeSuffix: 'DIR', attrByte: 0x83 });
+    // Original file
+    var payload = new Uint8Array(2500);
+    for (var p = 0; p < 2500; p++) payload[p] = (p * 37 + 13) & 0xFF;
+    var srcRes = cfsImportFile(buf, partStart, partEnd, 5, 'ORIG', payload, { ftype: 1, typeSuffix: 'PRG' });
+    assert.ok(srcRes.ok);
+    var src = readCfsDirectorySector(buf, 5)[srcRes.slotIndex];
+
+    // Simulate the copy step: read the file's data + 16 name bytes
+    var srcData = readCfsFileData(buf, src.dataTreePtr.addr, src.size).data;
+    var nameBytes = new Uint8Array(16);
+    var srcOff = 5 * 512 + srcRes.slotIndex * 32;
+    for (var nb = 0; nb < 16; nb++) nameBytes[nb] = d[srcOff + nb];
+
+    // Simulate the paste step: build name string from nameBytes
+    var pName = '';
+    for (var ni = 0; ni < 16; ni++) {
+      var nbv = nameBytes[ni];
+      if (nbv === 0xA0 || nbv === 0x00) break;
+      pName += String.fromCharCode(nbv);
+    }
+    var dstRes = cfsImportFile(buf, partStart, partEnd, 5, pName, srcData, { ftype: 1, typeSuffix: 'PRG' });
+    assert.ok(dstRes.ok);
+    assert.notStrictEqual(dstRes.slotIndex, srcRes.slotIndex); // different slot
+    var dst = readCfsDirectorySector(buf, 5)[dstRes.slotIndex];
+
+    // Names match byte-for-byte
+    var dstOff = 5 * 512 + dstRes.slotIndex * 32;
+    for (var di = 0; di < 16; di++) assert.strictEqual(d[dstOff + di], d[srcOff + di], 'name byte ' + di);
+    // typeSuffix matches
+    assert.strictEqual(dst.typeSuffix, src.typeSuffix);
+    // Payload reads back identical
+    var dstData = readCfsFileData(buf, dst.dataTreePtr.addr, dst.size).data;
+    assert.strictEqual(dstData.length, srcData.length);
+    for (var bi = 0; bi < srcData.length; bi++) assert.strictEqual(dstData[bi], srcData[bi], 'byte ' + bi);
+  });
+});
+
 describe('cfsInsertSeparator', function() {
   it('writes a Closed-DEL entry with attr byte 0xF8 and the pattern in the name field', function() {
     var buf = new ArrayBuffer(64 * 1024);
@@ -1100,9 +1146,9 @@ describe('cfsInsertSeparator', function() {
     var res = cfsInsertSeparator(buf, 5, pattern);
     assert.ok(res.ok, res.error || '');
     var slotOff = 5 * 512 + res.slotIndex * 32;
-    // Pattern bytes 0..7, then $A0 padding 8..15
+    // Pattern bytes 0..7, then $00 padding 8..15 (IDE64-native)
     for (var i = 0; i < 8; i++) assert.strictEqual(d[slotOff + i], 0x2D);
-    for (var j = 8; j < 16; j++) assert.strictEqual(d[slotOff + j], 0xA0);
+    for (var j = 8; j < 16; j++) assert.strictEqual(d[slotOff + j], 0x00);
     // attr byte: 0xF8 = Closed + D + R + W + X + ftype DEL. Without
     // the W bit set, VICE's CFS listing flags the row as read-only
     // ("<" marker), so all four permission bits go in.

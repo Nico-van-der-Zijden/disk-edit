@@ -597,10 +597,27 @@ function updateEntryMenuState() {
   // Each individual disabled-state check below still runs to set the
   // correct disabled class for the new view.
   var _cfsHiddenIds = ['opt-move-up', 'opt-move-down', 'opt-change-ts',
-    'opt-view-as', 'opt-scratch', 'opt-unscratch'];
+    'opt-scratch', 'opt-unscratch'];
   for (var _ri = 0; _ri < _cfsHiddenIds.length; _ri++) {
     var _re = document.getElementById(_cfsHiddenIds[_ri]);
     if (_re) _re.style.display = '';
+  }
+  // opt-cfs-view-hex is CFS-only. Settle it here at the top so it's not
+  // gated on the big override block at the bottom running to completion.
+  // Inside a CFS partition: show, enable iff a live file/REL entry is
+  // selected. Anywhere else: hide.
+  var _cfsHexEl = document.getElementById('opt-cfs-view-hex');
+  if (_cfsHexEl) {
+    if (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0 && cfsDirEntries) {
+      var _cfsSel = (selectedEntryIndex >= 0 && selectedEntryIndex < cfsDirEntries.length)
+        ? cfsDirEntries[selectedEntryIndex] : null;
+      var _cfsHexOk = !!_cfsSel && !_cfsSel.empty &&
+        (_cfsSel.ftype === CFS_FTYPE.NORMAL || _cfsSel.ftype === CFS_FTYPE.REL);
+      _cfsHexEl.style.display = '';
+      _cfsHexEl.classList.toggle('disabled', !_cfsHexOk);
+    } else {
+      _cfsHexEl.style.display = 'none';
+    }
   }
   // Single-select only operations (all disabled for tape / container list)
   document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
@@ -609,6 +626,14 @@ function updateEntryMenuState() {
   document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
   document.getElementById('opt-change-ts').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
   document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection || multiSelect || containerList);
+  // Reset the always-applicable View As children (Hex, Disasm, PETSCII)
+  // here so they stay enabled in non-CFS contexts. Without this, entering
+  // a CFS partition adds .disabled (the CFS branch below force-disables
+  // them since selectedEntryIndex isn't a CBM byte offset there) and the
+  // class never gets cleared on the way back out.
+  document.getElementById('opt-view-hex').classList.toggle('disabled', !hasSelection || containerList);
+  document.getElementById('opt-view-disasm').classList.toggle('disabled', !hasSelection || containerList);
+  document.getElementById('opt-view-petscii').classList.toggle('disabled', !hasSelection || containerList);
   var noNesting = inPartition && !currentFormat.subdirLinked; // D81: no nesting; DNP: nesting allowed
   document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || noNesting || !currentBuffer || !currentFormat.supportsSubdirs || !canInsertFile() || noEdit);
 
@@ -886,6 +911,12 @@ function updateEntryMenuState() {
     // / slot heuristics since neither is guaranteed stable.
     var cfsIsDeldirRef = cfsHasEntry && typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(cfsEntrySel);
     var cfsEditableEntry = cfsHasEntry && !cfsIsDeleted && !cfsIsDeldirRef;
+    // Live data-bearing entry — file content can be read out. Declared
+    // up here because half a dozen toggles below depend on it; the
+    // previous late-declaration relied on var hoisting and silently
+    // disabled View As / View Hex on every CFS render.
+    var cfsExportable = cfsHasEntry && !cfsIsDeleted &&
+      (cfsEntrySel.ftype === CFS_FTYPE.NORMAL || cfsEntrySel.ftype === CFS_FTYPE.REL);
     // Rename is single-only — both startInlineRenameCfsEntry and the
     // CBM-DOS analogue refuse with multi-select. Disable in multi too.
     document.getElementById('opt-rename').classList.toggle('disabled', !cfsEditableEntry || multiSelect);
@@ -960,7 +991,28 @@ function updateEntryMenuState() {
     document.getElementById('opt-move-up').style.display = 'none';
     document.getElementById('opt-move-down').style.display = 'none';
     document.getElementById('opt-change-ts').style.display = 'none';
-    document.getElementById('opt-view-as').style.display = 'none';
+    // View As: opt-view-hex routes through showCfsFileHexViewer in CFS
+    // view. Other sub-options (Disassembly / PETSCII / BASIC) read via
+    // the CBM-DOS byte-offset path; for now hide them via CSS so only
+    // Hex shows in the submenu. Gated on a live file/REL entry.
+    // (opt-cfs-view-hex visibility/enable is handled at the top of
+    // updateEntryMenuState so it survives errors in this block.)
+    var cfsViewAsEl = document.getElementById('opt-view-as');
+    cfsViewAsEl.style.display = '';
+    cfsViewAsEl.classList.toggle('disabled', !cfsExportable);
+    // Within the submenu, only Hex is wired for CFS. The other viewers
+    // (Disassembly / PETSCII / BASIC / Graphics / VLIR / REL / TASS /
+    // geoWrite) all read selectedEntryIndex as a CBM-DOS byte offset,
+    // which is wrong here.
+    document.getElementById('opt-view-hex').classList.toggle('disabled', !cfsExportable);
+    document.getElementById('opt-view-disasm').classList.add('disabled');
+    document.getElementById('opt-view-petscii').classList.add('disabled');
+    document.getElementById('opt-view-basic').classList.add('disabled');
+    document.getElementById('opt-view-gfx').classList.add('disabled');
+    document.getElementById('opt-view-geowrite').classList.add('disabled');
+    document.getElementById('opt-view-vlir').classList.add('disabled');
+    document.getElementById('opt-view-rel').classList.add('disabled');
+    document.getElementById('opt-view-tass').classList.add('disabled');
     // Remove Entry: hard delete — frees the data sectors (recursive for
     // dirs) and zeros the 32-byte slot. Loses unscratch for the entry,
     // but keeps the bitmap clean. Enabled on any editable entry (DEL
@@ -983,11 +1035,16 @@ function updateEntryMenuState() {
     // Export: live file entries (NORMAL / REL) only — dirs/links/DEL
     // have no data to dump. opt-export-menu is the parent submenu; the
     // CBM-DOS code keeps it disabled outside CBM contexts so override
-    // here so the CFS user can reach Export File.
-    var cfsExportable = cfsHasEntry && !cfsIsDeleted &&
-      (cfsEntrySel.ftype === CFS_FTYPE.NORMAL || cfsEntrySel.ftype === CFS_FTYPE.REL);
+    // here so the CFS user can reach Export File. (cfsExportable is
+    // declared up top so View As / View Hex gating sees the right value.)
     document.getElementById('opt-export').classList.toggle('disabled', !cfsExportable);
     document.getElementById('opt-export-menu').classList.toggle('disabled', !cfsExportable);
+    // Copy: same rule as Export — single or multi NORMAL/REL entries.
+    // Paste: enabled whenever the clipboard has anything and the dir
+    // has room (canInsertFile() reads CBM-DOS shape — bypass it here
+    // and check the CFS free-slot probe instead).
+    document.getElementById('opt-copy').classList.toggle('disabled', !cfsExportable);
+    document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !cfsHasFreeSlot);
     // Align: handler routes to alignCfsFilename in CFS view. Gate on
     // the same editable-entry flag we use for Rename / Scratch so the
     // system <<DELETED FILES>> entry stays protected.
