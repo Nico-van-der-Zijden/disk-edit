@@ -1,47 +1,28 @@
 // ── CFS Bitmap Viewer ─────────────────────────────────────────────────
-//
-// A heat-map / file-ownership visualizer for a CFS partition's
-// allocation bitmap. Two modes (toggle in the modal footer):
-//
-//   Density    (default): each cell colored by the fraction of its
-//              LBA range that's marked USED. System LBAs (bitmap chain,
-//              deldir, root + dir chain) drawn brown; lost sectors red.
-//   Ownership: each cell colored by the file (if any) that owns the
-//              majority of its LBA range. System sectors stay brown;
-//              palette cycles per-file so neighbours stand out.
-//
-// Cell count is fixed at 4096 (a 64x64 grid). Cell size = ceil(totalLBAs
-// / 4096) — for 128 MiB that's 64 LBAs per cell, for 8 MiB it's 4. Click
-// a cell to see its LBA range + owning file list + USED count in the
-// detail panel under the grid.
+// 64x64 heat map of a CFS partition's allocation bitmap. Density mode
+// colours each cell by its used-ratio; Ownership mode colours by the
+// file owning the majority of its LBAs. Cell size = ceil(totalLBAs/4096).
 
 (function() {
-  function clickHandler() {
-    if (typeof cfsPartitionIdx === 'undefined' || cfsPartitionIdx < 0) return false;
-    if (!cfsDirEntries || !hddBuffer || !hddPartitions) return false;
-    var partition = hddPartitions[cfsPartitionIdx];
-    if (!partition) return false;
-    showCfsBamViewer(partition);
-    return true;
-  }
-
-  // Patch the existing opt-view-bam click handler: try CFS first, fall
-  // back to the CBM-DOS handler (already registered on the same node).
+  // Capture-phase listener so we get first crack at the click and can
+  // short-circuit the CBM-DOS handler when we're in a CFS partition.
   var bamEl = document.getElementById('opt-view-bam');
   if (!bamEl) return;
   bamEl.addEventListener('click', function(ev) {
-    if (clickHandler()) {
-      ev.stopImmediatePropagation();
-      if (typeof closeMenus === 'function') closeMenus();
-    }
-  }, true); // capture so we run before the CBM-DOS handler
+    if (typeof cfsPartitionIdx === 'undefined' || cfsPartitionIdx < 0) return;
+    if (!cfsDirEntries || !hddBuffer || !hddPartitions) return;
+    var partition = hddPartitions[cfsPartitionIdx];
+    if (!partition) return;
+    ev.stopImmediatePropagation();
+    if (typeof closeMenus === 'function') closeMenus();
+    showCfsBamViewer(partition);
+  }, true);
 })();
 
-// Walk every dir entry's B-tree (recursive for subdirs) and build a
-// per-LBA owner map. Each LBA gets the offset of the dir entry that
-// claims it (encoded as "dirLba:slotIndex"), or 'system' for the
-// bitmap chain / deldir / dir-chain sectors. LBAs not touched by any
-// of those are absent from the map (they're either free or lost).
+// Build owner→LBA mapping for a CFS partition. Walks every live dir
+// entry's B-tree (recursive for subdirs) plus system LBAs (bitmap
+// chain, reserved, deldir, dir chain). Returns owners + bitmap state
+// + file list + lost-sector count for the heat-map renderer.
 function _cfsBuildLbaOwnership(buffer, partition) {
   var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
   var partStart = partition.startLba;

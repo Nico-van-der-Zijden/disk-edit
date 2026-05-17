@@ -578,17 +578,12 @@ function renderCfsDirectoryView() {
       }
       updateEntryMenuState();
     });
-    // ── Drag-to-reorder within the CFS dir listing ────────────────
-    // Mirrors the CBM-DOS row handlers in ui-render.js. The global
-    // dragstart in ui-init.js still wires DownloadURL for export to OS;
-    // these handlers add the internal reorder path. dragSrcCfsIdx
-    // shared across the listener set via the per-tab closure (set on
-    // dragstart, cleared on dragend / drop).
+    // Drag-to-reorder. The global dragstart still wires DownloadURL for
+    // OS export; these handlers add the internal reorder path.
     row.addEventListener('dragstart', function(ev) {
       _dragSrcCfsIdx = idx;
       row.classList.add('dragging');
       ev.dataTransfer.effectAllowed = 'copyMove';
-      // Custom drag image: clone the row so it stays visible.
       var ghost = row.cloneNode(true);
       ghost.classList.add('drag-ghost');
       ghost.classList.remove('selected', 'dragging');
@@ -629,17 +624,14 @@ function renderCfsDirectoryView() {
       if (src === null || src === undefined) return;
       var target = idx;
       if (src === target) return;
-      // Refuse to move past system entries (self-ref / deldir-ref) and
-      // refuse to move the source if it IS a system entry.
+      // System entries (self-ref / deldir-ref) can't move or be moved past.
       var srcEnt = cfsDirEntries[src];
       var tgtEnt = cfsDirEntries[target];
       if (!srcEnt || !tgtEnt) return;
       if (srcEnt.isSelfRef || (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(srcEnt))) return;
       if (tgtEnt.isSelfRef || (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(tgtEnt))) return;
-      // Edge-aware target adjustment: dropping on the top half of a row
-      // means "insert above"; bottom half means "insert below". For
-      // adjacent rows skip this adjustment (otherwise we resolve back
-      // to the source's own slot and do nothing).
+      // Top-half drop → above, bottom-half → below. Adjacent rows
+      // swap directly (skipping the adjustment).
       var rect = row.getBoundingClientRect();
       var midY = rect.top + rect.height / 2;
       if (Math.abs(target - src) !== 1) {
@@ -804,15 +796,9 @@ function showCfsLinkTarget(entry) {
 }
 
 
-// Move selected CFS entries up (direction=-1) or down (direction=1) by
-// one slot each. Mirrors the CBM-DOS moveEntry behaviour:
-//   * Single + multi-select both supported (multi keeps relative order)
-//   * Bottom bound = last non-empty slot in the dir chain
-//   * Top bound = first user-movable slot (skips self-ref + deldir-ref)
-//   * Selection follows the moved rows after the swap
-// CFS dir entries are 32 bytes each in a chain of 16-entry sectors; the
-// swap helper preserves the bit-sliced dir-next pointer bits at byte $14
-// so the chain links stay intact.
+// Move selected CFS entries up (-1) or down (+1) by one slot each.
+// Multi-select keeps relative order; system entries (self-ref + deldir-
+// ref) stay pinned; selection follows the moved rows.
 function moveCfsEntries(direction) {
   if (cfsPartitionIdx < 0 || !cfsDirEntries) return;
   if (selectedEntryIndex < 0) return;
@@ -829,10 +815,7 @@ function moveCfsEntries(direction) {
   if (indices.length === 0) return;
   indices.sort(function(a, b) { return a - b; });
 
-  // First user-movable slot = first slot whose entry isn't self-ref /
-  // deldir-ref. Anything above that is system-managed and we don't
-  // swap into it. For a typical root: slot 0 self-ref, slot 1 deldir,
-  // slot 2 = first user slot. Subdir self-refs use slot 0 only.
+  // First user slot + last non-empty slot bound the move.
   var firstUserSlot = 0;
   for (var fu = 0; fu < cfsDirEntries.length; fu++) {
     var fuEnt = cfsDirEntries[fu];
@@ -842,9 +825,6 @@ function moveCfsEntries(direction) {
     firstUserSlot = fu;
     break;
   }
-
-  // Last non-empty slot — anything past it is empty and not interesting
-  // as a swap target (would just trade an entry into a void).
   var lastUsed = -1;
   for (var lu = cfsDirEntries.length - 1; lu >= 0; lu--) {
     var luEnt = cfsDirEntries[lu];
@@ -857,9 +837,8 @@ function moveCfsEntries(direction) {
 
   if (typeof pushUndo === 'function') pushUndo();
 
-  // Top-to-bottom for up, bottom-to-top for down — same direction
-  // discipline CBM-DOS uses to keep adjacent swaps in the same selection
-  // from clobbering each other.
+  // Top-down for up, bottom-up for down — keeps adjacent swaps in the
+  // same selection from clobbering each other.
   if (direction < 0) {
     for (var u = 0; u < indices.length; u++) {
       var srcU = cfsDirEntries[indices[u]];
@@ -884,11 +863,8 @@ function moveCfsEntries(direction) {
   refreshIde64View();
 }
 
-// Build the `preloaded = { data, name, isPrg, error }` object that the
-// shared viewers (showFileHexViewer / showFileDisasmViewer /
-// showFilePetsciiViewer / showFileBasicViewer / showFileGfxViewer /
-// showFileTassViewer) accept. CFS-aware callers use this to drive those
-// viewers without going through the CBM-DOS readFileData pipeline.
+// Build the { data, name, isPrg, error } shape the shared viewers
+// accept so they can drive a CFS entry without going through readFileData.
 function cfsLoadFileForViewer(entry) {
   if (!entry || !entry.dataTreePtr || !entry.dataTreePtr.lba) return null;
   var res = readCfsFileData(hddBuffer, entry.dataTreePtr.addr, entry.size);
@@ -897,11 +873,9 @@ function cfsLoadFileForViewer(entry) {
   return { data: res.data, name: name, isPrg: isPrg, error: res.error };
 }
 
-// ── CFS file content viewer (Phase 3a, hex + download) ────────────────
-// Reads the file via the B-tree walker, opens a hex modal with a
-// Download button. PETSCII / BASIC viewers are deferred to Phase 3b —
-// the existing implementations are deeply tied to currentBuffer + a
-// CBM directory entry offset, so reusing them requires more plumbing.
+// CFS file hex modal with a Download button. The shared View As
+// viewers are reached via the global hex/disasm/petscii path; this one
+// is the link-target inspector.
 function showCfsFileHexViewer(entry) {
   if (!entry || !entry.dataTreePtr || !entry.dataTreePtr.lba) {
     showModal('CFS file', ['"' + petsciiToReadable(entry.name) + '" has no data tree pointer.']);
