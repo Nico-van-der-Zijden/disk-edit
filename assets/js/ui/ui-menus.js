@@ -663,6 +663,11 @@ function updateEntryMenuState() {
     var _re = document.getElementById(_cfsHiddenIds[_ri]);
     if (_re) _re.style.display = '';
   }
+  // Restore opt-change-ts to its CBM-DOS label — the CFS branch below
+  // relabels it to "Edit Data LBA…" since CFS has no T/S concept; this
+  // line undoes that when switching to a non-CFS view.
+  var _tsResetEl = document.getElementById('opt-change-ts');
+  if (_tsResetEl) _tsResetEl.textContent = 'Edit Track/Sector';
   // Single-select only operations (all disabled for tape / container list)
   document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
   document.getElementById('opt-insert').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || noEdit);
@@ -883,9 +888,19 @@ function updateEntryMenuState() {
   }
   document.getElementById('opt-view-tass').classList.toggle('disabled', !isTassCandidate);
   document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || noEdit);
-  document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
-  document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection || noEdit);
-  document.getElementById('opt-view-geos').classList.toggle('disabled', !geosEnabled);
+  // Edit Current Sector / Edit File Sector are CBM-DOS only — they call
+  // getDirSlotOffsets / sectorOffset / dirTrack from the format spec,
+  // none of which apply to an IDE64 .hdd partition list view or to a
+  // CFS file (sectors are 512 B LBAs, not 256 B T/S). Disable across
+  // the entire .hdd context; the toggle runs every updateEntryMenuState
+  // call so they re-enable automatically on switch to a D64/etc tab.
+  var hddContext = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
+  document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect || noEdit || hddContext);
+  document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection || noEdit || hddContext);
+  // GEOS File Info reads the dir entry's GEOS header T/S — CBM-DOS-only;
+  // CFS dir entries don't carry that field. Disable across the .hdd
+  // context entirely (re-enables on switch to a D64/etc tab).
+  document.getElementById('opt-view-geos').classList.toggle('disabled', !geosEnabled || hddContext);
   const lockEl = document.getElementById('opt-lock');
   const splatEl = document.getElementById('opt-splat');
   if (hasSelection && !tape) {
@@ -1059,9 +1074,10 @@ function updateEntryMenuState() {
       var cm = document.getElementById('check-type-' + tci);
       if (cm) cm.innerHTML = (tci === cfsCheckIdx) ? '<i class="fa-solid fa-check"></i>' : '';
     }
-    // Edit Track/Sector stays hidden in CFS (no T/S — files use a B-tree
-    // by LBA, and the existing CBM-DOS editor would corrupt hddBuffer
-    // at random offsets since selectedEntryIndex is a slot index here).
+    // Edit Track/Sector stays hidden in CFS — raw sector editing exposes
+    // the byte-sliced CFS storage layout which isn't a useful UX for
+    // end users. View As → Hex shows the de-interleaved file content
+    // for the "I want to look at the bytes" case.
     document.getElementById('opt-change-ts').style.display = 'none';
     // Move Up / Move Down: route to moveCfsEntries which respects the
     // self-ref / deldir-ref protected slots and the last-used bound.

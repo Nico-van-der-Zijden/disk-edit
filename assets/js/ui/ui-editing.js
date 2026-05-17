@@ -243,9 +243,17 @@ function updateMenuState() {
   // on the CMD container partition-list view — the container itself isn't
   // a disk EmulatorJS can mount; enter a partition first.
   document.getElementById('opt-open-in-emulator').classList.toggle('disabled', !hasDisk || containerList);
-  document.getElementById('opt-find').classList.toggle('disabled', !hasDisk || containerList);
+  // Find walks T:S sectors via the format's sectorsPerTrack — CBM-DOS
+  // only. Skip the whole IDE64 .hdd context; CFS file content search
+  // would need its own walker.
+  var hddCtx2 = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
+  document.getElementById('opt-find').classList.toggle('disabled', !hasDisk || containerList || hddCtx2);
   document.getElementById('opt-find-tabs').classList.toggle('disabled', tabs.length === 0);
-  document.getElementById('opt-goto-sector').classList.toggle('disabled', !hasDisk || noEdit);
+  // Go to Sector is CBM-DOS-only (modal walks T/S, not LBA), so disable
+  // across the entire IDE64 .hdd context. updateMenuState runs on every
+  // tab switch so it re-enables automatically on a D64/etc tab.
+  var hddCtx = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
+  document.getElementById('opt-goto-sector').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
   var sepDisabled = !hasDisk || noEdit;
   document.getElementById('opt-show-separators').classList.toggle('disabled', sepDisabled);
   if (sepDisabled && typeof isSepFloatOpen === 'function' && isSepFloatOpen()) hideSepFloat();

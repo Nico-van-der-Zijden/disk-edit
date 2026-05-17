@@ -231,6 +231,11 @@ function showSearchModal(title, allTabs) {
         var totalResults = 0;
         for (var ti = 0; ti < tabs.length; ti++) {
           var tab = tabs[ti];
+          // Skip IDE64 .hdd tabs — searchDisk walks T:S via the format
+          // spec which they don't have. Surfacing them here would either
+          // crash or return empty noise. CFS-aware search would need a
+          // separate walker; defer.
+          if (tab.format && tab.format.filesystem === 'ide64-container') continue;
           var prevBuffer = currentBuffer;
           var prevFormat = currentFormat;
           var prevTracks = currentTracks;

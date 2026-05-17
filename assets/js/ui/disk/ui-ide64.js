@@ -803,6 +803,7 @@ function showCfsLinkTarget(entry) {
   }
 }
 
+
 // Move selected CFS entries up (direction=-1) or down (direction=1) by
 // one slot each. Mirrors the CBM-DOS moveEntry behaviour:
 //   * Single + multi-select both supported (multi keeps relative order)

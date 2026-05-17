@@ -285,6 +285,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.3.131', title: 'IDE64 .hdd — CBM-DOS-only menu items now disable cleanly in CFS view', items: [
+      'Edit menu: Edit Current Sector / Edit File Sector now disabled on IDE64 .hdd tabs (both partition list and inside a CFS partition). They walk T:S via the format spec which CFS doesn\'t have. Re-enable automatically on switch back to a D64 / D71 / etc. tab',
+      'Search menu: Go to Sector also disabled in the .hdd context (same reason — modal walks T:S, not LBA). Find disabled too; Find in All Tabs stays enabled but skips IDE64 tabs in the loop so it doesn\'t crash on mixed sets',
+      'View menu: GEOS File Info disabled in .hdd context. CFS dir entries don\'t carry a GEOS header T/S pointer',
+    ]},
     { ver: '1.3.130', title: 'IDE64 .hdd — Move Up/Down, drag-to-reorder, keyboard shortcuts in CFS view', items: [
       'Move Up / Move Down works for CFS dir entries (File menu + Ctrl+Arrow). Multi-select supported, same as CBM-DOS. cfsSwapDirEntries preserves the bit-sliced dir-next pointer at byte $14 of each slot so the chain stays intact across swaps; cross-sector swaps work too',
       'Drag a CFS row onto another to reorder. Same UX as D64: dropping on the top half of a target row inserts above, bottom half inserts below; adjacent rows swap. Refuses moves that would touch the self-ref or <<DELETED FILES>> reference. The existing OS-export drag (drop on a folder window) still works alongside',
