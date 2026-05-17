@@ -217,7 +217,10 @@ function _cfsTreeSearch(data, rootLba, byteOffset) {
     level++;
   }
   var itt = rootLba;
+  var seen = {};
   while (level > 0 && itt !== null && itt > 0) {
+    if (seen[itt]) return null;
+    seen[itt] = true;
     var sectorBase = itt * IDE64_SECTOR_SIZE;
     if (sectorBase + IDE64_SECTOR_SIZE > data.length) return null;
     var slotOff = sectorBase + (m2 & 7) * 64;
@@ -435,23 +438,30 @@ function cfsValidatePartition(buffer, partition, opts) {
   var partEnd = partition.endLba;
   if (partStart == null || partEnd == null) { log.push('ERROR: partition has no LBA bounds'); return { log: log, lostCount: 0, missingCount: 0, reachable: {} }; }
 
+  // reachable[lba] = first-claimant string. Second claim on the same LBA
+  // is a real corruption: two files (or a file + system structure) point
+  // at the same data sector — one of them is wrong.
   var reachable = {};
-  function reach(lba) {
+  var overlap = [];
+  function reach(lba, owner) {
     if (lba < partStart || lba > partEnd) return;
-    reachable[lba] = true;
+    var prev = reachable[lba];
+    if (prev && prev !== owner) overlap.push({ lba: lba, owners: [prev, owner] });
+    else if (!prev) reachable[lba] = owner;
   }
 
-  // System sectors: bitmap chain, reserved partStart+1, deldir.
-  for (var bm = 0; partStart + bm <= partEnd; bm += 4096) reach(partStart + bm);
-  reach(partStart + 1);
-  var deldirLba = (partition.cfsDeletedDir && partition.cfsDeletedDir.lba) ? partition.cfsDeletedDir.addr : 0;
-  var rootLba   = (partition.cfsRootDir    && partition.cfsRootDir.lba)    ? partition.cfsRootDir.addr    : 0;
-  if (deldirLba) reach(deldirLba);
+  // System sectors: bitmap chain + the reserved sector at partStart+1.
+  // The deldir is reached naturally via the <<DELETED FILES>> entry in
+  // the root dir — pre-claiming it here would produce a spurious overlap
+  // with the dir walker on every clean disk.
+  for (var bm = 0; partStart + bm <= partEnd; bm += 4096) reach(partStart + bm, 'system:bitmap');
+  reach(partStart + 1, 'system:reserved');
+  var rootLba = (partition.cfsRootDir && partition.cfsRootDir.lba) ? partition.cfsRootDir.addr : 0;
 
   // Walk dir chains via the bit-sliced dir-next; for each live entry
   // walk its B-tree (file) or recurse (DIR).
   var dirVisited = {};
-  function walkTree(treeRoot, fileSize) {
+  function walkTree(treeRoot, fileSize, ownerLabel) {
     if (!treeRoot || treeRoot < partStart || treeRoot > partEnd) return;
     var depth = _cfsComputeTreeDepth(fileSize);
     var seen = {};
@@ -459,12 +469,12 @@ function cfsValidatePartition(buffer, partition, opts) {
       if (!nodeLba || nodeLba < partStart || nodeLba > partEnd) return;
       if (seen[nodeLba]) return;
       seen[nodeLba] = true;
-      reach(nodeLba);
+      reach(nodeLba, 'tree:' + ownerLabel);
       var nodeBase = nodeLba * IDE64_SECTOR_SIZE;
       if (nodeBase + IDE64_SECTOR_SIZE > data.length) return;
       for (var pi = 0; pi < 128; pi++) {
         var dp = _readIde64Pointer(data, nodeBase + pi * 4);
-        if (dp.lba && dp.addr > 0) reach(dp.addr);
+        if (dp.lba && dp.addr > 0) reach(dp.addr, 'data:' + ownerLabel);
       }
       if (level < depth) {
         for (var s = 0; s < 8; s++) {
@@ -484,7 +494,7 @@ function cfsValidatePartition(buffer, partition, opts) {
         return;
       }
       dirVisited[lba] = true;
-      reach(lba);
+      reach(lba, 'dir:' + label);
       var entries = readCfsDirectorySector(data, lba);
       if (!entries) break;
       for (var i = 0; i < entries.length; i++) {
@@ -493,10 +503,11 @@ function cfsValidatePartition(buffer, partition, opts) {
         if (en.ftype === CFS_FTYPE.DEL) continue; // sectors freed at scratch time
         if (!en.dataTreePtr || !en.dataTreePtr.lba) continue;
         var addr = en.dataTreePtr.addr;
+        var entryName = petsciiToReadable(en.name);
         if (en.ftype === CFS_FTYPE.DIR) {
-          walkDirChain(addr, label + '/' + readPetsciiString(data, lba * IDE64_SECTOR_SIZE + i * 32, 16, false));
+          walkDirChain(addr, label + '/' + entryName);
         } else {
-          walkTree(addr, en.size || 0);
+          walkTree(addr, en.size || 0, label + '/' + entryName);
         }
       }
       var nextPtr = _cfsReadDirNext(data, lba * IDE64_SECTOR_SIZE);
@@ -515,9 +526,18 @@ function cfsValidatePartition(buffer, partition, opts) {
     else if (!isUsed && shouldBeUsed) missing.push(lba);
   }
 
-  if (lost.length === 0 && missing.length === 0) {
+  if (lost.length === 0 && missing.length === 0 && overlap.length === 0) {
     log.push('Bitmap is consistent — every used sector is claimed by a file or system structure.');
   } else {
+    if (overlap.length > 0) {
+      log.push('ERROR: ' + overlap.length + ' sector(s) claimed by more than one file or structure.');
+      log.push('  Data in these sectors is shared — at least one owner is reading garbage.');
+      for (var oi = 0; oi < Math.min(overlap.length, 10); oi++) {
+        var ov = overlap[oi];
+        log.push('    LBA $' + ov.lba.toString(16).toUpperCase() + ': ' + ov.owners[0] + ' + ' + ov.owners[1]);
+      }
+      if (overlap.length > 10) log.push('    … and ' + (overlap.length - 10) + ' more');
+    }
     if (missing.length > 0) {
       log.push('ERROR: ' + missing.length + ' sector(s) claimed by a file but marked FREE in the bitmap.');
       log.push('  These will be re-allocated on next file write, corrupting existing content.');
@@ -541,7 +561,7 @@ function cfsValidatePartition(buffer, partition, opts) {
     log.push('Bitmap rebuilt: ' + lost.length + ' freed, ' + missing.length + ' marked used.');
   }
 
-  return { log: log, lostCount: lost.length, missingCount: missing.length, reachable: reachable };
+  return { log: log, lostCount: lost.length, missingCount: missing.length, overlapCount: overlap.length, overlap: overlap, reachable: reachable };
 }
 
 // Hunt orphan tree-node sectors in a CFS partition. Quick mode checks
@@ -562,11 +582,12 @@ function cfsScanOrphans(buffer, partition, opts) {
   var reachable = cfsValidatePartition(buffer, partition, { fix: false }).reachable;
 
   // Candidate LBAs: not reachable, looks like a tree node. Deep mode
-  // also scans free space and requires a denser pointer cluster (4+)
-  // to keep random data from showing up as a "lost file".
+  // also scans free space and requires a denser pointer cluster (8+
+  // of 16 contiguous slots) to keep random data from showing up as a
+  // "lost file".
   var candidates = [];
   var fromFree = {};
-  var minPlausible = opts.deep ? 4 : 1;
+  var minPlausible = opts.deep ? 8 : 1;
   for (var lba = partStart; lba <= partEnd; lba++) {
     if (reachable[lba]) continue;
     var isFree = cfsIsSectorFree(data, partStart, lba);

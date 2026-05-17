@@ -1727,3 +1727,124 @@ describe('CFS delete — IDEDOS reference comparison', function() {
     }
   });
 });
+
+describe('cfsValidatePartition — overlap detection', function() {
+  it('clean disk: zero overlaps reported', function() {
+    var buf = createEmptyHdd(2);
+    var info = readIde64Partitions(buf);
+    var part = info.partitions[0];
+    var imp = cfsImportFile(buf, part.startLba, part.endLba, part.cfsRootDir.addr, 'HELLO', new Uint8Array([1, 2, 3]));
+    assert.ok(imp.ok, imp.error || '');
+
+    var res = cfsValidatePartition(buf, part, { fix: false });
+    assert.strictEqual(res.overlapCount, 0);
+    assert.strictEqual(res.overlap.length, 0);
+  });
+
+  it('two dir entries pointing at the same tree LBA produce overlaps tagged with both names', function() {
+    var buf = createEmptyHdd(2);
+    var info = readIde64Partitions(buf);
+    var part = info.partitions[0];
+
+    // Import a normal file so we have a real tree LBA + data sector.
+    var payload = new Uint8Array(512);
+    for (var i = 0; i < 512; i++) payload[i] = i & 0xFF;
+    var imp = cfsImportFile(buf, part.startLba, part.endLba, part.cfsRootDir.addr, 'FIRST', payload);
+    assert.ok(imp.ok, imp.error || '');
+
+    // Find the imported entry, clone its dataTreePtr into a fresh slot.
+    var rootDirLba = part.cfsRootDir.addr;
+    var entries = readCfsDirectorySector(buf, rootDirLba);
+    var firstEntry = null;
+    var firstIdx = -1;
+    for (var ei = 0; ei < entries.length; ei++) {
+      if (!entries[ei].empty && petsciiToReadable(entries[ei].name).indexOf('FIRST') === 0) {
+        firstEntry = entries[ei];
+        firstIdx = ei;
+        break;
+      }
+    }
+    assert.ok(firstEntry, 'imported entry not found');
+
+    // Drop a synthetic SECOND entry into a free slot, copying byte-for-byte
+    // bytes 0x10..0x1F of the FIRST entry (size + tree pointer + attrs).
+    var d = new Uint8Array(buf);
+    var freeSlot = -1;
+    for (var si = 0; si < entries.length; si++) {
+      if (entries[si].empty && si !== firstIdx) { freeSlot = si; break; }
+    }
+    assert.notStrictEqual(freeSlot, -1);
+    var srcOff = rootDirLba * 512 + firstIdx * 32;
+    var dstOff = rootDirLba * 512 + freeSlot * 32;
+    var twin = 'TWIN';
+    for (var n = 0; n < 16; n++) d[dstOff + n] = n < twin.length ? twin.charCodeAt(n) : 0x00;
+    for (var b = 0x10; b < 0x20; b++) d[dstOff + b] = d[srcOff + b];
+
+    var res = cfsValidatePartition(buf, part, { fix: false });
+    assert.ok(res.overlapCount > 0, 'expected overlaps, got ' + res.overlapCount);
+
+    // Every overlap should have two owners, and at least one should
+    // mention TWIN (the duplicate claimant).
+    var twinFound = false;
+    for (var oi = 0; oi < res.overlap.length; oi++) {
+      var ow = res.overlap[oi].owners;
+      assert.strictEqual(ow.length, 2);
+      if (ow[0].indexOf('TWIN') !== -1 || ow[1].indexOf('TWIN') !== -1) twinFound = true;
+    }
+    assert.ok(twinFound, 'no overlap owner mentioned TWIN: ' + JSON.stringify(res.overlap));
+
+    // Validator log should call out the overlap as an ERROR.
+    var logStr = res.log.join('\n');
+    assert.ok(/sector\(s\) claimed by more than one/i.test(logStr), 'log: ' + logStr);
+  });
+});
+
+describe('cfsScanOrphans — deep mode threshold', function() {
+  it('a junk sector with only 7 plausible pointers is not flagged as a candidate', function() {
+    var buf = createEmptyHdd(2);
+    var info = readIde64Partitions(buf);
+    var part = info.partitions[0];
+
+    // Pick a free LBA inside the partition and seed exactly 7 plausible
+    // pointers in slots 0..6, then a zero in slot 7 to break the run.
+    var d = new Uint8Array(buf);
+    var partStart = part.startLba;
+    var junkLba = part.endLba - 10;
+    var sectorOff = junkLba * 512;
+    for (var s = 0; s < 7; s++) {
+      var target = partStart + 100 + s; // plausible: inside partition
+      d[sectorOff + s * 4 + 0] = 0x40 | ((target >>> 24) & 0x0F);
+      d[sectorOff + s * 4 + 1] = (target >>> 16) & 0xFF;
+      d[sectorOff + s * 4 + 2] = (target >>> 8) & 0xFF;
+      d[sectorOff + s * 4 + 3] = target & 0xFF;
+    }
+    // Slot 7 zeroed — the scanner uses `break` on the first non-plausible
+    // entry, so the plausible run is exactly 7.
+
+    var candidates = cfsScanOrphans(buf, part, { deep: true });
+    var hit = candidates.some(function(c) { return c.treeLba === junkLba; });
+    assert.strictEqual(hit, false, '7-pointer junk sector flagged: threshold should be ≥8');
+  });
+
+  it('a junk sector with 8 plausible pointers IS flagged as a deep-mode candidate', function() {
+    var buf = createEmptyHdd(2);
+    var info = readIde64Partitions(buf);
+    var part = info.partitions[0];
+
+    var d = new Uint8Array(buf);
+    var partStart = part.startLba;
+    var junkLba = part.endLba - 10;
+    var sectorOff = junkLba * 512;
+    for (var s = 0; s < 8; s++) {
+      var target = partStart + 100 + s;
+      d[sectorOff + s * 4 + 0] = 0x40 | ((target >>> 24) & 0x0F);
+      d[sectorOff + s * 4 + 1] = (target >>> 16) & 0xFF;
+      d[sectorOff + s * 4 + 2] = (target >>> 8) & 0xFF;
+      d[sectorOff + s * 4 + 3] = target & 0xFF;
+    }
+
+    var candidates = cfsScanOrphans(buf, part, { deep: true });
+    var hit = candidates.some(function(c) { return c.treeLba === junkLba; });
+    assert.strictEqual(hit, true, '8-pointer junk sector not flagged');
+  });
+});

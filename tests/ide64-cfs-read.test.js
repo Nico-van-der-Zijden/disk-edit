@@ -156,4 +156,17 @@ describe('CFS B-tree file reader', function() {
     assert.strictEqual(link.lba, true);
     assert.strictEqual(link.addr, 0x1234567);
   });
+
+  it('_cfsTreeSearch returns null on tree-cycle instead of running to depth limit', function() {
+    // Synthesise a self-referential tree at depth 2: rootLba's slot 0
+    // treelink points right back at rootLba. With byteOffset = 9*65536+128
+    // the inner peel loop assigns depth=2, so the descent loop iterates
+    // twice — the second iteration hits the cycle guard and bails to null.
+    var buf = new ArrayBuffer(1024 * 1024);
+    var d = new Uint8Array(buf);
+    var rootLba = 100;
+    writeTreeLink(d, rootLba * 512 + 0, rootLba);
+    var result = _cfsTreeSearch(d, rootLba, 9 * 65536 + 128);
+    assert.strictEqual(result, null);
+  });
 });
