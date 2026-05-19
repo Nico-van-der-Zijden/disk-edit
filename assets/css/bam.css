@@ -319,7 +319,7 @@
   padding: 4px 0;
 }
 .hdd-map-strip {
-  position: relative;
+  display: flex;
   width: 100%;
   height: 56px;
   background: #1c2030;
@@ -328,23 +328,34 @@
   overflow: hidden;
 }
 .hdd-map-region {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  min-width: 3px;
+  position: relative;
+  flex-grow: 1;
+  flex-shrink: 1;
+  flex-basis: 0;
+  min-width: 0;
   cursor: pointer;
   border-right: 1px solid rgba(0,0,0,0.35);
 }
-/* System sectors (MBR / partition table / backup mirror) are 1 LBA each.
-   At realistic disk sizes (megabytes+) that's <0.001% of the strip, so we
-   give them a clickable min-width and bump z-index to render above the
-   adjacent partition fill — otherwise the partition's larger region paints
-   right over them. */
-.hdd-map-region.hdd-map-mbr,
-.hdd-map-region.hdd-map-parttab,
-.hdd-map-region.hdd-map-parttab-backup {
-  min-width: 4px;
-  z-index: 1;
+/* System sectors (MBR / partition table / backup mirror) are 1 LBA each —
+   <0.01% of any realistic image — so they get a fixed pixel width and an
+   in-strip label instead of competing proportionally. */
+.hdd-map-region.hdd-map-system {
+  flex: 0 0 32px;
+}
+.hdd-map-region-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  color: #1a1208;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.25);
+  letter-spacing: 0.5px;
+  pointer-events: none;
+  user-select: none;
 }
 .hdd-map-region:hover {
   outline: 1px solid #fff;

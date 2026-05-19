@@ -291,6 +291,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.4', title: 'IDE64 .hdd — readable disk map + backup-LBA bitmap fix', items: [
+      'Disk-map strip is laid out as flexbox now: MBR, partition table and partition-table backup get fixed-width labelled blocks (MBR / PT / PT⁺) instead of competing proportionally with multi-MiB partitions — on any disk size they\'re now visible and clickable',
+      'Partitions and gaps still scale relative to each other by sector count, so a 4 MiB partition is still ~2× as wide as a 2 MiB one',
+      'Fixed a silent allocator bug: a freshly-created .hdd\'s default partition spans the disk\'s backup partition-table LBA, but the partition bitmap left that LBA marked free. Filling the partition to capacity could therefore hand it out for file data and clobber the backup — the bitmap now reserves it, matching cfsfdisk',
+    ]},
     { ver: '1.4.3', title: 'IDE64 .hdd — disk map + heat map share one tabbed modal', items: [
       'View BAM on an .hdd image now opens a single tabbed modal. The Partitions tab shows the disk-map strip; a second tab labelled with the current partition\'s name shows the CFS bitmap heat map. Default tab is the partition heat map when you\'re inside a CFS partition, the disk map otherwise',
       'Double-click a partition region in the disk map to load that partition\'s heat map into the second tab — switches tabs without changing the underlying disk view. Works for both live and soft-deleted CFS partitions',

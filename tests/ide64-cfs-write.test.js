@@ -1643,6 +1643,22 @@ describe('CFS partition soft-delete / restore (Phase D)', function() {
       assert.strictEqual(d[backup + i], d[primary + i], 'byte ' + i + ' of partition entry mirrored');
     }
   });
+
+  it('createEmptyHdd reserves the backup LBA in the partition bitmap', function() {
+    // The default partition spans LBA 2..lastLBA, which includes the
+    // backup partition-table LBA at the very end. If the bitmap left it
+    // free, the allocator would eventually hand it out for file data and
+    // silently clobber the backup. Real cfsfdisk-formatted images keep
+    // it marked used; we must too.
+    var buf = createEmptyHdd(4);
+    var d = new Uint8Array(buf);
+    var totalLbas = buf.byteLength / 512;
+    var backupLba = totalLbas - 1;
+    var partEnd = ((d[1*512+0x14] & 0x0F) << 24) | (d[1*512+0x15] << 16) | (d[1*512+0x16] << 8) | d[1*512+0x17];
+    assert.strictEqual(partEnd, backupLba, 'precondition: default partition spans the backup LBA');
+    assert.strictEqual(cfsIsSectorFree(d, 2, backupLba), false, 'backup LBA must be marked used in the bitmap');
+    assert.strictEqual(cfsIsSectorFree(d, 2, backupLba - 1), true, 'LBA just before backup should still be free');
+  });
 });
 
 // Byte-exact behavior against IDEDOS reference images. Only runs when

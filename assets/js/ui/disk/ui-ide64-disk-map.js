@@ -194,9 +194,9 @@ function _buildIde64DiskMapContext(boot, info, buffer) {
 
 function _renderDiskMapHtml(ctx) {
   function regionColor(r) {
-    if (r.kind === 'mbr')               return '#7a5c2e';
-    if (r.kind === 'parttab')           return '#a87d3e';
-    if (r.kind === 'parttab-backup')    return '#a87d3e';
+    if (r.kind === 'mbr')               return '#b88a3e';
+    if (r.kind === 'parttab')           return '#d49a48';
+    if (r.kind === 'parttab-backup')    return '#d49a48';
     if (r.kind === 'gap')               return '#1c2030';
     if (r.kind === 'partition-deleted') return '#5a4040';
     if (r.typeCode === 0x02)            return '#9a8030';
@@ -206,6 +206,15 @@ function _renderDiskMapHtml(ctx) {
       return '#4a8fbd';
     }
     return '#666';
+  }
+  function isSystem(r) {
+    return r.kind === 'mbr' || r.kind === 'parttab' || r.kind === 'parttab-backup';
+  }
+  function systemLabel(r) {
+    if (r.kind === 'mbr') return 'MBR';
+    if (r.kind === 'parttab') return 'PT';
+    if (r.kind === 'parttab-backup') return 'PT⁺';
+    return '';
   }
   function fmtSize(sectors) {
     var bytes = sectors * 512;
@@ -227,14 +236,25 @@ function _renderDiskMapHtml(ctx) {
     '<span style="color:var(--text-muted)">default partition: slot ' + boot.defaultPart + '</span>' +
     '</div>');
 
+  // Strip layout — flexbox. System regions (MBR / partition table / backup)
+  // are 1 LBA each, which is <0.01% of the disk on any realistic image, so
+  // they get a fixed pixel width and a label. Partitions + gaps share the
+  // remaining width proportionally to their sector counts, so a 4 MiB
+  // partition is still ~2× as wide as a 2 MiB partition.
   lines.push('<div class="hdd-map-strip" data-strip="disk">');
   for (var ri = 0; ri < withGaps.length; ri++) {
     var r = withGaps[ri];
-    var leftPct = (r.startLba / totalLbas) * 100;
-    var widthPct = ((r.endLba - r.startLba + 1) / totalLbas) * 100;
+    var span = r.endLba - r.startLba + 1;
     var cls = 'hdd-map-region hdd-map-' + r.kind;
-    lines.push('<span class="' + cls + '" data-ri="' + ri + '" ' +
-      'style="left:' + leftPct + '%;width:' + widthPct + '%;background:' + regionColor(r) + '"></span>');
+    var style = 'background:' + regionColor(r);
+    var inner = '';
+    if (isSystem(r)) {
+      cls += ' hdd-map-system';
+      inner = '<span class="hdd-map-region-label">' + systemLabel(r) + '</span>';
+    } else {
+      style += ';flex-grow:' + span;
+    }
+    lines.push('<span class="' + cls + '" data-ri="' + ri + '" style="' + style + '">' + inner + '</span>');
   }
   lines.push('</div>');
 
@@ -249,8 +269,8 @@ function _renderDiskMapHtml(ctx) {
     '<span><span class="cfs-bam-swatch" style="background:#3a4855"></span>Hidden</span>' +
     '<span><span class="cfs-bam-swatch" style="background:#9a8030"></span>GEOS</span>' +
     '<span><span class="cfs-bam-swatch" style="background:#5a4040"></span>Deleted (recoverable)</span>' +
-    '<span><span class="cfs-bam-swatch" style="background:#a87d3e"></span>Partition table</span>' +
-    '<span><span class="cfs-bam-swatch" style="background:#7a5c2e"></span>MBR</span>' +
+    '<span><span class="cfs-bam-swatch" style="background:#d49a48"></span>Partition table</span>' +
+    '<span><span class="cfs-bam-swatch" style="background:#b88a3e"></span>MBR</span>' +
     '<span><span class="cfs-bam-swatch" style="background:#1c2030"></span>Unallocated</span>' +
     '</div>');
 

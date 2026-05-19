@@ -1689,6 +1689,13 @@ function cfsInitPartitionStorage(buffer, partitionStart, partitionEndLba, partit
     cfsMarkSectorUsed(buffer, partitionStart, pastLba);
   }
 
+  // Reserve the partition's last LBA. cfsfdisk does this unconditionally
+  // — and when partitionEndLba happens to coincide with the backup
+  // partition-table LBA (as it does for the default whole-disk partition
+  // in createEmptyHdd), this is what keeps the file allocator from
+  // handing it out and silently overwriting the backup table.
+  cfsMarkSectorUsed(buffer, partitionStart, partitionEndLba);
+
   // Mark the three reserved system sectors used.
   cfsMarkSectorUsed(buffer, partitionStart, partitionStart + 1);
   cfsMarkSectorUsed(buffer, partitionStart, deldirLba);
