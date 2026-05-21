@@ -319,13 +319,18 @@ function leaveCfsSubdir() {
 // self-reference (slot 0 of the first sector) when there's no parent
 // (= partition root) and finally to the partition name. Self-ref and
 // outgoing entries can drift apart if a rename only updated one of
-// them — using the outgoing entry as canonical matches what the user
-// sees in the parent listing.
+// them. Verified against IDEDOS on real hardware: with a drifted dir
+// (parent says CREATURES2, self-ref says C2), IDEDOS prints the
+// self-ref name when listing the dir's contents via LOAD"$",8. We
+// mirror that so what we show matches what a real C64 would. Falls
+// back to the parent's outgoing-entry name (cached as cfsEnteredAs on
+// enter) if a self-ref is absent, then the partition name. Rename
+// already syncs both names so new renames don't introduce drift.
 function _cfsCurrentDirDisplayName() {
-  if (cfsEnteredAs) return cfsEnteredAs;
-  if (cfsDirEntries && cfsDirEntries.length > 0 && cfsDirEntries[0].name) {
+  if (cfsDirEntries && cfsDirEntries.length > 0 && cfsDirEntries[0].isSelfRef && cfsDirEntries[0].name) {
     return cfsDirEntries[0].name;
   }
+  if (cfsEnteredAs) return cfsEnteredAs;
   if (cfsPartitionIdx >= 0 && hddPartitions) {
     var p = hddPartitions[cfsPartitionIdx];
     if (p) return p.name || ('Partition ' + cfsPartitionIdx);

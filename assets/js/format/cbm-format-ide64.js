@@ -1675,10 +1675,15 @@ function cfsInitPartitionStorage(buffer, partitionStart, partitionEndLba, partit
     bitmapCount++;
   }
 
-  // Mark each bitmap sector as used (so the partition can't accidentally
-  // overwrite its own allocation tables).
+  // Mark each bitmap sector + its reserved companion at +1 as used.
+  // cfsfdisk reserves both for every 4096-LBA chunk; the companion
+  // stays zero-filled (purpose appears to be reserved-for-future-use)
+  // but the bitmap marks it used so the file allocator skips it,
+  // matching cfsfdisk's reference output byte-for-byte.
   for (var bm2 = 0; bm2 < bitmapCount; bm2++) {
-    cfsMarkSectorUsed(buffer, partitionStart, partitionStart + bm2 * 4096);
+    var bmpLba = partitionStart + bm2 * 4096;
+    cfsMarkSectorUsed(buffer, partitionStart, bmpLba);
+    cfsMarkSectorUsed(buffer, partitionStart, bmpLba + 1);
   }
 
   // Mark anything past partitionEndLba in the final bitmap as used so
@@ -1696,8 +1701,8 @@ function cfsInitPartitionStorage(buffer, partitionStart, partitionEndLba, partit
   // handing it out and silently overwriting the backup table.
   cfsMarkSectorUsed(buffer, partitionStart, partitionEndLba);
 
-  // Mark the three reserved system sectors used.
-  cfsMarkSectorUsed(buffer, partitionStart, partitionStart + 1);
+  // Reserve the deleted-dir + root-dir sectors. (The bitmap-companion at
+  // partitionStart + 1 is already covered by the bitmap+1 loop above.)
   cfsMarkSectorUsed(buffer, partitionStart, deldirLba);
   cfsMarkSectorUsed(buffer, partitionStart, rootdirLba);
 
@@ -2415,6 +2420,8 @@ function readIde64Partitions(buffer) {
   return {
     label: boot.label,
     defaultPart: boot.defaultPart,
+    partDir: boot.partDir,
+    partDirBackup: boot.partDirBackup,
     partitions: partitions,
   };
 }

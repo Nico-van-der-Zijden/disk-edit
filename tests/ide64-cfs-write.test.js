@@ -1659,6 +1659,43 @@ describe('CFS partition soft-delete / restore (Phase D)', function() {
     assert.strictEqual(cfsIsSectorFree(d, 2, backupLba), false, 'backup LBA must be marked used in the bitmap');
     assert.strictEqual(cfsIsSectorFree(d, 2, backupLba - 1), true, 'LBA just before backup should still be free');
   });
+
+  it('createEmptyHdd reserves bitmap-companion LBAs to match cfsfdisk', function() {
+    // cfsfdisk marks the LBA right after every bitmap (partStart+1 of each
+    // 4096-LBA chunk) as used in the bitmap. Our generator used to mark
+    // only the first companion; this asserts every companion is reserved.
+    var buf = createEmptyHdd(16);
+    var d = new Uint8Array(buf);
+    var partStart = 2;
+    var partEnd = buf.byteLength / 512 - 1;
+    for (var bm = 0; partStart + bm <= partEnd; bm += 4096) {
+      var bmpLba = partStart + bm;
+      assert.strictEqual(cfsIsSectorFree(d, partStart, bmpLba), false, 'bitmap LBA ' + bmpLba + ' must be used');
+      assert.strictEqual(cfsIsSectorFree(d, partStart, bmpLba + 1), false, 'companion LBA ' + (bmpLba+1) + ' must be used');
+    }
+  });
+
+  it('heat-map ownership classifies system LBAs without false LOST flags', function() {
+    // _cfsBuildLbaOwnership must mark every system sector cfsfdisk
+    // reserves: bitmap LBA + companion at +1 (for every 4096-LBA chunk),
+    // deldir, root dir, AND partitionEndLba. If any of these are
+    // bitmap-used but not in the owners map, they get classified as
+    // LOST and rendered red in the heat map.
+    var buf = createEmptyHdd(16);
+    var d = new Uint8Array(buf);
+    var info = readIde64Partitions(d);
+    var ownership = _cfsBuildLbaOwnership(d, info.partitions[0]);
+    assert.strictEqual(ownership.lostCount, 0, 'no LBA should be flagged lost in a clean image');
+    // partitionEndLba must be marked system (== backup LBA in this layout)
+    assert.strictEqual(ownership.owners[info.partitions[0].endLba], 'system');
+    // companion sector after every bitmap chunk must be marked system
+    var pStart = info.partitions[0].startLba;
+    var pEnd = info.partitions[0].endLba;
+    for (var bm2 = 0; pStart + bm2 <= pEnd; bm2 += 4096) {
+      assert.strictEqual(ownership.owners[pStart + bm2], 'system', 'bitmap LBA ' + (pStart+bm2) + ' marked system');
+      assert.strictEqual(ownership.owners[pStart + bm2 + 1], 'system', 'bitmap companion LBA ' + (pStart+bm2+1) + ' marked system');
+    }
+  });
 });
 
 // Byte-exact behavior against IDEDOS reference images. Only runs when

@@ -379,8 +379,20 @@ function _cfsBuildLbaOwnership(buffer, partition) {
     if (lba < partStart || lba > partEnd) return;
     if (owners[lba] === undefined) owners[lba] = key;
   }
-  for (var bm = 0; partStart + bm <= partEnd; bm += 4096) markSystem(partStart + bm);
-  markSystem(partStart + 1);
+  // System sectors at the start of each 4096-LBA bitmap chunk: the bitmap
+  // itself (offset 0) plus the reserved companion sector right after it
+  // (offset 1). cfsfdisk leaves the companion zero-filled but bitmap-used
+  // on every chunk, not just the first — so on a multi-MiB partition we'd
+  // flag dozens of false LOST sectors if we only marked partStart+1.
+  for (var bm = 0; partStart + bm <= partEnd; bm += 4096) {
+    markSystem(partStart + bm);
+    markSystem(partStart + bm + 1);
+  }
+  // cfsfdisk reserves the partition's last LBA in the bitmap. When the
+  // partition spans the .hdd's backup partition-table LBA this is what
+  // protects the backup; either way the bitmap reports it used, so the
+  // ownership map must call it system or it gets flagged as LOST.
+  markSystem(partEnd);
   if (partition.cfsDeletedDir && partition.cfsDeletedDir.lba) markSystem(partition.cfsDeletedDir.addr);
   var dirVisited = {};
   function walkTree(treeRoot, fileSize, key) {

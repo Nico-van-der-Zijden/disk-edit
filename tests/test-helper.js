@@ -63,6 +63,7 @@ loadScript('assets/js/ui/viewers/ui-viewer-vlir.js');
 loadScript('assets/js/ui/viewers/ui-viewer-rel.js');
 loadScript('assets/js/ui/viewers/ui-viewer-basic.js');
 loadScript('assets/js/ui/viewers/ui-viewer-geowrite.js');
+loadScript('assets/js/ui/disk/ui-ide64-disk-map.js');
 
 // Helper: load a test fixture disk and set globals. Fixtures live in
 // tests/fixtures/ (gitignored — keep local copies).
