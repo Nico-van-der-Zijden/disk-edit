@@ -2145,6 +2145,344 @@ function cfsCreateSubdir(buffer, partitionStart, partitionEndLba, parentDirLba, 
   return { ok: true, dirLba: slot.dirLba, slotIndex: slot.slotIndex, newDirLba: newDirLba };
 }
 
+// ── Recursive directory copy (clipboard tree) ────────────────────────
+// Collect a directory and all its contents into a serializable tree the
+// clipboard can carry across tabs / .hdd images. Layout:
+//   {
+//     nameBytes: Uint8Array(16),    // raw 16-byte name from caller
+//     files:   [{ nameBytes, ftype, typeSuffix, payload, size }],
+//     subdirs: [{ nameBytes, files, subdirs, skippedLnks }],
+//     skippedLnks: [ 'NAME', ... ], // display strings for the user report
+//   }
+// LNK entries are intentionally not copied — their target almost
+// certainly won't resolve in the destination image. The user gets a
+// summary at the end naming what was skipped. Cycle-guarded by a
+// visited-set on directory LBAs (defensive — well-formed CFS doesn't
+// cycle, but corrupted images do).
+function cfsCollectDirTree(buffer, sourceDirLba, sourceNameBytes) {
+  if (!buffer) return { ok: false, error: 'invalid buffer' };
+  if (!sourceDirLba) return { ok: false, error: 'invalid dir lba' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var visited = {};
+  var skippedLnksAll = [];
+
+  function rawNameBytes(entry) {
+    var off = entry.dirLba * IDE64_SECTOR_SIZE + entry.index * CFS_DIR_ENTRY_SIZE;
+    var out = new Uint8Array(16);
+    for (var i = 0; i < 16; i++) out[i] = data[off + i];
+    return out;
+  }
+
+  function walk(dirLba, nameBytes) {
+    if (visited[dirLba]) return { error: 'directory cycle at LBA ' + dirLba };
+    visited[dirLba] = true;
+    var node = { nameBytes: nameBytes, files: [], subdirs: [], skippedLnks: [] };
+    var entries = readCfsDirectory(data, dirLba);
+    if (!entries) return { error: 'unreadable directory at LBA ' + dirLba };
+    for (var i = 0; i < entries.length; i++) {
+      var en = entries[i];
+      if (!en || en.empty) continue;
+      if (en.isSelfRef) continue;
+      if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(en)) continue;
+      if (en.ftype === CFS_FTYPE.DEL) continue;
+      var dispName = (typeof petsciiToReadable === 'function' ? petsciiToReadable(en.name || '') : (en.name || '')).trim();
+      if (en.ftype === CFS_FTYPE.LNK) {
+        node.skippedLnks.push(dispName || '?');
+        skippedLnksAll.push(dispName || '?');
+        continue;
+      }
+      if (en.ftype === CFS_FTYPE.DIR) {
+        if (!en.dataTreePtr || !en.dataTreePtr.lba) continue;
+        var sub = walk(en.dataTreePtr.addr, rawNameBytes(en));
+        if (sub.error) return { error: sub.error };
+        node.subdirs.push(sub.node);
+        continue;
+      }
+      // NORMAL / REL — capture payload bytes
+      if (!en.dataTreePtr || !en.dataTreePtr.lba) continue;
+      var rd = readCfsFileData(data, en.dataTreePtr.addr, en.size || 0);
+      if (rd.error) return { error: 'reading file "' + dispName + '": ' + rd.error };
+      node.files.push({
+        nameBytes: rawNameBytes(en),
+        ftype: en.ftype,
+        typeSuffix: en.typeSuffix || 'PRG',
+        payload: rd.data,
+        size: en.size || 0,
+      });
+    }
+    return { node: node };
+  }
+
+  var res = walk(sourceDirLba, sourceNameBytes);
+  if (res.error) return { ok: false, error: res.error };
+  return { ok: true, tree: res.node, skippedLnks: skippedLnksAll };
+}
+
+// Estimate how many destination sectors are needed to write `tree` into
+// a CFS partition. Used by the paste pre-check so we can refuse before
+// any write if the destination doesn't have enough free space. Counts:
+//   * one sector per subdirectory's first dir sector
+//   * dir-extension sectors: when a parent dir holds > 16 outgoing
+//     entries (16 per sector) it needs more chain sectors. Conservative
+//     ceil((entries+1)/16) per dir to account for the self-ref slot.
+//   * data sectors per file: ceil(size / 512)
+//   * tree-node sectors per file: derived from _cfsComputeTreeDepth.
+//     A depth-0 file has none, depth-1 has 1 root, depth-2 has up to 9,
+//     etc. Upper bound used here so the pre-check is conservative.
+function cfsEstimateTreeSectors(tree) {
+  if (!tree) return 0;
+  var total = 0;
+  function visit(node, isRoot) {
+    // Root of the paste also needs a new dir sector at the destination
+    // (the new top-level subdir we're creating in the dest dir).
+    if (isRoot) total += 1;
+    // Dir-extension sectors. The new dir holds entries for all files +
+    // subdirs in this node, plus a self-ref. 16 slots per dir sector;
+    // the first sector is already counted (above for root, or below as
+    // part of the subdir count). Each additional 16 slots = 1 more.
+    var slots = 1 /* self-ref */ + node.files.length + node.subdirs.length;
+    var extraDirSectors = Math.max(0, Math.ceil(slots / 16) - 1);
+    total += extraDirSectors;
+    for (var f = 0; f < node.files.length; f++) {
+      var sz = node.files[f].size || 0;
+      var dataSectors = Math.ceil(sz / IDE64_SECTOR_SIZE);
+      total += dataSectors;
+      // Tree-node overhead. Depth 0 = 0 nodes, depth d ≥ 1 has 1 + 8 + 64 + ... nodes.
+      var depth = _cfsComputeTreeDepth(sz);
+      if (depth > 0) {
+        var nodes = 0;
+        var levelSize = 1;
+        for (var L = 0; L < depth; L++) { nodes += levelSize; levelSize *= 8; }
+        total += nodes;
+      }
+    }
+    for (var s = 0; s < node.subdirs.length; s++) {
+      total += 1; // subdir's first sector
+      visit(node.subdirs[s], false);
+    }
+  }
+  visit(tree, true);
+  return total;
+}
+
+// Count the free sectors inside a CFS partition by scanning the bitmap
+// once. Used by the paste pre-check. Not memoised — fast enough on
+// realistic partition sizes (8 MiB = 16k bitmap bits, microseconds).
+function cfsCountFreeSectors(buffer, partitionStart, partitionEndLba) {
+  if (!buffer) return 0;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var n = 0;
+  for (var lba = partitionStart; lba <= partitionEndLba; lba++) {
+    if (cfsIsSectorFree(data, partitionStart, lba)) n++;
+  }
+  return n;
+}
+
+// Find a CFS dir entry by raw name bytes (PETSCII, $A0/$00/$20-padded).
+// Returns the matching entry or null. Compares the meaningful prefix —
+// stops at the first $A0 / $00 padding byte in EITHER side, so a
+// space-padded name matches an $A0-padded one as long as the prefix
+// agrees. Used by tree paste to detect destination conflicts.
+function _cfsFindDirEntryByNameBytes(buffer, dirLba, nameBytes) {
+  if (!buffer || !dirLba) return null;
+  var entries = readCfsDirectory(buffer, dirLba);
+  if (!entries) return null;
+  function effectiveLen(b) {
+    for (var i = 0; i < 16; i++) {
+      if (b[i] === 0xA0 || b[i] === 0x00) return i;
+    }
+    return 16;
+  }
+  function trimTrailingSpaces(b, n) {
+    while (n > 0 && b[n - 1] === 0x20) n--;
+    return n;
+  }
+  var srcLen = trimTrailingSpaces(nameBytes, effectiveLen(nameBytes));
+  if (srcLen === 0) return null;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  for (var i = 0; i < entries.length; i++) {
+    var en = entries[i];
+    if (!en || en.empty) continue;
+    if (en.isSelfRef) continue;
+    var off = en.dirLba * IDE64_SECTOR_SIZE + en.index * CFS_DIR_ENTRY_SIZE;
+    var enBytes = new Uint8Array(16);
+    for (var j = 0; j < 16; j++) enBytes[j] = data[off + j];
+    var enLen = trimTrailingSpaces(enBytes, effectiveLen(enBytes));
+    if (enLen !== srcLen) continue;
+    var match = true;
+    for (var k = 0; k < srcLen; k++) {
+      if (enBytes[k] !== nameBytes[k]) { match = false; break; }
+    }
+    if (match) return en;
+  }
+  return null;
+}
+
+// Find a non-colliding name in `parentDirLba` by appending " (N)" for
+// N = 2..99. Truncates the base if needed so the full name fits in 16
+// bytes (suffix " (2)".." (9)" = 4 bytes → base ≤ 12; " (10)".." (99)"
+// = 5 bytes → base ≤ 11). Returns a fresh 16-byte Uint8Array padded
+// with $A0, or null if all 98 candidate names are already taken.
+function _cfsAutoRenameInDir(buffer, parentDirLba, baseNameBytes) {
+  if (!buffer || !parentDirLba) return null;
+  // Effective base length (strip $A0 / $00 / trailing spaces).
+  var baseLen = 16;
+  for (var i = 0; i < 16; i++) {
+    if (baseNameBytes[i] === 0xA0 || baseNameBytes[i] === 0x00) { baseLen = i; break; }
+  }
+  while (baseLen > 0 && baseNameBytes[baseLen - 1] === 0x20) baseLen--;
+  for (var n = 2; n <= 99; n++) {
+    var suffix = ' (' + n + ')';
+    var suffixLen = suffix.length;
+    var maxBase = 16 - suffixLen;
+    var keep = Math.min(baseLen, maxBase);
+    if (keep <= 0) return null;
+    var candidate = new Uint8Array(16);
+    for (var b = 0; b < keep; b++) candidate[b] = baseNameBytes[b];
+    for (var s = 0; s < suffixLen; s++) candidate[keep + s] = suffix.charCodeAt(s);
+    for (var p = keep + suffixLen; p < 16; p++) candidate[p] = 0xA0;
+    if (!_cfsFindDirEntryByNameBytes(buffer, parentDirLba, candidate)) return candidate;
+  }
+  return null;
+}
+
+// Paste a previously-collected `tree` into the destination directory at
+// `destDirLba`. opts.onConflict controls top-level name collision:
+//   'overwrite' — merge into the existing dir, replacing any conflicting
+//                 file by name (subdirs merge recursively)
+//   'rename'    — create a new dir with " (N)" suffix (auto-truncated)
+//   'cancel'    — refuse the paste (caller should check first)
+// Returns { ok, error?, copiedFiles, copiedDirs, skippedLnks, finalNameBytes }.
+function cfsPasteDirTree(buffer, partitionStart, partitionEndLba, destDirLba, tree, opts) {
+  if (!buffer || !tree) return { ok: false, error: 'invalid args' };
+  opts = opts || {};
+  var onConflict = opts.onConflict || 'cancel';
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+
+  var stats = { copiedFiles: 0, copiedDirs: 0, skippedLnks: [] };
+
+  // Resolve the top-level dir name + decide where to write into.
+  var topNameBytes = tree.nameBytes;
+  var existing = _cfsFindDirEntryByNameBytes(buffer, destDirLba, topNameBytes);
+  var targetDirLba = null;
+  var finalNameBytes = topNameBytes;
+  function _displayName(bytes) {
+    var s = '';
+    for (var i = 0; i < 16; i++) {
+      var b = bytes[i];
+      if (b === 0xA0 || b === 0x00) break;
+      // PETSCII letters live at $41..$5A uppercase, $C1..$DA shifted lowercase
+      // For display we map both to ASCII A-Z; punctuation passes through.
+      if (b >= 0xC1 && b <= 0xDA) s += String.fromCharCode(b - 0x80);
+      else if (b >= 0x20 && b <= 0x7E) s += String.fromCharCode(b);
+      else s += '?';
+    }
+    return s.replace(/ +$/, '');
+  }
+  if (existing && onConflict !== 'overwrite' && onConflict !== 'rename') {
+    return { ok: false, error: 'A "' + _displayName(topNameBytes) + '" already exists; choose Overwrite or Rename.' };
+  }
+  if (existing && existing.ftype !== CFS_FTYPE.DIR && onConflict === 'overwrite') {
+    return { ok: false, error: 'Destination has a non-directory entry with the same name; cannot overwrite.' };
+  }
+  if (existing && onConflict === 'rename') {
+    var renamed = _cfsAutoRenameInDir(buffer, destDirLba, topNameBytes);
+    if (!renamed) return { ok: false, error: 'All " (N)" rename suffixes 2..99 are taken; choose a different destination.' };
+    finalNameBytes = renamed;
+    existing = null; // fall through to fresh-create path
+  }
+  if (existing && existing.ftype === CFS_FTYPE.DIR && onConflict === 'overwrite') {
+    targetDirLba = existing.dataTreePtr.addr;
+  } else {
+    // Fresh create
+    var topNameStr = '';
+    for (var ti = 0; ti < 16; ti++) {
+      var nb = finalNameBytes[ti];
+      if (nb === 0xA0 || nb === 0x00) break;
+      topNameStr += String.fromCharCode(nb);
+    }
+    var created = cfsCreateSubdir(buffer, partitionStart, partitionEndLba, destDirLba, topNameStr);
+    if (!created.ok) return { ok: false, error: 'creating dir: ' + (created.error || 'unknown') };
+    targetDirLba = created.newDirLba;
+  }
+  stats.copiedDirs++;
+
+  // Recurse: write files + subdirs into targetDirLba. On overwrite mode,
+  // replace conflicting files by name; on the rename branch we got a
+  // fresh dir so no internal conflicts exist.
+  function recurse(srcNode, dstDirLba, mode) {
+    // Files first
+    for (var fi = 0; fi < srcNode.files.length; fi++) {
+      var f = srcNode.files[fi];
+      var fName = '';
+      for (var fn = 0; fn < 16; fn++) {
+        var fb = f.nameBytes[fn];
+        if (fb === 0xA0 || fb === 0x00) break;
+        fName += String.fromCharCode(fb);
+      }
+      if (mode === 'overwrite') {
+        var conflict = _cfsFindDirEntryByNameBytes(buffer, dstDirLba, f.nameBytes);
+        if (conflict && conflict.ftype !== CFS_FTYPE.DIR) {
+          // Hard-remove the existing file entry + its data tree
+          if (typeof cfsRemoveDirEntry === 'function') {
+            cfsRemoveDirEntry(buffer, partitionStart, partitionEndLba, conflict, dstDirLba);
+          }
+        } else if (conflict && conflict.ftype === CFS_FTYPE.DIR) {
+          return { ok: false, error: 'Cannot overwrite file "' + fName + '" — destination has a directory with the same name.' };
+        }
+      }
+      var imp = cfsImportFile(buffer, partitionStart, partitionEndLba, dstDirLba, fName, f.payload, {
+        ftype: f.ftype || CFS_FTYPE.NORMAL,
+        typeSuffix: f.typeSuffix || 'PRG',
+      });
+      if (!imp.ok) return { ok: false, error: 'importing "' + fName + '": ' + (imp.error || 'unknown') };
+      stats.copiedFiles++;
+    }
+    // Then subdirs
+    for (var si = 0; si < srcNode.subdirs.length; si++) {
+      var sub = srcNode.subdirs[si];
+      var subName = '';
+      for (var sn = 0; sn < 16; sn++) {
+        var sb = sub.nameBytes[sn];
+        if (sb === 0xA0 || sb === 0x00) break;
+        subName += String.fromCharCode(sb);
+      }
+      var subTargetLba = null;
+      if (mode === 'overwrite') {
+        var subConflict = _cfsFindDirEntryByNameBytes(buffer, dstDirLba, sub.nameBytes);
+        if (subConflict && subConflict.ftype === CFS_FTYPE.DIR) {
+          subTargetLba = subConflict.dataTreePtr.addr;
+        } else if (subConflict) {
+          return { ok: false, error: 'Cannot merge dir "' + subName + '" — destination has a non-directory entry with the same name.' };
+        }
+      }
+      if (subTargetLba === null) {
+        var subCreated = cfsCreateSubdir(buffer, partitionStart, partitionEndLba, dstDirLba, subName);
+        if (!subCreated.ok) return { ok: false, error: 'creating subdir "' + subName + '": ' + (subCreated.error || 'unknown') };
+        subTargetLba = subCreated.newDirLba;
+      }
+      stats.copiedDirs++;
+      var r = recurse(sub, subTargetLba, mode);
+      if (r && !r.ok) return r;
+    }
+    // LNK names just flow up; the source already populated tree.skippedLnks
+    for (var li = 0; li < srcNode.skippedLnks.length; li++) {
+      stats.skippedLnks.push(srcNode.skippedLnks[li]);
+    }
+    return { ok: true };
+  }
+
+  var r = recurse(tree, targetDirLba, existing ? 'overwrite' : 'fresh');
+  if (!r.ok) return r;
+  return {
+    ok: true,
+    copiedFiles: stats.copiedFiles,
+    copiedDirs: stats.copiedDirs,
+    skippedLnks: stats.skippedLnks,
+    finalNameBytes: finalNameBytes,
+  };
+}
+
 // Resolve a slash-separated CFS path against `buffer`, starting at the
 // directory at `startDirLba`. Returns the matched entry or null when
 // any component is missing or a non-DIR is encountered mid-path. Names

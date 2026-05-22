@@ -189,8 +189,37 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
       var ce = cfsDirEntries[rawIdx[cci]];
       if (!ce || ce.empty) continue;
       var ceName = petsciiToReadable(ce.name).trim() || '?';
-      if (ce.ftype === CFS_FTYPE.DIR || ce.ftype === CFS_FTYPE.LNK || ce.ftype === CFS_FTYPE.DEL) {
-        cfsSkipped.push({ name: ceName, reason: 'Not a file (dir / link / scratched)' });
+      // DIR entries: collect the whole subtree (recursive) into a single
+      // clipboard item. Paste recreates the tree at the destination.
+      if (ce.ftype === CFS_FTYPE.DIR) {
+        if (_cfsEntryIsDeldirRef(ce)) {
+          cfsSkipped.push({ name: ceName, reason: 'System "<<DELETED FILES>>" entry — not copyable' });
+          continue;
+        }
+        if (!ce.dataTreePtr || !ce.dataTreePtr.lba) {
+          cfsSkipped.push({ name: ceName, reason: 'Empty dir pointer' });
+          continue;
+        }
+        var dirDisk = new Uint8Array(hddBuffer);
+        var dirNameBytes = new Uint8Array(16);
+        var dirSrcOff = ce.dirLba * 512 + ce.index * 32;
+        for (var dni = 0; dni < 16; dni++) dirNameBytes[dni] = dirDisk[dirSrcOff + dni];
+        if (cfsProgress) await cfsProgress.update(cci, rawIdx.length, ceName);
+        var dirColl = cfsCollectDirTree(hddBuffer, ce.dataTreePtr.addr, dirNameBytes);
+        if (!dirColl.ok) {
+          cfsSkipped.push({ name: ceName, reason: dirColl.error || 'collect failed' });
+          continue;
+        }
+        clipboard.push({
+          kind: 'cfs-dir-tree',
+          nameBytes: dirNameBytes,
+          tree: dirColl.tree,
+          skippedLnks: dirColl.skippedLnks,
+        });
+        continue;
+      }
+      if (ce.ftype === CFS_FTYPE.LNK || ce.ftype === CFS_FTYPE.DEL) {
+        cfsSkipped.push({ name: ceName, reason: 'Not a file (link / scratched)' });
         continue;
       }
       if (!ce.dataTreePtr || !ce.dataTreePtr.lba) {
@@ -347,6 +376,84 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
   if (cfsPartitionIdx >= 0 && cfsDirEntries) {
     var cPart = hddPartitions && hddPartitions[cfsPartitionIdx];
     if (!cPart) return;
+    // Dir-tree clipboard: route through the recursive paste helper.
+    // Pre-check destination free space, prompt on top-level conflict,
+    // then call cfsPasteDirTree. Multiple tree items processed in order.
+    var treeItems = clipboard.filter(function(it) { return it.kind === 'cfs-dir-tree'; });
+    if (treeItems.length > 0) {
+      // Pre-check: sum sectors needed across all tree items + count free.
+      var needed = 0;
+      for (var ti = 0; ti < treeItems.length; ti++) needed += cfsEstimateTreeSectors(treeItems[ti].tree);
+      var freeSec = cfsCountFreeSectors(hddBuffer, cPart.startLba, cPart.endLba);
+      if (needed > freeSec) {
+        showModal('Paste — not enough space', [
+          'Pasting needs at least ' + needed + ' free sectors but the partition has ' + freeSec + '.',
+          'Free up ' + (needed - freeSec) + ' more sector(s) (or pick a bigger partition) and try again.',
+        ]);
+        return;
+      }
+      // Per-item: check top-level conflict, prompt if any, then paste.
+      var treePasted = 0, treeFiles = 0, treeDirs = 0;
+      var treeAllLnks = [];
+      pushUndo();
+      for (var pti = 0; pti < treeItems.length; pti++) {
+        var titem = treeItems[pti];
+        var existingTop = _cfsFindDirEntryByNameBytes(hddBuffer, cfsDirLba, titem.nameBytes);
+        var mode = 'cancel';
+        if (existingTop) {
+          var dispName = '';
+          for (var dn = 0; dn < 16; dn++) {
+            var dnb = titem.nameBytes[dn];
+            if (dnb === 0xA0 || dnb === 0x00) break;
+            if (dnb >= 0xC1 && dnb <= 0xDA) dispName += String.fromCharCode(dnb - 0x80);
+            else if (dnb >= 0x20 && dnb <= 0x7E) dispName += String.fromCharCode(dnb);
+          }
+          var choice = await showChoiceModal(
+            'Directory exists',
+            'The destination already has an entry named "' + dispName.trim() + '". What would you like to do?',
+            [
+              { label: 'Cancel', value: 'cancel', secondary: true },
+              { label: 'Rename', value: 'rename' },
+              { label: 'Overwrite', value: 'overwrite' },
+            ]
+          );
+          if (choice === 'cancel' || choice == null) {
+            if (typeof popUndo === 'function') popUndo();
+            return;
+          }
+          mode = choice;
+        } else {
+          mode = 'cancel'; // no conflict — onConflict arg is unused, but paste expects a value
+        }
+        var pres = cfsPasteDirTree(hddBuffer, cPart.startLba, cPart.endLba, cfsDirLba, titem.tree, { onConflict: mode });
+        if (!pres.ok) {
+          showModal('Paste failed', [pres.error || 'Unknown error.']);
+          if (typeof popUndo === 'function') popUndo();
+          return;
+        }
+        treePasted++;
+        treeFiles += pres.copiedFiles;
+        treeDirs += pres.copiedDirs;
+        if (pres.skippedLnks) treeAllLnks = treeAllLnks.concat(pres.skippedLnks);
+        // Also include LNKs noted at copy-time but not seen during paste
+        // (paste's recurse only sees them via the source tree).
+        if (titem.skippedLnks) {
+          for (var tlnk = 0; tlnk < titem.skippedLnks.length; tlnk++) {
+            if (treeAllLnks.indexOf(titem.skippedLnks[tlnk]) < 0) treeAllLnks.push(titem.skippedLnks[tlnk]);
+          }
+        }
+      }
+      refreshIde64View();
+      var summary = ['Pasted ' + treeDirs + ' director' + (treeDirs === 1 ? 'y' : 'ies') + ' and ' + treeFiles + ' file' + (treeFiles === 1 ? '' : 's') + '.'];
+      if (treeAllLnks.length > 0) {
+        summary.push('');
+        summary.push(treeAllLnks.length + ' link(s) not copied (link targets generally don\'t resolve across .hdd images):');
+        for (var sl = 0; sl < treeAllLnks.length && sl < 12; sl++) summary.push('  ' + treeAllLnks[sl]);
+        if (treeAllLnks.length > 12) summary.push('  … and ' + (treeAllLnks.length - 12) + ' more');
+      }
+      showModal('Paste complete', summary);
+      return;
+    }
     // cfsImportFile auto-extends the dir chain when every existing dir
     // sector is full, so we don't pre-block here. If extension itself
     // fails (the partition is out of free sectors), the per-file result
@@ -392,8 +499,11 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
   }
   if (!currentBuffer || !canInsertFile()) return;
 
-  // Check if any GEOS files in clipboard and disk is not GEOS
-  var hasGeos = clipboard.some(function(c) { return c.geosInfoBlock !== null; });
+  // Check if any GEOS files in clipboard and disk is not GEOS. Tree
+  // entries (kind:'cfs-dir-tree') have no geosInfoBlock field so they
+  // mustn't trigger this prompt; use loose != to treat undefined the
+  // same as null, and exclude tree entries explicitly.
+  var hasGeos = clipboard.some(function(c) { return c.kind !== 'cfs-dir-tree' && c.geosInfoBlock != null; });
   if (hasGeos && !hasGeosSignature(currentBuffer)) {
     var choice = await showChoiceModal(
       'GEOS File',

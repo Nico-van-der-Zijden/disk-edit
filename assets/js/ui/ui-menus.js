@@ -1176,11 +1176,14 @@ function updateEntryMenuState() {
     // declared up top so View As / View Hex gating sees the right value.)
     document.getElementById('opt-export').classList.toggle('disabled', !cfsExportable);
     document.getElementById('opt-export-menu').classList.toggle('disabled', !cfsExportable);
-    // Copy: same rule as Export — single or multi NORMAL/REL entries.
+    // Copy: NORMAL/REL files OR a DIR entry (recursive tree copy). LNK
+    // and the system <<DELETED FILES>> stay disabled — the handler in
+    // ui-fileops.js also defensively re-checks those cases.
+    var cfsCopyableDir = cfsHasEntry && !cfsIsDeleted && cfsEntrySel.ftype === CFS_FTYPE.DIR && !_cfsEntryIsDeldirRef(cfsEntrySel);
+    document.getElementById('opt-copy').classList.toggle('disabled', !(cfsExportable || cfsCopyableDir));
     // Paste: enabled whenever the clipboard has anything and the dir
     // has room (canInsertFile() reads CBM-DOS shape — bypass it here
     // and check the CFS free-slot probe instead).
-    document.getElementById('opt-copy').classList.toggle('disabled', !cfsExportable);
     document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !cfsHasFreeSlot);
     // Align: handler routes to alignCfsFilename in CFS view. Gate on
     // the same editable-entry flag we use for Rename / Scratch so the

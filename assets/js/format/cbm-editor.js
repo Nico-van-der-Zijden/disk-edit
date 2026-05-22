@@ -143,7 +143,9 @@ function clearCmdContainerState() {
 // Layout viewer reads this and is greyed out when null.
 var currentG64Layout = null;
 var clipboard = []; // array of { typeIdx, nameBytes, geosBytes, geosInfoBlock, data, vlirRecords }
-                    // data is null for GEOS VLIR files; vlirRecords is null for everything else
+                    // data is null for GEOS VLIR files; vlirRecords is null for everything else.
+                    // CFS dir-tree entries carry { kind: 'cfs-dir-tree', nameBytes, tree, skippedLnks }
+                    // — `tree` matches cfsCollectDirTree's output shape.
 var dirInterleave = 3;   // directory sector interleave
 var fileInterleave = 10; // file data sector interleave
 
@@ -151,7 +153,6 @@ var fileInterleave = 10; // file data sector interleave
 // getSpeederVariant — uses data-presence heuristics (not header-ID
 // sniffing) and is consulted from the D64 descriptor's BAM helpers
 // to read tracks 36-40 from the correct offset.
-
 // ── Undo system ──────────────────────────────────────────────────────
 // The tab is "clean" (tabDirty=false) when undoStack.length === cleanStackLength.
 // Set by markClean() on load / save; read by popUndo() to restore clean state

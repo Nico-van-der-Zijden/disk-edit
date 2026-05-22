@@ -1756,6 +1756,173 @@ describe('CFS partition soft-delete / restore (Phase D)', function() {
     var primaryAfter = readIde64Partitions(d).partitions[0];
     assert.strictEqual(primaryAfter.deleted, liveBeforeRestore.deleted);
   });
+
+  // ── Recursive dir-tree copy/paste across .hdd images ──────────────
+  // Helper: build a small synthetic source — GAMES dir with PONG + TETRIS
+  // files and an ARCADE subdir containing PACMAN.
+  function _buildSourceTree() {
+    var buf = createEmptyHdd(4);
+    var info = readIde64Partitions(buf);
+    var p = info.partitions[0];
+    var rootLba = p.cfsRootDir.addr;
+    var games = cfsCreateSubdir(buf, p.startLba, p.endLba, rootLba, 'GAMES');
+    cfsImportFile(buf, p.startLba, p.endLba, games.newDirLba, 'PONG', new Uint8Array([1,2,3,4]), { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'PRG' });
+    cfsImportFile(buf, p.startLba, p.endLba, games.newDirLba, 'TETRIS', new Uint8Array(2000), { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'PRG' });
+    var arcade = cfsCreateSubdir(buf, p.startLba, p.endLba, games.newDirLba, 'ARCADE');
+    cfsImportFile(buf, p.startLba, p.endLba, arcade.newDirLba, 'PACMAN', new Uint8Array(500), { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'PRG' });
+    // Read raw 16-byte name of GAMES from root for the collect call
+    var d = new Uint8Array(buf);
+    var nameBytes = new Uint8Array(16);
+    var entries = readCfsDirectory(buf, rootLba);
+    var gamesEntry = entries.find(function(e) {
+      return !e.empty && !e.isSelfRef && e.ftype === CFS_FTYPE.DIR && e.dataTreePtr && e.dataTreePtr.addr === games.newDirLba;
+    });
+    var off = gamesEntry.dirLba * 512 + gamesEntry.index * 32;
+    for (var i = 0; i < 16; i++) nameBytes[i] = d[off + i];
+    return { buf: buf, partition: p, gamesDirLba: games.newDirLba, gamesNameBytes: nameBytes };
+  }
+
+  it('cfsCollectDirTree captures nested files + subdirs, skips LNK entries', function() {
+    var src = _buildSourceTree();
+    var coll = cfsCollectDirTree(src.buf, src.gamesDirLba, src.gamesNameBytes);
+    assert.strictEqual(coll.ok, true);
+    assert.strictEqual(coll.tree.files.length, 2, 'PONG + TETRIS at top level');
+    assert.strictEqual(coll.tree.subdirs.length, 1, 'ARCADE subdir');
+    assert.strictEqual(coll.tree.subdirs[0].files.length, 1, 'PACMAN inside ARCADE');
+    assert.strictEqual(coll.tree.subdirs[0].files[0].size, 500);
+    // No LNK entries in this synthetic tree
+    assert.strictEqual(coll.skippedLnks.length, 0);
+  });
+
+  it('cfsPasteDirTree copies a tree into a different .hdd', function() {
+    var src = _buildSourceTree();
+    var coll = cfsCollectDirTree(src.buf, src.gamesDirLba, src.gamesNameBytes);
+    var dstBuf = createEmptyHdd(4);
+    var dstInfo = readIde64Partitions(dstBuf);
+    var dstP = dstInfo.partitions[0];
+    var res = cfsPasteDirTree(dstBuf, dstP.startLba, dstP.endLba, dstP.cfsRootDir.addr, coll.tree, { onConflict: 'cancel' });
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.copiedDirs, 2);   // GAMES + ARCADE
+    assert.strictEqual(res.copiedFiles, 3);  // PONG, TETRIS, PACMAN
+
+    // Verify GAMES exists in destination root with the expected children.
+    var dstRoot = readCfsDirectory(dstBuf, dstP.cfsRootDir.addr);
+    var dstGames = dstRoot.find(function(e) {
+      return !e.empty && !e.isSelfRef && e.ftype === CFS_FTYPE.DIR && e.dataTreePtr && e.dataTreePtr.addr !== dstP.cfsDeletedDir.addr;
+    });
+    assert.ok(dstGames, 'GAMES present in dst root');
+    var dstGamesChildren = readCfsDirectory(dstBuf, dstGames.dataTreePtr.addr)
+      .filter(function(e) { return !e.empty && !e.isSelfRef; });
+    assert.strictEqual(dstGamesChildren.length, 3); // 2 files + ARCADE
+    var dstArcade = dstGamesChildren.find(function(e) { return e.ftype === CFS_FTYPE.DIR; });
+    assert.ok(dstArcade, 'ARCADE present inside GAMES');
+    var dstPacman = readCfsDirectory(dstBuf, dstArcade.dataTreePtr.addr)
+      .filter(function(e) { return !e.empty && !e.isSelfRef; });
+    assert.strictEqual(dstPacman.length, 1);
+    assert.strictEqual(dstPacman[0].size, 500);
+  });
+
+  it('cfsPasteDirTree refuses cancel mode when the dir name already exists', function() {
+    var src = _buildSourceTree();
+    var coll = cfsCollectDirTree(src.buf, src.gamesDirLba, src.gamesNameBytes);
+    var dstBuf = createEmptyHdd(4);
+    var dstInfo = readIde64Partitions(dstBuf);
+    var dstP = dstInfo.partitions[0];
+    // First paste — succeeds
+    cfsPasteDirTree(dstBuf, dstP.startLba, dstP.endLba, dstP.cfsRootDir.addr, coll.tree, { onConflict: 'cancel' });
+    // Second paste with cancel mode — refuses
+    var res2 = cfsPasteDirTree(dstBuf, dstP.startLba, dstP.endLba, dstP.cfsRootDir.addr, coll.tree, { onConflict: 'cancel' });
+    assert.strictEqual(res2.ok, false);
+    assert.ok(res2.error && res2.error.indexOf('already exists') >= 0);
+  });
+
+  it('cfsPasteDirTree rename mode picks " (N)" suffix and truncates long bases', function() {
+    var src = _buildSourceTree();
+    var coll = cfsCollectDirTree(src.buf, src.gamesDirLba, src.gamesNameBytes);
+    var dstBuf = createEmptyHdd(4);
+    var dstInfo = readIde64Partitions(dstBuf);
+    var dstP = dstInfo.partitions[0];
+    cfsPasteDirTree(dstBuf, dstP.startLba, dstP.endLba, dstP.cfsRootDir.addr, coll.tree, { onConflict: 'cancel' });
+    // Second paste with rename — should land as "GAMES (2)"
+    var res = cfsPasteDirTree(dstBuf, dstP.startLba, dstP.endLba, dstP.cfsRootDir.addr, coll.tree, { onConflict: 'rename' });
+    assert.strictEqual(res.ok, true);
+    var finalName = '';
+    for (var i = 0; i < 16; i++) {
+      var b = res.finalNameBytes[i];
+      if (b === 0xA0 || b === 0x00) break;
+      finalName += String.fromCharCode(b);
+    }
+    assert.strictEqual(finalName, 'GAMES (2)');
+    // Truncation test: a 15-byte base + " (2)" should truncate the base.
+    var longTree = {
+      nameBytes: new Uint8Array([0x4C,0x4F,0x4E,0x47,0x44,0x49,0x52,0x4E,0x41,0x4D,0x45,0x58,0x59,0x5A,0x57,0xA0]), // "LONGDIRNAMEXYZW"
+      files: [], subdirs: [], skippedLnks: [],
+    };
+    // First paste lands as-is
+    var r1 = cfsPasteDirTree(dstBuf, dstP.startLba, dstP.endLba, dstP.cfsRootDir.addr, longTree, { onConflict: 'cancel' });
+    assert.strictEqual(r1.ok, true);
+    // Second paste with rename — base truncated to 12 to make room for " (2)".
+    var r2 = cfsPasteDirTree(dstBuf, dstP.startLba, dstP.endLba, dstP.cfsRootDir.addr, longTree, { onConflict: 'rename' });
+    assert.strictEqual(r2.ok, true);
+    var rn = '';
+    for (var ri = 0; ri < 16; ri++) {
+      var rb = r2.finalNameBytes[ri];
+      if (rb === 0xA0 || rb === 0x00) break;
+      rn += String.fromCharCode(rb);
+    }
+    assert.strictEqual(rn, 'LONGDIRNAMEX (2)'); // 12 base chars + " (2)" = 16
+  });
+
+  it('cfsPasteDirTree overwrite mode merges and replaces conflicting files', function() {
+    var src = _buildSourceTree();
+    var coll = cfsCollectDirTree(src.buf, src.gamesDirLba, src.gamesNameBytes);
+    var dstBuf = createEmptyHdd(4);
+    var dstInfo = readIde64Partitions(dstBuf);
+    var dstP = dstInfo.partitions[0];
+    // Pre-populate dst with a GAMES dir containing a file PONG of different size
+    var preGames = cfsCreateSubdir(dstBuf, dstP.startLba, dstP.endLba, dstP.cfsRootDir.addr, 'GAMES');
+    cfsImportFile(dstBuf, dstP.startLba, dstP.endLba, preGames.newDirLba, 'PONG', new Uint8Array(9999), { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'PRG' });
+    cfsImportFile(dstBuf, dstP.startLba, dstP.endLba, preGames.newDirLba, 'KEEP', new Uint8Array(100), { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'PRG' });
+    // Overwrite paste — merges, replacing PONG (4 bytes from src), adding TETRIS + ARCADE.
+    var res = cfsPasteDirTree(dstBuf, dstP.startLba, dstP.endLba, dstP.cfsRootDir.addr, coll.tree, { onConflict: 'overwrite' });
+    assert.strictEqual(res.ok, true);
+    // Verify post-merge state of GAMES
+    var dstRoot = readCfsDirectory(dstBuf, dstP.cfsRootDir.addr);
+    var dstGames = dstRoot.find(function(e) {
+      return !e.empty && !e.isSelfRef && e.ftype === CFS_FTYPE.DIR && e.dataTreePtr && e.dataTreePtr.addr !== dstP.cfsDeletedDir.addr;
+    });
+    var children = readCfsDirectory(dstBuf, dstGames.dataTreePtr.addr).filter(function(e) { return !e.empty && !e.isSelfRef; });
+    var byName = {};
+    for (var i = 0; i < children.length; i++) {
+      byName[petsciiToReadable(children[i].name).trim()] = children[i];
+    }
+    assert.ok(byName.PONG, 'PONG present');
+    assert.strictEqual(byName.PONG.size, 4, 'PONG overwritten with src size');
+    assert.ok(byName.TETRIS, 'TETRIS added');
+    assert.ok(byName.ARCADE, 'ARCADE added');
+    assert.ok(byName.KEEP, 'KEEP preserved — not in src tree');
+  });
+
+  it('cfsEstimateTreeSectors + cfsCountFreeSectors gate the paste pre-check', function() {
+    // Tiny synthetic tree: 3 small files. Estimate should be conservative
+    // upper bound covering data + tree-node + dir sectors.
+    var tree = {
+      nameBytes: new Uint8Array([0x44,0x49,0x52,0xA0,0xA0,0xA0,0xA0,0xA0,0xA0,0xA0,0xA0,0xA0,0xA0,0xA0,0xA0,0xA0]),
+      files: [
+        { nameBytes: new Uint8Array(16), ftype: 1, typeSuffix: 'PRG', payload: new Uint8Array(100), size: 100 },
+        { nameBytes: new Uint8Array(16), ftype: 1, typeSuffix: 'PRG', payload: new Uint8Array(200), size: 200 },
+      ],
+      subdirs: [], skippedLnks: [],
+    };
+    var est = cfsEstimateTreeSectors(tree);
+    assert.ok(est >= 3, 'must reserve at least dir + 2 data sectors');
+    // Free count on a fresh 4 MiB image
+    var buf = createEmptyHdd(4);
+    var info = readIde64Partitions(buf);
+    var p = info.partitions[0];
+    var free = cfsCountFreeSectors(buf, p.startLba, p.endLba);
+    assert.ok(free > est, 'fresh 4 MiB has plenty of room for the tiny tree');
+  });
 });
 
 // Byte-exact behavior against IDEDOS reference images. Only runs when
