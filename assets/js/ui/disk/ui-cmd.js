@@ -813,6 +813,25 @@ document.getElementById('opt-hdd-partition-restore').addEventListener('click', f
   if (idx >= 0) confirmHddPartitionRestore(idx);
 });
 
+// Rename the .hdd's global disk label (boot sector $20..$2F). cfsfdisk's
+// "g" command. Visible only on the .hdd partition-list view.
+document.getElementById('opt-hdd-rename-disk').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  if (this.classList.contains('disabled')) return;
+  showHddRenameDiskDialog();
+});
+
+// Emergency recovery: copy the backup partition table at boot $1C's LBA
+// over the primary at LBA 1. cfsfdisk's "u" command. Visible only on the
+// .hdd partition-list view.
+document.getElementById('opt-hdd-restore-backup-pt').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  if (this.classList.contains('disabled')) return;
+  confirmHddLoadBackupPartitionTable();
+});
+
 // Type code → file extension + accepted import sizes. `sizes: null`
 // means variable-size (DNP — any 64 KiB multiple up to 16 MiB).
 var CMDC_IMPORT_EXPORT_TYPES = {

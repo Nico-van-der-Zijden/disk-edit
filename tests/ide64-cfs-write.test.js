@@ -1660,6 +1660,29 @@ describe('CFS partition soft-delete / restore (Phase D)', function() {
     assert.strictEqual(cfsIsSectorFree(d, 2, backupLba - 1), true, 'LBA just before backup should still be free');
   });
 
+  it('heat-map ownership classifies system LBAs without false LOST flags', function() {
+    // _cfsBuildLbaOwnership must mark every system sector cfsfdisk
+    // reserves: bitmap LBA + companion at +1 (for every 4096-LBA chunk),
+    // partStart+1, deldir, root dir, AND partitionEndLba. If any of these
+    // are bitmap-used but not in the owners map, they get classified as
+    // LOST and rendered red in the heat map.
+    var buf = createEmptyHdd(16);
+    var d = new Uint8Array(buf);
+    var info = readIde64Partitions(d);
+    var ownership = _cfsBuildLbaOwnership(d, info.partitions[0]);
+    assert.strictEqual(ownership.lostCount, 0, 'no LBA should be flagged lost in a clean image');
+
+    // partitionEndLba must be marked system (== backup LBA in this layout)
+    assert.strictEqual(ownership.owners[info.partitions[0].endLba], 'system');
+    // companion sector after every bitmap chunk must be marked system
+    var pStart = info.partitions[0].startLba;
+    var pEnd = info.partitions[0].endLba;
+    for (var bm = 0; pStart + bm <= pEnd; bm += 4096) {
+      assert.strictEqual(ownership.owners[pStart + bm], 'system', 'bitmap LBA ' + (pStart+bm) + ' marked system');
+      assert.strictEqual(ownership.owners[pStart + bm + 1], 'system', 'bitmap companion LBA ' + (pStart+bm+1) + ' marked system');
+    }
+  });
+
   it('createEmptyHdd reserves bitmap-companion LBAs to match cfsfdisk', function() {
     // cfsfdisk marks the LBA right after every bitmap (partStart+1 of each
     // 4096-LBA chunk) as used in the bitmap. Our generator used to mark
@@ -1675,26 +1698,63 @@ describe('CFS partition soft-delete / restore (Phase D)', function() {
     }
   });
 
-  it('heat-map ownership classifies system LBAs without false LOST flags', function() {
-    // _cfsBuildLbaOwnership must mark every system sector cfsfdisk
-    // reserves: bitmap LBA + companion at +1 (for every 4096-LBA chunk),
-    // deldir, root dir, AND partitionEndLba. If any of these are
-    // bitmap-used but not in the owners map, they get classified as
-    // LOST and rendered red in the heat map.
-    var buf = createEmptyHdd(16);
+  it('cfsSetHddLabel writes 16 PETSCII bytes, space-padded', function() {
+    var buf = createEmptyHdd(4, { label: 'OLD LABEL' });
     var d = new Uint8Array(buf);
-    var info = readIde64Partitions(d);
-    var ownership = _cfsBuildLbaOwnership(d, info.partitions[0]);
-    assert.strictEqual(ownership.lostCount, 0, 'no LBA should be flagged lost in a clean image');
-    // partitionEndLba must be marked system (== backup LBA in this layout)
-    assert.strictEqual(ownership.owners[info.partitions[0].endLba], 'system');
-    // companion sector after every bitmap chunk must be marked system
-    var pStart = info.partitions[0].startLba;
-    var pEnd = info.partitions[0].endLba;
-    for (var bm2 = 0; pStart + bm2 <= pEnd; bm2 += 4096) {
-      assert.strictEqual(ownership.owners[pStart + bm2], 'system', 'bitmap LBA ' + (pStart+bm2) + ' marked system');
-      assert.strictEqual(ownership.owners[pStart + bm2 + 1], 'system', 'bitmap companion LBA ' + (pStart+bm2+1) + ' marked system');
+    var res = cfsSetHddLabel(buf, 'NEW DISK');
+    assert.strictEqual(res.ok, true);
+    // Stored bytes: "NEW DISK" + 8 spaces, in $20..$2F
+    var expected = 'NEW DISK        '; // 16 chars
+    for (var i = 0; i < 16; i++) {
+      assert.strictEqual(d[0x20 + i], expected.charCodeAt(i), 'byte ' + i);
     }
+    // parseIde64BootSector should read it back trimmed
+    var boot = parseIde64BootSector(d);
+    assert.strictEqual(boot.label, 'NEW DISK');
+  });
+
+  it('cfsSetHddLabel truncates to 16 chars and refuses non-HDD buffers', function() {
+    var buf = createEmptyHdd(4);
+    var d = new Uint8Array(buf);
+    cfsSetHddLabel(buf, 'THIS IS A VERY LONG LABEL THAT EXCEEDS 16 CHARS');
+    var boot = parseIde64BootSector(d);
+    assert.strictEqual(boot.label, 'THIS IS A VERY L');
+    // Empty buffer + buffer without IDE64 magic both refused
+    assert.strictEqual(cfsSetHddLabel(null, 'X').ok, false);
+    var fake = new Uint8Array(512).buffer;
+    assert.strictEqual(cfsSetHddLabel(fake, 'X').ok, false);
+  });
+
+  it('cfsLoadBackupPartitionTable restores primary from backup', function() {
+    var buf = createEmptyHdd(4);
+    var d = new Uint8Array(buf);
+    // Capture pristine primary bytes (== backup bytes at this point).
+    var pristine = new Uint8Array(512);
+    for (var i = 0; i < 512; i++) pristine[i] = d[1 * 512 + i];
+    // Corrupt the primary partition table.
+    for (var j = 0; j < 64; j++) d[1 * 512 + j] = 0xCC;
+    // Restore from backup.
+    var res = cfsLoadBackupPartitionTable(buf);
+    assert.strictEqual(res.ok, true);
+    // Primary now byte-for-byte matches the pristine state.
+    for (var k = 0; k < 512; k++) {
+      assert.strictEqual(d[1 * 512 + k], pristine[k], 'byte ' + k);
+    }
+  });
+
+  it('readIde64BackupPartitions previews backup without modifying the buffer', function() {
+    var buf = createEmptyHdd(4, { partitionName: 'MAIN' });
+    var d = new Uint8Array(buf);
+    // Mutate primary so primary and backup diverge.
+    d[1 * 512 + 0x10] &= ~0x80; // soft-delete slot 0 in primary only
+    var liveBeforeRestore = readIde64Partitions(d).partitions[0];
+    var backupPreview = readIde64BackupPartitions(d);
+    assert.ok(backupPreview, 'backup preview returned');
+    // Backup still has the live partition (we mutated only primary).
+    assert.strictEqual(backupPreview.partitions[0].deleted, false);
+    // Primary buffer unchanged by the preview call.
+    var primaryAfter = readIde64Partitions(d).partitions[0];
+    assert.strictEqual(primaryAfter.deleted, liveBeforeRestore.deleted);
   });
 });
 

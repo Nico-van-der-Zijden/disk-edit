@@ -1791,6 +1791,58 @@ function _cfsMirrorPartitionTableToBackup(data) {
   for (var i = 0; i < IDE64_SECTOR_SIZE; i++) data[dstBase + i] = data[srcBase + i];
 }
 
+// cfsfdisk's "u" command — emergency recovery for a corrupted primary
+// partition table. Copies the 512-byte backup directory at boot $1C's
+// LBA back over the primary at LBA 1. Returns { ok, error?, summary? }
+// where summary describes the backup contents so the UI can confirm
+// with the user before applying.
+function cfsLoadBackupPartitionTable(buffer) {
+  if (!buffer) return { ok: false, error: 'invalid buffer' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var backupLba = _cfsReadBackupPartDirLba(data);
+  if (backupLba === null) return { ok: false, error: 'No backup partition table pointer in boot sector' };
+  var srcBase = backupLba * IDE64_SECTOR_SIZE;
+  if (srcBase + IDE64_SECTOR_SIZE > data.length) return { ok: false, error: 'Backup LBA out of buffer' };
+  var dstBase = 1 * IDE64_SECTOR_SIZE;
+  for (var i = 0; i < IDE64_SECTOR_SIZE; i++) data[dstBase + i] = data[srcBase + i];
+  return { ok: true };
+}
+
+// Preview the backup partition table without modifying anything. Returns
+// the same shape as readIde64Partitions() but reading from the backup
+// LBA. Used by the UI to show "the backup contains: ..." before the
+// user confirms a restore. Returns null if the backup pointer is unset
+// or out of range.
+function readIde64BackupPartitions(buffer) {
+  if (!buffer) return null;
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  var backupLba = _cfsReadBackupPartDirLba(data);
+  if (backupLba === null) return null;
+  // Temporarily copy backup over primary in a scratch buffer so the
+  // existing partition reader (which hardcodes LBA 1) works unchanged.
+  var scratch = new Uint8Array(data);
+  var srcBase = backupLba * IDE64_SECTOR_SIZE;
+  if (srcBase + IDE64_SECTOR_SIZE > scratch.length) return null;
+  for (var i = 0; i < IDE64_SECTOR_SIZE; i++) scratch[1 * IDE64_SECTOR_SIZE + i] = scratch[srcBase + i];
+  return readIde64Partitions(scratch);
+}
+
+// Update the 16-byte global disk label in the boot sector ($20..$2F).
+// Stored space-padded — matches createEmptyHdd and what cfsfdisk's "g"
+// (set global disklabel) command does. Caller is responsible for any
+// PETSCII / ASCII conversion (we just take a string and copy charCodes).
+function cfsSetHddLabel(buffer, newLabel) {
+  if (!buffer) return { ok: false, error: 'invalid buffer' };
+  var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  if (data.length < 0x30) return { ok: false, error: 'buffer too small for boot sector' };
+  if (!isIde64Hdd(data)) return { ok: false, error: 'not an IDE64 .hdd image' };
+  var s = newLabel || '';
+  for (var i = 0; i < 16; i++) {
+    data[0x20 + i] = i < s.length ? (s.charCodeAt(i) & 0xFF) : 0x20;
+  }
+  return { ok: true };
+}
+
 // Increment boot-sector byte $03 (wraps at 256). Empirically observed
 // to bump on every partition scratch in IDEDOS — looks like a partition-
 // table generation/dirty stamp. Whether IDEDOS also bumps it on add /

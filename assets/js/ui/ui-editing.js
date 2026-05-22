@@ -225,6 +225,26 @@ function updateMenuState() {
     dhdDosLabel += ' (no donor cached)';
   }
   dhdDosBtn.textContent = dhdDosLabel;
+  // IDE64 .hdd whole-disk operations: only meaningful on an .hdd
+  // container, hidden everywhere else so the Disk Tools submenu isn't
+  // cluttered with inapplicable items.
+  var renameDiskBtn = document.getElementById('opt-hdd-rename-disk');
+  var restoreBackupBtn = document.getElementById('opt-hdd-restore-backup-pt');
+  var hddSepDiskOps = document.getElementById('sep-hdd-disk-ops');
+  var onHddContainer = typeof hddBuffer !== 'undefined' && !!hddBuffer;
+  var hddDisplay = onHddContainer ? '' : 'none';
+  if (renameDiskBtn) {
+    renameDiskBtn.style.display = hddDisplay;
+    renameDiskBtn.classList.toggle('disabled', !onHddContainer);
+  }
+  if (restoreBackupBtn) {
+    restoreBackupBtn.style.display = hddDisplay;
+    // Restore-from-backup needs boot $1C to point at a real backup LBA
+    // (older / hand-built images may have it cleared).
+    var hasBackup = !!(typeof hddBootInfo !== 'undefined' && hddBootInfo && hddBootInfo.partDirBackup && hddBootInfo.partDirBackup.lba && hddBootInfo.partDirBackup.addr > 1);
+    restoreBackupBtn.classList.toggle('disabled', !onHddContainer || !hasBackup);
+  }
+  if (hddSepDiskOps) hddSepDiskOps.style.display = hddDisplay;
   document.getElementById('opt-scan-orphans').classList.toggle('disabled', !hasDisk || noEdit || hddListView);
   // Scratched CFS entries are kept around for Unscratch — compacting
   // them away would defeat recovery.

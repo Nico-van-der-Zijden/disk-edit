@@ -107,13 +107,19 @@ function renderIde64PartitionList() {
   var prevListing = content ? content.querySelector('.dir-listing') : null;
   var prevScrollTop = prevListing ? prevListing.scrollTop : 0;
   var prevScrollLeft = prevListing ? prevListing.scrollLeft : 0;
-  var label = hddBootInfo.label || 'IDE64';
+  var label = hddBootInfo.label || '';
   var defaultPart = hddBootInfo.defaultPart;
+  // Show the boot-sector disk label in the header — matches what
+  // cfsfdisk's "p" command and IDEDOS's mount listing display. The
+  // filename is already visible in the tab title, so duplicating it
+  // here just hides the more interesting datum. Fall back to the
+  // filename if the label is empty (older / hand-built images).
+  var headerName = label || hddFileName || 'IDE64';
 
   var html = '<div class="disk-panel">' +
     '<div class="disk-header">' +
       '<div class="disk-header-spacer"><i class="fa-solid fa-hard-drive" title="IDE64 hard-disk image"></i></div>' +
-      '<div class="disk-name">' + escHtml(hddFileName || label) + '</div>' +
+      '<div class="disk-name">' + escHtml(headerName) + '</div>' +
       '<div class="disk-id">IDE64</div>' +
     '</div>' +
     '<div class="dir-entry dir-header-row">' +
@@ -314,18 +320,14 @@ function leaveCfsSubdir() {
   refreshIde64View();
 }
 
-// Display name for the currently-viewed directory: the parent's
-// outgoing-entry name we entered through. Falls back to the dir's own
-// self-reference (slot 0 of the first sector) when there's no parent
-// (= partition root) and finally to the partition name. Self-ref and
-// outgoing entries can drift apart if a rename only updated one of
-// them. Verified against IDEDOS on real hardware: with a drifted dir
-// (parent says CREATURES2, self-ref says C2), IDEDOS prints the
-// self-ref name when listing the dir's contents via LOAD"$",8. We
-// mirror that so what we show matches what a real C64 would. Falls
-// back to the parent's outgoing-entry name (cached as cfsEnteredAs on
-// enter) if a self-ref is absent, then the partition name. Rename
-// already syncs both names so new renames don't introduce drift.
+// Display name for the currently-viewed directory. Reads the dir's
+// own slot-0 self-reference first — verified against IDEDOS on real
+// hardware: with a drifted dir (parent says CREATURES2, self-ref says
+// C2), IDEDOS prints the self-ref name when listing the dir's contents
+// via LOAD"$",8. We mirror that so what we show matches what a real
+// C64 would. Falls back to the parent's outgoing-entry name (cached as
+// cfsEnteredAs on enter) if a self-ref is absent, then partition name.
+// Rename already syncs both names, so new renames don't introduce drift.
 function _cfsCurrentDirDisplayName() {
   if (cfsDirEntries && cfsDirEntries.length > 0 && cfsDirEntries[0].isSelfRef && cfsDirEntries[0].name) {
     return cfsDirEntries[0].name;
@@ -1733,6 +1735,91 @@ async function confirmHddPartitionRestore(idx) {
   var res = cfsRestorePartition(hddBuffer, idx);
   if (!res.ok) {
     showModal('Restore partition failed', [res.error || 'Unknown error.']);
+    if (typeof popUndo === 'function') popUndo();
+    return;
+  }
+  var info = readIde64Partitions(hddBuffer);
+  if (info) {
+    hddBootInfo = info;
+    hddPartitions = info.partitions;
+  }
+  refreshIde64View();
+}
+
+// ── Rename Disk Label (.hdd boot-sector $20..$2F) ────────────────────
+// cfsfdisk's "g" command equivalent. The 16-byte label is space-padded
+// ASCII; cfsfdisk prompts plain text and stores it as-is, so we do the
+// same via showInputModal (no PETSCII inline editor needed here).
+async function showHddRenameDiskDialog() {
+  if (!hddBuffer || !hddBootInfo) return;
+  var current = hddBootInfo.label || '';
+  var entered = await showInputModal('Disk Label', current);
+  if (entered === null || entered === undefined) return;
+  // Match cfsfdisk: stored space-padded, max 16 chars. Trim any trailing
+  // spaces the user typed so the boot sector has a clean label string.
+  entered = entered.substring(0, 16).replace(/ +$/, '');
+  if (entered === current) return;
+  pushUndo();
+  var res = cfsSetHddLabel(hddBuffer, entered);
+  if (!res.ok) {
+    showModal('Rename disk failed', [res.error || 'Unknown error.']);
+    if (typeof popUndo === 'function') popUndo();
+    return;
+  }
+  // Re-read boot info so hddBootInfo.label reflects the new value before
+  // the next render. The partition table itself doesn't change, so we
+  // could skip the partitions re-read — but readIde64Partitions also
+  // refreshes the boot info, keeping the path simple.
+  var info = readIde64Partitions(hddBuffer);
+  if (info) {
+    hddBootInfo = info;
+    hddPartitions = info.partitions;
+  }
+  refreshIde64View();
+}
+
+// ── Restore Partition Table from Backup ──────────────────────────────
+// cfsfdisk's "u" command. Reads the backup at boot $1C's LBA, previews
+// its partition list, and on confirm copies it over the primary at LBA
+// 1. The per-partition data (bitmap / dirs / files) is untouched — only
+// the 32-byte slot entries in LBA 1 change. Recovery use case: the
+// primary got corrupted (bad write, FS check failure, manual edit gone
+// wrong) and the backup still has the last-good copy.
+async function confirmHddLoadBackupPartitionTable() {
+  if (!hddBuffer || !hddBootInfo) return;
+  var backupInfo = readIde64BackupPartitions(hddBuffer);
+  if (!backupInfo) {
+    showModal('Restore from backup failed', ['No backup partition table is referenced from the boot sector, or the backup LBA is out of range.']);
+    return;
+  }
+  // Build a preview so the user knows what they're about to replace
+  // their primary table with.
+  var lines = ['This will replace the primary partition table at LBA 1 with the backup copy.'];
+  var livePart = backupInfo.partitions.filter(function(p) { return !p.empty && !p.deleted; });
+  var deletedPart = backupInfo.partitions.filter(function(p) { return !p.empty && p.deleted; });
+  if (livePart.length === 0 && deletedPart.length === 0) {
+    lines.push('');
+    lines.push('Warning: the backup contains no partitions. Restoring it would leave the disk empty.');
+  } else {
+    lines.push('');
+    lines.push('Backup contains ' + livePart.length + ' live partition' + (livePart.length === 1 ? '' : 's') +
+      (deletedPart.length ? ' (+ ' + deletedPart.length + ' soft-deleted)' : '') + ':');
+    for (var i = 0; i < backupInfo.partitions.length && i < 16; i++) {
+      var p = backupInfo.partitions[i];
+      if (p.empty) continue;
+      var name = petsciiToReadable(p.name || '').trim() || '(unnamed)';
+      var flag = p.deleted ? ' [deleted]' : '';
+      lines.push('  slot ' + i + ': ' + name + ' <' + (p.typeName || '?') + '>' + flag);
+    }
+  }
+  lines.push('');
+  lines.push('Per-partition data (bitmap, directories, files) is not affected — only the 32-byte slot entries in the partition table change.');
+  var confirmed = await showConfirmModal('Restore Partition Table from Backup', lines, { okLabel: 'Restore' });
+  if (!confirmed) return;
+  pushUndo();
+  var res = cfsLoadBackupPartitionTable(hddBuffer);
+  if (!res.ok) {
+    showModal('Restore from backup failed', [res.error || 'Unknown error.']);
     if (typeof popUndo === 'function') popUndo();
     return;
   }

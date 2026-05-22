@@ -700,14 +700,30 @@ function importFileToDisk(fileName, fileData) {
 }
 
 // ── CVT Import ─────────────────────────────────────────────────────
-function showConfirmModal(title, message) {
+function showConfirmModal(title, message, opts) {
+  opts = opts || {};
+  var okLabel = opts.okLabel || 'OK';
   return new Promise(function(resolve) {
     document.getElementById('modal-title').textContent = title;
     var body = document.getElementById('modal-body');
-    body.innerHTML = '<div class="text-base">' + escHtml(message) + '</div>';
+    // String → single paragraph; array → paragraph per line, blank
+    // strings becoming a vertical gap. Matches the multi-line layout
+    // showModal uses for validator output, but kept as <div>s so links
+    // / formatting remain straightforward and the dialog reads as prose.
+    if (Array.isArray(message)) {
+      var html = '';
+      for (var i = 0; i < message.length; i++) {
+        var line = message[i];
+        if (line === '') html += '<div class="text-base" style="height:6px"></div>';
+        else html += '<div class="text-base">' + escHtml(line) + '</div>';
+      }
+      body.innerHTML = html;
+    } else {
+      body.innerHTML = '<div class="text-base">' + escHtml(message) + '</div>';
+    }
     var footer = document.querySelector('#modal-overlay .modal-footer');
     footer.innerHTML = '<button class="modal-btn-secondary" id="confirm-cancel">Cancel</button>' +
-      '<button id="confirm-ok">OK</button>';
+      '<button id="confirm-ok">' + escHtml(okLabel) + '</button>';
     document.getElementById('confirm-ok').addEventListener('click', function() {
       document.getElementById('modal-overlay').classList.remove('open');
       resolve(true);
