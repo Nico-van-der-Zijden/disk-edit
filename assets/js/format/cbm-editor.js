@@ -153,6 +153,72 @@ var fileInterleave = 10; // file data sector interleave
 // getSpeederVariant — uses data-presence heuristics (not header-ID
 // sniffing) and is consulted from the D64 descriptor's BAM helpers
 // to read tracks 36-40 from the correct offset.
+
+// ── DiskCtx: explicit disk context (refactor groundwork) ─────────────
+// Many helpers currently read CBM-DOS state implicitly from globals:
+// currentBuffer, currentPartition, currentFormat, currentTracks,
+// dirInterleave, fileInterleave. That makes it impossible to write into
+// a directory other than the user's current view — which we need for
+// recursive cross-partition dir copy/paste.
+//
+// DiskCtx makes that state explicit. Phase 1 introduces the shape +
+// builder + stash/restore wrapper here without changing any helper
+// signatures yet — call sites and helpers migrate to ctx-aware versions
+// in later phases. While the migration is in progress, helpers will
+// accept an optional ctx and fall back to getCurrentCtx() when omitted,
+// so partial migration is safe.
+//
+// Shape:
+//   {
+//     buffer:        ArrayBuffer | null,           // the active disk image
+//     partition:     object | null,                // currentPartition snapshot
+//     format:        DISK_FORMATS.xxx | null,      // descriptor
+//     tracks:        number,                       // disk track count
+//     dirInterleave: number,                       // directory interleave
+//     fileInterleave: number,                      // file interleave
+//   }
+function getCurrentCtx() {
+  return {
+    buffer: typeof currentBuffer !== 'undefined' ? currentBuffer : null,
+    partition: typeof currentPartition !== 'undefined' ? currentPartition : null,
+    format: typeof currentFormat !== 'undefined' ? currentFormat : null,
+    tracks: typeof currentTracks !== 'undefined' ? currentTracks : 0,
+    dirInterleave: dirInterleave,
+    fileInterleave: fileInterleave,
+  };
+}
+
+// Run `fn` with the globals temporarily set to `ctx`. Restores prior
+// values in a finally block so a throw inside `fn` can't leave globals
+// in an inconsistent state. Single-threaded JS makes this safe; the
+// caller doesn't need to worry about reentrancy from event handlers
+// while `fn` is running synchronously. For async `fn`, the caller is
+// responsible for awaiting it INSIDE the wrapper — passing an async
+// function and not awaiting will release globals before the work runs.
+//
+// Used as a bridge during the refactor: helpers that haven't been
+// ctx-threaded yet can still be called against a non-current context
+// via withDiskCtx(otherCtx, function() { oldHelper(args); }).
+function withDiskCtx(ctx, fn) {
+  var saved = getCurrentCtx();
+  try {
+    if (typeof currentBuffer !== 'undefined') currentBuffer = ctx.buffer;
+    if (typeof currentPartition !== 'undefined') currentPartition = ctx.partition;
+    if (typeof currentFormat !== 'undefined') currentFormat = ctx.format;
+    if (typeof currentTracks !== 'undefined') currentTracks = ctx.tracks;
+    dirInterleave = ctx.dirInterleave;
+    fileInterleave = ctx.fileInterleave;
+    return fn();
+  } finally {
+    currentBuffer = saved.buffer;
+    currentPartition = saved.partition;
+    currentFormat = saved.format;
+    currentTracks = saved.tracks;
+    dirInterleave = saved.dirInterleave;
+    fileInterleave = saved.fileInterleave;
+  }
+}
+
 // ── Undo system ──────────────────────────────────────────────────────
 // The tab is "clean" (tabDirty=false) when undoStack.length === cleanStackLength.
 // Set by markClean() on load / save; read by popUndo() to restore clean state
