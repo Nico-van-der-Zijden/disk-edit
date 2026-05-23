@@ -712,6 +712,26 @@ document.getElementById('opt-resize-dnp').addEventListener('click', async functi
   if (optEl.classList.contains('disabled')) return;
   closeMenus();
 
+  // Runtime guard: refuse when we're inside a CMD container slice.
+  // Growing the DNP past the container slot's allocated size would
+  // silently truncate the tail on splice-back, and shrinking would
+  // waste container space without a way to reclaim it. The menu-state
+  // wiring already disables the item in this case, but a keyboard /
+  // accidental dispatch could still land here.
+  if (typeof cmdcPartitionIdx !== 'undefined' && cmdcPartitionIdx >= 0) {
+    showModal('Resize Image', [
+      'This DNP is a fixed-size partition inside a CMD container ' +
+      '(DHD / RAMLink / FD). Resizing it here would corrupt the ' +
+      'container — the partition slot has a fixed allocation that ' +
+      'can\'t grow.',
+      '',
+      'To enlarge: delete this partition and create a new bigger one, ' +
+      'then paste your files into it. To use Resize Image, export the ' +
+      'partition as a stand-alone .dnp first (File → Export Partition).',
+    ]);
+    return;
+  }
+
   var oldTracks = currentTracks;
   var oldKB = Math.round(oldTracks * 65536 / 1024);
   var input = await showInputModal(

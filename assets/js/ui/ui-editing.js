@@ -255,7 +255,13 @@ function updateMenuState() {
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
   document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
   document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
-  document.getElementById('opt-resize-dnp').classList.toggle('disabled', !hasDisk || currentFormat !== DISK_FORMATS.dnp || !!currentPartition);
+  // Resize Image only safe on a stand-alone DNP. Inside a CMD container
+  // (DHD / RAMLink / FD-* / etc.) the DNP is a fixed-size slice spliced
+  // back into a container slot — growing past that slot's size would
+  // silently truncate the tail on save. Disable until we have a real
+  // "grow the container slot" path.
+  var insideCmdSlice = cmdcPartitionIdx >= 0;
+  document.getElementById('opt-resize-dnp').classList.toggle('disabled', !hasDisk || currentFormat !== DISK_FORMATS.dnp || !!currentPartition || insideCmdSlice);
   // Listing exports gate on hddListView (no dir to export at the
   // partition list). PNG render is CBM-DOS-only (reads parseCurrentDir).
   document.getElementById('opt-export-all').classList.toggle('disabled', !hasDisk || containerList || hddListView);
