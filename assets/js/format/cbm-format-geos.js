@@ -320,22 +320,24 @@ function isVlirFile(data, entryOff) {
 }
 
 /** @param {Uint8Array} data @param {number} entryOff @param {(track: number, sector: number) => void} callback @returns {number} Total sectors visited */
-function forEachFileSector(data, entryOff, callback) {
-  var fmt = currentFormat;
+function forEachFileSector(data, entryOff, callback, ctx) {
+  ctx = ctx || getCurrentCtx();
+  var fmt = ctx.format;
+  var tracks = ctx.tracks;
   var typeIdx = data[entryOff + 2] & 0x07;
   var count = 0;
 
   function followChain(ft, fs) {
     var visited = {};
     while (ft !== 0) {
-      if (ft < 1 || ft > currentTracks) break;
+      if (ft < 1 || ft > tracks) break;
       if (fs >= fmt.sectorsPerTrack(ft)) break;
       var key = ft + ':' + fs;
       if (visited[key]) break;
       visited[key] = true;
       callback(ft, fs);
       count++;
-      var off = sectorOffset(ft, fs);
+      var off = sectorOffset(ft, fs, ctx);
       if (off < 0) break;
       ft = data[off]; fs = data[off + 1];
     }
@@ -354,14 +356,14 @@ function forEachFileSector(data, entryOff, callback) {
   if (data[entryOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
     var infoT = data[entryOff + 0x15];
     var infoS = data[entryOff + 0x16];
-    if (infoT >= 1 && infoT <= currentTracks &&
+    if (infoT >= 1 && infoT <= tracks &&
         infoS < fmt.sectorsPerTrack(infoT)) {
       callback(infoT, infoS);
       count++;
     }
     // VLIR: walk each record chain from the index sector
     if (data[entryOff + 0x17] === 0x01) {
-      var idxOff = sectorOffset(startT, startS);
+      var idxOff = sectorOffset(startT, startS, ctx);
       if (idxOff >= 0) {
         for (var vri = 0; vri < 127; vri++) {
           var recT = data[idxOff + 2 + vri * 2];
@@ -383,8 +385,9 @@ function forEachFileSector(data, entryOff, callback) {
 // as far as possible, then advance to the next track. Mutates `allocated`
 // (keys "t:s") to mark chosen sectors, and returns the new [{ track, sector }]
 // list. Callers build their own trackOrder + allocated map.
-function allocateSectorsFromTrackOrder(allocated, numSectors, trackOrder, interleave) {
-  var fmt = currentFormat;
+function allocateSectorsFromTrackOrder(allocated, numSectors, trackOrder, interleave, ctx) {
+  ctx = ctx || getCurrentCtx();
+  var fmt = ctx.format;
   var sectorList = [];
   var lastSector = 0;
 

@@ -6,14 +6,17 @@
 
 // Build a true sector allocation map by following all file and directory chains.
 // Does NOT trust the BAM — walks every chain on disk.
-function buildTrueAllocationMap(buffer) {
+function buildTrueAllocationMap(buffer, diskCtx) {
+  diskCtx = diskCtx || getCurrentCtx();
   var data = new Uint8Array(buffer);
-  var fmt = currentFormat;
+  var fmt = diskCtx.format;
+  var partition = diskCtx.partition;
+  var tracks = diskCtx.tracks;
   var allocated = {}; // "t:s" -> true
 
-  if (currentPartition && !currentPartition.dnpDir) {
+  if (partition && !partition.dnpDir) {
     // Inside a D81 partition: mark partition system sectors (header, BAM1, BAM2)
-    var st = currentPartition.startTrack;
+    var st = partition.startTrack;
     allocated[st + ':0'] = true; // header
     allocated[st + ':1'] = true; // BAM1
     allocated[st + ':2'] = true; // BAM2
@@ -25,7 +28,7 @@ function buildTrueAllocationMap(buffer) {
       for (var psi = 0; psi < ps.length; psi++) allocated[st2 + ':' + ps[psi]] = true;
     });
     // Also mark protected sectors on non-skip tracks (e.g. D1M/D2M/D4M system partition on track 26)
-    for (var et = 1; et <= currentTracks; et++) {
+    for (var et = 1; et <= tracks; et++) {
       if (sysTracks[et]) continue; // already handled above
       var eps = fmt.getProtectedSectors(et);
       for (var epi = 0; epi < eps.length; epi++) allocated[et + ':' + eps[epi]] = true;
@@ -40,7 +43,7 @@ function buildTrueAllocationMap(buffer) {
       if (allocated[key]) break; // already visited (also prevents loops)
       allocated[key] = true;
 
-      var off = sectorOffset(dirT, dirS);
+      var off = sectorOffset(dirT, dirS, diskCtx);
       if (off < 0) break;
 
       for (var i = 0; i < fmt.entriesPerSector; i++) {
@@ -56,7 +59,7 @@ function buildTrueAllocationMap(buffer) {
           var hdrKey = ft + ':' + fs;
           if (!allocated[hdrKey]) {
             allocated[hdrKey] = true;
-            var hdrOff = sectorOffset(ft, fs);
+            var hdrOff = sectorOffset(ft, fs, diskCtx);
             if (hdrOff >= 0) {
               walkDirectory(data[hdrOff], data[hdrOff + 1]);
             }
@@ -67,7 +70,7 @@ function buildTrueAllocationMap(buffer) {
         // Follow all file sector chains (main + REL + GEOS)
         forEachFileSector(data, entOff, function(t, s) {
           allocated[t + ':' + s] = true;
-        });
+        }, diskCtx);
       }
 
       dirT = data[off]; dirS = data[off + 1];
@@ -75,11 +78,11 @@ function buildTrueAllocationMap(buffer) {
   }
 
   // For linked subdirs, always walk from root to cover all directories
-  if (fmt.subdirLinked && currentPartition && currentPartition.dnpDir) {
+  if (fmt.subdirLinked && partition && partition.dnpDir) {
     walkDirectory(fmt.dirTrack, fmt.dirSector);
   } else {
-    var ctx = getDirContext();
-    walkDirectory(ctx.dirTrack, ctx.dirSector);
+    var dctx = getDirContext(diskCtx);
+    walkDirectory(dctx.dirTrack, dctx.dirSector);
   }
 
   return allocated;
@@ -88,26 +91,28 @@ function buildTrueAllocationMap(buffer) {
 // Allocate sectors using the same strategy as a real CBM drive:
 // - 1541/1571: tracks below dir track first (descending), then above (ascending), interleave 10
 // - 1581: tracks below dir track first (descending), then above (ascending), interleave 1
-function allocateSectors(allocated, numSectors) {
-  var fmt = currentFormat;
+function allocateSectors(allocated, numSectors, diskCtx) {
+  diskCtx = diskCtx || getCurrentCtx();
+  var fmt = diskCtx.format;
+  var partition = diskCtx.partition;
 
   var trackOrder = [];
   var interleave;
 
-  if (currentPartition && !currentPartition.dnpDir) {
+  if (partition && !partition.dnpDir) {
     // Inside a D81 partition: use partition's tracks (skip track 1 = system track)
-    var st = currentPartition.startTrack;
-    var numPartTracks = Math.floor(currentPartition.partSize / fmt.partitionSpt);
+    var st = partition.startTrack;
+    var numPartTracks = Math.floor(partition.partSize / fmt.partitionSpt);
     // Partition's "directory track" is the start track; data goes on tracks 2+ (absolute: st+1, st+2, ...)
     for (var pt = 2; pt <= numPartTracks; pt++) trackOrder.push(st + pt - 1);
     interleave = fmt.defaultInterleave;
   } else {
     var dirTrack = fmt.dirTrack;
     var skipTracks = fmt.getSkipTracks();
-    var maxBamTrack = fmt.bamTracksRange(currentTracks);
+    var maxBamTrack = fmt.bamTracksRange(diskCtx.tracks);
     for (var t = dirTrack - 1; t >= 1; t--) { if (!skipTracks[t]) trackOrder.push(t); }
     for (var t2 = dirTrack + 1; t2 <= maxBamTrack; t2++) { if (!skipTracks[t2]) trackOrder.push(t2); }
-    interleave = fileInterleave;
+    interleave = diskCtx.fileInterleave;
   }
-  return allocateSectorsFromTrackOrder(allocated, numSectors, trackOrder, interleave);
+  return allocateSectorsFromTrackOrder(allocated, numSectors, trackOrder, interleave, diskCtx);
 }
