@@ -1950,3 +1950,173 @@ const SAFE_PETSCII = new Set([
   0xC0,0xC1,0xC2,0xC3,0xC4,0xC5,0xC6,0xC7,0xC8,0xC9,0xCA,0xCB,0xCC,0xCD,0xCE,0xCF,
   0xD0,0xD1,0xD2,0xD3,0xD4,0xD5,0xD6,0xD7,0xD8,0xD9,0xDA,0xDB,0xDC,0xDD,0xDE,0xDF,
 ]);
+
+// ── CBM-DOS dir-tree paste (cross-family writer) ─────────────────────
+// Mirrors cfsPasteDirTree, but writes to a CBM-DOS partition (D81 / DNP
+// / D1M-D2M-D4M Native). Uses the ctx-aware writeFileToDisk so the
+// target dir is determined by `diskCtx` (typically pointing at a
+// non-current partition).
+//
+// First-pass MVP: pastes files only. Subdir creation in the destination
+// is deferred to a follow-up — when the source tree carries subdirs
+// they're skipped and reported in skippedDirs.
+
+// Map a CFS file's ftype/typeSuffix to a CBM-DOS typeIdx (1=SEQ 2=PRG
+// 3=USR 4=REL). CFS-typed files (NORMAL with a "TXT" / "PRG" suffix
+// string) collapse to PRG unless they explicitly declare SEQ / USR.
+function cfsToCbmTypeIdx(ftype, typeSuffix) {
+  // CFS_FTYPE.REL (the format-ide64.js constant) is 2. Use the numeric
+  // value directly so this helper has no dependency on cbm-format-ide64.js
+  if (ftype === 2) return 4; // REL
+  if (typeSuffix === 'SEQ') return 1;
+  if (typeSuffix === 'USR') return 3;
+  if (typeSuffix === 'REL') return 4;
+  return 2; // default PRG
+}
+
+// Resolve the effective CBM typeIdx for a generic-tree file entry —
+// prefers file.cbmTypeIdx when the collector set it, falls back to the
+// CFS mapping otherwise. Returns 2 (PRG) for fully untyped entries.
+function resolveFileCbmTypeIdx(file) {
+  if (file.cbmTypeIdx) return file.cbmTypeIdx;
+  return cfsToCbmTypeIdx(file.ftype, file.typeSuffix);
+}
+
+// Find a CBM-DOS dir entry by raw 16-byte PETSCII name in the current
+// directory referenced by diskCtx. Uses effective-length comparison
+// (trim $A0 / $00 / trailing-space padding) so a space-padded name
+// matches an $A0-padded one when the visible prefix agrees. Returns
+// the entry offset or -1.
+function _cbmFindDirEntryByNameBytes(diskCtx, nameBytes) {
+  var buffer = diskCtx.buffer;
+  var data = new Uint8Array(buffer);
+  var fmt = diskCtx.format;
+  var dctx = getDirContext(diskCtx);
+  function effectiveLen(b) {
+    for (var i = 0; i < 16; i++) {
+      if (b[i] === 0xA0 || b[i] === 0x00) return i;
+    }
+    return 16;
+  }
+  function trimTrailingSpaces(b, n) {
+    while (n > 0 && b[n - 1] === 0x20) n--;
+    return n;
+  }
+  var srcLen = trimTrailingSpaces(nameBytes, effectiveLen(nameBytes));
+  if (srcLen === 0) return -1;
+  var t = dctx.dirTrack, s = dctx.dirSector;
+  var visited = {};
+  while (t !== 0) {
+    var key = t + ':' + s;
+    if (visited[key]) break;
+    visited[key] = true;
+    var off = sectorOffset(t, s, diskCtx);
+    if (off < 0) break;
+    for (var i = 0; i < fmt.entriesPerSector; i++) {
+      var eo = off + i * fmt.entrySize;
+      var typeByte = data[eo + 2];
+      if (typeByte === 0) continue; // empty slot
+      var enLen = trimTrailingSpaces(data.subarray(eo + 5, eo + 21), effectiveLen(data.subarray(eo + 5, eo + 21)));
+      if (enLen !== srcLen) continue;
+      var match = true;
+      for (var k = 0; k < srcLen; k++) {
+        if (data[eo + 5 + k] !== nameBytes[k]) { match = false; break; }
+      }
+      if (match) return eo;
+    }
+    t = data[off]; s = data[off + 1];
+  }
+  return -1;
+}
+
+// Paste a generic dir tree into a CBM-DOS partition. opts.onConflict
+// behaves like cfsPasteDirTree: 'overwrite' removes the existing file
+// before writing, 'rename' would auto-suffix (deferred for now since
+// CBM-DOS rename + truncation isn't built yet), 'cancel' refuses.
+// Returns { ok, error?, copiedFiles, copiedDirs, skippedLnks, skippedDirs }.
+function cbmPasteDirTree(diskCtx, tree, opts) {
+  if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return { ok: false, error: 'invalid disk context' };
+  if (!tree) return { ok: false, error: 'invalid tree' };
+  opts = opts || {};
+  var onConflict = opts.onConflict || 'cancel';
+
+  var copiedFiles = 0;
+  var copiedDirs = 0;
+  var skippedLnks = (tree.skippedLnks || []).slice();
+  var skippedDirs = [];
+
+  // Subdir creation is not yet implemented in this MVP — report any
+  // subdirs in the source tree so the caller can summarise them.
+  if (tree.subdirs && tree.subdirs.length > 0) {
+    for (var di = 0; di < tree.subdirs.length; di++) {
+      var subName = '';
+      var nb = tree.subdirs[di].nameBytes;
+      if (nb) {
+        for (var sni = 0; sni < 16; sni++) {
+          var snb = nb[sni];
+          if (snb === 0xA0 || snb === 0x00) break;
+          if (snb >= 0xC1 && snb <= 0xDA) subName += String.fromCharCode(snb - 0x80);
+          else if (snb >= 0x20 && snb <= 0x7E) subName += String.fromCharCode(snb);
+        }
+      }
+      skippedDirs.push(subName.replace(/ +$/, '') || '(subdir)');
+    }
+  }
+
+  for (var i = 0; i < tree.files.length; i++) {
+    var file = tree.files[i];
+    if (!file.payload) continue;
+    // GEOS VLIR files don't roundtrip cleanly through writeFileToDisk
+    // (their payload is the index sector + record chains, not a flat
+    // byte stream). Skip with a warning rather than corrupting the
+    // destination disk.
+    if (file.vlirRecords) {
+      skippedLnks.push('(GEOS VLIR file skipped — not yet supported by CBM-DOS writer)');
+      continue;
+    }
+    var typeIdx = resolveFileCbmTypeIdx(file);
+    // Conflict check on the file name
+    if (onConflict === 'overwrite' || onConflict === 'cancel') {
+      var existing = _cbmFindDirEntryByNameBytes(diskCtx, file.nameBytes);
+      if (existing >= 0) {
+        if (onConflict === 'cancel') {
+          var displayName = '';
+          for (var dn = 0; dn < 16; dn++) {
+            var dnb = file.nameBytes[dn];
+            if (dnb === 0xA0 || dnb === 0x00) break;
+            if (dnb >= 0xC1 && dnb <= 0xDA) displayName += String.fromCharCode(dnb - 0x80);
+            else if (dnb >= 0x20 && dnb <= 0x7E) displayName += String.fromCharCode(dnb);
+          }
+          return { ok: false, error: 'File "' + displayName.trim() + '" already exists; choose Overwrite (or remove it first).' };
+        }
+        // Overwrite: scratch the existing entry first (closed bit cleared
+        // makes the slot reusable on next write).
+        var dataBefore = new Uint8Array(diskCtx.buffer);
+        dataBefore[existing + 2] = 0x00; // wipe type — full scratch happens by writeFileToDisk picking the slot
+        // Wipe other bytes too so findFreeDirEntry treats the slot as
+        // empty on its scan.
+        for (var w = 3; w < 32; w++) dataBefore[existing + w] = 0x00;
+      }
+    }
+    var geosData = null;
+    if (file.geosBytes || file.geosInfoBlock) {
+      geosData = {
+        geosBytes: file.geosBytes || new Uint8Array(9),
+        geosInfoBlock: file.geosInfoBlock || null,
+      };
+    }
+    var ok = writeFileToDisk(typeIdx, file.nameBytes, file.payload, geosData, true, diskCtx);
+    if (!ok) {
+      return { ok: false, error: 'writeFileToDisk failed for a file' };
+    }
+    copiedFiles++;
+  }
+
+  return {
+    ok: true,
+    copiedFiles: copiedFiles,
+    copiedDirs: copiedDirs,
+    skippedLnks: skippedLnks,
+    skippedDirs: skippedDirs,
+  };
+}
