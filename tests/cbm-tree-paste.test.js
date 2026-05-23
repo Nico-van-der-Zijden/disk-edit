@@ -41,7 +41,7 @@ describe('cbmPasteDirTree (task #12 — MVP file-only writer)', () => {
     var buf = loadFreshDnp(81);
     var ctx = getCurrentCtx();
     var tree = _buildSimpleTree();
-    var res = cbmPasteDirTree(ctx, tree, { onConflict: 'cancel' });
+    var res = cbmPasteDirTree(ctx, tree, { onConflict: 'cancel', flat: true });
     assert.strictEqual(res.ok, true);
     assert.strictEqual(res.copiedFiles, 2);
     assert.strictEqual(res.skippedLnks.length, 0);
@@ -60,9 +60,9 @@ describe('cbmPasteDirTree (task #12 — MVP file-only writer)', () => {
     var buf = loadFreshDnp(81);
     var ctx = getCurrentCtx();
     var tree = _buildSimpleTree();
-    cbmPasteDirTree(ctx, tree, { onConflict: 'cancel' });
-    // Second paste — should refuse on the first conflict
-    var res = cbmPasteDirTree(ctx, tree, { onConflict: 'cancel' });
+    cbmPasteDirTree(ctx, tree, { onConflict: 'cancel', flat: true });
+    // Second flat-paste — should refuse on the first file conflict (HELLO already exists at root)
+    var res = cbmPasteDirTree(ctx, tree, { onConflict: 'cancel', flat: true });
     assert.strictEqual(res.ok, false);
     assert.ok(res.error && res.error.indexOf('already exists') >= 0);
   });
@@ -75,18 +75,18 @@ describe('cbmPasteDirTree (task #12 — MVP file-only writer)', () => {
       for (var i = 0; i < 16; i++) out[i] = i < s.length ? s.charCodeAt(i) : 0xA0;
       return out;
     }
-    // First, paste a small HELLO
+    // First, paste a small HELLO (flat = file at root)
     cbmPasteDirTree(ctx, {
       nameBytes: nb('X'), files: [{ nameBytes: nb('HELLO'), cbmTypeIdx: 2, payload: new Uint8Array(8), size: 8 }],
       subdirs: [], skippedLnks: [],
-    }, { onConflict: 'cancel' });
-    // Now overwrite with a bigger HELLO
+    }, { onConflict: 'cancel', flat: true });
+    // Now overwrite with a bigger HELLO (flat again so the file conflict triggers)
     var bigger = new Uint8Array(500);
     for (var i = 0; i < 500; i++) bigger[i] = i & 0xFF;
     var res = cbmPasteDirTree(ctx, {
       nameBytes: nb('X'), files: [{ nameBytes: nb('HELLO'), cbmTypeIdx: 2, payload: bigger, size: 500 }],
       subdirs: [], skippedLnks: [],
-    }, { onConflict: 'overwrite' });
+    }, { onConflict: 'overwrite', flat: true });
     assert.strictEqual(res.ok, true);
     // Verify only one HELLO exists in the dir
     var dirInfo = parseCurrentDir(buf);
@@ -118,18 +118,24 @@ describe('cbmPasteDirTree (task #12 — MVP file-only writer)', () => {
       ],
       skippedLnks: [],
     };
-    var res = cbmPasteDirTree(ctx, tree, { onConflict: 'cancel' });
+    var res = cbmPasteDirTree(ctx, tree, { onConflict: 'cancel', flat: true });
     assert.strictEqual(res.ok, true);
     assert.strictEqual(res.copiedFiles, 2);   // FILE1 at root + PONG inside GAMES
     assert.strictEqual(res.copiedDirs, 2);    // GAMES + ART
     assert.strictEqual(res.skippedDirs.length, 0);
-    // Verify GAMES and ART entries exist in the root dir
-    var dirInfo = parseCurrentDir(buf);
-    var entries = (dirInfo && dirInfo.entries) || [];
-    var dirNames = entries.map(function(e) { return petsciiToReadable(e.name || '').trim(); });
-    assert.ok(dirNames.indexOf('GAMES') >= 0, 'GAMES dir present: ' + JSON.stringify(dirNames));
-    assert.ok(dirNames.indexOf('ART')   >= 0, 'ART dir present');
-    assert.ok(dirNames.indexOf('FILE1') >= 0, 'FILE1 at root');
+    // Verify GAMES + ART + FILE1 via cbmCollectDirTree (test-helper
+    // doesn't load parseDnpDirectory so we use the lower-level walker).
+    var coll = cbmCollectDirTree(ctx);
+    function nameOf(bytes) {
+      var n = '';
+      for (var i = 0; i < 16; i++) { var b = bytes[i]; if (b === 0xA0 || b === 0) break; n += String.fromCharCode(b); }
+      return n.replace(/ +$/, '');
+    }
+    var subNames = coll.tree.subdirs.map(function(s) { return nameOf(s.nameBytes); });
+    assert.ok(subNames.indexOf('GAMES') >= 0, 'GAMES dir present: ' + JSON.stringify(subNames));
+    assert.ok(subNames.indexOf('ART')   >= 0, 'ART dir present');
+    var rootFileNames = coll.tree.files.map(function(f) { return nameOf(f.nameBytes); });
+    assert.ok(rootFileNames.indexOf('FILE1') >= 0, 'FILE1 at root');
   });
 
   it('rejects non-linked formats from creating nested subdirs', () => {
@@ -184,7 +190,8 @@ describe('cbmCollectDirTree (task #11 — CBM-DOS reader)', () => {
     global.currentTracks = 81;
     global.currentPartition = null;
     var ctx = getCurrentCtx();
-    // Paste two files first, then collect them back
+    // Paste two files first (flat — at root, not under a wrapper),
+    // then collect them back.
     cbmPasteDirTree(ctx, {
       nameBytes: nb('SRC'),
       files: [
@@ -192,7 +199,7 @@ describe('cbmCollectDirTree (task #11 — CBM-DOS reader)', () => {
         { nameBytes: nb('BETA'),  cbmTypeIdx: 1, payload: new Uint8Array(300), size: 300 },
       ],
       subdirs: [], skippedLnks: [],
-    }, { onConflict: 'cancel' });
+    }, { onConflict: 'cancel', flat: true });
     var coll = cbmCollectDirTree(ctx);
     assert.strictEqual(coll.ok, true);
     assert.strictEqual(coll.tree.files.length, 2);
@@ -216,6 +223,7 @@ describe('cbmCollectDirTree (task #11 — CBM-DOS reader)', () => {
     global.currentTracks = 81;
     global.currentPartition = null;
     var ctxA = getCurrentCtx();
+    // flat:true so the top-level files+subdirs land at the DNP root
     cbmPasteDirTree(ctxA, {
       nameBytes: nb('SRC'),
       files: [{ nameBytes: nb('FILE1'), cbmTypeIdx: 2, payload: new Uint8Array([0xAA]), size: 1 }],
@@ -227,7 +235,7 @@ describe('cbmCollectDirTree (task #11 — CBM-DOS reader)', () => {
         },
       ],
       skippedLnks: [],
-    }, { onConflict: 'cancel' });
+    }, { onConflict: 'cancel', flat: true });
 
     var coll = cbmCollectDirTree(ctxA);
     assert.strictEqual(coll.ok, true);
@@ -235,14 +243,15 @@ describe('cbmCollectDirTree (task #11 — CBM-DOS reader)', () => {
     assert.strictEqual(coll.tree.subdirs.length, 1);
     assert.strictEqual(coll.tree.subdirs[0].files.length, 1);
 
-    // Paste into a fresh DNP
+    // Paste into a fresh DNP, flat again so we can compare collector
+    // output against the source structure without an extra wrapper.
     var bufB = createEmptyDisk('dnp', 81);
     global.currentBuffer = bufB;
     global.currentFormat = DISK_FORMATS.dnp;
     global.currentTracks = 81;
     global.currentPartition = null;
     var ctxB = getCurrentCtx();
-    var res = cbmPasteDirTree(ctxB, coll.tree, { onConflict: 'cancel' });
+    var res = cbmPasteDirTree(ctxB, coll.tree, { onConflict: 'cancel', flat: true });
     assert.strictEqual(res.ok, true);
     assert.strictEqual(res.copiedFiles, 2);
     assert.strictEqual(res.copiedDirs, 1);
@@ -301,6 +310,127 @@ describe('cbmCollectDirTree (task #11 — CBM-DOS reader)', () => {
     // ceil(100/254)=1 + ceil(500/254)=2 + subdir 2 + dir-margin 1 = 6 at minimum
     assert.ok(est >= 6, 'tree estimate at least 6 sectors (got ' + est + ')');
     assert.ok(fresh > est, 'fresh DNP can hold the tiny tree');
+  });
+
+  it('cross-family: CFS tree pastes into a DNP with type translation', () => {
+    // Build a CFS subdir with files of every CBM type (SEQ / PRG / USR / REL)
+    var hdd = createEmptyHdd(4);
+    var info = readIde64Partitions(hdd);
+    var p = info.partitions[0];
+    var rootLba = p.cfsRootDir.addr;
+    var games = cfsCreateSubdir(hdd, p.startLba, p.endLba, rootLba, 'GAMES');
+    cfsImportFile(hdd, p.startLba, p.endLba, games.newDirLba, 'AS_PRG', new Uint8Array([0x01, 0x08]), { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'PRG' });
+    cfsImportFile(hdd, p.startLba, p.endLba, games.newDirLba, 'AS_SEQ', new Uint8Array(50),  { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'SEQ' });
+    cfsImportFile(hdd, p.startLba, p.endLba, games.newDirLba, 'AS_USR', new Uint8Array(50),  { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'USR' });
+    cfsImportFile(hdd, p.startLba, p.endLba, games.newDirLba, 'AS_REL', new Uint8Array(50),  { ftype: CFS_FTYPE.REL,    typeSuffix: 'REL' });
+    // Read GAMES nameBytes off disk
+    var d = new Uint8Array(hdd);
+    var rootEntries = readCfsDirectory(hdd, rootLba);
+    var gamesEntry = rootEntries.find(function(e) {
+      return !e.empty && !e.isSelfRef && e.ftype === CFS_FTYPE.DIR && e.dataTreePtr && e.dataTreePtr.addr === games.newDirLba;
+    });
+    var nameOff = gamesEntry.dirLba * 512 + gamesEntry.index * 32;
+    var gamesNameBytes = new Uint8Array(16);
+    for (var i = 0; i < 16; i++) gamesNameBytes[i] = d[nameOff + i];
+
+    var coll = cfsCollectDirTree(hdd, games.newDirLba, gamesNameBytes);
+    assert.strictEqual(coll.ok, true);
+    assert.strictEqual(coll.tree.files.length, 4);
+
+    // Paste into a fresh DNP
+    var dnp = createEmptyDisk('dnp', 81);
+    global.currentBuffer = dnp;
+    global.currentFormat = DISK_FORMATS.dnp;
+    global.currentTracks = 81;
+    global.currentPartition = null;
+    var ctx = getCurrentCtx();
+    var res = cbmPasteDirTree(ctx, coll.tree, { onConflict: 'cancel' });
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.copiedDirs, 1);  // GAMES
+    assert.strictEqual(res.copiedFiles, 4); // all four types
+
+    // Verify GAMES + each file via cbmCollectDirTree (avoids
+    // parseDnpDirectory which isn't loaded by test-helper).
+    var dnpColl = cbmCollectDirTree(ctx);
+    function nameOf(bytes) {
+      var n = '';
+      for (var i = 0; i < 16; i++) { var b = bytes[i]; if (b === 0xA0 || b === 0) break; n += String.fromCharCode(b); }
+      return n.replace(/ +$/, '');
+    }
+    var subs = dnpColl.tree.subdirs.map(function(s) { return nameOf(s.nameBytes); });
+    assert.ok(subs.indexOf('GAMES') >= 0, 'GAMES subdir created on DNP');
+    var gamesSub = dnpColl.tree.subdirs.find(function(s) { return nameOf(s.nameBytes) === 'GAMES'; });
+    assert.strictEqual(gamesSub.files.length, 4);
+    var byName = {};
+    for (var fi = 0; fi < gamesSub.files.length; fi++) {
+      byName[nameOf(gamesSub.files[fi].nameBytes)] = gamesSub.files[fi].cbmTypeIdx;
+    }
+    assert.strictEqual(byName.AS_PRG, 2);
+    assert.strictEqual(byName.AS_SEQ, 1);
+    assert.strictEqual(byName.AS_USR, 3);
+    assert.strictEqual(byName.AS_REL, 4);
+  });
+
+  it('cross-family: DNP tree pastes into a CFS partition with type translation', () => {
+    function nbLocal(s) {
+      var out = new Uint8Array(16);
+      for (var i = 0; i < 16; i++) out[i] = i < s.length ? s.charCodeAt(i) : 0xA0;
+      return out;
+    }
+    // Build a small DNP tree with each CBM file type
+    var dnp = createEmptyDisk('dnp', 81);
+    global.currentBuffer = dnp;
+    global.currentFormat = DISK_FORMATS.dnp;
+    global.currentTracks = 81;
+    global.currentPartition = null;
+    var dnpCtx = getCurrentCtx();
+    // flat:true so the four files land at the DNP root (no SRC wrapper)
+    cbmPasteDirTree(dnpCtx, {
+      nameBytes: nbLocal('SRC'),
+      files: [
+        { nameBytes: nbLocal('AS_PRG'), cbmTypeIdx: 2, payload: new Uint8Array([0x01, 0x08, 0xAA]), size: 3 },
+        { nameBytes: nbLocal('AS_SEQ'), cbmTypeIdx: 1, payload: new Uint8Array(50), size: 50 },
+        { nameBytes: nbLocal('AS_USR'), cbmTypeIdx: 3, payload: new Uint8Array(50), size: 50 },
+        { nameBytes: nbLocal('AS_REL'), cbmTypeIdx: 4, payload: new Uint8Array(50), size: 50 },
+      ],
+      subdirs: [], skippedLnks: [],
+    }, { onConflict: 'cancel', flat: true });
+    var dnpColl = cbmCollectDirTree(dnpCtx, nbLocal('SRC'));
+    assert.strictEqual(dnpColl.ok, true);
+    assert.strictEqual(dnpColl.tree.files.length, 4);
+
+    // Wrap the four files in an outer subdir for the CFS paste
+    var wrappedTree = {
+      nameBytes: nbLocal('WRAP'),
+      files: dnpColl.tree.files,
+      subdirs: [],
+      skippedLnks: [],
+    };
+
+    // Paste into a fresh CFS partition
+    var hdd = createEmptyHdd(4);
+    var hddInfo = readIde64Partitions(hdd);
+    var p = hddInfo.partitions[0];
+    var res = cfsPasteDirTree(hdd, p.startLba, p.endLba, p.cfsRootDir.addr, wrappedTree, { onConflict: 'cancel' });
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.copiedDirs, 1);
+    assert.strictEqual(res.copiedFiles, 4);
+
+    // Find WRAP subdir in CFS root and verify each file's CFS typeSuffix
+    var rootEntries = readCfsDirectory(hdd, p.cfsRootDir.addr);
+    var wrapEntry = rootEntries.find(function(e) {
+      return !e.empty && !e.isSelfRef && e.ftype === CFS_FTYPE.DIR && e.dataTreePtr && e.dataTreePtr.addr !== p.cfsDeletedDir.addr;
+    });
+    assert.ok(wrapEntry, 'WRAP subdir created in CFS root');
+    var children = readCfsDirectory(hdd, wrapEntry.dataTreePtr.addr).filter(function(e) { return !e.empty && !e.isSelfRef; });
+    var bySuffix = {};
+    for (var ci = 0; ci < children.length; ci++) {
+      bySuffix[petsciiToReadable(children[ci].name).trim()] = children[ci].typeSuffix;
+    }
+    assert.strictEqual(bySuffix.AS_PRG, 'PRG');
+    assert.strictEqual(bySuffix.AS_SEQ, 'SEQ');
+    assert.strictEqual(bySuffix.AS_USR, 'USR');
+    assert.strictEqual(bySuffix.AS_REL, 'REL');
   });
 
   it('captures GEOS metadata when a GEOS file is present', () => {

@@ -2400,6 +2400,10 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
   if (!tree) return { ok: false, error: 'invalid tree' };
   opts = opts || {};
   var onConflict = opts.onConflict || 'cancel';
+  // opts.flat = true skips the top-level wrapper dir and pastes
+  // tree.files + tree.subdirs directly into diskCtx's current dir.
+  // Default is wrap-by-default, mirroring cfsPasteDirTree.
+  var wrap = !opts.flat;
 
   var copiedFiles = 0;
   var copiedDirs = 0;
@@ -2419,6 +2423,52 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
     }
     return s.replace(/ +$/, '');
   }
+
+  // When wrap is on and the format supports subdirs, create (or reuse
+  // on overwrite) a top-level subdir for tree.nameBytes and recurse
+  // with a diskCtx pointing into it. When the format doesn't support
+  // subdirs (D64/D71/D81 root etc.), fall back to flat-paste at the
+  // current dir but tag any source-tree subdirs as unsupported.
+  var fmt = diskCtx.format;
+  var targetCtx = diskCtx;
+  if (wrap && fmt.subdirLinked && tree.nameBytes) {
+    var topName = _displayName(tree.nameBytes);
+    if (topName) {
+      var existing = _cbmFindDirEntryByNameBytes(diskCtx, tree.nameBytes);
+      if (existing >= 0 && onConflict === 'cancel') {
+        return { ok: false, error: 'A "' + topName + '" already exists; choose Overwrite (or rename it first).' };
+      }
+      if (existing >= 0 && onConflict === 'overwrite') {
+        // Reuse the existing dir — file conflicts inside still go
+        // through the per-file overwrite path below.
+        var dataNow = new Uint8Array(diskCtx.buffer);
+        var hdrT = dataNow[existing + 3];
+        var hdrS = dataNow[existing + 4];
+        var hdrOff = sectorOffset(hdrT, hdrS, diskCtx);
+        if (hdrOff < 0) {
+          return { ok: false, error: 'Existing "' + topName + '" entry points at an invalid sector.' };
+        }
+        targetCtx = Object.assign({}, diskCtx, {
+          partition: {
+            dnpDir: true,
+            dnpHeaderT: hdrT, dnpHeaderS: hdrS,
+            dnpDirT: dataNow[hdrOff + 0x00], dnpDirS: dataNow[hdrOff + 0x01],
+            name: topName,
+          },
+        });
+      } else {
+        var created = _cbmCreateDnpSubdir(diskCtx, topName);
+        if (!created.ok) {
+          return { ok: false, error: 'creating top-level dir "' + topName + '": ' + (created.error || 'unknown') };
+        }
+        targetCtx = Object.assign({}, diskCtx, { partition: created.partition });
+        copiedDirs++;
+      }
+    }
+  }
+  // From here on, write into targetCtx (which is either the wrapper
+  // we just created/reused, or the original diskCtx for flat mode).
+  diskCtx = targetCtx;
 
   for (var i = 0; i < tree.files.length; i++) {
     var file = tree.files[i];
