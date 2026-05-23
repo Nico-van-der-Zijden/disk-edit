@@ -2029,6 +2029,178 @@ function _cbmFindDirEntryByNameBytes(diskCtx, nameBytes) {
   return -1;
 }
 
+// Walk a CBM-DOS directory and collect every file + nested subdir into
+// the generic tree shape that cbmPasteDirTree / cfsPasteDirTree consume.
+// `diskCtx` selects the partition / root (via diskCtx.partition). The
+// returned tree carries CBM-DOS-typed file entries (cbmTypeIdx +
+// optional geosBytes/geosInfoBlock/vlirRecords) that the paster's
+// type-translation layer maps onto CFS when crossing families.
+//
+// Subdir traversal:
+//   - DNP / CMD Native (subdirLinked:true): DIR entries point at the
+//     subdir's header sector. Recurse with a {dnpDir:true, ...} child
+//     partition.
+//   - D81 (subdirLinked:false): a $05 PARTITION entry points at the
+//     sub-disk's start track. Recurse with a {startTrack, partSize}
+//     child partition.
+//
+// VLIR GEOS files are captured (geosBytes + geosInfoBlock + a marker)
+// but a `vlirRecords: { skipped: true }` flag is set so the CBM-DOS
+// paster knows to skip them rather than corrupt the destination with
+// a flat-byte-stream rewrite. The CFS paster also skips VLIR for the
+// same reason.
+//
+// Returns { ok, tree, error? }. The tree shape matches what
+// cfsCollectDirTree emits, so paste targets stay symmetric.
+function cbmCollectDirTree(diskCtx, sourceNameBytes) {
+  if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return { ok: false, error: 'invalid disk context' };
+  var data = new Uint8Array(diskCtx.buffer);
+  var fmt = diskCtx.format;
+  var visited = {}; // cycle guard keyed by 'startT:startS' for subdirs
+
+  function readNameBytes(entryOff) {
+    var out = new Uint8Array(16);
+    for (var i = 0; i < 16; i++) out[i] = data[entryOff + 5 + i];
+    return out;
+  }
+
+  function walk(ctx, nameBytes) {
+    var localData = new Uint8Array(ctx.buffer);
+    var localFmt = ctx.format;
+    var dctx = getDirContext(ctx);
+    var t = dctx.dirTrack, s = dctx.dirSector;
+    var node = { nameBytes: nameBytes, files: [], subdirs: [], skippedLnks: [] };
+    var sectorVisited = {};
+    while (t !== 0) {
+      var key = t + ':' + s;
+      if (sectorVisited[key]) break;
+      sectorVisited[key] = true;
+      var off = sectorOffset(t, s, ctx);
+      if (off < 0) break;
+      for (var i = 0; i < localFmt.entriesPerSector; i++) {
+        var entryOff = off + i * localFmt.entrySize;
+        var typeByte = localData[entryOff + 2];
+        if (typeByte === 0) continue;       // empty slot
+        if ((typeByte & 0x80) === 0) continue; // scratched (closed bit clear)
+        var typeIdx = typeByte & 0x07;
+        var fileT = localData[entryOff + 3];
+        var fileS = localData[entryOff + 4];
+
+        // DNP / Native linked subdir
+        if (typeIdx === localFmt.subdirType && localFmt.subdirLinked) {
+          var subKey = fileT + ':' + fileS;
+          if (visited[subKey]) continue; // cycle guard
+          visited[subKey] = true;
+          var hdrOff = sectorOffset(fileT, fileS, ctx);
+          if (hdrOff < 0) continue;
+          var childCtx = Object.assign({}, ctx, {
+            partition: {
+              dnpDir: true,
+              dnpHeaderT: fileT, dnpHeaderS: fileS,
+              dnpDirT: localData[hdrOff + 0x00], dnpDirS: localData[hdrOff + 0x01],
+              name: '',
+            },
+          });
+          var subNode = walk(childCtx, readNameBytes(entryOff));
+          node.subdirs.push(subNode);
+          continue;
+        }
+
+        // D81 sub-partition (file type $05, but format is not subdirLinked)
+        if (typeIdx === localFmt.subdirType && !localFmt.subdirLinked) {
+          // entry[30..31] = partition size in sectors (LE)
+          var partSize = localData[entryOff + 30] | (localData[entryOff + 31] << 8);
+          if (!partSize) continue;
+          var partKey = 'p' + fileT;
+          if (visited[partKey]) continue;
+          visited[partKey] = true;
+          var childCtxP = Object.assign({}, ctx, {
+            partition: { startTrack: fileT, partSize: partSize, name: '' },
+          });
+          var subNodeP = walk(childCtxP, readNameBytes(entryOff));
+          node.subdirs.push(subNodeP);
+          continue;
+        }
+
+        // Regular file (PRG / SEQ / USR / REL). Skip the type-$00 DEL
+        // case (already filtered above by typeByte === 0 / closed bit).
+        if (typeIdx < 1 || typeIdx > 4) continue;
+        var fileName = readNameBytes(entryOff);
+        // GEOS metadata: bytes 21-29 of dir entry. Capture as-is.
+        var hasGeos = false;
+        var geosBytes = new Uint8Array(9);
+        for (var gi = 0; gi < 9; gi++) {
+          geosBytes[gi] = localData[entryOff + 21 + gi];
+          if (geosBytes[gi] !== 0) hasGeos = true;
+        }
+        // Read info block (at entry $15/$16) if it points at a real
+        // sector — GEOS sequential + VLIR files both carry this.
+        var geosInfoBlock = null;
+        if (hasGeos) {
+          var infoT = localData[entryOff + 0x15];
+          var infoS = localData[entryOff + 0x16];
+          if (infoT > 0) {
+            var infoOff = sectorOffset(infoT, infoS, ctx);
+            if (infoOff >= 0 && infoOff + 256 <= localData.length) {
+              geosInfoBlock = new Uint8Array(256);
+              for (var ib = 0; ib < 256; ib++) geosInfoBlock[ib] = localData[infoOff + ib];
+            }
+          }
+        }
+        // VLIR detection: entry byte $17 = 0x01 means VLIR file. Capture
+        // the flag so the paster can skip with a clear warning instead
+        // of writing the VLIR index sector as a flat byte stream.
+        var isVlir = (hasGeos && localData[entryOff + 0x17] === 0x01);
+
+        var fileEntry = {
+          nameBytes: fileName,
+          cbmTypeIdx: typeIdx,
+          payload: null,
+          size: 0,
+        };
+        if (hasGeos) {
+          fileEntry.geosBytes = geosBytes;
+          fileEntry.geosInfoBlock = geosInfoBlock;
+        }
+        if (isVlir) {
+          // Mark as VLIR without reading the payload — the index sector
+          // bytes alone aren't a valid file body, and unpacking the
+          // record chains here would duplicate ui-viewer-vlir's logic.
+          fileEntry.vlirRecords = { skipped: true };
+          fileEntry.payload = new Uint8Array(0);
+        } else {
+          var rd = readFileData(ctx.buffer, entryOff, ctx);
+          if (rd.error) {
+            // Unreadable chain — surface in skippedLnks-style list so
+            // the caller's summary can note it.
+            node.skippedLnks.push('(unreadable file)');
+            continue;
+          }
+          fileEntry.payload = rd.data;
+          fileEntry.size = rd.data.length;
+        }
+        node.files.push(fileEntry);
+      }
+      t = localData[off]; s = localData[off + 1];
+    }
+    return node;
+  }
+
+  // Default root-name: the source partition's disk-header label.
+  if (!sourceNameBytes) {
+    sourceNameBytes = new Uint8Array(16);
+    var hdrOff = sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector, diskCtx);
+    if (hdrOff >= 0 && fmt.nameOffset != null) {
+      for (var nb = 0; nb < 16; nb++) sourceNameBytes[nb] = data[hdrOff + fmt.nameOffset + nb] || 0xA0;
+    } else {
+      for (var nb2 = 0; nb2 < 16; nb2++) sourceNameBytes[nb2] = 0xA0;
+    }
+  }
+
+  var tree = walk(diskCtx, sourceNameBytes);
+  return { ok: true, tree: tree };
+}
+
 // Create a DNP-style linked subdir (subdirLinked formats: CMD Native,
 // D1M/D2M/D4M Native partitions). Allocates 2 sectors (header + first
 // dir sector), wires up the parent/child pointers per the format

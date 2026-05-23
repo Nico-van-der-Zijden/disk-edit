@@ -167,3 +167,121 @@ describe('cbmPasteDirTree (task #12 — MVP file-only writer)', () => {
     assert.strictEqual(cfsToCbmTypeIdx(1, 'TXT'), 2);   // unknown suffix → PRG default
   });
 });
+
+describe('cbmCollectDirTree (task #11 — CBM-DOS reader)', () => {
+  beforeEach(() => { resetGlobals(); });
+
+  function nb(s) {
+    var out = new Uint8Array(16);
+    for (var i = 0; i < 16; i++) out[i] = i < s.length ? s.charCodeAt(i) : 0xA0;
+    return out;
+  }
+
+  it('collects flat files from a DNP root', () => {
+    var buf = createEmptyDisk('dnp', 81);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.dnp;
+    global.currentTracks = 81;
+    global.currentPartition = null;
+    var ctx = getCurrentCtx();
+    // Paste two files first, then collect them back
+    cbmPasteDirTree(ctx, {
+      nameBytes: nb('SRC'),
+      files: [
+        { nameBytes: nb('ALPHA'), cbmTypeIdx: 2, payload: new Uint8Array([1, 2, 3, 4]), size: 4 },
+        { nameBytes: nb('BETA'),  cbmTypeIdx: 1, payload: new Uint8Array(300), size: 300 },
+      ],
+      subdirs: [], skippedLnks: [],
+    }, { onConflict: 'cancel' });
+    var coll = cbmCollectDirTree(ctx);
+    assert.strictEqual(coll.ok, true);
+    assert.strictEqual(coll.tree.files.length, 2);
+    assert.strictEqual(coll.tree.subdirs.length, 0);
+    // File order matches dir-entry order; verify type + size
+    var names = coll.tree.files.map(function(f) { return petsciiToReadable(readPetsciiString(f.nameBytes, 0, 16)).trim(); });
+    assert.ok(names.indexOf('ALPHA') >= 0);
+    assert.ok(names.indexOf('BETA')  >= 0);
+    var alpha = coll.tree.files.find(function(f) { return petsciiToReadable(readPetsciiString(f.nameBytes, 0, 16)).trim() === 'ALPHA'; });
+    assert.strictEqual(alpha.cbmTypeIdx, 2); // PRG
+    assert.strictEqual(alpha.size, 4);
+    assert.deepStrictEqual(Array.from(alpha.payload), [1, 2, 3, 4]);
+  });
+
+  it('round-trips a DNP tree with nested subdirs through collect + paste', () => {
+    // Build a small tree on disk A, collect it, paste into disk B,
+    // verify disk B's collect output matches.
+    var bufA = createEmptyDisk('dnp', 81);
+    global.currentBuffer = bufA;
+    global.currentFormat = DISK_FORMATS.dnp;
+    global.currentTracks = 81;
+    global.currentPartition = null;
+    var ctxA = getCurrentCtx();
+    cbmPasteDirTree(ctxA, {
+      nameBytes: nb('SRC'),
+      files: [{ nameBytes: nb('FILE1'), cbmTypeIdx: 2, payload: new Uint8Array([0xAA]), size: 1 }],
+      subdirs: [
+        {
+          nameBytes: nb('GAMES'),
+          files: [{ nameBytes: nb('PONG'), cbmTypeIdx: 2, payload: new Uint8Array(8), size: 8 }],
+          subdirs: [], skippedLnks: [],
+        },
+      ],
+      skippedLnks: [],
+    }, { onConflict: 'cancel' });
+
+    var coll = cbmCollectDirTree(ctxA);
+    assert.strictEqual(coll.ok, true);
+    assert.strictEqual(coll.tree.files.length, 1);
+    assert.strictEqual(coll.tree.subdirs.length, 1);
+    assert.strictEqual(coll.tree.subdirs[0].files.length, 1);
+
+    // Paste into a fresh DNP
+    var bufB = createEmptyDisk('dnp', 81);
+    global.currentBuffer = bufB;
+    global.currentFormat = DISK_FORMATS.dnp;
+    global.currentTracks = 81;
+    global.currentPartition = null;
+    var ctxB = getCurrentCtx();
+    var res = cbmPasteDirTree(ctxB, coll.tree, { onConflict: 'cancel' });
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.copiedFiles, 2);
+    assert.strictEqual(res.copiedDirs, 1);
+
+    // Collect from B and confirm same shape
+    var collB = cbmCollectDirTree(ctxB);
+    assert.strictEqual(collB.tree.files.length, 1);
+    assert.strictEqual(collB.tree.subdirs.length, 1);
+    assert.strictEqual(collB.tree.subdirs[0].files.length, 1);
+  });
+
+  it('captures GEOS metadata when a GEOS file is present', () => {
+    // Build a fresh GEOS disk + write a sequential GEOS file via the
+    // writer (it sets up the info block + the geosBytes correctly).
+    var buf = createEmptyDisk('d64', 35);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d64;
+    global.currentTracks = 35;
+    global.currentPartition = null;
+    writeGeosSignature(buf);
+    var ctx = getCurrentCtx();
+    var nameBytes = nb('GEOFILE');
+    var geosBytes = new Uint8Array(9);
+    geosBytes[0] = 0;   // info block T (set later by writer when present)
+    geosBytes[1] = 0;
+    geosBytes[2] = 0x01; // structure: sequential
+    geosBytes[3] = 0x83; // file type — arbitrary geos file type
+    var infoBlock = new Uint8Array(256);
+    infoBlock[0] = 0x00;
+    infoBlock[1] = 0xFF;
+    for (var i = 2; i < 256; i++) infoBlock[i] = (i + 0x42) & 0xFF;
+    var ok = writeFileToDisk(2, nameBytes, new Uint8Array([1, 2, 3, 4]), { geosBytes: geosBytes, geosInfoBlock: infoBlock }, true, ctx);
+    assert.strictEqual(ok, true, 'GEOS write should succeed');
+    var coll = cbmCollectDirTree(ctx);
+    var geoFile = coll.tree.files.find(function(f) { return petsciiToReadable(readPetsciiString(f.nameBytes, 0, 16)).trim() === 'GEOFILE'; });
+    assert.ok(geoFile, 'GEOFILE collected');
+    assert.ok(geoFile.geosBytes, 'geosBytes captured');
+    assert.strictEqual(geoFile.geosBytes[2], 0x01, 'structure byte preserved');
+    assert.ok(geoFile.geosInfoBlock, 'geosInfoBlock captured');
+    assert.strictEqual(geoFile.geosInfoBlock.length, 256);
+  });
+});
