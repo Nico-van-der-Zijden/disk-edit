@@ -97,7 +97,7 @@ describe('cbmPasteDirTree (task #12 — MVP file-only writer)', () => {
     assert.strictEqual(helloCount, 1, 'exactly one HELLO after overwrite');
   });
 
-  it('reports subdirs in skippedDirs (MVP — subdir creation not yet implemented)', () => {
+  it('creates DNP subdirs and recurses into them', () => {
     var buf = loadFreshDnp(81);
     var ctx = getCurrentCtx();
     function nb(s) {
@@ -109,17 +109,54 @@ describe('cbmPasteDirTree (task #12 — MVP file-only writer)', () => {
       nameBytes: nb('SRC'),
       files: [{ nameBytes: nb('FILE1'), cbmTypeIdx: 2, payload: new Uint8Array(8), size: 8 }],
       subdirs: [
-        { nameBytes: nb('GAMES'), files: [], subdirs: [], skippedLnks: [] },
-        { nameBytes: nb('ART'),   files: [], subdirs: [], skippedLnks: [] },
+        {
+          nameBytes: nb('GAMES'),
+          files: [{ nameBytes: nb('PONG'), cbmTypeIdx: 2, payload: new Uint8Array(16), size: 16 }],
+          subdirs: [], skippedLnks: [],
+        },
+        { nameBytes: nb('ART'), files: [], subdirs: [], skippedLnks: [] },
       ],
       skippedLnks: [],
     };
     var res = cbmPasteDirTree(ctx, tree, { onConflict: 'cancel' });
     assert.strictEqual(res.ok, true);
+    assert.strictEqual(res.copiedFiles, 2);   // FILE1 at root + PONG inside GAMES
+    assert.strictEqual(res.copiedDirs, 2);    // GAMES + ART
+    assert.strictEqual(res.skippedDirs.length, 0);
+    // Verify GAMES and ART entries exist in the root dir
+    var dirInfo = parseCurrentDir(buf);
+    var entries = (dirInfo && dirInfo.entries) || [];
+    var dirNames = entries.map(function(e) { return petsciiToReadable(e.name || '').trim(); });
+    assert.ok(dirNames.indexOf('GAMES') >= 0, 'GAMES dir present: ' + JSON.stringify(dirNames));
+    assert.ok(dirNames.indexOf('ART')   >= 0, 'ART dir present');
+    assert.ok(dirNames.indexOf('FILE1') >= 0, 'FILE1 at root');
+  });
+
+  it('rejects non-linked formats from creating nested subdirs', () => {
+    // Use a fresh D64 (no subdirLinked support) and try to paste a tree
+    // with subdirs. The subdirs should land in skippedDirs.
+    var buf = createEmptyDisk('d64', 35);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d64;
+    global.currentTracks = 35;
+    global.currentPartition = null;
+    var ctx = getCurrentCtx();
+    function nb(s) {
+      var out = new Uint8Array(16);
+      for (var i = 0; i < 16; i++) out[i] = i < s.length ? s.charCodeAt(i) : 0xA0;
+      return out;
+    }
+    var res = cbmPasteDirTree(ctx, {
+      nameBytes: nb('SRC'),
+      files: [{ nameBytes: nb('HI'), cbmTypeIdx: 2, payload: new Uint8Array(4), size: 4 }],
+      subdirs: [{ nameBytes: nb('NESTED'), files: [], subdirs: [], skippedLnks: [] }],
+      skippedLnks: [],
+    }, { onConflict: 'cancel' });
+    assert.strictEqual(res.ok, true);
     assert.strictEqual(res.copiedFiles, 1);
-    assert.strictEqual(res.skippedDirs.length, 2);
-    assert.ok(res.skippedDirs.indexOf('GAMES') >= 0);
-    assert.ok(res.skippedDirs.indexOf('ART') >= 0);
+    assert.strictEqual(res.copiedDirs, 0);
+    assert.strictEqual(res.skippedDirs.length, 1);
+    assert.ok(res.skippedDirs[0].indexOf('NESTED') >= 0);
   });
 
   it('maps CFS-style ftype/typeSuffix to CBM-DOS typeIdx', () => {

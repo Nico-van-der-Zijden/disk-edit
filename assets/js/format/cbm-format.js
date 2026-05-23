@@ -2029,6 +2029,110 @@ function _cbmFindDirEntryByNameBytes(diskCtx, nameBytes) {
   return -1;
 }
 
+// Create a DNP-style linked subdir (subdirLinked formats: CMD Native,
+// D1M/D2M/D4M Native partitions). Allocates 2 sectors (header + first
+// dir sector), wires up the parent/child pointers per the format
+// descriptor's subdir* offsets, and creates a DIR entry in the current
+// parent. Returns { ok, error?, partition } where `partition` is a
+// {dnpDir:true, dnpHeaderT, dnpHeaderS, dnpDirT, dnpDirS, name} shape
+// suitable for building a child diskCtx to recurse into.
+function _cbmCreateDnpSubdir(diskCtx, name) {
+  if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return { ok: false, error: 'invalid disk context' };
+  if (!name) return { ok: false, error: 'empty name' };
+  var buffer = diskCtx.buffer;
+  var fmt = diskCtx.format;
+  var partition = diskCtx.partition;
+  if (!fmt.subdirLinked) return { ok: false, error: 'format does not support linked subdirs' };
+  var data = new Uint8Array(buffer);
+
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, diskCtx);
+
+  // Allocate 2 sectors: header + first dir sector
+  var allocated = buildTrueAllocationMap(buffer, diskCtx);
+  var sectorList = allocateSectors(allocated, 2, diskCtx);
+  if (sectorList.length < 2) return { ok: false, error: 'Not enough free sectors for a new subdir' };
+
+  var hdrSec = sectorList[0];
+  var dirSec = sectorList[1];
+
+  // Parent header T/S for back-navigation (root vs nested subdir)
+  var parentHeaderT = fmt.headerTrack;
+  var parentHeaderS = fmt.headerSector;
+  if (partition && partition.dnpHeaderT !== undefined) {
+    parentHeaderT = partition.dnpHeaderT;
+    parentHeaderS = partition.dnpHeaderS;
+  }
+
+  // Header sector
+  var hdrOff = sectorOffset(hdrSec.track, hdrSec.sector, diskCtx);
+  for (var hi = 0; hi < 256; hi++) data[hdrOff + hi] = 0x00;
+  data[hdrOff + 0x00] = dirSec.track;
+  data[hdrOff + 0x01] = dirSec.sector;
+  data[hdrOff + 0x02] = fmt.dosVersion;
+  for (var ni = 0; ni < fmt.nameLength; ni++) {
+    if (ni < name.length) {
+      var ch = name.charCodeAt(ni);
+      data[hdrOff + fmt.nameOffset + ni] = (ch >= 0x41 && ch <= 0x5A) ? ch : (ch >= 0x30 && ch <= 0x39) ? ch : 0x20;
+    } else {
+      data[hdrOff + fmt.nameOffset + ni] = 0xA0;
+    }
+  }
+  // ID region from the root header (preserves disk ID + DOS-type bytes)
+  var rootHdrOff = sectorOffset(fmt.headerTrack, fmt.headerSector, diskCtx);
+  for (var idi = 0; idi < fmt.idLength; idi++) {
+    data[hdrOff + fmt.idOffset + idi] = data[rootHdrOff + fmt.idOffset + idi];
+  }
+  // Self-reference + parent-header pointers
+  data[hdrOff + fmt.subdirSelfRef] = hdrSec.track;
+  data[hdrOff + fmt.subdirSelfRef + 1] = hdrSec.sector;
+  data[hdrOff + fmt.subdirParentRef] = parentHeaderT;
+  data[hdrOff + fmt.subdirParentRef + 1] = parentHeaderS;
+
+  // First dir sector: 00 FF + zeroes
+  var dirOff = sectorOffset(dirSec.track, dirSec.sector, diskCtx);
+  for (var di = 0; di < 256; di++) data[dirOff + di] = 0x00;
+  data[dirOff + 0x00] = 0x00;
+  data[dirOff + 0x01] = 0xFF;
+
+  bamMarkSectorUsed(data, hdrSec.track, hdrSec.sector, bamOff, diskCtx);
+  bamMarkSectorUsed(data, dirSec.track, dirSec.sector, bamOff, diskCtx);
+
+  // Create DIR entry in the parent
+  var entryOff = findFreeDirEntry(buffer, null, diskCtx);
+  if (entryOff < 0) return { ok: false, error: 'No free directory entry available' };
+  data[entryOff + 2] = 0x80 | fmt.subdirType;
+  data[entryOff + 3] = hdrSec.track;
+  data[entryOff + 4] = hdrSec.sector;
+  for (var eni = 0; eni < fmt.nameLength; eni++) {
+    data[entryOff + 5 + eni] = data[hdrOff + fmt.nameOffset + eni];
+  }
+  for (var eu = 21; eu < 30; eu++) data[entryOff + eu] = 0x00;
+  data[entryOff + 30] = 2;
+  data[entryOff + 31] = 0;
+
+  // Parent dir-entry reference per D2M-DNP.TXT (rev 1.3):
+  //   +$24/$25 = T/S of the parent dir block holding our entry
+  //   +$26    = entry index within that block (0..7)
+  // For LBA-addressed formats (DNP / D1M / D2M / D4M), sectorOffset uses
+  //   ((T-1)*256 + S)*256, so the inverse is straightforward.
+  var parentDirT = (entryOff >>> 16) + 1;
+  var parentDirS = (entryOff >>> 8) & 0xFF;
+  var parentIdx = (entryOff >>> 5) & 0x07;
+  data[hdrOff + fmt.subdirParentEntry] = parentDirT;
+  data[hdrOff + fmt.subdirParentEntry + 1] = parentDirS;
+  data[hdrOff + fmt.subdirParentEntry + 2] = parentIdx;
+
+  return {
+    ok: true,
+    partition: {
+      dnpDir: true,
+      dnpHeaderT: hdrSec.track, dnpHeaderS: hdrSec.sector,
+      dnpDirT: dirSec.track, dnpDirS: dirSec.sector,
+      name: name,
+    },
+  };
+}
+
 // Paste a generic dir tree into a CBM-DOS partition. opts.onConflict
 // behaves like cfsPasteDirTree: 'overwrite' removes the existing file
 // before writing, 'rename' would auto-suffix (deferred for now since
@@ -2045,22 +2149,18 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
   var skippedLnks = (tree.skippedLnks || []).slice();
   var skippedDirs = [];
 
-  // Subdir creation is not yet implemented in this MVP — report any
-  // subdirs in the source tree so the caller can summarise them.
-  if (tree.subdirs && tree.subdirs.length > 0) {
-    for (var di = 0; di < tree.subdirs.length; di++) {
-      var subName = '';
-      var nb = tree.subdirs[di].nameBytes;
-      if (nb) {
-        for (var sni = 0; sni < 16; sni++) {
-          var snb = nb[sni];
-          if (snb === 0xA0 || snb === 0x00) break;
-          if (snb >= 0xC1 && snb <= 0xDA) subName += String.fromCharCode(snb - 0x80);
-          else if (snb >= 0x20 && snb <= 0x7E) subName += String.fromCharCode(snb);
-        }
-      }
-      skippedDirs.push(subName.replace(/ +$/, '') || '(subdir)');
+  // Decode a raw 16-byte PETSCII name into a display string. Inline so
+  // the file + subdir loops below stay self-contained.
+  function _displayName(nameBytes) {
+    var s = '';
+    if (!nameBytes) return s;
+    for (var i = 0; i < 16; i++) {
+      var b = nameBytes[i];
+      if (b === 0xA0 || b === 0x00) break;
+      if (b >= 0xC1 && b <= 0xDA) s += String.fromCharCode(b - 0x80);
+      else if (b >= 0x20 && b <= 0x7E) s += String.fromCharCode(b);
     }
+    return s.replace(/ +$/, '');
   }
 
   for (var i = 0; i < tree.files.length; i++) {
@@ -2110,6 +2210,60 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
       return { ok: false, error: 'writeFileToDisk failed for a file' };
     }
     copiedFiles++;
+  }
+
+  // Subdirectories — only supported on linked-subdir formats (DNP and
+  // CMD Native partitions inside D1M/D2M/D4M). D81 sub-partitions and
+  // other non-linked subdir mechanisms aren't built yet; their entries
+  // get reported in skippedDirs.
+  if (tree.subdirs && tree.subdirs.length > 0) {
+    var fmt = diskCtx.format;
+    for (var di = 0; di < tree.subdirs.length; di++) {
+      var sub = tree.subdirs[di];
+      var subName = _displayName(sub.nameBytes);
+      if (!subName) subName = 'SUBDIR';
+      if (!fmt.subdirLinked) {
+        skippedDirs.push(subName + ' (this format does not support nested subdirs)');
+        continue;
+      }
+      var existing = _cbmFindDirEntryByNameBytes(diskCtx, sub.nameBytes);
+      var subCtx = null;
+      if (existing >= 0 && onConflict === 'overwrite') {
+        // Same-name subdir already exists. Read its header T/S so we
+        // can recurse into the existing dir rather than re-creating it.
+        var dataNow = new Uint8Array(diskCtx.buffer);
+        var hdrT = dataNow[existing + 3], hdrS = dataNow[existing + 4];
+        var hdrOff = sectorOffset(hdrT, hdrS, diskCtx);
+        if (hdrOff < 0) {
+          skippedDirs.push(subName + ' (existing dir entry points at an invalid sector)');
+          continue;
+        }
+        subCtx = Object.assign({}, diskCtx, {
+          partition: {
+            dnpDir: true,
+            dnpHeaderT: hdrT, dnpHeaderS: hdrS,
+            dnpDirT: dataNow[hdrOff + 0x00], dnpDirS: dataNow[hdrOff + 0x01],
+            name: subName,
+          },
+        });
+      } else if (existing >= 0 && onConflict === 'cancel') {
+        return { ok: false, error: 'Directory "' + subName + '" already exists; choose Overwrite (or rename it first).' };
+      } else {
+        var creation = _cbmCreateDnpSubdir(diskCtx, subName);
+        if (!creation.ok) {
+          return { ok: false, error: 'creating subdir "' + subName + '": ' + (creation.error || 'unknown') };
+        }
+        subCtx = Object.assign({}, diskCtx, { partition: creation.partition });
+        copiedDirs++;
+      }
+      // Recurse into the (new or merged) subdir
+      var rr = cbmPasteDirTree(subCtx, sub, opts);
+      if (!rr.ok) return rr;
+      copiedFiles += rr.copiedFiles;
+      copiedDirs += rr.copiedDirs;
+      for (var sl = 0; sl < rr.skippedLnks.length; sl++) skippedLnks.push(rr.skippedLnks[sl]);
+      for (var sd = 0; sd < rr.skippedDirs.length; sd++) skippedDirs.push(rr.skippedDirs[sd]);
+    }
   }
 
   return {
