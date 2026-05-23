@@ -2053,6 +2053,34 @@ function _cbmFindDirEntryByNameBytes(diskCtx, nameBytes) {
   return -1;
 }
 
+// Find a non-colliding name in the current directory by appending " (N)"
+// for N = 2..99. Truncates the base so the full name still fits in 16
+// bytes (suffix " (2)".." (9)" = 4 bytes → base ≤ 12; " (10)".." (99)"
+// = 5 bytes → base ≤ 11). Returns a fresh 16-byte Uint8Array padded
+// with $A0, or null if all 98 candidates are taken. Mirrors the
+// CFS-side _cfsAutoRenameInDir helper.
+function _cbmAutoRenameInDir(diskCtx, baseNameBytes) {
+  if (!diskCtx || !diskCtx.buffer) return null;
+  var baseLen = 16;
+  for (var i = 0; i < 16; i++) {
+    if (baseNameBytes[i] === 0xA0 || baseNameBytes[i] === 0x00) { baseLen = i; break; }
+  }
+  while (baseLen > 0 && baseNameBytes[baseLen - 1] === 0x20) baseLen--;
+  for (var n = 2; n <= 99; n++) {
+    var suffix = ' (' + n + ')';
+    var suffixLen = suffix.length;
+    var maxBase = 16 - suffixLen;
+    var keep = Math.min(baseLen, maxBase);
+    if (keep <= 0) return null;
+    var candidate = new Uint8Array(16);
+    for (var b = 0; b < keep; b++) candidate[b] = baseNameBytes[b];
+    for (var s = 0; s < suffixLen; s++) candidate[keep + s] = suffix.charCodeAt(s);
+    for (var p = keep + suffixLen; p < 16; p++) candidate[p] = 0xA0;
+    if (_cbmFindDirEntryByNameBytes(diskCtx, candidate) < 0) return candidate;
+  }
+  return null;
+}
+
 // Walk a CBM-DOS directory and collect every file + nested subdir into
 // the generic tree shape that cbmPasteDirTree / cfsPasteDirTree consume.
 // `diskCtx` selects the partition / root (via diskCtx.partition). The
@@ -2267,8 +2295,12 @@ function _cbmCreateDnpSubdir(diskCtx, name) {
   data[hdrOff + 0x02] = fmt.dosVersion;
   for (var ni = 0; ni < fmt.nameLength; ni++) {
     if (ni < name.length) {
+      // Accept any printable PETSCII byte (0x20-0x7E covers letters,
+      // digits, space, punctuation including ( ) for rename suffixes).
+      // Out-of-range bytes collapse to space rather than corrupting the
+      // header — same fallback the older A-Z/0-9-only filter used.
       var ch = name.charCodeAt(ni);
-      data[hdrOff + fmt.nameOffset + ni] = (ch >= 0x41 && ch <= 0x5A) ? ch : (ch >= 0x30 && ch <= 0x39) ? ch : 0x20;
+      data[hdrOff + fmt.nameOffset + ni] = (ch >= 0x20 && ch <= 0x7E) ? ch : 0x20;
     } else {
       data[hdrOff + fmt.nameOffset + ni] = 0xA0;
     }
@@ -2435,8 +2467,19 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
     var topName = _displayName(tree.nameBytes);
     if (topName) {
       var existing = _cbmFindDirEntryByNameBytes(diskCtx, tree.nameBytes);
-      if (existing >= 0 && onConflict === 'cancel') {
-        return { ok: false, error: 'A "' + topName + '" already exists; choose Overwrite (or rename it first).' };
+      if (existing >= 0 && onConflict !== 'overwrite' && onConflict !== 'rename') {
+        return { ok: false, error: 'A "' + topName + '" already exists; choose Overwrite or Rename.' };
+      }
+      // 'rename' mode: auto-suffix " (N)" with name truncation so the
+      // new top-level name doesn't collide. Falls through to the
+      // fresh-create branch with the renamed bytes.
+      var createNameStr = topName;
+      var renamedBytes = null;
+      if (existing >= 0 && onConflict === 'rename') {
+        renamedBytes = _cbmAutoRenameInDir(diskCtx, tree.nameBytes);
+        if (!renamedBytes) return { ok: false, error: 'All " (N)" rename suffixes 2..99 are taken; choose a different destination.' };
+        createNameStr = _displayName(renamedBytes);
+        existing = -1; // pretend no conflict so we take the create path below
       }
       if (existing >= 0 && onConflict === 'overwrite') {
         // Reuse the existing dir — file conflicts inside still go
@@ -2457,9 +2500,9 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
           },
         });
       } else {
-        var created = _cbmCreateDnpSubdir(diskCtx, topName);
+        var created = _cbmCreateDnpSubdir(diskCtx, createNameStr);
         if (!created.ok) {
-          return { ok: false, error: 'creating top-level dir "' + topName + '": ' + (created.error || 'unknown') };
+          return { ok: false, error: 'creating top-level dir "' + createNameStr + '": ' + (created.error || 'unknown') };
         }
         targetCtx = Object.assign({}, diskCtx, { partition: created.partition });
         copiedDirs++;

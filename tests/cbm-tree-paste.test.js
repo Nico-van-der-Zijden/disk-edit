@@ -138,6 +138,38 @@ describe('cbmPasteDirTree (task #12 — MVP file-only writer)', () => {
     assert.ok(rootFileNames.indexOf('FILE1') >= 0, 'FILE1 at root');
   });
 
+  it('wrap-mode rename picks " (N)" suffix with name-length truncation', () => {
+    function nb(s) {
+      var out = new Uint8Array(16);
+      for (var i = 0; i < 16; i++) out[i] = i < s.length ? s.charCodeAt(i) : 0xA0;
+      return out;
+    }
+    function nameOf(bytes) {
+      var n = '';
+      for (var i = 0; i < 16; i++) { var b = bytes[i]; if (b === 0xA0 || b === 0) break; n += String.fromCharCode(b); }
+      return n.replace(/ +$/, '');
+    }
+    var buf = loadFreshDnp(81);
+    var ctx = getCurrentCtx();
+    // First paste creates SRC; second paste with 'rename' should land
+    // as 'SRC (2)'.
+    cbmPasteDirTree(ctx, _buildSimpleTree(), { onConflict: 'cancel' });
+    var res = cbmPasteDirTree(ctx, _buildSimpleTree(), { onConflict: 'rename' });
+    assert.strictEqual(res.ok, true);
+    var subs = cbmCollectDirTree(ctx).tree.subdirs.map(function(s) { return nameOf(s.nameBytes); });
+    assert.ok(subs.indexOf('SRC') >= 0, 'original SRC still present');
+    assert.ok(subs.indexOf('SRC (2)') >= 0, 'renamed SRC (2) created: ' + JSON.stringify(subs));
+
+    // Truncation: 'LONGDIRNAMEXYZW' (15 chars) + ' (2)' (4 chars) = 19 →
+    // base trimmed to 12 chars → 'LONGDIRNAMEX (2)' (16 chars).
+    var longTree = { nameBytes: nb('LONGDIRNAMEXYZW'), files: [], subdirs: [], skippedLnks: [] };
+    cbmPasteDirTree(ctx, longTree, { onConflict: 'cancel' });
+    var res2 = cbmPasteDirTree(ctx, longTree, { onConflict: 'rename' });
+    assert.strictEqual(res2.ok, true);
+    var subs2 = cbmCollectDirTree(ctx).tree.subdirs.map(function(s) { return nameOf(s.nameBytes); });
+    assert.ok(subs2.indexOf('LONGDIRNAMEX (2)') >= 0, 'truncated rename present: ' + JSON.stringify(subs2));
+  });
+
   it('rejects non-linked formats from creating nested subdirs', () => {
     // Use a fresh D64 (no subdirLinked support) and try to paste a tree
     // with subdirs. The subdirs should land in skippedDirs.

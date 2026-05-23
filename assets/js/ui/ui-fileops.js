@@ -628,6 +628,7 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
           'The destination already has an entry named "' + dispName.trim() + '". What would you like to do?',
           [
             { label: 'Cancel', value: 'cancel', secondary: true },
+            { label: 'Rename', value: 'rename' },
             { label: 'Overwrite', value: 'overwrite' },
           ]
         );
