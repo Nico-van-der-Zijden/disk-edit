@@ -254,6 +254,26 @@ describe('cbmCollectDirTree (task #11 — CBM-DOS reader)', () => {
     assert.strictEqual(collB.tree.subdirs[0].files.length, 1);
   });
 
+  it('maps CBM-DOS typeIdx onto CFS ftype + typeSuffix (cross-family)', () => {
+    var rel = cbmToCfsTypeFields(4);
+    assert.strictEqual(rel.typeSuffix, 'REL');
+    assert.strictEqual(rel.ftype, 2); // CFS_FTYPE.REL
+    var seq = cbmToCfsTypeFields(1);
+    assert.strictEqual(seq.typeSuffix, 'SEQ');
+    assert.strictEqual(seq.ftype, 1); // CFS_FTYPE.NORMAL
+    var prg = cbmToCfsTypeFields(2);
+    assert.strictEqual(prg.typeSuffix, 'PRG');
+    var usr = cbmToCfsTypeFields(3);
+    assert.strictEqual(usr.typeSuffix, 'USR');
+    // resolveFileCfsTypeFields prefers source-set CFS fields when both present
+    var withCfs = resolveFileCfsTypeFields({ ftype: 2, typeSuffix: 'REL', cbmTypeIdx: 1 });
+    assert.strictEqual(withCfs.typeSuffix, 'REL'); // source CFS wins
+    var withCbm = resolveFileCfsTypeFields({ cbmTypeIdx: 3 });
+    assert.strictEqual(withCbm.typeSuffix, 'USR'); // CBM-only collector → USR
+    var untyped = resolveFileCfsTypeFields({});
+    assert.strictEqual(untyped.typeSuffix, 'PRG'); // safe default
+  });
+
   it('captures GEOS metadata when a GEOS file is present', () => {
     // Build a fresh GEOS disk + write a sequential GEOS file via the
     // writer (it sets up the info block + the geosBytes correctly).

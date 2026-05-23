@@ -1982,6 +1982,30 @@ function resolveFileCbmTypeIdx(file) {
   return cfsToCbmTypeIdx(file.ftype, file.typeSuffix);
 }
 
+// Inverse of cfsToCbmTypeIdx — map a CBM-DOS typeIdx (1=SEQ, 2=PRG,
+// 3=USR, 4=REL) onto CFS file fields. Used by cfsPasteDirTree when a
+// file in the source tree came from a CBM-DOS collector (cbmTypeIdx
+// set, ftype/typeSuffix unset). Returned typeSuffix matches what
+// cfsImportFile expects to land in the dir entry's $19..$1B "PRG" /
+// "SEQ" / "USR" / "REL" suffix bytes.
+function cbmToCfsTypeFields(cbmTypeIdx) {
+  // CFS_FTYPE constants (NORMAL=1, REL=2) are defined in cbm-format-ide64.js.
+  // Use the numeric values directly so this helper has no cross-file dep.
+  if (cbmTypeIdx === 4) return { ftype: 2, typeSuffix: 'REL' }; // REL
+  if (cbmTypeIdx === 1) return { ftype: 1, typeSuffix: 'SEQ' };
+  if (cbmTypeIdx === 3) return { ftype: 1, typeSuffix: 'USR' };
+  return { ftype: 1, typeSuffix: 'PRG' }; // 2 PRG and any unknown default
+}
+
+// Resolve the effective CFS ftype/typeSuffix for a generic-tree file —
+// mirrors resolveFileCbmTypeIdx. Prefers the source-set CFS fields,
+// falls back to the CBM mapping, then to NORMAL/PRG.
+function resolveFileCfsTypeFields(file) {
+  if (file.ftype && file.typeSuffix) return { ftype: file.ftype, typeSuffix: file.typeSuffix };
+  if (file.cbmTypeIdx) return cbmToCfsTypeFields(file.cbmTypeIdx);
+  return { ftype: 1, typeSuffix: 'PRG' };
+}
+
 // Find a CBM-DOS dir entry by raw 16-byte PETSCII name in the current
 // directory referenced by diskCtx. Uses effective-length comparison
 // (trim $A0 / $00 / trailing-space padding) so a space-padded name

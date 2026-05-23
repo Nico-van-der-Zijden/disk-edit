@@ -2431,9 +2431,13 @@ function cfsPasteDirTree(buffer, partitionStart, partitionEndLba, destDirLba, tr
           return { ok: false, error: 'Cannot overwrite file "' + fName + '" — destination has a directory with the same name.' };
         }
       }
+      // Translate CBM-DOS type info onto CFS ftype/typeSuffix when the
+      // file came from a cross-family collector (cbmTypeIdx set, CFS
+      // fields unset). resolveFileCfsTypeFields lives in cbm-format.js.
+      var cfsType = resolveFileCfsTypeFields(f);
       var imp = cfsImportFile(buffer, partitionStart, partitionEndLba, dstDirLba, fName, f.payload, {
-        ftype: f.ftype || CFS_FTYPE.NORMAL,
-        typeSuffix: f.typeSuffix || 'PRG',
+        ftype: cfsType.ftype,
+        typeSuffix: cfsType.typeSuffix,
       });
       if (!imp.ok) return { ok: false, error: 'importing "' + fName + '": ' + (imp.error || 'unknown') };
       stats.copiedFiles++;
