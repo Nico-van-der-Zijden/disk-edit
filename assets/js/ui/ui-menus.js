@@ -824,7 +824,11 @@ function updateEntryMenuState() {
     var eClosed = (eType & 0x80) !== 0;
     var eIdx = eType & 0x07;
     exportEnabled = eClosed && eIdx >= 1 && eIdx <= 4;
-    copyEnabled = exportEnabled;
+    // Copy: regular files (PRG/SEQ/USR/REL) OR a subdir/partition entry
+    // for the new cross-family tree copy. cbmCollectDirTree captures the
+    // whole subtree into the clipboard, mirroring the CFS Copy path.
+    var isCopyableSubdir = eClosed && currentFormat && eIdx === currentFormat.subdirType;
+    copyEnabled = exportEnabled || isCopyableSubdir;
     prgSelected = eClosed && eIdx === 2;
     var geosFileType = edata[selectedEntryIndex + 0x18];
     var geosStruct = edata[selectedEntryIndex + 0x17];

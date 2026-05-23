@@ -295,6 +295,54 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
       nameBytes = new Uint8Array(16);
       for (var i = 0; i < 16; i++) nameBytes[i] = data[entOff + 5 + i];
       fileName = petsciiToReadable(readPetsciiString(data, entOff + 5, 16)).trim() || '?';
+      // Subdir / sub-partition entries: collect the whole tree into a
+      // single clipboard item via cbmCollectDirTree. Symmetric with the
+      // CFS-side DIR-copy branch up above. Both DNP linked subdirs and
+      // D81-style CBM partitions (file type $05 with !subdirLinked)
+      // share this typeByte check; cbmCollectDirTree picks the right
+      // child-ctx shape based on the format descriptor.
+      if (currentFormat && typeIdx === currentFormat.subdirType) {
+        var fileT = data[entOff + 3];
+        var fileS = data[entOff + 4];
+        var childCtx;
+        if (currentFormat.subdirLinked) {
+          var hdrOff2 = sectorOffset(fileT, fileS);
+          if (hdrOff2 < 0) {
+            skipped.push({ name: fileName, reason: 'Subdir header out of range' });
+            continue;
+          }
+          childCtx = Object.assign({}, getCurrentCtx(), {
+            partition: {
+              dnpDir: true,
+              dnpHeaderT: fileT, dnpHeaderS: fileS,
+              dnpDirT: data[hdrOff2 + 0x00], dnpDirS: data[hdrOff2 + 0x01],
+              name: fileName,
+            },
+          });
+        } else {
+          var partSize = data[entOff + 30] | (data[entOff + 31] << 8);
+          if (!partSize) {
+            skipped.push({ name: fileName, reason: 'Partition entry has zero size' });
+            continue;
+          }
+          childCtx = Object.assign({}, getCurrentCtx(), {
+            partition: { startTrack: fileT, partSize: partSize, name: fileName },
+          });
+        }
+        if (progress) await progress.update(ci, total, fileName);
+        var coll = cbmCollectDirTree(childCtx, nameBytes);
+        if (!coll.ok) {
+          skipped.push({ name: fileName, reason: coll.error || 'collect failed' });
+          continue;
+        }
+        clipboard.push({
+          kind: 'cbm-dir-tree',
+          nameBytes: nameBytes,
+          tree: coll.tree,
+          skippedLnks: [],
+        });
+        continue;
+      }
       if (typeIdx < 1 || typeIdx > 4) {
         skipped.push({ name: fileName, reason: 'Unsupported file type' });
         continue;
