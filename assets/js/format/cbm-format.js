@@ -1288,8 +1288,9 @@ var parsedTAPEntries = null; // entryOff → { fileData: Uint8Array }
 var parsedTapeDir = null;    // last parsed tape directory entries array
 
 // ── Sector geometry (delegates to current format) ────────────────────
-function sectorsPerTrack(t) {
-  return currentFormat.sectorsPerTrack(t);
+function sectorsPerTrack(t, ctx) {
+  ctx = ctx || getCurrentCtx();
+  return ctx.format.sectorsPerTrack(t);
 }
 
 
@@ -1297,8 +1298,9 @@ function sectorsPerTrack(t) {
 // ── BAM byte-level helpers (partition-aware, handles D81 >32 sectors) ─
 // Partition BAM: returns byte offset for a track's BAM entry (free count byte)
 // relTrack is 1-based relative to partition start
-function getPartitionBamEntry(bamOff, relTrack) {
-  var fmt = currentFormat;
+function getPartitionBamEntry(bamOff, relTrack, ctx) {
+  ctx = ctx || getCurrentCtx();
+  var fmt = ctx.format;
   var spt = fmt.partitionSpt;
   var off = fmt.partitionBamOffset;
   var esz = fmt.partitionBamEntrySize;
@@ -1308,40 +1310,48 @@ function getPartitionBamEntry(bamOff, relTrack) {
 
 // Returns the byte offset of the bitmap bytes for a given track.
 // For partitions, track is absolute (disk-level) and bamOff is the partition BAM offset.
-function getBamBitmapBase(track, bamOff) {
-  if (currentPartition && !currentPartition.dnpDir) {
-    var relTrack = track - currentPartition.startTrack + 1;
-    return getPartitionBamEntry(bamOff, relTrack) + 1;
+function getBamBitmapBase(track, bamOff, ctx) {
+  ctx = ctx || getCurrentCtx();
+  var partition = ctx.partition;
+  if (partition && !partition.dnpDir) {
+    var relTrack = track - partition.startTrack + 1;
+    return getPartitionBamEntry(bamOff, relTrack, ctx) + 1;
   }
-  return currentFormat.getBamBitmapBase(bamOff, track);
+  return ctx.format.getBamBitmapBase(bamOff, track);
 }
 
 /** @param {Uint8Array} data @param {number} bamOff @param {number} track @param {number} sector @returns {boolean} */
-function checkSectorFree(data, bamOff, track, sector) {
-  if (currentFormat.isSectorFree) return currentFormat.isSectorFree(data, bamOff, track, sector);
-  var base = getBamBitmapBase(track, bamOff);
+function checkSectorFree(data, bamOff, track, sector, ctx) {
+  ctx = ctx || getCurrentCtx();
+  if (ctx.format.isSectorFree) return ctx.format.isSectorFree(data, bamOff, track, sector);
+  var base = getBamBitmapBase(track, bamOff, ctx);
   return (data[base + Math.floor(sector / 8)] & (1 << (sector % 8))) !== 0;
 }
 
 /** @param {Uint8Array} data @param {number} track @param {number} sector @param {number} bamOff */
-function bamMarkSectorUsed(data, track, sector, bamOff) {
-  var base = getBamBitmapBase(track, bamOff);
-  data[base + (sector >> 3)] &= ~currentFormat.bamBitMask(sector);
-  bamRecalcFree(data, track, bamOff);
+function bamMarkSectorUsed(data, track, sector, bamOff, ctx) {
+  ctx = ctx || getCurrentCtx();
+  var base = getBamBitmapBase(track, bamOff, ctx);
+  data[base + (sector >> 3)] &= ~ctx.format.bamBitMask(sector);
+  bamRecalcFree(data, track, bamOff, ctx);
 }
 
 /** @param {Uint8Array} data @param {number} track @param {number} sector @param {number} bamOff */
-function bamMarkSectorFree(data, track, sector, bamOff) {
-  var base = getBamBitmapBase(track, bamOff);
-  data[base + (sector >> 3)] |= currentFormat.bamBitMask(sector);
-  bamRecalcFree(data, track, bamOff);
+function bamMarkSectorFree(data, track, sector, bamOff, ctx) {
+  ctx = ctx || getCurrentCtx();
+  var base = getBamBitmapBase(track, bamOff, ctx);
+  data[base + (sector >> 3)] |= ctx.format.bamBitMask(sector);
+  bamRecalcFree(data, track, bamOff, ctx);
 }
 
 /** @param {Uint8Array} data @param {number} track @param {number} bamOff */
-function bamRecalcFree(data, track, bamOff) {
-  var spt = currentFormat.sectorsPerTrack(track);
+function bamRecalcFree(data, track, bamOff, ctx) {
+  ctx = ctx || getCurrentCtx();
+  var fmt = ctx.format;
+  var partition = ctx.partition;
+  var spt = fmt.sectorsPerTrack(track);
   var numBytes = Math.ceil(spt / 8);
-  var base = getBamBitmapBase(track, bamOff);
+  var base = getBamBitmapBase(track, bamOff, ctx);
   var free = 0;
   for (var i = 0; i < numBytes; i++) {
     var bval = data[base + i];
@@ -1351,11 +1361,11 @@ function bamRecalcFree(data, track, bamOff) {
     }
   }
   // Write free count
-  if (currentPartition && !currentPartition.dnpDir) {
-    var relTrack = track - currentPartition.startTrack + 1;
-    data[getPartitionBamEntry(bamOff, relTrack)] = free;
+  if (partition && !partition.dnpDir) {
+    var relTrack = track - partition.startTrack + 1;
+    data[getPartitionBamEntry(bamOff, relTrack, ctx)] = free;
   } else {
-    currentFormat.writeTrackFree(data, bamOff, track, free);
+    fmt.writeTrackFree(data, bamOff, track, free);
   }
 }
 
