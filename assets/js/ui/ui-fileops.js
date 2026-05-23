@@ -588,6 +588,20 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     return it.kind === 'cfs-dir-tree' || it.kind === 'cbm-dir-tree';
   });
   if (cbmTreeItems.length > 0) {
+    // Pre-check: sum sectors needed across all tree items + count free.
+    var cbmPreCtx = getCurrentCtx();
+    var cbmNeeded = 0;
+    for (var cni = 0; cni < cbmTreeItems.length; cni++) {
+      cbmNeeded += cbmEstimateTreeSectors(cbmTreeItems[cni].tree, cbmPreCtx.format);
+    }
+    var cbmFree = cbmCountFreeSectors(cbmPreCtx);
+    if (cbmNeeded > cbmFree) {
+      showModal('Paste — not enough space', [
+        'Pasting needs at least ' + cbmNeeded + ' free sectors but the destination has ' + cbmFree + '.',
+        'Free up ' + (cbmNeeded - cbmFree) + ' more sector(s) (or pick a bigger destination) and try again.',
+      ]);
+      return;
+    }
     pushUndo();
     var cbmTreePasted = 0, cbmTreeFiles = 0, cbmTreeDirs = 0;
     var cbmTreeSkippedDirs = [];

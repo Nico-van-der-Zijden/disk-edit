@@ -2329,6 +2329,67 @@ function _cbmCreateDnpSubdir(diskCtx, name) {
   };
 }
 
+// Estimate how many CBM-DOS sectors are needed at the destination to
+// write `tree`. Used by the paste pre-check so the UI can refuse
+// before any write if the destination doesn't have room. Conservative
+// upper bound:
+//   * data sectors per file: ceil(size / 254)
+//   * 1 extra sector per GEOS file (info block)
+//   * 2 sectors per subdir (header + first dir sector) for
+//     subdirLinked formats; non-linked formats can't host nested
+//     subdirs from this path so they count zero (the paster reports
+//     them in skippedDirs instead)
+//   * +1 spare per dir node for chain growth headroom (each dir
+//     sector holds 8 entries; safe margin for the parent + new dir)
+function cbmEstimateTreeSectors(tree, fmt) {
+  if (!tree) return 0;
+  var subdirLinked = fmt && fmt.subdirLinked;
+  var total = 0;
+  function visit(node) {
+    for (var i = 0; i < node.files.length; i++) {
+      var f = node.files[i];
+      if (f.vlirRecords) continue; // skipped at write time
+      var size = f.size || (f.payload ? f.payload.length : 0);
+      total += Math.max(1, Math.ceil(size / 254));
+      if (f.geosInfoBlock) total += 1;
+    }
+    if (subdirLinked && node.subdirs) {
+      for (var s = 0; s < node.subdirs.length; s++) {
+        total += 2; // header + first dir sector for the new subdir
+        total += 1; // parent dir-chain growth margin
+        visit(node.subdirs[s]);
+      }
+    }
+  }
+  visit(tree);
+  return total;
+}
+
+// Sum free sectors in the current CBM-DOS partition (per the BAM).
+// For the root or a DNP subdir, scans all bitmap tracks. For a D81
+// sub-partition, scans the partition's track range only.
+function cbmCountFreeSectors(diskCtx) {
+  if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return 0;
+  var data = new Uint8Array(diskCtx.buffer);
+  var fmt = diskCtx.format;
+  var partition = diskCtx.partition;
+  var dctx = getDirContext(diskCtx);
+  var bamOff = dctx.bamOff;
+  if (!fmt.readTrackFree) return 0;
+  var startTrack = 1, endTrack = diskCtx.tracks || 1;
+  if (partition && !partition.dnpDir && partition.startTrack) {
+    // D81 CBM partition: tracks partition.startTrack..end
+    startTrack = partition.startTrack;
+    var numPartTracks = Math.floor(partition.partSize / fmt.partitionSpt);
+    endTrack = partition.startTrack + numPartTracks - 1;
+  }
+  var total = 0;
+  for (var t = startTrack; t <= endTrack; t++) {
+    total += fmt.readTrackFree(data, bamOff, t) | 0;
+  }
+  return total;
+}
+
 // Paste a generic dir tree into a CBM-DOS partition. opts.onConflict
 // behaves like cfsPasteDirTree: 'overwrite' removes the existing file
 // before writing, 'rename' would auto-suffix (deferred for now since

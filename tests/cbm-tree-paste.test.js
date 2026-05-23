@@ -274,6 +274,35 @@ describe('cbmCollectDirTree (task #11 — CBM-DOS reader)', () => {
     assert.strictEqual(untyped.typeSuffix, 'PRG'); // safe default
   });
 
+  it('cbmEstimateTreeSectors + cbmCountFreeSectors gate the pre-check', () => {
+    function nbLocal(s) {
+      var out = new Uint8Array(16);
+      for (var i = 0; i < 16; i++) out[i] = i < s.length ? s.charCodeAt(i) : 0xA0;
+      return out;
+    }
+    var buf = createEmptyDisk('dnp', 81);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.dnp;
+    global.currentTracks = 81;
+    global.currentPartition = null;
+    var ctx = getCurrentCtx();
+    var fresh = cbmCountFreeSectors(ctx);
+    assert.ok(fresh > 100, 'fresh DNP has plenty of free sectors (got ' + fresh + ')');
+    var tinyTree = {
+      nameBytes: nbLocal('TINY'),
+      files: [
+        { nameBytes: nbLocal('A'), cbmTypeIdx: 2, payload: new Uint8Array(100), size: 100 },
+        { nameBytes: nbLocal('B'), cbmTypeIdx: 1, payload: new Uint8Array(500), size: 500 },
+      ],
+      subdirs: [{ nameBytes: nbLocal('S'), files: [], subdirs: [], skippedLnks: [] }],
+      skippedLnks: [],
+    };
+    var est = cbmEstimateTreeSectors(tinyTree, DISK_FORMATS.dnp);
+    // ceil(100/254)=1 + ceil(500/254)=2 + subdir 2 + dir-margin 1 = 6 at minimum
+    assert.ok(est >= 6, 'tree estimate at least 6 sectors (got ' + est + ')');
+    assert.ok(fresh > est, 'fresh DNP can hold the tiny tree');
+  });
+
   it('captures GEOS metadata when a GEOS file is present', () => {
     // Build a fresh GEOS disk + write a sequential GEOS file via the
     // writer (it sets up the info block + the geosBytes correctly).
