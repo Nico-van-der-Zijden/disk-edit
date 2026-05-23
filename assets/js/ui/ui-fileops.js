@@ -529,6 +529,24 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
 
   for (var pi = 0; pi < total; pi++) {
     var item = clipboard[pi];
+    // Tree clipboard items only paste into CFS partitions for now —
+    // pasting a directory tree into a CBM-DOS disk needs the upcoming
+    // cross-family writer (the DiskCtx refactor groundwork lives in
+    // cbm-editor.js but the writer / translation isn't built yet).
+    // Skip with a clear message instead of crashing in writeFileToDisk.
+    if (item.kind === 'cfs-dir-tree') {
+      var treeName = '';
+      if (item.nameBytes) {
+        for (var tnb = 0; tnb < 16; tnb++) {
+          var tnbCh = item.nameBytes[tnb];
+          if (tnbCh === 0xA0 || tnbCh === 0x00) break;
+          if (tnbCh >= 0xC1 && tnbCh <= 0xDA) treeName += String.fromCharCode(tnbCh - 0x80);
+          else if (tnbCh >= 0x20 && tnbCh <= 0x7E) treeName += String.fromCharCode(tnbCh);
+        }
+      }
+      skipped.push({ name: treeName || '(directory)', reason: 'Directory tree paste is not yet supported on CBM-DOS disks' });
+      continue;
+    }
     var fileName = petsciiToReadable(readPetsciiString(item.nameBytes, 0, 16)).trim() || '?';
 
     await progress.update(pi, total, fileName);
