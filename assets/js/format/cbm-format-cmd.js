@@ -743,8 +743,9 @@ function getTrackOffsets(format, maxTracks) {
 }
 
 /** @param {number} track @param {number} sector @returns {number} Byte offset or -1 */
-function sectorOffset(track, sector) {
-  const fmt = currentFormat;
+function sectorOffset(track, sector, ctx) {
+  ctx = ctx || getCurrentCtx();
+  const fmt = ctx.format;
   // Formats with lbaAddressing:true (D1M/D2M/D4M) treat directory entries
   // and file-chain bytes as LBA-encoded — sector_idx = (T-1) × 256 + S,
   // byte = idx × 256. S ranges 0..255 regardless of physical SPT. For
@@ -755,7 +756,7 @@ function sectorOffset(track, sector) {
     if (track < 1 || sector < 0 || sector > 255) return -1;
     return ((track - 1) * 256 + sector) * 256;
   }
-  const maxTrack = currentTracks || 40;
+  const maxTrack = ctx.tracks || 40;
   if (track < 1 || track > maxTrack) return -1;
   if (sector < 0 || sector >= fmt.sectorsPerTrack(track)) return -1;
   const offsets = getTrackOffsets(fmt, maxTrack);

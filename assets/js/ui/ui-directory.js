@@ -31,28 +31,31 @@ function parseCurrentDir(buffer) {
 // ── Partition-aware directory helpers ──────────────────────────────────
 // Returns { dirTrack, dirSector, dirTrackNum, bamOff, maxDirSectors }
 // for the current context (root or partition)
-function getDirContext() {
-  if (currentPartition) {
-    if (currentPartition.dnpDir) {
+function getDirContext(diskCtx) {
+  diskCtx = diskCtx || getCurrentCtx();
+  var partition = diskCtx.partition;
+  var fmt = diskCtx.format;
+  if (partition) {
+    if (partition.dnpDir) {
       return {
-        dirTrack: currentPartition.dnpDirT, dirSector: currentPartition.dnpDirS,
-        dirTrackNum: currentPartition.dnpDirT,
-        bamOff: sectorOffset(currentFormat.bamTrack, currentFormat.bamSector),
+        dirTrack: partition.dnpDirT, dirSector: partition.dnpDirS,
+        dirTrackNum: partition.dnpDirT,
+        bamOff: sectorOffset(fmt.bamTrack, fmt.bamSector, diskCtx),
         maxDirSectors: 222 // DNP can expand directory freely
       };
     }
-    var st = currentPartition.startTrack;
+    var st = partition.startTrack;
     return {
       dirTrack: st, dirSector: 3, dirTrackNum: st,
-      bamOff: sectorOffset(st, 1),
+      bamOff: sectorOffset(st, 1, diskCtx),
       maxDirSectors: 37
     };
   }
   return {
-    dirTrack: currentFormat.dirTrack, dirSector: currentFormat.dirSector,
-    dirTrackNum: currentFormat.dirTrack,
-    bamOff: sectorOffset(currentFormat.bamTrack, currentFormat.bamSector),
-    maxDirSectors: currentFormat.maxDirSectors
+    dirTrack: fmt.dirTrack, dirSector: fmt.dirSector,
+    dirTrackNum: fmt.dirTrack,
+    bamOff: sectorOffset(fmt.bamTrack, fmt.bamSector, diskCtx),
+    maxDirSectors: fmt.maxDirSectors
   };
 }
 
