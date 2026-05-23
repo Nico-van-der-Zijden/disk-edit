@@ -632,13 +632,15 @@ importFileInput.addEventListener('change', () => {
 // nameBytes = 16-byte Uint8Array of PETSCII filename (already padded with $A0)
 // Returns true on success, false on failure (with rollback).
 // geosData is optional: { geosBytes: Uint8Array(9), geosInfoBlock: Uint8Array(256)|null }
-function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent) {
+function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent, diskCtx) {
+  diskCtx = diskCtx || getCurrentCtx();
   if (!silent) pushUndo();
-  var snapshot = currentBuffer.slice(0);
-  var data = new Uint8Array(currentBuffer);
+  var buffer = diskCtx.buffer;
+  var snapshot = buffer.slice(0);
+  var data = new Uint8Array(buffer);
 
   // Build true allocation map (don't trust BAM)
-  var allocated = buildTrueAllocationMap(currentBuffer);
+  var allocated = buildTrueAllocationMap(buffer, diskCtx);
 
   // Calculate required sectors for file data
   var dataLen = fileData.length;
@@ -650,7 +652,7 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent) {
   if (needsInfoBlock) numSectors++;
 
   // Allocate sectors using real drive algorithm
-  var sectorList = allocateSectors(allocated, numSectors);
+  var sectorList = allocateSectors(allocated, numSectors, diskCtx);
   if (sectorList.length < numSectors) {
     if (!silent) showModal('Write Error', ['Not enough free sectors. Need ' + numSectors + ', have ' + sectorList.length + '.']);
     return false;
@@ -658,7 +660,7 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent) {
 
   // Reserve a directory entry before writing any data (fail early)
   // Pass allocated map so linked subdir expansion doesn't reuse file sectors
-  var entryOff = findFreeDirEntry(currentBuffer, allocated);
+  var entryOff = findFreeDirEntry(buffer, allocated, diskCtx);
   if (entryOff < 0) {
     if (!silent) showModal('Write Error', ['No free directory entry available.']);
     return false;
@@ -669,7 +671,7 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent) {
   var dataSectorStart = 0;
   if (needsInfoBlock) {
     infoSec = sectorList[0];
-    var infoOff = sectorOffset(infoSec.track, infoSec.sector);
+    var infoOff = sectorOffset(infoSec.track, infoSec.sector, diskCtx);
     for (var ib = 0; ib < 256; ib++) data[infoOff + ib] = geosData.geosInfoBlock[ib];
     // Info block bytes 0-1 should be 00 FF (standard GEOS info block marker)
     data[infoOff] = 0x00;
@@ -682,7 +684,7 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent) {
   var dataPos = 0;
   for (var si = 0; si < fileSectors.length; si++) {
     var sec = fileSectors[si];
-    var soff = sectorOffset(sec.track, sec.sector);
+    var soff = sectorOffset(sec.track, sec.sector, diskCtx);
 
     if (si < fileSectors.length - 1) {
       var nextSec = fileSectors[si + 1];
@@ -725,22 +727,31 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent) {
   data[entryOff + 31] = (sectorList.length >> 8) & 0xFF;
 
   // Update BAM for all sectors (file data + info block)
-  var ctx = getDirContext();
-  var bamOff = ctx.bamOff;
+  var dctx = getDirContext(diskCtx);
+  var bamOff = dctx.bamOff;
   for (var bi = 0; bi < sectorList.length; bi++) {
-    bamMarkSectorUsed(data, sectorList[bi].track, sectorList[bi].sector, bamOff);
+    bamMarkSectorUsed(data, sectorList[bi].track, sectorList[bi].sector, bamOff, diskCtx);
+  }
+
+  // Rollback helper: byte-restore from snapshot so we don't replace the
+  // buffer object (callers may hold references). Only matters when the
+  // caller passed an explicit diskCtx; the legacy fallback path reassigns
+  // currentBuffer below to preserve old behavior for un-ported callers.
+  function rollback() {
+    new Uint8Array(buffer).set(new Uint8Array(snapshot));
+    if (diskCtx.buffer === currentBuffer) currentBuffer = snapshot;
   }
 
   // Verify the write by reading back the file data
-  var verify = readFileData(currentBuffer, entryOff);
+  var verify = readFileData(buffer, entryOff, diskCtx);
   if (verify.error || verify.data.length !== fileData.length) {
-    currentBuffer = snapshot;
+    rollback();
     if (!silent) showModal('Write Error', ['Verification failed: ' + (verify.error || 'size mismatch')]);
     return false;
   }
   for (var vi = 0; vi < fileData.length; vi++) {
     if (verify.data[vi] !== fileData[vi]) {
-      currentBuffer = snapshot;
+      rollback();
       if (!silent) showModal('Write Error', ['Verification failed: data mismatch at byte ' + vi + '.']);
       return false;
     }
@@ -1129,12 +1140,14 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock,
 
 // Find a free directory entry (typeByte === 0x00 with all entry bytes zeroed)
 // Also allocates a new directory sector if needed (like insertFileEntry but without writing an entry)
-function findFreeDirEntry(buffer, preAllocated) {
+function findFreeDirEntry(buffer, preAllocated, diskCtx) {
+  diskCtx = diskCtx || getCurrentCtx();
   var data = new Uint8Array(buffer);
-  var fmt = currentFormat;
-  var ctx = getDirContext();
-  var bamOff = ctx.bamOff;
-  var t = ctx.dirTrack, s = ctx.dirSector;
+  var fmt = diskCtx.format;
+  var partition = diskCtx.partition;
+  var dctx = getDirContext(diskCtx);
+  var bamOff = dctx.bamOff;
+  var t = dctx.dirTrack, s = dctx.dirSector;
   var visited = {};
   var lastOff = -1;
 
@@ -1142,7 +1155,7 @@ function findFreeDirEntry(buffer, preAllocated) {
     var key = t + ':' + s;
     if (visited[key]) break;
     visited[key] = true;
-    var off = sectorOffset(t, s);
+    var off = sectorOffset(t, s, diskCtx);
     if (off < 0) break;
     lastOff = off;
 
@@ -1161,17 +1174,17 @@ function findFreeDirEntry(buffer, preAllocated) {
   // No empty slot — allocate new directory sector
   var dirTrk, newSector;
 
-  if (fmt.subdirLinked && currentPartition && currentPartition.dnpDir) {
+  if (fmt.subdirLinked && partition && partition.dnpDir) {
     // Linked subdirs: directory can span any track, use allocateSectors
-    var allocMap = preAllocated || buildTrueAllocationMap(buffer);
-    var secList = allocateSectors(allocMap, 1);
+    var allocMap = preAllocated || buildTrueAllocationMap(buffer, diskCtx);
+    var secList = allocateSectors(allocMap, 1, diskCtx);
     if (secList.length === 0) return -1;
     dirTrk = secList[0].track;
     newSector = secList[0].sector;
   } else {
     // Standard: allocate on the directory track only
-    dirTrk = ctx.dirTrackNum;
-    var spt = sectorsPerTrack(dirTrk);
+    dirTrk = dctx.dirTrackNum;
+    var spt = sectorsPerTrack(dirTrk, diskCtx);
     var protectedSecs = fmt.getProtectedSectors(dirTrk);
     newSector = -1;
     for (var cs = 1; cs < spt; cs++) {
@@ -1188,13 +1201,13 @@ function findFreeDirEntry(buffer, preAllocated) {
     data[lastOff + 1] = newSector;
   }
 
-  var newOff = sectorOffset(dirTrk, newSector);
+  var newOff = sectorOffset(dirTrk, newSector, diskCtx);
   data[newOff] = 0x00;
   data[newOff + 1] = 0xFF;
   for (var zi = 2; zi < 256; zi++) data[newOff + zi] = 0x00;
 
   // Mark sector as used in BAM
-  bamMarkSectorUsed(data, dirTrk, newSector, bamOff);
+  bamMarkSectorUsed(data, dirTrk, newSector, bamOff, diskCtx);
 
   return newOff;
 }

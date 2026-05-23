@@ -1377,11 +1377,12 @@ function totalSectors(format, numTracks) {
 
 
 /** @param {ArrayBuffer} buffer @param {number} entryOff @returns {FileReadResult} */
-function readFileData(buffer, entryOff) {
+function readFileData(buffer, entryOff, ctx) {
+  ctx = ctx || getCurrentCtx();
   var disk = new Uint8Array(buffer);
 
   // T64: read directly from stored data offset, prepend load address
-  if (currentFormat === DISK_FORMATS.t64) {
+  if (ctx.format === DISK_FORMATS.t64) {
     var info = parsedT64Entries && parsedT64Entries[entryOff];
     if (!info) return { data: new Uint8Array(0), error: 'T64 entry not found' };
     var size = info.t64EndAddr - info.t64StartAddr;
@@ -1396,7 +1397,7 @@ function readFileData(buffer, entryOff) {
   }
 
   // TAP: return pre-decoded data stored during parsing
-  if (currentFormat === DISK_FORMATS.tap) {
+  if (ctx.format === DISK_FORMATS.tap) {
     var tapEntry = parsedTAPEntries && parsedTAPEntries[entryOff];
     if (!tapEntry) return { data: new Uint8Array(0), error: 'TAP entry not found' };
     if (!tapEntry.fileData) return { data: new Uint8Array(0), error: 'TAP data not decoded (turbo loader?)' };
@@ -1410,13 +1411,13 @@ function readFileData(buffer, entryOff) {
   var bytes = [];
   var visited = {};
   while (t !== 0) {
-    if (t < 1 || t > currentTracks) return { data: new Uint8Array(bytes), error: 'Illegal track ' + t };
-    if (s < 0 || s >= currentFormat.sectorsPerTrack(t)) return { data: new Uint8Array(bytes), error: 'Illegal sector ' + s + ' on track ' + t };
+    if (t < 1 || t > ctx.tracks) return { data: new Uint8Array(bytes), error: 'Illegal track ' + t };
+    if (s < 0 || s >= ctx.format.sectorsPerTrack(t)) return { data: new Uint8Array(bytes), error: 'Illegal sector ' + s + ' on track ' + t };
     var key = t + ':' + s;
     if (visited[key]) return { data: new Uint8Array(bytes), error: 'Circular reference at T:' + t + ' S:' + s };
     visited[key] = true;
 
-    var off = sectorOffset(t, s);
+    var off = sectorOffset(t, s, ctx);
     if (off < 0) return { data: new Uint8Array(bytes), error: 'Invalid sector offset' };
 
     var nextT = disk[off];
