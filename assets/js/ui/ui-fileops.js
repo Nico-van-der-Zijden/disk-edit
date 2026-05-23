@@ -425,9 +425,13 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     var cPart = hddPartitions && hddPartitions[cfsPartitionIdx];
     if (!cPart) return;
     // Dir-tree clipboard: route through the recursive paste helper.
-    // Pre-check destination free space, prompt on top-level conflict,
-    // then call cfsPasteDirTree. Multiple tree items processed in order.
-    var treeItems = clipboard.filter(function(it) { return it.kind === 'cfs-dir-tree'; });
+    // Accepts both 'cfs-dir-tree' (CFS source) and 'cbm-dir-tree'
+    // (CBM-DOS source) — cfsPasteDirTree's cross-family translation
+    // handles the type-field difference. Pre-check destination free
+    // space, prompt on top-level conflict, then call cfsPasteDirTree.
+    var treeItems = clipboard.filter(function(it) {
+      return it.kind === 'cfs-dir-tree' || it.kind === 'cbm-dir-tree';
+    });
     if (treeItems.length > 0) {
       // Pre-check: sum sectors needed across all tree items + count free.
       var needed = 0;
@@ -548,10 +552,13 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
   if (!currentBuffer || !canInsertFile()) return;
 
   // Check if any GEOS files in clipboard and disk is not GEOS. Tree
-  // entries (kind:'cfs-dir-tree') have no geosInfoBlock field so they
-  // mustn't trigger this prompt; use loose != to treat undefined the
-  // same as null, and exclude tree entries explicitly.
-  var hasGeos = clipboard.some(function(c) { return c.kind !== 'cfs-dir-tree' && c.geosInfoBlock != null; });
+  // entries (kind:'cfs-dir-tree' / 'cbm-dir-tree') have no top-level
+  // geosInfoBlock field; the per-file GEOS data inside the tree is
+  // handled by cbmPasteDirTree per-file. Exclude tree kinds and use a
+  // loose != so undefined doesn't trigger the prompt.
+  var hasGeos = clipboard.some(function(c) {
+    return c.kind !== 'cfs-dir-tree' && c.kind !== 'cbm-dir-tree' && c.geosInfoBlock != null;
+  });
   if (hasGeos && !hasGeosSignature(currentBuffer)) {
     var choice = await showChoiceModal(
       'GEOS File',
@@ -570,31 +577,99 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
   }
 
   var total = clipboard.length;
-  var progress = showProgressModal('Pasting Files');
 
+  // Tree clipboard items route through cbmPasteDirTree. Symmetric with
+  // the CFS branch above — accepts both 'cfs-dir-tree' (CFS source)
+  // and 'cbm-dir-tree' (CBM-DOS source); cbmPasteDirTree's cross-family
+  // type translation handles the field-shape difference. Trees are
+  // processed BEFORE the regular file-paste loop so the loop only ever
+  // sees flat file entries.
+  var cbmTreeItems = clipboard.filter(function(it) {
+    return it.kind === 'cfs-dir-tree' || it.kind === 'cbm-dir-tree';
+  });
+  if (cbmTreeItems.length > 0) {
+    pushUndo();
+    var cbmTreePasted = 0, cbmTreeFiles = 0, cbmTreeDirs = 0;
+    var cbmTreeSkippedDirs = [];
+    var cbmTreeSkippedLnks = [];
+    for (var ctI = 0; ctI < cbmTreeItems.length; ctI++) {
+      var titem = cbmTreeItems[ctI];
+      // Compute display name from the tree's top-level nameBytes.
+      var dispName = '';
+      if (titem.nameBytes) {
+        for (var dnI = 0; dnI < 16; dnI++) {
+          var dnB = titem.nameBytes[dnI];
+          if (dnB === 0xA0 || dnB === 0x00) break;
+          if (dnB >= 0xC1 && dnB <= 0xDA) dispName += String.fromCharCode(dnB - 0x80);
+          else if (dnB >= 0x20 && dnB <= 0x7E) dispName += String.fromCharCode(dnB);
+        }
+      }
+      // Conflict check at the destination root level
+      var cbmCtx = getCurrentCtx();
+      var existing = _cbmFindDirEntryByNameBytes(cbmCtx, titem.nameBytes);
+      var mode = 'cancel';
+      if (existing >= 0) {
+        var cbmChoice = await showChoiceModal(
+          'Directory exists',
+          'The destination already has an entry named "' + dispName.trim() + '". What would you like to do?',
+          [
+            { label: 'Cancel', value: 'cancel', secondary: true },
+            { label: 'Overwrite', value: 'overwrite' },
+          ]
+        );
+        if (cbmChoice === 'cancel' || cbmChoice == null) {
+          if (typeof popUndo === 'function') popUndo();
+          return;
+        }
+        mode = cbmChoice;
+      }
+      var pres = cbmPasteDirTree(cbmCtx, titem.tree, { onConflict: mode });
+      if (!pres.ok) {
+        showModal('Paste failed', [pres.error || 'Unknown error.']);
+        if (typeof popUndo === 'function') popUndo();
+        return;
+      }
+      cbmTreePasted++;
+      cbmTreeFiles += pres.copiedFiles;
+      cbmTreeDirs += pres.copiedDirs;
+      if (pres.skippedDirs) cbmTreeSkippedDirs = cbmTreeSkippedDirs.concat(pres.skippedDirs);
+      if (pres.skippedLnks) cbmTreeSkippedLnks = cbmTreeSkippedLnks.concat(pres.skippedLnks);
+    }
+    // Re-render after tree paste
+    renderDisk(parseCurrentDir(currentBuffer));
+    updateMenuState();
+    // If clipboard had ONLY trees, summarise + return. Otherwise the
+    // remaining (file) items continue through the normal paste loop.
+    var nonTreeRemaining = clipboard.length - cbmTreeItems.length;
+    if (nonTreeRemaining === 0) {
+      var cbmSummary = ['Pasted ' + cbmTreeDirs + ' director' + (cbmTreeDirs === 1 ? 'y' : 'ies') +
+        ' and ' + cbmTreeFiles + ' file' + (cbmTreeFiles === 1 ? '' : 's') + '.'];
+      if (cbmTreeSkippedDirs.length > 0) {
+        cbmSummary.push('');
+        cbmSummary.push(cbmTreeSkippedDirs.length + ' director' +
+          (cbmTreeSkippedDirs.length === 1 ? 'y' : 'ies') + ' not copied:');
+        for (var sdi = 0; sdi < cbmTreeSkippedDirs.length && sdi < 12; sdi++) cbmSummary.push('  ' + cbmTreeSkippedDirs[sdi]);
+        if (cbmTreeSkippedDirs.length > 12) cbmSummary.push('  … and ' + (cbmTreeSkippedDirs.length - 12) + ' more');
+      }
+      if (cbmTreeSkippedLnks.length > 0) {
+        cbmSummary.push('');
+        cbmSummary.push(cbmTreeSkippedLnks.length + ' link(s) not copied:');
+        for (var sli = 0; sli < cbmTreeSkippedLnks.length && sli < 12; sli++) cbmSummary.push('  ' + cbmTreeSkippedLnks[sli]);
+        if (cbmTreeSkippedLnks.length > 12) cbmSummary.push('  … and ' + (cbmTreeSkippedLnks.length - 12) + ' more');
+      }
+      showModal('Paste complete', cbmSummary);
+      return;
+    }
+  }
+
+  var progress = showProgressModal('Pasting Files');
   var pasted = 0;
   var skipped = [];
 
   for (var pi = 0; pi < total; pi++) {
     var item = clipboard[pi];
-    // Tree clipboard items only paste into CFS partitions for now —
-    // pasting a directory tree into a CBM-DOS disk needs the upcoming
-    // cross-family writer (the DiskCtx refactor groundwork lives in
-    // cbm-editor.js but the writer / translation isn't built yet).
-    // Skip with a clear message instead of crashing in writeFileToDisk.
-    if (item.kind === 'cfs-dir-tree') {
-      var treeName = '';
-      if (item.nameBytes) {
-        for (var tnb = 0; tnb < 16; tnb++) {
-          var tnbCh = item.nameBytes[tnb];
-          if (tnbCh === 0xA0 || tnbCh === 0x00) break;
-          if (tnbCh >= 0xC1 && tnbCh <= 0xDA) treeName += String.fromCharCode(tnbCh - 0x80);
-          else if (tnbCh >= 0x20 && tnbCh <= 0x7E) treeName += String.fromCharCode(tnbCh);
-        }
-      }
-      skipped.push({ name: treeName || '(directory)', reason: 'Directory tree paste is not yet supported on CBM-DOS disks' });
-      continue;
-    }
+    // Skip tree-kind items — they were processed above.
+    if (item.kind === 'cfs-dir-tree' || item.kind === 'cbm-dir-tree') continue;
     var fileName = petsciiToReadable(readPetsciiString(item.nameBytes, 0, 16)).trim() || '?';
 
     await progress.update(pi, total, fileName);
