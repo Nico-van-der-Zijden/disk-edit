@@ -42,10 +42,11 @@ var GEOS_SIGNATURE = 'GEOS format V1.0';
 var GEOS_SIG_OFFSET = 0xAD; // offset within header sector
 
 /** @param {ArrayBuffer} buffer @returns {boolean} */
-function hasGeosSignature(buffer) {
+function hasGeosSignature(buffer, ctx) {
   if (!buffer) return false;
+  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
-  var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector);
+  var hdrOff = sectorOffset(ctx.format.headerTrack, ctx.format.headerSector, ctx);
   if (hdrOff < 0) return false;
   for (var i = 0; i < GEOS_SIGNATURE.length; i++) {
     if (data[hdrOff + GEOS_SIG_OFFSET + i] !== GEOS_SIGNATURE.charCodeAt(i)) return false;
@@ -54,9 +55,10 @@ function hasGeosSignature(buffer) {
 }
 
 /** @param {ArrayBuffer} buffer */
-function writeGeosSignature(buffer) {
+function writeGeosSignature(buffer, ctx) {
+  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
-  var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector);
+  var hdrOff = sectorOffset(ctx.format.headerTrack, ctx.format.headerSector, ctx);
   if (hdrOff < 0) return;
   for (var i = 0; i < GEOS_SIGNATURE.length; i++) {
     data[hdrOff + GEOS_SIG_OFFSET + i] = GEOS_SIGNATURE.charCodeAt(i);
@@ -70,10 +72,11 @@ function writeGeosSignature(buffer) {
 // (+$AB/$AC per GEOS.TXT rev 1.4 line 231). Returns { track, sector } or
 // null when no border sector is allocated (most common case — writeGeosSignature
 // zeroes these bytes on a fresh format).
-function readGeosBorderRef(buffer) {
+function readGeosBorderRef(buffer, ctx) {
   if (!buffer) return null;
+  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
-  var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector);
+  var hdrOff = sectorOffset(ctx.format.headerTrack, ctx.format.headerSector, ctx);
   if (hdrOff < 0) return null;
   var t = data[hdrOff + 0xAB];
   var s = data[hdrOff + 0xAC];
@@ -85,10 +88,11 @@ function readGeosBorderRef(buffer) {
 // the same 32-byte directory-entry layout as a normal dir block, but is
 // only a single sector (link bytes 00/FF) so it holds at most 8 entries.
 // Used by GEOS for cross-disk drag-and-drop staging.
-function readGeosBorderEntries(buffer) {
-  var ref = readGeosBorderRef(buffer);
+function readGeosBorderEntries(buffer, ctx) {
+  ctx = ctx || getCurrentCtx();
+  var ref = readGeosBorderRef(buffer, ctx);
   if (!ref) return [];
-  var off = sectorOffset(ref.track, ref.sector);
+  var off = sectorOffset(ref.track, ref.sector, ctx);
   if (off < 0) return [];
   var data = new Uint8Array(buffer);
   var entries = [];
@@ -111,10 +115,11 @@ function readGeosBorderEntries(buffer) {
 }
 
 // Check if a disk has GEOS formatting (border sector signature at T18/S0 offset 0xAD)
-function isGeosDisk(buffer) {
+function isGeosDisk(buffer, ctx) {
   if (!buffer) return false;
+  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
-  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  var bamOff = sectorOffset(ctx.format.bamTrack, ctx.format.bamSector, ctx);
   if (bamOff < 0) return false;
   // GEOS identification: bytes at BAM offset 0xAD-0xBC contain "GEOS format"
   // or the border sector has specific values. A simpler check: look for any
@@ -209,14 +214,16 @@ function decodeGeosString(data, offset, maxLen) {
 // The directory entry's T/S points to the VLIR index sector.
 // The index contains up to 127 record pointers (T/S pairs at bytes 2-255).
 // Each record is a standard sector chain. Returns array of Uint8Array (one per record).
-function readVLIRRecords(buffer, entryOff) {
+function readVLIRRecords(buffer, entryOff, ctx) {
+  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
-  var fmt = currentFormat;
+  var fmt = ctx.format;
+  var tracks = ctx.tracks;
   var indexT = data[entryOff + 3];
   var indexS = data[entryOff + 4];
   if (indexT === 0) return [];
 
-  var idxOff = sectorOffset(indexT, indexS);
+  var idxOff = sectorOffset(indexT, indexS, ctx);
   if (idxOff < 0) return [];
 
   var records = [];
@@ -237,12 +244,12 @@ function readVLIRRecords(buffer, entryOff) {
     var visited = {};
     var t = recT, s = recS;
     while (t !== 0) {
-      if (t < 1 || t > currentTracks) break;
+      if (t < 1 || t > tracks) break;
       if (s >= fmt.sectorsPerTrack(t)) break;
       var key = t + ':' + s;
       if (visited[key]) break;
       visited[key] = true;
-      var off = sectorOffset(t, s);
+      var off = sectorOffset(t, s, ctx);
       if (off < 0) break;
       var nextT = data[off], nextS = data[off + 1];
       if (nextT === 0) {
@@ -265,13 +272,15 @@ function readVLIRRecords(buffer, entryOff) {
 //   populated record    -> { data: Uint8Array }
 // Unlike readVLIRRecords (which is lossy), this preserves the end-vs-empty distinction
 // so a VLIR file can be copied and pasted without losing its index structure.
-function readVLIRRecordsForCopy(buffer, entryOff) {
+function readVLIRRecordsForCopy(buffer, entryOff, ctx) {
+  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
-  var fmt = currentFormat;
+  var fmt = ctx.format;
+  var tracks = ctx.tracks;
   var indexT = data[entryOff + 3];
   var indexS = data[entryOff + 4];
   if (indexT === 0) return [];
-  var idxOff = sectorOffset(indexT, indexS);
+  var idxOff = sectorOffset(indexT, indexS, ctx);
   if (idxOff < 0) return [];
 
   var records = [];
@@ -291,12 +300,12 @@ function readVLIRRecordsForCopy(buffer, entryOff) {
     var visited = {};
     var t = recT, s = recS;
     while (t !== 0) {
-      if (t < 1 || t > currentTracks) break;
+      if (t < 1 || t > tracks) break;
       if (s >= fmt.sectorsPerTrack(t)) break;
       var key = t + ':' + s;
       if (visited[key]) break;
       visited[key] = true;
-      var off = sectorOffset(t, s);
+      var off = sectorOffset(t, s, ctx);
       if (off < 0) break;
       var nextT = data[off], nextS = data[off + 1];
       if (nextT === 0) {
@@ -562,13 +571,14 @@ function resizeDnpImage(buffer, newTracks) {
 //
 // onInfoBlock(track, sector) — called once if the entry has a GEOS info block.
 // onRecordStart(track, sector, recordIdx) — called per VLIR record chain head.
-function forEachGeosAuxSector(data, entryOff, onInfoBlock, onRecordStart) {
+function forEachGeosAuxSector(data, entryOff, onInfoBlock, onRecordStart, ctx) {
+  ctx = ctx || getCurrentCtx();
   var typeIdx = data[entryOff + 2] & 0x07;
   if (data[entryOff + 0x18] === 0 || typeIdx === FILE_TYPE.REL) return;
   if (onInfoBlock) onInfoBlock(data[entryOff + 0x15], data[entryOff + 0x16]);
   if (data[entryOff + 0x17] !== 0x01) return;
   var startT = data[entryOff + 3], startS = data[entryOff + 4];
-  var idxOff = sectorOffset(startT, startS);
+  var idxOff = sectorOffset(startT, startS, ctx);
   if (idxOff < 0) return;
   for (var i = 0; i < 127; i++) {
     var recT = data[idxOff + 2 + i * 2];
@@ -636,9 +646,10 @@ function decompressGeosScrap(compressed) {
   return new Uint8Array(out);
 }
 
-function readGeosInfoBlock(buffer, track, sector) {
+function readGeosInfoBlock(buffer, track, sector, ctx) {
   if (track === 0) return null;
-  var off = sectorOffset(track, sector);
+  ctx = ctx || getCurrentCtx();
+  var off = sectorOffset(track, sector, ctx);
   if (off < 0) return null;
   var data = new Uint8Array(buffer);
 
