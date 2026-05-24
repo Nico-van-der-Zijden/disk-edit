@@ -63,6 +63,16 @@ describe('readPetsciiString', () => {
     var result = readPetsciiString(data, 0, 5);
     assert.strictEqual(result.length, 5);
   });
+
+  it('also stops at 0x00 padding (CFS / cfsfdisk convention)', () => {
+    // Without the $00 stop, "SUBDIR" + ten $00 bytes would render as
+    // "SUBDIR@@@@@@@@@@" because PETSCII $00 decodes to the '@' glyph.
+    var data = new Uint8Array(16);
+    'SUBDIR'.split('').forEach(function(c, i) { data[i] = c.charCodeAt(0); });
+    // bytes 6..15 already 0 from Uint8Array init
+    var result = readPetsciiString(data, 0, 16);
+    assert.strictEqual(petsciiToReadable(result), 'SUBDIR');
+  });
 });
 
 describe('escHtml', () => {

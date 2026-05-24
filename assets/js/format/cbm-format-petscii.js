@@ -98,7 +98,14 @@ function readPetsciiString(data, offset, len, stopAtPadding) {
   let contentLen = len;
   if (stopAtPadding !== false) {
     for (let i = 0; i < len; i++) {
-      if (data[offset + i] === 0xA0) { contentLen = i; break; }
+      // Stop on either $A0 (PETSCII hard-space / CBM-DOS name padding)
+      // or $00 (NUL / CFS name padding — also used by some cfsfdisk
+      // images and IDE64 partition tables). Without the $00 check, a
+      // CFS file name like "SUBDIR" + $00 * 10 would render as
+      // "SUBDIR@@@@@@@@@@" because PETSCII $00 decodes to the '@'
+      // glyph in the C64 character set.
+      var b = data[offset + i];
+      if (b === 0xA0 || b === 0x00) { contentLen = i; break; }
     }
   }
   let s = '';
