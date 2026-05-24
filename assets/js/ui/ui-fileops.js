@@ -596,11 +596,38 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     }
     var cbmFree = cbmCountFreeSectors(cbmPreCtx);
     if (cbmNeeded > cbmFree) {
-      showModal('Paste — not enough space', [
-        'Pasting needs at least ' + cbmNeeded + ' free sectors but the destination has ' + cbmFree + '.',
-        'Free up ' + (cbmNeeded - cbmFree) + ' more sector(s) (or pick a bigger destination) and try again.',
-      ]);
-      return;
+      // If we're inside a D81 sub-partition and there are free tracks
+      // immediately after it on the root disk, grow the partition to
+      // absorb them before refusing. The user explicitly opted into a
+      // tight-fit allocation at create time; this lets follow-up pastes
+      // reclaim the disk slack instead of forcing a delete/recreate.
+      var growReport = null;
+      if (cbmPreCtx.partition && cbmPreCtx.partition.startTrack &&
+          cbmPreCtx.format.supportsSubdirs && !cbmPreCtx.format.subdirLinked) {
+        var growRes = _cbmGrowD81Partition(cbmPreCtx, cbmNeeded - cbmFree);
+        if (growRes.ok) {
+          growReport = growRes;
+          // Update the local cmdc partition record + ctx so subsequent
+          // helpers (writeFileToDisk, allocateSectors, etc.) see the
+          // new partition size.
+          cbmPreCtx.partition.partSize = growRes.newPartSize;
+          if (typeof currentPartition !== 'undefined' && currentPartition) {
+            currentPartition.partSize = growRes.newPartSize;
+          }
+          cbmFree = cbmCountFreeSectors(cbmPreCtx);
+        }
+      }
+      if (cbmNeeded > cbmFree) {
+        var msg = [
+          'Pasting needs at least ' + cbmNeeded + ' free sectors but the destination has ' + cbmFree + '.',
+        ];
+        if (growReport) {
+          msg.push('Grew the partition by ' + growReport.addedTracks + ' track(s) (' + growReport.addedSectors + ' sectors) but still short.');
+        }
+        msg.push('Free up ' + (cbmNeeded - cbmFree) + ' more sector(s) (or pick a bigger destination) and try again.');
+        showModal('Paste — not enough space', msg);
+        return;
+      }
     }
     pushUndo();
     var cbmTreePasted = 0, cbmTreeFiles = 0, cbmTreeDirs = 0;

@@ -170,6 +170,70 @@ describe('cbmPasteDirTree (task #12 — MVP file-only writer)', () => {
     assert.ok(subs2.indexOf('LONGDIRNAMEX (2)') >= 0, 'truncated rename present: ' + JSON.stringify(subs2));
   });
 
+  it('_cbmGrowD81Partition extends a sub-partition into free root tracks', () => {
+    function nb(s) {
+      var out = new Uint8Array(16);
+      for (var i = 0; i < 16; i++) out[i] = i < s.length ? s.charCodeAt(i) : 0xA0;
+      return out;
+    }
+    var buf = createEmptyDisk('d81', 80);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d81;
+    global.currentTracks = 80;
+    global.currentPartition = null;
+    var rootCtx = getCurrentCtx();
+    // Create a 3-track sub-partition (the spec minimum)
+    var res = _cbmCreateD81Partition(rootCtx, 'GAMES', 40); // ~1 data track + 1 sys = 80 sectors, hits 3-track floor → 120
+    assert.strictEqual(res.ok, true);
+    var startTrack = res.partition.startTrack;
+    var origSize = res.partition.partSize;
+    assert.strictEqual(origSize, 120, '3-track partition = 120 sectors');
+
+    // Build a sub-partition ctx and try to grow it by 200 sectors (5 tracks)
+    var subCtx = Object.assign({}, rootCtx, {
+      partition: { startTrack: startTrack, partSize: origSize, name: 'GAMES' },
+    });
+    var grown = _cbmGrowD81Partition(subCtx, 200);
+    assert.strictEqual(grown.ok, true, 'grow ok: ' + JSON.stringify(grown));
+    assert.ok(grown.addedTracks >= 5, 'added at least 5 tracks (got ' + grown.addedTracks + ')');
+    assert.strictEqual(grown.newPartSize, origSize + grown.addedTracks * 40);
+
+    // Verify partSize byte in the parent dir entry was rewritten
+    var dirInfo = parseCurrentDir(buf);
+    var games = (dirInfo.entries || []).find(function(e) { return petsciiToReadable(e.name || '').trim() === 'GAMES'; });
+    var d = new Uint8Array(buf);
+    var partSizeOnDisk = d[games.entryOff + 30] | (d[games.entryOff + 31] << 8);
+    assert.strictEqual(partSizeOnDisk, grown.newPartSize, 'parent entry partSize matches grow output');
+  });
+
+  it('_cbmGrowD81Partition refuses when next track is occupied', () => {
+    function nb(s) {
+      var out = new Uint8Array(16);
+      for (var i = 0; i < 16; i++) out[i] = i < s.length ? s.charCodeAt(i) : 0xA0;
+      return out;
+    }
+    var buf = createEmptyDisk('d81', 80);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d81;
+    global.currentTracks = 80;
+    global.currentPartition = null;
+    var rootCtx = getCurrentCtx();
+    // Create two back-to-back 3-track sub-partitions
+    var a = _cbmCreateD81Partition(rootCtx, 'A', 40);
+    var b = _cbmCreateD81Partition(rootCtx, 'B', 40);
+    assert.strictEqual(a.ok, true);
+    assert.strictEqual(b.ok, true);
+    assert.strictEqual(b.partition.startTrack, a.partition.startTrack + 3, 'B is right after A');
+
+    // Try to grow A — should refuse because B occupies the next track
+    var subCtxA = Object.assign({}, rootCtx, {
+      partition: { startTrack: a.partition.startTrack, partSize: a.partition.partSize, name: 'A' },
+    });
+    var grown = _cbmGrowD81Partition(subCtxA, 40);
+    assert.strictEqual(grown.ok, false);
+    assert.ok(grown.error && grown.error.indexOf('no contiguous free tracks') >= 0);
+  });
+
   it('creates D81 CBM partitions for subdirs (file type $05)', () => {
     function nb(s) {
       var out = new Uint8Array(16);

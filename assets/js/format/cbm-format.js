@@ -2513,6 +2513,137 @@ function _cbmCreateD81Partition(diskCtx, name, desiredSectors) {
   };
 }
 
+// Grow an existing D81 sub-partition by extending it into free root
+// tracks immediately after its current end. Returns { ok, addedSectors,
+// newPartSize, error? }. Used by the paste pre-check so a subsequent
+// paste into a tight-fit partition reclaims adjacent free space rather
+// than refusing outright.
+//
+// diskCtx must point at the sub-partition itself (diskCtx.partition has
+// startTrack + partSize set). The function locates the parent dir entry
+// in the root, scans root BAM for free tracks beyond the partition end,
+// extends partSize, updates the partition's own BAM to mark the new
+// tracks free internally, marks them used in the root BAM, and rewrites
+// the partSize bytes (+30/+31) in the parent dir entry.
+//
+// Refuses when: not inside a sub-partition; the parent entry can't be
+// located; no contiguous free root tracks immediately after the
+// partition; or growth would push past partition track 80 (1581 BAM
+// can only address 80 tracks worth of bitmap).
+function _cbmGrowD81Partition(diskCtx, extraSectorsNeeded) {
+  if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return { ok: false, error: 'invalid disk context' };
+  if (!diskCtx.partition || !diskCtx.partition.startTrack) {
+    return { ok: false, error: 'not inside a D81 sub-partition' };
+  }
+  var fmt = diskCtx.format;
+  if (!fmt.supportsSubdirs || fmt.subdirLinked) {
+    return { ok: false, error: 'format does not host D81-style partitions' };
+  }
+  var pSpt = fmt.partitionSpt;
+  var data = new Uint8Array(diskCtx.buffer);
+  var startTrack = diskCtx.partition.startTrack;
+  var curPartSize = diskCtx.partition.partSize;
+  var curNumTracks = Math.floor(curPartSize / pSpt);
+  var partEndTrack = startTrack + curNumTracks - 1;
+
+  // Cap: a D81 sub-partition's BAM (2 sectors at startTrack/1 + /2)
+  // only covers 80 partition tracks. Refuse growth that would exceed
+  // that, even if root tracks are still free.
+  var maxPartTracks = 80;
+  var headroomTracks = maxPartTracks - curNumTracks;
+  if (headroomTracks <= 0) return { ok: false, error: 'partition is already at its 80-track limit' };
+
+  // Locate the parent dir entry in the root. We have to do this here
+  // (not pass it through) because diskCtx.partition doesn't carry an
+  // entryOff. Construct a root-view diskCtx for the dir walk.
+  var rootCtx = Object.assign({}, diskCtx, { partition: null });
+  var rootDir = getDirContext(rootCtx);
+  var entryOff = -1;
+  var t = rootDir.dirTrack, s = rootDir.dirSector;
+  var visited = {};
+  while (t !== 0 && entryOff < 0) {
+    var k = t + ':' + s;
+    if (visited[k]) break;
+    visited[k] = true;
+    var off = sectorOffset(t, s, rootCtx);
+    if (off < 0) break;
+    for (var i = 0; i < fmt.entriesPerSector; i++) {
+      var eo = off + i * fmt.entrySize;
+      var typeByte = data[eo + 2];
+      if ((typeByte & 0x80) === 0) continue;
+      if ((typeByte & 0x07) !== fmt.subdirType) continue;
+      if (data[eo + 3] === startTrack && data[eo + 4] === 0) { entryOff = eo; break; }
+    }
+    t = data[off + 0]; s = data[off + 1];
+  }
+  if (entryOff < 0) {
+    return { ok: false, error: 'parent dir entry for the partition not found in the root' };
+  }
+
+  // Scan root BAM for free tracks immediately after the partition end.
+  // Stops on the first occupied track — partitions are contiguous and
+  // we can't leapfrog a used track.
+  var rootBamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, rootCtx);
+  function rootBamBaseFor(track) {
+    if (track <= 40) return rootBamOff + 0x10 + (track - 1) * 6;
+    return rootBamOff + 256 + 0x10 + (track - 41) * 6;
+  }
+  function trackIsFreeInRoot(track) {
+    if (track === fmt.dirTrack) return false; // never claim the root dir track
+    if (track < 1 || track > diskCtx.tracks) return false;
+    var base = rootBamBaseFor(track);
+    var spt = fmt.sectorsPerTrack(track);
+    var freeBits = data[base];
+    return freeBits >= spt; // all sectors free
+  }
+
+  var addableTracks = 0;
+  var trackCursor = partEndTrack + 1;
+  var neededTracks = Math.max(1, Math.ceil(extraSectorsNeeded / pSpt));
+  // Limit growth by: per-paste need, BAM-coverage cap, and root layout.
+  var maxAddable = Math.min(neededTracks, headroomTracks);
+  while (addableTracks < maxAddable && trackIsFreeInRoot(trackCursor)) {
+    addableTracks++;
+    trackCursor++;
+  }
+  if (addableTracks <= 0) {
+    return { ok: false, error: 'no contiguous free tracks immediately after the partition' };
+  }
+
+  // 1) Mark the new tracks free in the partition's own BAM.
+  var bam1Off = sectorOffset(startTrack, 1, diskCtx);
+  var bam2Off = sectorOffset(startTrack, 2, diskCtx);
+  for (var n = 0; n < addableTracks; n++) {
+    // Partition-local track index (1-based): old data covered 1..curNumTracks,
+    // new tracks are curNumTracks + 1 .. curNumTracks + addableTracks.
+    var pt = curNumTracks + n + 1;
+    var base;
+    if (pt <= 40) base = bam1Off + 0x10 + (pt - 1) * 6;
+    else base = bam2Off + 0x10 + (pt - 41) * 6;
+    data[base] = pSpt;                          // free-count = full track
+    for (var bb = 0; bb < 5; bb++) data[base + 1 + bb] = 0xFF;  // all sector bits set
+  }
+
+  // 2) Mark the new root tracks as fully used in the root BAM.
+  for (var rt = partEndTrack + 1; rt <= partEndTrack + addableTracks; rt++) {
+    var rbase = rootBamBaseFor(rt);
+    data[rbase] = 0;
+    for (var rb = 0; rb < 5; rb++) data[rbase + 1 + rb] = 0x00;
+  }
+
+  // 3) Rewrite partSize in the parent dir entry.
+  var newPartSize = curPartSize + addableTracks * pSpt;
+  data[entryOff + 30] = newPartSize & 0xFF;
+  data[entryOff + 31] = (newPartSize >>> 8) & 0xFF;
+
+  return {
+    ok: true,
+    addedSectors: addableTracks * pSpt,
+    addedTracks: addableTracks,
+    newPartSize: newPartSize,
+  };
+}
+
 // Estimate how many CBM-DOS sectors are needed at the destination to
 // write `tree`. Used by the paste pre-check so the UI can refuse
 // before any write if the destination doesn't have room. Conservative

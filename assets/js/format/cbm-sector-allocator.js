@@ -67,6 +67,24 @@ function buildTrueAllocationMap(buffer, diskCtx) {
           continue;
         }
 
+        // D81-style CBM partition (file type $05 on a non-linked format).
+        // The partition occupies tracks ft .. ft + numTracks-1; mark every
+        // sector in that range so a later new-partition allocation can't
+        // overlap. Walking file chains alone wouldn't catch this — the
+        // partition's data sectors aren't on the parent's chain. partSize
+        // is stored at +30/+31 of the dir entry, in sector units.
+        if (!fmt.subdirLinked && fmt.supportsSubdirs && typeIdx === fmt.subdirType && (typeByte & 0x80)) {
+          var partSize = data[entOff + 30] | (data[entOff + 31] << 8);
+          if (partSize > 0 && fmt.partitionSpt > 0) {
+            var partNumTracks = Math.floor(partSize / fmt.partitionSpt);
+            for (var pt = ft; pt < ft + partNumTracks; pt++) {
+              var pspt = fmt.sectorsPerTrack(pt);
+              for (var ps = 0; ps < pspt; ps++) allocated[pt + ':' + ps] = true;
+            }
+          }
+          continue;
+        }
+
         // Follow all file sector chains (main + REL + GEOS)
         forEachFileSector(data, entOff, function(t, s) {
           allocated[t + ':' + s] = true;
