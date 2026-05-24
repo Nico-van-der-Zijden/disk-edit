@@ -291,6 +291,14 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.5', title: 'Directory copy/paste across all disk formats', items: [
+      'Copy a directory (or sub-partition) in any view and paste into any other. Works across .hdd ↔ DNP ↔ D81 ↔ DHD ↔ RAMLink ↔ D1M/D2M/D4M with cross-family type translation (PRG / SEQ / USR / REL round-trip; LNK and GEOS VLIR skipped with a warning at the end)',
+      'Conflict prompt offers Cancel / Rename / Overwrite. Rename auto-suffixes " (2)".." (99)" with name truncation to stay within 16 bytes. Overwrite merges into the existing dir, replacing same-name files. Pre-check refuses before any write if the destination doesn\'t have enough free sectors',
+      'D81 sub-partitions auto-create on paste and auto-grow into adjacent free root tracks when later pastes need more room — instead of refusing, the partition extends to absorb the free tracks immediately after it',
+      'New Disk Tools items for .hdd images: Rename Disk Label (edits the 16-byte boot-sector label, container header now shows it instead of the filename) and Restore Partition Table from Backup (copies the backup at boot $1C\'s LBA over the primary at LBA 1 — cfsfdisk\'s "u" command, for emergency recovery)',
+      'Heat-map fidelity: bitmap-companion sectors at partStart+1+4096k and the partition-end LBA are now classified as system instead of LOST. createEmptyHdd\'s bitmap matches cfsfdisk\'s byte-for-byte. CFS dir-name display follows the dir\'s own slot-0 self-reference (matches IDEDOS — visible on the ide.hdd CREATURES2 / C2 drift)',
+      'Resize Image refuses when invoked inside a CMD-container DNP partition (DHD / RAMLink / FD) with a clear modal explaining the workaround. Previously could silently truncate the tail on save because the container slot has a fixed allocation',
+    ]},
     { ver: '1.4.4', title: 'IDE64 .hdd — readable disk map + backup-LBA bitmap fix', items: [
       'Disk-map strip is laid out as flexbox now: MBR, partition table and partition-table backup get fixed-width labelled blocks (MBR / PT / PT⁺) instead of competing proportionally with multi-MiB partitions — on any disk size they\'re now visible and clickable',
       'Partitions and gaps still scale relative to each other by sector count, so a 4 MiB partition is still ~2× as wide as a 2 MiB one',
