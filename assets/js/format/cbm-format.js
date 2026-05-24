@@ -2361,6 +2361,158 @@ function _cbmCreateDnpSubdir(diskCtx, name) {
   };
 }
 
+// Create a D81-style CBM partition (file type $05) for formats with
+// supportsSubdirs && !subdirLinked. Allocates a contiguous run of
+// tracks (minimum 3 = 120 sectors), formats the run as a self-
+// contained sub-disk (header + 2 BAM sectors + first dir sector),
+// then writes a partition entry in the current root dir + marks the
+// allocated tracks as used in the root BAM. Returns
+// { ok, error?, partition } where `partition` is a {startTrack,
+// partSize, name} shape suitable for building a child diskCtx.
+//
+// `desiredSectors` is the number of free sectors the caller wants
+// inside the partition (after the system track). Rounded up to the
+// next multiple of partitionSpt; minimum is one data track (so the
+// final partition is 2 tracks = 80 sectors of which 40 are free
+// minus the 4 sys sectors).
+function _cbmCreateD81Partition(diskCtx, name, desiredSectors) {
+  if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return { ok: false, error: 'invalid disk context' };
+  if (!name) return { ok: false, error: 'empty name' };
+  var fmt = diskCtx.format;
+  if (!fmt.supportsSubdirs || fmt.subdirLinked) {
+    return { ok: false, error: 'format does not support D81-style CBM partitions' };
+  }
+  if (diskCtx.partition && diskCtx.partition.startTrack) {
+    // Already inside a sub-partition — 1581 firmware refuses further nesting.
+    return { ok: false, error: 'D81 sub-partitions cannot be nested' };
+  }
+  var data = new Uint8Array(diskCtx.buffer);
+  var pSpt = fmt.partitionSpt;
+
+  // Track budget. D81 spec minimum is 3 tracks (120 sectors) before
+  // 1581 firmware will treat it as a sub-directory. Compute from
+  // caller's desired free-sector count, +1 sys track. Always at least
+  // 3 tracks.
+  var dataTracks = Math.max(1, Math.ceil((desiredSectors || 1) / pSpt));
+  var numTracks = Math.max(3, dataTracks + 1); // +1 sys track, min 3 total
+  var partSectors = numTracks * pSpt;
+
+  // Find a contiguous free track run that doesn't include the dir
+  // track. Search via the live allocation map so the result respects
+  // file chains the BAM might not yet reflect.
+  var allocated = buildTrueAllocationMap(diskCtx.buffer, diskCtx);
+  var startTrack = -1;
+  for (var t = 1; t <= diskCtx.tracks - numTracks + 1; t++) {
+    var endTrack = t + numTracks - 1;
+    if (t <= fmt.dirTrack && endTrack >= fmt.dirTrack) continue;
+    var allFree = true;
+    for (var ct = t; ct <= endTrack; ct++) {
+      var spt = fmt.sectorsPerTrack(ct);
+      for (var cs = 0; cs < spt; cs++) {
+        if (allocated[ct + ':' + cs]) { allFree = false; break; }
+      }
+      if (!allFree) break;
+    }
+    if (allFree) { startTrack = t; break; }
+  }
+  if (startTrack < 0) {
+    return { ok: false, error: 'no contiguous free space for ' + numTracks + ' tracks' };
+  }
+
+  // Allocate the parent dir entry for the partition.
+  var entryOff = findFreeDirEntry(diskCtx.buffer, allocated, diskCtx);
+  if (entryOff < 0) return { ok: false, error: 'no free directory entry' };
+
+  // Write the parent dir entry: type = $80 | subdirType, T/S = startTrack/0.
+  data[entryOff + 2] = 0x80 | fmt.subdirType;
+  data[entryOff + 3] = startTrack;
+  data[entryOff + 4] = 0;
+  for (var ni = 0; ni < 16; ni++) {
+    if (ni < name.length) {
+      var ch = name.charCodeAt(ni);
+      data[entryOff + 5 + ni] = (ch >= 0x20 && ch <= 0x7E) ? ch : 0x20;
+    } else {
+      data[entryOff + 5 + ni] = 0xA0;
+    }
+  }
+  for (var ui = 21; ui < 30; ui++) data[entryOff + ui] = 0x00;
+  data[entryOff + 30] = partSectors & 0xFF;
+  data[entryOff + 31] = (partSectors >> 8) & 0xFF;
+
+  // Header sector at (startTrack, 0). Layout mirrors the D81 root.
+  var headerOff = sectorOffset(startTrack, 0, diskCtx);
+  for (var hz = 0; hz < 256; hz++) data[headerOff + hz] = 0x00;
+  data[headerOff + 0x00] = startTrack;
+  data[headerOff + 0x01] = 3;
+  data[headerOff + 0x02] = 0x44; // 'D'
+  data[headerOff + 0x03] = 0xBB;
+  for (var hni = 0; hni < 16; hni++) data[headerOff + 0x04 + hni] = data[entryOff + 5 + hni];
+  data[headerOff + 0x14] = 0xA0;
+  data[headerOff + 0x15] = 0xA0;
+  data[headerOff + 0x16] = 0x31; // ID '1'
+  data[headerOff + 0x17] = 0x41; // ID 'A'
+  data[headerOff + 0x18] = 0xA0;
+  data[headerOff + 0x19] = 0x33; // DOS type '3'
+  data[headerOff + 0x1A] = 0x44; // DOS type 'D'
+
+  // BAM sector 1 — covers tracks 1..40 of the partition (relative).
+  var bam1Off = sectorOffset(startTrack, 1, diskCtx);
+  for (var bz = 0; bz < 256; bz++) data[bam1Off + bz] = 0x00;
+  data[bam1Off + 0x00] = startTrack;
+  data[bam1Off + 0x01] = 2;
+  data[bam1Off + 0x02] = 0x44;
+  data[bam1Off + 0x03] = 0xBB;
+  data[bam1Off + 0x04] = 0x31;
+  data[bam1Off + 0x05] = 0x41;
+
+  // BAM sector 2 — covers tracks 41..80.
+  var bam2Off = sectorOffset(startTrack, 2, diskCtx);
+  for (var bz2 = 0; bz2 < 256; bz2++) data[bam2Off + bz2] = 0x00;
+  data[bam2Off + 0x00] = 0x00;
+  data[bam2Off + 0x01] = 0xFF;
+  data[bam2Off + 0x02] = 0x44;
+  data[bam2Off + 0x03] = 0xBB;
+  data[bam2Off + 0x04] = 0x31;
+  data[bam2Off + 0x05] = 0x41;
+
+  for (var pt = 1; pt <= numTracks; pt++) {
+    var base;
+    if (pt <= 40) base = bam1Off + 0x10 + (pt - 1) * 6;
+    else base = bam2Off + 0x10 + (pt - 41) * 6;
+    if (pt === 1) {
+      // System track: sectors 0..3 used (header + 2 BAM + first dir).
+      data[base] = pSpt - 4;
+      for (var bb = 0; bb < 5; bb++) data[base + 1 + bb] = 0xFF;
+      data[base + 1] &= ~0x0F; // clear bits for sectors 0..3
+    } else {
+      data[base] = pSpt;
+      for (var bb2 = 0; bb2 < 5; bb2++) data[base + 1 + bb2] = 0xFF;
+    }
+  }
+
+  // First dir sector at (startTrack, 3) — empty.
+  var dirOff = sectorOffset(startTrack, 3, diskCtx);
+  for (var di = 0; di < 256; di++) data[dirOff + di] = 0x00;
+  data[dirOff + 0] = 0x00;
+  data[dirOff + 1] = 0xFF;
+
+  // Mark all partition tracks as fully allocated in the ROOT BAM, so
+  // the root's free-block accounting reflects the new partition.
+  var rootBamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, diskCtx);
+  for (var rt = startTrack; rt < startTrack + numTracks; rt++) {
+    var rbase;
+    if (rt <= 40) rbase = rootBamOff + 0x10 + (rt - 1) * 6;
+    else rbase = rootBamOff + 256 + 0x10 + (rt - 41) * 6;
+    data[rbase] = 0;
+    for (var rb = 0; rb < 5; rb++) data[rbase + 1 + rb] = 0x00;
+  }
+
+  return {
+    ok: true,
+    partition: { startTrack: startTrack, partSize: partSectors, name: name },
+  };
+}
+
 // Estimate how many CBM-DOS sectors are needed at the destination to
 // write `tree`. Used by the paste pre-check so the UI can refuse
 // before any write if the destination doesn't have room. Conservative
@@ -2375,7 +2527,9 @@ function _cbmCreateDnpSubdir(diskCtx, name) {
 //     sector holds 8 entries; safe margin for the parent + new dir)
 function cbmEstimateTreeSectors(tree, fmt) {
   if (!tree) return 0;
+  var supportsSubdirs = fmt && fmt.supportsSubdirs;
   var subdirLinked = fmt && fmt.subdirLinked;
+  var partitionSpt = (fmt && fmt.partitionSpt) || 40;
   var total = 0;
   function visit(node) {
     for (var i = 0; i < node.files.length; i++) {
@@ -2385,11 +2539,30 @@ function cbmEstimateTreeSectors(tree, fmt) {
       total += Math.max(1, Math.ceil(size / 254));
       if (f.geosInfoBlock) total += 1;
     }
-    if (subdirLinked && node.subdirs) {
-      for (var s = 0; s < node.subdirs.length; s++) {
-        total += 2; // header + first dir sector for the new subdir
-        total += 1; // parent dir-chain growth margin
-        visit(node.subdirs[s]);
+    if (!supportsSubdirs || !node.subdirs) return;
+    for (var s = 0; s < node.subdirs.length; s++) {
+      var sub = node.subdirs[s];
+      if (subdirLinked) {
+        // DNP / CMD Native — 2 sectors per subdir + 1 dir-chain margin
+        total += 2;
+        total += 1;
+        visit(sub);
+      } else {
+        // D81 sub-partition — sums sub's sectors first, rounds up to
+        // a full partition-track count, then adds the system track
+        // (header + 2 BAM + first dir). Inside the partition there's
+        // no further nesting, so we don't recurse into subdirs.
+        var inner = 0;
+        for (var fi = 0; fi < sub.files.length; fi++) {
+          var sf = sub.files[fi];
+          if (sf.vlirRecords) continue;
+          var sz = sf.size || (sf.payload ? sf.payload.length : 0);
+          inner += Math.max(1, Math.ceil(sz / 254));
+          if (sf.geosInfoBlock) inner += 1;
+        }
+        var dataTracks = Math.max(1, Math.ceil(inner / partitionSpt));
+        var numTracks = Math.max(3, dataTracks + 1);
+        total += numTracks * partitionSpt;
       }
     }
   }
@@ -2463,7 +2636,47 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
   // current dir but tag any source-tree subdirs as unsupported.
   var fmt = diskCtx.format;
   var targetCtx = diskCtx;
-  if (wrap && fmt.subdirLinked && tree.nameBytes) {
+  // Pick the subdir-creator that fits the format:
+  //   subdirLinked → DNP / CMD Native — call _cbmCreateDnpSubdir
+  //   supportsSubdirs && !subdirLinked → D81 CBM partitions — call
+  //     _cbmCreateD81Partition (1-level nesting only)
+  function _hostsSubdirs(ctx) {
+    var f = ctx.format;
+    if (f.subdirLinked) return true;
+    // D81-style: only at the root, not nested inside a sub-partition.
+    return !!f.supportsSubdirs && !(ctx.partition && ctx.partition.startTrack);
+  }
+  function _createSubdir(ctx, subName, neededSectors) {
+    var f = ctx.format;
+    if (f.subdirLinked) return _cbmCreateDnpSubdir(ctx, subName);
+    return _cbmCreateD81Partition(ctx, subName, neededSectors || 120);
+  }
+  function _childCtxForExisting(ctx, existingEntryOff) {
+    // Build a child ctx that points INTO the existing subdir referenced
+    // by the dir entry at existingEntryOff. Differs by format family.
+    var f = ctx.format;
+    var d = new Uint8Array(ctx.buffer);
+    var hdrT = d[existingEntryOff + 3];
+    var hdrS = d[existingEntryOff + 4];
+    if (f.subdirLinked) {
+      var hOff = sectorOffset(hdrT, hdrS, ctx);
+      if (hOff < 0) return null;
+      return Object.assign({}, ctx, {
+        partition: {
+          dnpDir: true,
+          dnpHeaderT: hdrT, dnpHeaderS: hdrS,
+          dnpDirT: d[hOff + 0x00], dnpDirS: d[hOff + 0x01],
+          name: '',
+        },
+      });
+    }
+    // D81 sub-partition: read size from entry bytes 30/31.
+    var pSize = d[existingEntryOff + 30] | (d[existingEntryOff + 31] << 8);
+    return Object.assign({}, ctx, {
+      partition: { startTrack: hdrT, partSize: pSize, name: '' },
+    });
+  }
+  if (wrap && _hostsSubdirs(diskCtx) && tree.nameBytes) {
     var topName = _displayName(tree.nameBytes);
     if (topName) {
       var existing = _cbmFindDirEntryByNameBytes(diskCtx, tree.nameBytes);
@@ -2482,25 +2695,20 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
         existing = -1; // pretend no conflict so we take the create path below
       }
       if (existing >= 0 && onConflict === 'overwrite') {
-        // Reuse the existing dir — file conflicts inside still go
-        // through the per-file overwrite path below.
-        var dataNow = new Uint8Array(diskCtx.buffer);
-        var hdrT = dataNow[existing + 3];
-        var hdrS = dataNow[existing + 4];
-        var hdrOff = sectorOffset(hdrT, hdrS, diskCtx);
-        if (hdrOff < 0) {
+        // Reuse the existing subdir — file conflicts inside still go
+        // through the per-file overwrite path below. _childCtxForExisting
+        // builds the right partition shape for this format family.
+        var reuseCtx = _childCtxForExisting(diskCtx, existing);
+        if (!reuseCtx) {
           return { ok: false, error: 'Existing "' + topName + '" entry points at an invalid sector.' };
         }
-        targetCtx = Object.assign({}, diskCtx, {
-          partition: {
-            dnpDir: true,
-            dnpHeaderT: hdrT, dnpHeaderS: hdrS,
-            dnpDirT: dataNow[hdrOff + 0x00], dnpDirS: dataNow[hdrOff + 0x01],
-            name: topName,
-          },
-        });
+        targetCtx = reuseCtx;
       } else {
-        var created = _cbmCreateDnpSubdir(diskCtx, createNameStr);
+        // Estimate space needed inside the new subdir so D81-partition
+        // creation picks an adequate track count. For DNP/Native, the
+        // helper allocates exactly 2 sectors and ignores this hint.
+        var needed = cbmEstimateTreeSectors(tree, fmt);
+        var created = _createSubdir(diskCtx, createNameStr, needed);
         if (!created.ok) {
           return { ok: false, error: 'creating top-level dir "' + createNameStr + '": ' + (created.error || 'unknown') };
         }
@@ -2562,44 +2770,33 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
     copiedFiles++;
   }
 
-  // Subdirectories — only supported on linked-subdir formats (DNP and
-  // CMD Native partitions inside D1M/D2M/D4M). D81 sub-partitions and
-  // other non-linked subdir mechanisms aren't built yet; their entries
-  // get reported in skippedDirs.
+  // Subdirectories — DNP / CMD Native via linked subdirs;  D81 via
+  // a fresh sub-partition (file type $05). _hostsSubdirs decides which
+  // path applies based on format flags + whether we're already inside
+  // a D81 sub-partition (no second level allowed there).
   if (tree.subdirs && tree.subdirs.length > 0) {
-    var fmt = diskCtx.format;
     for (var di = 0; di < tree.subdirs.length; di++) {
       var sub = tree.subdirs[di];
       var subName = _displayName(sub.nameBytes);
       if (!subName) subName = 'SUBDIR';
-      if (!fmt.subdirLinked) {
-        skippedDirs.push(subName + ' (this format does not support nested subdirs)');
+      if (!_hostsSubdirs(diskCtx)) {
+        skippedDirs.push(subName + ' (this format does not support nested subdirs here)');
         continue;
       }
       var existing = _cbmFindDirEntryByNameBytes(diskCtx, sub.nameBytes);
       var subCtx = null;
       if (existing >= 0 && onConflict === 'overwrite') {
-        // Same-name subdir already exists. Read its header T/S so we
-        // can recurse into the existing dir rather than re-creating it.
-        var dataNow = new Uint8Array(diskCtx.buffer);
-        var hdrT = dataNow[existing + 3], hdrS = dataNow[existing + 4];
-        var hdrOff = sectorOffset(hdrT, hdrS, diskCtx);
-        if (hdrOff < 0) {
+        // Same-name subdir already exists — recurse into it.
+        subCtx = _childCtxForExisting(diskCtx, existing);
+        if (!subCtx) {
           skippedDirs.push(subName + ' (existing dir entry points at an invalid sector)');
           continue;
         }
-        subCtx = Object.assign({}, diskCtx, {
-          partition: {
-            dnpDir: true,
-            dnpHeaderT: hdrT, dnpHeaderS: hdrS,
-            dnpDirT: dataNow[hdrOff + 0x00], dnpDirS: dataNow[hdrOff + 0x01],
-            name: subName,
-          },
-        });
       } else if (existing >= 0 && onConflict === 'cancel') {
         return { ok: false, error: 'Directory "' + subName + '" already exists; choose Overwrite (or rename it first).' };
       } else {
-        var creation = _cbmCreateDnpSubdir(diskCtx, subName);
+        var neededSub = cbmEstimateTreeSectors(sub, diskCtx.format);
+        var creation = _createSubdir(diskCtx, subName, neededSub);
         if (!creation.ok) {
           return { ok: false, error: 'creating subdir "' + subName + '": ' + (creation.error || 'unknown') };
         }

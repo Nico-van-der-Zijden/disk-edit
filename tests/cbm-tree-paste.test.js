@@ -170,6 +170,42 @@ describe('cbmPasteDirTree (task #12 — MVP file-only writer)', () => {
     assert.ok(subs2.indexOf('LONGDIRNAMEX (2)') >= 0, 'truncated rename present: ' + JSON.stringify(subs2));
   });
 
+  it('creates D81 CBM partitions for subdirs (file type $05)', () => {
+    function nb(s) {
+      var out = new Uint8Array(16);
+      for (var i = 0; i < 16; i++) out[i] = i < s.length ? s.charCodeAt(i) : 0xA0;
+      return out;
+    }
+    var buf = createEmptyDisk('d81', 80);
+    global.currentBuffer = buf;
+    global.currentFormat = DISK_FORMATS.d81;
+    global.currentTracks = 80;
+    global.currentPartition = null;
+    var ctx = getCurrentCtx();
+    var tree = {
+      nameBytes: nb('GAMES'),
+      files: [{ nameBytes: nb('PONG'), cbmTypeIdx: 2, payload: new Uint8Array(16), size: 16 }],
+      subdirs: [], skippedLnks: [],
+    };
+    var res = cbmPasteDirTree(ctx, tree, { onConflict: 'cancel' });
+    assert.strictEqual(res.ok, true, 'paste ok: ' + JSON.stringify(res));
+    assert.strictEqual(res.copiedDirs, 1);
+    assert.strictEqual(res.copiedFiles, 1);
+    // Walk the D81 root dir, find a type-$05 partition entry pointing
+    // at a 3-track partition starting at some startTrack.
+    var dirInfo = parseCurrentDir(buf);
+    var entries = (dirInfo && dirInfo.entries) || [];
+    var gamesEntry = entries.find(function(e) {
+      return petsciiToReadable(e.name || '').trim() === 'GAMES';
+    });
+    assert.ok(gamesEntry, 'GAMES partition entry in D81 root');
+    // entry.type includes 'CBM' or 'CBM<' (read-only marker) — accept both
+    assert.ok(/CBM/.test(gamesEntry.type), 'entry type is CBM partition: ' + gamesEntry.type);
+    // partSize stored at +30/+31 of the dir entry
+    var partSize = (new Uint8Array(buf))[gamesEntry.entryOff + 30] | ((new Uint8Array(buf))[gamesEntry.entryOff + 31] << 8);
+    assert.ok(partSize >= 120, 'partition is at least 3 tracks (' + partSize + ' sectors)');
+  });
+
   it('rejects non-linked formats from creating nested subdirs', () => {
     // Use a fresh D64 (no subdirLinked support) and try to paste a tree
     // with subdirs. The subdirs should land in skippedDirs.
