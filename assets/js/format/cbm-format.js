@@ -1289,7 +1289,6 @@ var parsedTapeDir = null;    // last parsed tape directory entries array
 
 // ── Sector geometry (delegates to current format) ────────────────────
 function sectorsPerTrack(t, ctx) {
-  ctx = ctx || getCurrentCtx();
   return ctx.format.sectorsPerTrack(t);
 }
 
@@ -1299,7 +1298,6 @@ function sectorsPerTrack(t, ctx) {
 // Partition BAM: returns byte offset for a track's BAM entry (free count byte)
 // relTrack is 1-based relative to partition start
 function getPartitionBamEntry(bamOff, relTrack, ctx) {
-  ctx = ctx || getCurrentCtx();
   var fmt = ctx.format;
   var spt = fmt.partitionSpt;
   var off = fmt.partitionBamOffset;
@@ -1311,7 +1309,6 @@ function getPartitionBamEntry(bamOff, relTrack, ctx) {
 // Returns the byte offset of the bitmap bytes for a given track.
 // For partitions, track is absolute (disk-level) and bamOff is the partition BAM offset.
 function getBamBitmapBase(track, bamOff, ctx) {
-  ctx = ctx || getCurrentCtx();
   var partition = ctx.partition;
   if (partition && !partition.dnpDir) {
     var relTrack = track - partition.startTrack + 1;
@@ -1322,7 +1319,6 @@ function getBamBitmapBase(track, bamOff, ctx) {
 
 /** @param {Uint8Array} data @param {number} bamOff @param {number} track @param {number} sector @returns {boolean} */
 function checkSectorFree(data, bamOff, track, sector, ctx) {
-  ctx = ctx || getCurrentCtx();
   if (ctx.format.isSectorFree) return ctx.format.isSectorFree(data, bamOff, track, sector);
   var base = getBamBitmapBase(track, bamOff, ctx);
   return (data[base + Math.floor(sector / 8)] & (1 << (sector % 8))) !== 0;
@@ -1330,7 +1326,6 @@ function checkSectorFree(data, bamOff, track, sector, ctx) {
 
 /** @param {Uint8Array} data @param {number} track @param {number} sector @param {number} bamOff */
 function bamMarkSectorUsed(data, track, sector, bamOff, ctx) {
-  ctx = ctx || getCurrentCtx();
   var base = getBamBitmapBase(track, bamOff, ctx);
   data[base + (sector >> 3)] &= ~ctx.format.bamBitMask(sector);
   bamRecalcFree(data, track, bamOff, ctx);
@@ -1338,7 +1333,6 @@ function bamMarkSectorUsed(data, track, sector, bamOff, ctx) {
 
 /** @param {Uint8Array} data @param {number} track @param {number} sector @param {number} bamOff */
 function bamMarkSectorFree(data, track, sector, bamOff, ctx) {
-  ctx = ctx || getCurrentCtx();
   var base = getBamBitmapBase(track, bamOff, ctx);
   data[base + (sector >> 3)] |= ctx.format.bamBitMask(sector);
   bamRecalcFree(data, track, bamOff, ctx);
@@ -1346,7 +1340,6 @@ function bamMarkSectorFree(data, track, sector, bamOff, ctx) {
 
 /** @param {Uint8Array} data @param {number} track @param {number} bamOff */
 function bamRecalcFree(data, track, bamOff, ctx) {
-  ctx = ctx || getCurrentCtx();
   var fmt = ctx.format;
   var partition = ctx.partition;
   var spt = fmt.sectorsPerTrack(track);
@@ -1378,7 +1371,6 @@ function totalSectors(format, numTracks) {
 
 /** @param {ArrayBuffer} buffer @param {number} entryOff @returns {FileReadResult} */
 function readFileData(buffer, entryOff, ctx) {
-  ctx = ctx || getCurrentCtx();
   var disk = new Uint8Array(buffer);
 
   // T64: read directly from stored data offset, prepend load address
@@ -1439,7 +1431,6 @@ function readFileData(buffer, entryOff, ctx) {
 
 /** @returns {number} Byte offset of the header sector */
 function getHeaderOffset(ctx) {
-  ctx = ctx || getCurrentCtx();
   var fmt = ctx.format;
   return sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector, ctx);
 }
@@ -1513,7 +1504,6 @@ var ERROR_CODES = {
 // because bamTracksRange caps at 35).
 function _d64BamEntry(bamOff, track, ctx) {
   if (track <= 35) return bamOff + 4 * track;
-  ctx = ctx || getCurrentCtx();
   var v = ctx.buffer ? getSpeederVariant(ctx.buffer, ctx) : null;
   if (v === 'SpeedDOS') return bamOff + 0xC0 + (track - 36) * 4;
   if (v === 'DolphinDOS') return bamOff + 0xAC + (track - 36) * 4;
@@ -1532,7 +1522,6 @@ function _d64BamEntry(bamOff, track, ctx) {
 // surface the state in the health-dot tooltip and the BAM-view banner.
 // Returns the offending byte value, or null when the disk is writable.
 function isSoftWriteProtected(buffer, ctx) {
-  ctx = ctx || getCurrentCtx();
   if (!buffer || !ctx.format.hasSoftWriteProtect) return null;
   var data = new Uint8Array(buffer);
   var bamOff = sectorOffset(ctx.format.bamTrack, ctx.format.bamSector, ctx);
@@ -1552,7 +1541,6 @@ function isSoftWriteProtected(buffer, ctx) {
 // `fmt.supportsSpeederBam` so the check stays inert on formats that
 // don't define the speeder-BAM layout (D71/D80/D82/D81/CMD native).
 function getSpeederVariant(buffer, ctx) {
-  ctx = ctx || getCurrentCtx();
   if (!buffer || !ctx.format.supportsSpeederBam) return null;
   if (ctx.tracks < 40) return null;
   var data = new Uint8Array(buffer);
@@ -1582,7 +1570,6 @@ function _hasFdEntries(data, off) {
 // also works on D71/D81 if anyone ever stamps a boot block there.
 function hasC128BootSignature(buffer, ctx) {
   if (!buffer) return false;
-  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
   var off = sectorOffset(1, 0, ctx);
   if (off < 0 || off + 3 > data.length) return false;
@@ -1595,7 +1582,6 @@ function hasC128BootSignature(buffer, ctx) {
 // boot-block signature above. Gated by `fmt.hasAutoBootFlag` so any
 // future format that grows the same convention can opt in.
 function hasD81AutoBootLoader(buffer, ctx) {
-  ctx = ctx || getCurrentCtx();
   if (!buffer || !ctx.format.hasAutoBootFlag) return false;
   var data = new Uint8Array(buffer);
   var bamOff = sectorOffset(ctx.format.bamTrack, ctx.format.bamSector, ctx);
@@ -1819,7 +1805,6 @@ function d81PartitionBamBase(partBamOff, track) {
 // startTrack = first track of the partition (header at sector 0, BAM at 1-2, dir at 3+)
 // partSize = size in sectors from directory entry bytes 30-31
 function parsePartition(buffer, startTrack, partSize, ctx) {
-  ctx = ctx || getCurrentCtx();
   const data = new Uint8Array(buffer);
   const fmt = ctx.format;
 

@@ -61,9 +61,9 @@ describe('createEmptyDisk for DNP', () => {
 
   it('marks track 1 sectors 0-34 used in BAM', () => {
     var buf = loadFreshDnp(5);
-    var bamOff = sectorOffset(1, 1);
+    var bamOff = sectorOffset(1, 1, getCurrentCtx());
     var data = new Uint8Array(buf);
-    // checkSectorFree(data, bamOff, track, sector) uses fmt.isSectorFree for CMD
+    // checkSectorFree(data, bamOff, track, sector, getCurrentCtx()) uses fmt.isSectorFree for CMD
     for (var s = 0; s <= 34; s++) {
       assert.strictEqual(currentFormat.isSectorFree(data, bamOff, 1, s), false,
         'sector 1:' + s + ' should be used');
@@ -75,7 +75,7 @@ describe('createEmptyDisk for DNP', () => {
   it('marks tracks 2..numTracks fully free', () => {
     var buf = loadFreshDnp(5);
     var data = new Uint8Array(buf);
-    var bamOff = sectorOffset(1, 1);
+    var bamOff = sectorOffset(1, 1, getCurrentCtx());
     for (var t = 2; t <= 5; t++) {
       assert.strictEqual(currentFormat.readTrackFree(data, bamOff, t), 256,
         'track ' + t + ' should have 256 free sectors');
@@ -91,11 +91,11 @@ describe('_cmdReadTrackFree / _cmdIsSectorFree on a populated DNP', () => {
 
   it('reports correct free count after marking one sector used', () => {
     var data = new Uint8Array(currentBuffer);
-    var bamOff = sectorOffset(1, 1);
+    var bamOff = sectorOffset(1, 1, getCurrentCtx());
     var freeBefore = currentFormat.readTrackFree(data, bamOff, 3);
     assert.strictEqual(freeBefore, 256);
     // Mark T3/S10 used
-    bamMarkSectorUsed(data, 3, 10, bamOff);
+    bamMarkSectorUsed(data, 3, 10, bamOff, getCurrentCtx());
     assert.strictEqual(currentFormat.readTrackFree(data, bamOff, 3), 255);
     assert.strictEqual(currentFormat.isSectorFree(data, bamOff, 3, 10), false);
     assert.strictEqual(currentFormat.isSectorFree(data, bamOff, 3, 11), true);
@@ -136,20 +136,20 @@ describe('resizeDnpImage — grow', () => {
   });
 
   it('grows 5 -> 10 tracks, buffer size doubles', () => {
-    var result = resizeDnpImage(currentBuffer, 10);
+    var result = resizeDnpImage(currentBuffer, 10, getCurrentCtx());
     assert.ok(result.buffer, 'should return a buffer');
     assert.strictEqual(result.buffer.byteLength, 10 * 65536);
   });
 
   it('updates the numTracks byte in the BAM header', () => {
-    var result = resizeDnpImage(currentBuffer, 10);
+    var result = resizeDnpImage(currentBuffer, 10, getCurrentCtx());
     var data = new Uint8Array(result.buffer);
     assert.strictEqual(data[2 * 256 + 0x08], 10);
   });
 
   it('existing track 1 header and dir content is preserved', () => {
     var before = new Uint8Array(currentBuffer).slice(0, 65536);
-    var result = resizeDnpImage(currentBuffer, 10);
+    var result = resizeDnpImage(currentBuffer, 10, getCurrentCtx());
     var after = new Uint8Array(result.buffer).slice(0, 65536);
     // Everything on track 1 except the numTracks byte (already tested) matches
     var mismatches = 0;
@@ -161,7 +161,7 @@ describe('resizeDnpImage — grow', () => {
   });
 
   it('new tracks have all-free BAM bitmaps', () => {
-    var result = resizeDnpImage(currentBuffer, 10);
+    var result = resizeDnpImage(currentBuffer, 10, getCurrentCtx());
     // Temporarily point currentBuffer/Tracks at the resized disk so the BAM
     // helpers use the right offsets.
     var savedBuf = currentBuffer, savedTracks = currentTracks;
@@ -169,7 +169,7 @@ describe('resizeDnpImage — grow', () => {
     global.currentTracks = 10;
     try {
       var data = new Uint8Array(result.buffer);
-      var bamOff = sectorOffset(1, 1);
+      var bamOff = sectorOffset(1, 1, getCurrentCtx());
       for (var t = 6; t <= 10; t++) {
         assert.strictEqual(currentFormat.readTrackFree(data, bamOff, t), 256,
           'new track ' + t + ' should be fully free');
@@ -186,7 +186,7 @@ describe('resizeDnpImage — shrink', () => {
 
   it('shrinks a clean 10-track DNP to 5 tracks', () => {
     loadFreshDnp(10);
-    var result = resizeDnpImage(currentBuffer, 5);
+    var result = resizeDnpImage(currentBuffer, 5, getCurrentCtx());
     assert.ok(result.buffer, 'should succeed on a clean disk');
     assert.strictEqual(result.buffer.byteLength, 5 * 65536);
     var data = new Uint8Array(result.buffer);
@@ -196,7 +196,7 @@ describe('resizeDnpImage — shrink', () => {
   it('blocks shrink when a file lives on a track being removed', () => {
     loadFreshDnp(10);
     placeSyntheticFile(currentBuffer, 8, 0, 'BLOCKER');
-    var result = resizeDnpImage(currentBuffer, 5);
+    var result = resizeDnpImage(currentBuffer, 5, getCurrentCtx());
     assert.strictEqual(result.error, 'blocked');
     assert.ok(Array.isArray(result.owners));
     assert.ok(result.owners.length >= 1);
@@ -206,15 +206,15 @@ describe('resizeDnpImage — shrink', () => {
 
   it('returns input unchanged when newTracks equals current size', () => {
     loadFreshDnp(8);
-    var result = resizeDnpImage(currentBuffer, 8);
+    var result = resizeDnpImage(currentBuffer, 8, getCurrentCtx());
     assert.strictEqual(result.buffer, currentBuffer);
   });
 
   it('rejects out-of-range track counts', () => {
     loadFreshDnp(5);
-    assert.ok(resizeDnpImage(currentBuffer, 1).error);
-    assert.ok(resizeDnpImage(currentBuffer, 256).error);
-    assert.ok(resizeDnpImage(currentBuffer, 0).error);
+    assert.ok(resizeDnpImage(currentBuffer, 1, getCurrentCtx()).error);
+    assert.ok(resizeDnpImage(currentBuffer, 256, getCurrentCtx()).error);
+    assert.ok(resizeDnpImage(currentBuffer, 0, getCurrentCtx()).error);
   });
 });
 
@@ -264,7 +264,7 @@ describe('resizeDnpImage — boundary & chain cases', () => {
   it('allows shrink when file sits on the highest kept track', () => {
     loadFreshDnp(10);
     placeSyntheticFile(currentBuffer, 5, 3, 'LASTKEEP');
-    var result = resizeDnpImage(currentBuffer, 5);
+    var result = resizeDnpImage(currentBuffer, 5, getCurrentCtx());
     assert.ok(result.buffer, 'should succeed when file is on the new boundary track');
     assert.strictEqual(result.buffer.byteLength, 5 * 65536);
   });
@@ -272,7 +272,7 @@ describe('resizeDnpImage — boundary & chain cases', () => {
   it('blocks shrink when file sits on the first doomed track', () => {
     loadFreshDnp(10);
     placeSyntheticFile(currentBuffer, 6, 0, 'FIRSTCUT');
-    var result = resizeDnpImage(currentBuffer, 5);
+    var result = resizeDnpImage(currentBuffer, 5, getCurrentCtx());
     assert.strictEqual(result.error, 'blocked');
     assert.ok(result.owners.some(function(o) { return o.track === 6; }));
   });
@@ -281,7 +281,7 @@ describe('resizeDnpImage — boundary & chain cases', () => {
     loadFreshDnp(10);
     // Start on kept track 5, continuation on doomed track 7
     placeTwoSectorChain(currentBuffer, 5, 10, 7, 4, 'CROSSING');
-    var result = resizeDnpImage(currentBuffer, 6);
+    var result = resizeDnpImage(currentBuffer, 6, getCurrentCtx());
     assert.strictEqual(result.error, 'blocked');
     assert.ok(result.owners.some(function(o) { return o.track === 7 && o.sector === 4; }),
       'high-track sector 7:4 should be flagged even though the chain starts on track 5');
@@ -291,12 +291,12 @@ describe('resizeDnpImage — boundary & chain cases', () => {
     loadFreshDnp(5);
     placeSyntheticFile(currentBuffer, 3, 12, 'ROUNDTRIP');
     var original = new Uint8Array(currentBuffer).slice();
-    var grown = resizeDnpImage(currentBuffer, 10);
+    var grown = resizeDnpImage(currentBuffer, 10, getCurrentCtx());
     assert.ok(grown.buffer);
     // Point format context at the resized disk so findDnpHighTrackOwners walks correctly
     global.currentBuffer = grown.buffer;
     global.currentTracks = 10;
-    var shrunk = resizeDnpImage(grown.buffer, 5);
+    var shrunk = resizeDnpImage(grown.buffer, 5, getCurrentCtx());
     assert.ok(shrunk.buffer, 'shrink back should succeed (no files above track 5)');
     var after = new Uint8Array(shrunk.buffer);
     assert.strictEqual(after.length, original.length);
@@ -307,7 +307,7 @@ describe('resizeDnpImage — boundary & chain cases', () => {
 
   it('shrinks a clean 10-track disk to the 2-track minimum', () => {
     loadFreshDnp(10);
-    var result = resizeDnpImage(currentBuffer, 2);
+    var result = resizeDnpImage(currentBuffer, 2, getCurrentCtx());
     assert.ok(result.buffer);
     assert.strictEqual(result.buffer.byteLength, 2 * 65536);
     assert.strictEqual(new Uint8Array(result.buffer)[2 * 256 + 0x08], 2);
@@ -315,7 +315,7 @@ describe('resizeDnpImage — boundary & chain cases', () => {
 
   it('grows a 5-track disk to the 255-track maximum without overflow', () => {
     loadFreshDnp(5);
-    var result = resizeDnpImage(currentBuffer, 255);
+    var result = resizeDnpImage(currentBuffer, 255, getCurrentCtx());
     assert.ok(result.buffer);
     assert.strictEqual(result.buffer.byteLength, 255 * 65536);
     assert.strictEqual(new Uint8Array(result.buffer)[2 * 256 + 0x08], 255);
@@ -525,7 +525,7 @@ describe('checkBAMIntegrity — fresh FD images have no phantom orphans', () => 
       global.currentFormat = DISK_FORMATS[key];
       global.currentTracks = 81;
       global.currentPartition = null;
-      var result = checkBAMIntegrity(buf);
+      var result = checkBAMIntegrity(buf, getCurrentCtx());
       assert.strictEqual(result.orphanCount, 0,
         'fresh ' + key + ' should not report any orphans');
       assert.strictEqual(result.allocMismatch, 0,

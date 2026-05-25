@@ -573,7 +573,7 @@ describe('cbmCollectDirTree (task #11 — CBM-DOS reader)', () => {
     global.currentFormat = DISK_FORMATS.d64;
     global.currentTracks = 35;
     global.currentPartition = null;
-    writeGeosSignature(buf);
+    writeGeosSignature(buf, getCurrentCtx());
     var ctx = getCurrentCtx();
     var nameBytes = nb('GEOFILE');
     var geosBytes = new Uint8Array(9);

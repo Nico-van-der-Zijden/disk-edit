@@ -9,25 +9,25 @@ describe('D64 sector geometry', () => {
   });
 
   it('sectorOffset returns correct offset for track 1 sector 0', () => {
-    assert.strictEqual(sectorOffset(1, 0), 0);
+    assert.strictEqual(sectorOffset(1, 0, getCurrentCtx()), 0);
   });
 
   it('sectorOffset returns correct offset for track 1 sector 1', () => {
-    assert.strictEqual(sectorOffset(1, 1), 256);
+    assert.strictEqual(sectorOffset(1, 1, getCurrentCtx()), 256);
   });
 
   it('sectorOffset returns correct offset for track 18 sector 0 (BAM)', () => {
     // Tracks 1-17: 17 tracks × 21 sectors = 357 sectors × 256 bytes
-    assert.strictEqual(sectorOffset(18, 0), 357 * 256);
+    assert.strictEqual(sectorOffset(18, 0, getCurrentCtx()), 357 * 256);
   });
 
   it('sectorOffset returns -1 for out-of-range track', () => {
-    assert.strictEqual(sectorOffset(0, 0), -1);
-    assert.strictEqual(sectorOffset(36, 0), -1);
+    assert.strictEqual(sectorOffset(0, 0, getCurrentCtx()), -1);
+    assert.strictEqual(sectorOffset(36, 0, getCurrentCtx()), -1);
   });
 
   it('sectorOffset returns -1 for out-of-range sector', () => {
-    assert.strictEqual(sectorOffset(1, 21), -1); // Track 1 has 21 sectors (0-20)
+    assert.strictEqual(sectorOffset(1, 21, getCurrentCtx()), -1); // Track 1 has 21 sectors (0-20)
   });
 
   it('sectorsPerTrack returns correct values for D64 zones', () => {
@@ -43,7 +43,7 @@ describe('D64 sector geometry', () => {
 });
 
 // TODO: re-enable "D81 sector geometry" suite once tests/fixtures/error_geos.d81
-// is available. Asserted: sectorsPerTrack(1/40/80) === 40, dirTrack === 40,
+// is available. Asserted: sectorsPerTrack(1/40/80, getCurrentCtx()) === 40, dirTrack === 40,
 // bamTrack/bamSector === 40/1, headerTrack/headerSector === 40/0.
 
 describe('parseDisk on org_geos.D64', () => {
@@ -84,7 +84,7 @@ describe('readFileData', () => {
   it('reads a file without error', () => {
     var info = parseDisk(currentBuffer);
     var entry = info.entries[0]; // geos v2.0 (PRG)
-    var result = readFileData(currentBuffer, entry.entryOff);
+    var result = readFileData(currentBuffer, entry.entryOff, getCurrentCtx());
     assert.strictEqual(result.error, null);
     assert.ok(result.data.length > 0);
   });
@@ -92,10 +92,10 @@ describe('readFileData', () => {
   it('returns error for invalid T/S', () => {
     // Create a fake entry with T/S = 0/0
     var data = new Uint8Array(currentBuffer);
-    var fakeOff = sectorOffset(18, 1); // first dir sector, first entry
+    var fakeOff = sectorOffset(18, 1, getCurrentCtx()); // first dir sector, first entry
     var origT = data[fakeOff + 3];
     data[fakeOff + 3] = 0; // set track to 0
-    var result = readFileData(currentBuffer, fakeOff);
+    var result = readFileData(currentBuffer, fakeOff, getCurrentCtx());
     assert.ok(result.data.length === 0 || result.error !== null);
     data[fakeOff + 3] = origT; // restore
   });
@@ -162,7 +162,7 @@ describe('isSoftWriteProtected', () => {
     global.currentTracks = 35;
     global.currentPartition = null;
     if (bamVersionByte !== undefined) {
-      var bo = sectorOffset(DISK_FORMATS.d64.bamTrack, DISK_FORMATS.d64.bamSector);
+      var bo = sectorOffset(DISK_FORMATS.d64.bamTrack, DISK_FORMATS.d64.bamSector, getCurrentCtx());
       data[bo + 0x02] = bamVersionByte;
     }
     return buf;
@@ -170,17 +170,17 @@ describe('isSoftWriteProtected', () => {
 
   it('returns null on a fresh D64 (BAM +$02 = $41)', () => {
     var buf = makeD64();
-    assert.strictEqual(isSoftWriteProtected(buf), null);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), null);
   });
 
   it('returns null when BAM +$02 is $00', () => {
     var buf = makeD64(0x00);
-    assert.strictEqual(isSoftWriteProtected(buf), null);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), null);
   });
 
   it('returns the offending byte when BAM +$02 is $50', () => {
     var buf = makeD64(0x50);
-    assert.strictEqual(isSoftWriteProtected(buf), 0x50);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), 0x50);
   });
 
   it('returns null when format is not D64 or D71', () => {
@@ -188,7 +188,7 @@ describe('isSoftWriteProtected', () => {
     global.currentBuffer = buf;
     global.currentFormat = DISK_FORMATS.d81;
     global.currentTracks = 80;
-    assert.strictEqual(isSoftWriteProtected(buf), null);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), null);
   });
 
   it('also covers D71 (same soft-WP semantics per spec)', () => {
@@ -197,12 +197,12 @@ describe('isSoftWriteProtected', () => {
     global.currentFormat = DISK_FORMATS.d71;
     global.currentTracks = 70;
     var data = new Uint8Array(buf);
-    var bo = sectorOffset(DISK_FORMATS.d71.bamTrack, DISK_FORMATS.d71.bamSector);
+    var bo = sectorOffset(DISK_FORMATS.d71.bamTrack, DISK_FORMATS.d71.bamSector, getCurrentCtx());
     // Fresh D71: writable
-    assert.strictEqual(isSoftWriteProtected(buf), null);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), null);
     // Flip DOS version byte to $50 — should be flagged
     data[bo + 0x02] = 0x50;
-    assert.strictEqual(isSoftWriteProtected(buf), 0x50);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), 0x50);
   });
 
   it('also covers D81 with format-specific expected byte ($44 D)', () => {
@@ -211,19 +211,19 @@ describe('isSoftWriteProtected', () => {
     global.currentFormat = DISK_FORMATS.d81;
     global.currentTracks = 80;
     var data = new Uint8Array(buf);
-    var bo = sectorOffset(DISK_FORMATS.d81.bamTrack, DISK_FORMATS.d81.bamSector);
+    var bo = sectorOffset(DISK_FORMATS.d81.bamTrack, DISK_FORMATS.d81.bamSector, getCurrentCtx());
     // Fresh D81: BAM +$02 = $44, writable
     assert.strictEqual(data[bo + 0x02], 0x44);
-    assert.strictEqual(isSoftWriteProtected(buf), null);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), null);
     // $00 is also OK per spec
     data[bo + 0x02] = 0x00;
-    assert.strictEqual(isSoftWriteProtected(buf), null);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), null);
     // $41 (the D64 byte) IS soft-WP on D81
     data[bo + 0x02] = 0x41;
-    assert.strictEqual(isSoftWriteProtected(buf), 0x41);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), 0x41);
     // Arbitrary other byte
     data[bo + 0x02] = 0x50;
-    assert.strictEqual(isSoftWriteProtected(buf), 0x50);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), 0x50);
   });
 
   it('also covers D80 with expected byte $43 C', () => {
@@ -232,13 +232,13 @@ describe('isSoftWriteProtected', () => {
     global.currentFormat = DISK_FORMATS.d80;
     global.currentTracks = 77;
     var data = new Uint8Array(buf);
-    var bo = sectorOffset(DISK_FORMATS.d80.bamTrack, DISK_FORMATS.d80.bamSector);
+    var bo = sectorOffset(DISK_FORMATS.d80.bamTrack, DISK_FORMATS.d80.bamSector, getCurrentCtx());
     assert.strictEqual(data[bo + 0x02], 0x43);
-    assert.strictEqual(isSoftWriteProtected(buf), null);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), null);
     data[bo + 0x02] = 0x00;
-    assert.strictEqual(isSoftWriteProtected(buf), null);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), null);
     data[bo + 0x02] = 0x50;
-    assert.strictEqual(isSoftWriteProtected(buf), 0x50);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), 0x50);
   });
 
   it('also covers D82 with expected byte $43 C', () => {
@@ -247,11 +247,11 @@ describe('isSoftWriteProtected', () => {
     global.currentFormat = DISK_FORMATS.d82;
     global.currentTracks = 154;
     var data = new Uint8Array(buf);
-    var bo = sectorOffset(DISK_FORMATS.d82.bamTrack, DISK_FORMATS.d82.bamSector);
+    var bo = sectorOffset(DISK_FORMATS.d82.bamTrack, DISK_FORMATS.d82.bamSector, getCurrentCtx());
     assert.strictEqual(data[bo + 0x02], 0x43);
-    assert.strictEqual(isSoftWriteProtected(buf), null);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), null);
     data[bo + 0x02] = 0x42;
-    assert.strictEqual(isSoftWriteProtected(buf), 0x42);
+    assert.strictEqual(isSoftWriteProtected(buf, getCurrentCtx()), 0x42);
   });
 });
 
@@ -263,7 +263,7 @@ describe('hasD81AutoBootLoader', () => {
     global.currentBuffer = buf;
     global.currentFormat = DISK_FORMATS.d81;
     global.currentTracks = 80;
-    assert.strictEqual(hasD81AutoBootLoader(buf), false);
+    assert.strictEqual(hasD81AutoBootLoader(buf, getCurrentCtx()), false);
   });
 
   it('returns true when BAM(40/1)+$07 is non-zero', () => {
@@ -272,9 +272,9 @@ describe('hasD81AutoBootLoader', () => {
     global.currentFormat = DISK_FORMATS.d81;
     global.currentTracks = 80;
     var data = new Uint8Array(buf);
-    var bo = sectorOffset(40, 1);
+    var bo = sectorOffset(40, 1, getCurrentCtx());
     data[bo + 0x07] = 0x01;
-    assert.strictEqual(hasD81AutoBootLoader(buf), true);
+    assert.strictEqual(hasD81AutoBootLoader(buf, getCurrentCtx()), true);
   });
 
   it('returns false on non-D81 formats even if the byte is set', () => {
@@ -282,7 +282,7 @@ describe('hasD81AutoBootLoader', () => {
     global.currentBuffer = buf;
     global.currentFormat = DISK_FORMATS.d64;
     global.currentTracks = 35;
-    assert.strictEqual(hasD81AutoBootLoader(buf), false);
+    assert.strictEqual(hasD81AutoBootLoader(buf, getCurrentCtx()), false);
   });
 });
 
@@ -362,7 +362,7 @@ describe('getSpeederVariant', () => {
 
   function writeFdEntries(buf, offsetIntoBam) {
     var data = new Uint8Array(buf);
-    var bamOff = sectorOffset(18, 0);
+    var bamOff = sectorOffset(18, 0, getCurrentCtx());
     // 5 entries × 4 bytes — free-count 17, bitmap $FF $FF $01 (track of 17 sectors all free).
     for (var i = 0; i < 5; i++) {
       data[bamOff + offsetIntoBam + i * 4 + 0] = 17;
@@ -374,34 +374,34 @@ describe('getSpeederVariant', () => {
 
   it('returns null on stock 35-track D64', () => {
     loadD64(35);
-    assert.strictEqual(getSpeederVariant(currentBuffer), null);
+    assert.strictEqual(getSpeederVariant(currentBuffer, getCurrentCtx()), null);
   });
 
   it('returns null on 40-track D64 with no extended BAM bytes', () => {
     loadD64(40);
-    assert.strictEqual(getSpeederVariant(currentBuffer), null);
+    assert.strictEqual(getSpeederVariant(currentBuffer, getCurrentCtx()), null);
   });
 
   it("returns 'SpeedDOS' when BAM-shaped data is at +$C0..$D3", () => {
     loadD64(40);
     writeFdEntries(currentBuffer, 0xC0);
-    assert.strictEqual(getSpeederVariant(currentBuffer), 'SpeedDOS');
+    assert.strictEqual(getSpeederVariant(currentBuffer, getCurrentCtx()), 'SpeedDOS');
   });
 
   it("returns 'DolphinDOS' when BAM-shaped data is at +$AC..$BF only", () => {
     loadD64(40);
     writeFdEntries(currentBuffer, 0xAC);
-    assert.strictEqual(getSpeederVariant(currentBuffer), 'DolphinDOS');
+    assert.strictEqual(getSpeederVariant(currentBuffer, getCurrentCtx()), 'DolphinDOS');
   });
 
   it('rejects ranges where the free-count byte is > 17', () => {
     loadD64(40);
     var data = new Uint8Array(currentBuffer);
-    var bamOff = sectorOffset(18, 0);
+    var bamOff = sectorOffset(18, 0, getCurrentCtx());
     // Plant garbage at +$C0 where the first byte (FC = 99) clearly isn't a free-count
     data[bamOff + 0xC0] = 99;
     data[bamOff + 0xC1] = 0xFF;
-    assert.strictEqual(getSpeederVariant(currentBuffer), null);
+    assert.strictEqual(getSpeederVariant(currentBuffer, getCurrentCtx()), null);
   });
 });
 
@@ -414,7 +414,7 @@ describe('D64 40-track BAM extension', () => {
     global.currentFormat = DISK_FORMATS.d64;
     global.currentTracks = 40;
     var data = new Uint8Array(buf);
-    var bamOff = sectorOffset(18, 0);
+    var bamOff = sectorOffset(18, 0, getCurrentCtx());
     // Plant SpeedDOS BAM at +$C0..
     for (var i = 0; i < 5; i++) {
       data[bamOff + 0xC0 + i * 4 + 0] = 17;
@@ -439,7 +439,7 @@ describe('D64 40-track BAM extension', () => {
     global.currentFormat = DISK_FORMATS.d64;
     global.currentTracks = 40;
     var data = new Uint8Array(buf);
-    var bamOff = sectorOffset(18, 0);
+    var bamOff = sectorOffset(18, 0, getCurrentCtx());
     // Plant SpeedDOS BAM with track 36 free-count = 13, marker
     data[bamOff + 0xC0 + 0] = 13; // free count for track 36
     data[bamOff + 0xC0 + 1] = 0xAA;
@@ -464,7 +464,7 @@ describe('hasC128BootSignature', () => {
     global.currentBuffer = buf;
     global.currentFormat = DISK_FORMATS.d64;
     global.currentTracks = 35;
-    assert.strictEqual(hasC128BootSignature(buf), false);
+    assert.strictEqual(hasC128BootSignature(buf, getCurrentCtx()), false);
   });
 
   it("returns true when bytes 'CBM' are at T1/S0 +$00..+$02", () => {
@@ -473,11 +473,11 @@ describe('hasC128BootSignature', () => {
     global.currentFormat = DISK_FORMATS.d64;
     global.currentTracks = 35;
     var data = new Uint8Array(buf);
-    var off = sectorOffset(1, 0);
+    var off = sectorOffset(1, 0, getCurrentCtx());
     data[off + 0] = 0x43; // C
     data[off + 1] = 0x42; // B
     data[off + 2] = 0x4D; // M
-    assert.strictEqual(hasC128BootSignature(buf), true);
+    assert.strictEqual(hasC128BootSignature(buf, getCurrentCtx()), true);
   });
 
   it('returns false when only some of the magic bytes match', () => {
@@ -486,10 +486,10 @@ describe('hasC128BootSignature', () => {
     global.currentFormat = DISK_FORMATS.d64;
     global.currentTracks = 35;
     var data = new Uint8Array(buf);
-    var off = sectorOffset(1, 0);
+    var off = sectorOffset(1, 0, getCurrentCtx());
     data[off + 0] = 0x43;
     data[off + 1] = 0x42;
     data[off + 2] = 0x00;
-    assert.strictEqual(hasC128BootSignature(buf), false);
+    assert.strictEqual(hasC128BootSignature(buf, getCurrentCtx()), false);
   });
 });

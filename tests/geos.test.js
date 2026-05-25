@@ -9,28 +9,28 @@ describe('GEOS signature on org_geos.D64', () => {
   });
 
   it('hasGeosSignature returns true for GEOS disk', () => {
-    assert.strictEqual(hasGeosSignature(currentBuffer), true);
+    assert.strictEqual(hasGeosSignature(currentBuffer, getCurrentCtx()), true);
   });
 
   it('hasGeosSignature returns false for non-GEOS disk', () => {
     // Zero out the signature area on a copy
     var copy = currentBuffer.slice(0);
     var data = new Uint8Array(copy);
-    var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector);
+    var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector, getCurrentCtx());
     for (var i = 0; i < 20; i++) data[hdrOff + 0xAD + i] = 0x00;
-    assert.strictEqual(hasGeosSignature(copy), false);
+    assert.strictEqual(hasGeosSignature(copy, getCurrentCtx()), false);
   });
 
   it('writeGeosSignature writes to header sector not BAM', () => {
     var copy = currentBuffer.slice(0);
     var data = new Uint8Array(copy);
     // Clear signature
-    var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector);
+    var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector, getCurrentCtx());
     for (var i = 0; i < 20; i++) data[hdrOff + 0xAD + i] = 0x00;
-    assert.strictEqual(hasGeosSignature(copy), false);
+    assert.strictEqual(hasGeosSignature(copy, getCurrentCtx()), false);
     // Write it back
-    writeGeosSignature(copy);
-    assert.strictEqual(hasGeosSignature(copy), true);
+    writeGeosSignature(copy, getCurrentCtx());
+    assert.strictEqual(hasGeosSignature(copy, getCurrentCtx()), true);
     // Verify it's on the header sector
     var sig = '';
     for (var j = 0; j < 16; j++) sig += String.fromCharCode(data[hdrOff + 0xAD + j]);
@@ -55,7 +55,7 @@ describe('readVLIRRecordsForCopy on org_geos.D64', () => {
       }
     }
     assert.ok(entry, 'should find desk top');
-    var records = readVLIRRecordsForCopy(currentBuffer, entry.entryOff);
+    var records = readVLIRRecordsForCopy(currentBuffer, entry.entryOff, getCurrentCtx());
     assert.ok(records.length > 0, 'should have records');
   });
 
@@ -66,7 +66,7 @@ describe('readVLIRRecordsForCopy on org_geos.D64', () => {
     for (var i = 0; i < info.entries.length; i++) {
       if (isVlirFile(data, info.entries[i].entryOff)) { entry = info.entries[i]; break; }
     }
-    var records = readVLIRRecordsForCopy(currentBuffer, entry.entryOff);
+    var records = readVLIRRecordsForCopy(currentBuffer, entry.entryOff, getCurrentCtx());
     // Last record should be null (end marker)
     assert.strictEqual(records[records.length - 1], null);
   });
@@ -78,7 +78,7 @@ describe('readVLIRRecordsForCopy on org_geos.D64', () => {
     for (var i = 0; i < info.entries.length; i++) {
       if (isVlirFile(data, info.entries[i].entryOff)) { entry = info.entries[i]; break; }
     }
-    var records = readVLIRRecordsForCopy(currentBuffer, entry.entryOff);
+    var records = readVLIRRecordsForCopy(currentBuffer, entry.entryOff, getCurrentCtx());
     var populated = records.filter(function(r) { return r && r.data && r.data.length > 0; });
     assert.ok(populated.length > 0, 'should have at least one populated record');
   });
@@ -133,25 +133,25 @@ describe('readGeosInfoBlock — magic validation', () => {
     var buf = makeBlankD64();
     var data = new Uint8Array(buf);
     // Pick T17/S0 as the candidate INFO sector — fill with non-magic.
-    var off = sectorOffset(17, 0);
+    var off = sectorOffset(17, 0, getCurrentCtx());
     data[off + 0x00] = 0xAB;
     data[off + 0x01] = 0xCD;
-    assert.strictEqual(readGeosInfoBlock(buf, 17, 0), null);
+    assert.strictEqual(readGeosInfoBlock(buf, 17, 0, getCurrentCtx()), null);
   });
 
   it('returns object when magic 00/FF is present', () => {
     var buf = makeBlankD64();
     var data = new Uint8Array(buf);
-    var off = sectorOffset(17, 0);
+    var off = sectorOffset(17, 0, getCurrentCtx());
     data[off + 0x00] = 0x00;
     data[off + 0x01] = 0xFF;
-    var ib = readGeosInfoBlock(buf, 17, 0);
+    var ib = readGeosInfoBlock(buf, 17, 0, getCurrentCtx());
     assert.ok(ib, 'should parse INFO block when magic is correct');
   });
 
   it('returns null for track 0', () => {
     var buf = makeBlankD64();
-    assert.strictEqual(readGeosInfoBlock(buf, 0, 0), null);
+    assert.strictEqual(readGeosInfoBlock(buf, 0, 0, getCurrentCtx()), null);
   });
 });
 
@@ -161,7 +161,7 @@ describe('readGeosInfoBlock — author + createdBy', () => {
   it('extracts author at +$61 and createdBy at +$75', () => {
     var buf = makeBlankD64();
     var data = new Uint8Array(buf);
-    var off = sectorOffset(17, 0);
+    var off = sectorOffset(17, 0, getCurrentCtx());
     data[off + 0x00] = 0x00;
     data[off + 0x01] = 0xFF;
     // Author "Chris Hawley"
@@ -172,7 +172,7 @@ describe('readGeosInfoBlock — author + createdBy', () => {
     var creator = 'geoWrite V2.1';
     for (var j = 0; j < creator.length; j++) data[off + 0x75 + j] = creator.charCodeAt(j);
     data[off + 0x75 + creator.length] = 0x00;
-    var ib = readGeosInfoBlock(buf, 17, 0);
+    var ib = readGeosInfoBlock(buf, 17, 0, getCurrentCtx());
     assert.strictEqual(ib.author, 'Chris Hawley');
     assert.strictEqual(ib.createdBy, 'geoWrite V2.1');
   });
@@ -180,10 +180,10 @@ describe('readGeosInfoBlock — author + createdBy', () => {
   it('returns empty strings when fields are unused (all null)', () => {
     var buf = makeBlankD64();
     var data = new Uint8Array(buf);
-    var off = sectorOffset(17, 0);
+    var off = sectorOffset(17, 0, getCurrentCtx());
     data[off + 0x00] = 0x00;
     data[off + 0x01] = 0xFF;
-    var ib = readGeosInfoBlock(buf, 17, 0);
+    var ib = readGeosInfoBlock(buf, 17, 0, getCurrentCtx());
     assert.strictEqual(ib.author, '');
     assert.strictEqual(ib.createdBy, '');
   });
@@ -195,7 +195,7 @@ describe('readGeosInfo — 5-step detection (GEOS.TXT rev 1.4)', () => {
   // Helper: write a dir entry into the freshly-made D64 at T18/S1 slot 0.
   function placeEntry(buf, opts) {
     var data = new Uint8Array(buf);
-    var dirOff = sectorOffset(18, 1);
+    var dirOff = sectorOffset(18, 1, getCurrentCtx());
     var eOff = dirOff + 0; // slot 0
     data[eOff + 0x02] = opts.typeByte;        // CBM type + flags
     data[eOff + 0x03] = opts.startT || 17;
@@ -210,7 +210,7 @@ describe('readGeosInfo — 5-step detection (GEOS.TXT rev 1.4)', () => {
   it('rejects CBM type REL (4) as not GEOS', () => {
     var buf = makeBlankD64();
     var eOff = placeEntry(buf, { typeByte: 0x84, fileType: 6, structure: 1 }); // closed REL
-    var geos = readGeosInfo(buf, eOff);
+    var geos = readGeosInfo(buf, eOff, getCurrentCtx());
     assert.strictEqual(geos.isGeos, false);
   });
 
@@ -221,7 +221,7 @@ describe('readGeosInfo — 5-step detection (GEOS.TXT rev 1.4)', () => {
     // heuristic. See cbm-format-geos.js comment block for justification.
     var buf = makeBlankD64();
     var eOff = placeEntry(buf, { typeByte: 0x83, fileType: 7, structure: 1, infoT: 17 });
-    var geos = readGeosInfo(buf, eOff);
+    var geos = readGeosInfo(buf, eOff, getCurrentCtx());
     assert.strictEqual(geos.isGeos, true);
     assert.strictEqual(geos.hasInfoBlock, true);
   });
@@ -229,21 +229,21 @@ describe('readGeosInfo — 5-step detection (GEOS.TXT rev 1.4)', () => {
   it('rejects structure > 1 as not GEOS', () => {
     var buf = makeBlankD64();
     var eOff = placeEntry(buf, { typeByte: 0x82, fileType: 6, structure: 2 }); // PRG, structure=2
-    var geos = readGeosInfo(buf, eOff);
+    var geos = readGeosInfo(buf, eOff, getCurrentCtx());
     assert.strictEqual(geos.isGeos, false);
   });
 
   it('accepts VLIR (structure=1) even when filetype is 0', () => {
     var buf = makeBlankD64();
     var eOff = placeEntry(buf, { typeByte: 0x82, fileType: 0, structure: 1, infoT: 17 });
-    var geos = readGeosInfo(buf, eOff);
+    var geos = readGeosInfo(buf, eOff, getCurrentCtx());
     assert.strictEqual(geos.isGeos, true);
   });
 
   it('classifies plain C64 (both structure and filetype 0) as not GEOS', () => {
     var buf = makeBlankD64();
     var eOff = placeEntry(buf, { typeByte: 0x82, fileType: 0, structure: 0 });
-    var geos = readGeosInfo(buf, eOff);
+    var geos = readGeosInfo(buf, eOff, getCurrentCtx());
     assert.strictEqual(geos.isGeos, false);
     assert.strictEqual(geos.hasInfoBlock, false);
   });
@@ -251,7 +251,7 @@ describe('readGeosInfo — 5-step detection (GEOS.TXT rev 1.4)', () => {
   it('flags hasInfoBlock false when info T/S is out of range', () => {
     var buf = makeBlankD64();
     var eOff = placeEntry(buf, { typeByte: 0x82, fileType: 6, structure: 1, infoT: 99 });
-    var geos = readGeosInfo(buf, eOff);
+    var geos = readGeosInfo(buf, eOff, getCurrentCtx());
     assert.strictEqual(geos.isGeos, true);
     assert.strictEqual(geos.hasInfoBlock, false);
   });
@@ -259,7 +259,7 @@ describe('readGeosInfo — 5-step detection (GEOS.TXT rev 1.4)', () => {
   it('flags hasInfoBlock true when filetype > 0 and info T/S in range', () => {
     var buf = makeBlankD64();
     var eOff = placeEntry(buf, { typeByte: 0x82, fileType: 6, structure: 1, infoT: 17 });
-    var geos = readGeosInfo(buf, eOff);
+    var geos = readGeosInfo(buf, eOff, getCurrentCtx());
     assert.strictEqual(geos.hasInfoBlock, true);
   });
 });
@@ -270,40 +270,40 @@ describe('GEOS border sector', () => {
   it('readGeosBorderRef returns null when header +$AB is $00', () => {
     var buf = makeBlankD64();
     // Fresh D64: header at T18/S0 starts with $AB/$AC = 0/0 (no border).
-    assert.strictEqual(readGeosBorderRef(buf), null);
+    assert.strictEqual(readGeosBorderRef(buf, getCurrentCtx()), null);
   });
 
   it('readGeosBorderRef returns T/S when header +$AB/$AC are set', () => {
     var buf = makeBlankD64();
     var data = new Uint8Array(buf);
-    var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector);
+    var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector, getCurrentCtx());
     data[hdrOff + 0xAB] = 0x13; // T19
     data[hdrOff + 0xAC] = 0x08; // S8
-    var ref = readGeosBorderRef(buf);
+    var ref = readGeosBorderRef(buf, getCurrentCtx());
     assert.deepStrictEqual(ref, { track: 0x13, sector: 0x08 });
   });
 
   it('readGeosBorderEntries enumerates populated slots only', () => {
     var buf = makeBlankD64();
     var data = new Uint8Array(buf);
-    var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector);
+    var hdrOff = sectorOffset(currentFormat.headerTrack, currentFormat.headerSector, getCurrentCtx());
     data[hdrOff + 0xAB] = 19;
     data[hdrOff + 0xAC] = 8;
     // Place 3 entries (slots 0, 2, 5) in the border sector at T19/S8.
-    var bOff = sectorOffset(19, 8);
+    var bOff = sectorOffset(19, 8, getCurrentCtx());
     [0, 2, 5].forEach(function(slot) {
       var eOff = bOff + slot * 32;
       data[eOff + 0x02] = 0x82; // closed PRG
       data[eOff + 0x03] = 1; data[eOff + 0x04] = 0;
       data[eOff + 0x1E] = 1; data[eOff + 0x1F] = 0; // 1 block
     });
-    var entries = readGeosBorderEntries(buf);
+    var entries = readGeosBorderEntries(buf, getCurrentCtx());
     assert.strictEqual(entries.length, 3);
     assert.ok(entries.every(function(e) { return e.typeIdx === 2 && e.closed; }));
   });
 
   it('readGeosBorderEntries returns empty array when no border ref', () => {
     var buf = makeBlankD64();
-    assert.deepStrictEqual(readGeosBorderEntries(buf), []);
+    assert.deepStrictEqual(readGeosBorderEntries(buf, getCurrentCtx()), []);
   });
 });

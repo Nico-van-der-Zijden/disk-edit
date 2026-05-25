@@ -71,6 +71,5 @@ function getTapeEntry(entryOff) {
 }
 
 function isTapeFormat(ctx) {
-  ctx = ctx || getCurrentCtx();
   return !!(ctx.format && ctx.format.isTape);
 }

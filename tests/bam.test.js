@@ -9,7 +9,7 @@ describe('checkBAMIntegrity on org_geos.D64', () => {
   });
 
   it('returns an object with expected properties', () => {
-    var result = checkBAMIntegrity(currentBuffer);
+    var result = checkBAMIntegrity(currentBuffer, getCurrentCtx());
     assert.ok(result.sectorOwner);
     assert.ok(Array.isArray(result.bamErrors));
     assert.strictEqual(typeof result.allocMismatch, 'number');
@@ -17,7 +17,7 @@ describe('checkBAMIntegrity on org_geos.D64', () => {
   });
 
   it('directory sectors are owned', () => {
-    var result = checkBAMIntegrity(currentBuffer);
+    var result = checkBAMIntegrity(currentBuffer, getCurrentCtx());
     // D64 directory starts at T18/S1
     assert.ok(result.sectorOwner['18:1']);
   });
@@ -26,7 +26,7 @@ describe('checkBAMIntegrity on org_geos.D64', () => {
   // a clean GEOS-format D64 reference is available. The committed-locally
   // org_geos.D64 reports allocMismatch=194 (an unrelated real disk with
   // historical BAM/file-chain mismatches that aren't a bug in our
-  // checker). Test asserted: checkBAMIntegrity(buffer).allocMismatch === 0.
+  // checker). Test asserted: checkBAMIntegrity(buffer, getCurrentCtx()).allocMismatch === 0.
 });
 
 describe('BAM sector operations on D64', () => {
@@ -36,36 +36,36 @@ describe('BAM sector operations on D64', () => {
 
   it('checkSectorFree detects free vs used sectors', () => {
     var data = new Uint8Array(currentBuffer);
-    var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+    var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector, getCurrentCtx());
     // Track 18 sector 0 (BAM) should be used
-    assert.strictEqual(checkSectorFree(data, bamOff, 18, 0), false);
+    assert.strictEqual(checkSectorFree(data, bamOff, 18, 0, getCurrentCtx()), false);
   });
 
   it('bamMarkSectorUsed marks a free sector as used', () => {
     var data = new Uint8Array(currentBuffer);
-    var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+    var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector, getCurrentCtx());
     // Find a free sector on track 1
     var freeSector = -1;
     for (var s = 0; s < 21; s++) {
-      if (checkSectorFree(data, bamOff, 1, s)) { freeSector = s; break; }
+      if (checkSectorFree(data, bamOff, 1, s, getCurrentCtx())) { freeSector = s; break; }
     }
     if (freeSector >= 0) {
-      bamMarkSectorUsed(data, 1, freeSector, bamOff);
-      assert.strictEqual(checkSectorFree(data, bamOff, 1, freeSector), false);
+      bamMarkSectorUsed(data, 1, freeSector, bamOff, getCurrentCtx());
+      assert.strictEqual(checkSectorFree(data, bamOff, 1, freeSector, getCurrentCtx()), false);
     }
   });
 
   it('bamMarkSectorFree marks a used sector as free', () => {
     var data = new Uint8Array(currentBuffer);
-    var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+    var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector, getCurrentCtx());
     // Track 18 sector 1 is used (directory)
-    bamMarkSectorFree(data, 18, 1, bamOff);
-    assert.strictEqual(checkSectorFree(data, bamOff, 18, 1), true);
+    bamMarkSectorFree(data, 18, 1, bamOff, getCurrentCtx());
+    assert.strictEqual(checkSectorFree(data, bamOff, 18, 1, getCurrentCtx()), true);
   });
 
   it('bamRecalcFree updates the free count correctly', () => {
     var data = new Uint8Array(currentBuffer);
-    var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+    var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector, getCurrentCtx());
     // Find a track with free sectors
     var testTrack = -1;
     for (var t = 19; t <= 35; t++) {
@@ -75,8 +75,8 @@ describe('BAM sector operations on D64', () => {
     var freeBefore = currentFormat.readTrackFree(data, bamOff, testTrack);
     var spt = currentFormat.sectorsPerTrack(testTrack);
     for (var s = 0; s < spt; s++) {
-      if (checkSectorFree(data, bamOff, testTrack, s)) {
-        bamMarkSectorUsed(data, testTrack, s, bamOff);
+      if (checkSectorFree(data, bamOff, testTrack, s, getCurrentCtx())) {
+        bamMarkSectorUsed(data, testTrack, s, bamOff, getCurrentCtx());
         break;
       }
     }
@@ -96,7 +96,7 @@ describe('forEachFileSector', () => {
     // Find the first non-GEOS PRG file (geos v2.0 engl.)
     var entry = info.entries[0];
     var blocks = data[entry.entryOff + 30] | (data[entry.entryOff + 31] << 8);
-    var count = forEachFileSector(data, entry.entryOff, function() {});
+    var count = forEachFileSector(data, entry.entryOff, function() {}, getCurrentCtx());
     assert.strictEqual(count, blocks);
   });
 
@@ -113,7 +113,7 @@ describe('forEachFileSector', () => {
     }
     assert.ok(entry, 'should find a VLIR file');
     var blocks = data[entry.entryOff + 30] | (data[entry.entryOff + 31] << 8);
-    var count = forEachFileSector(data, entry.entryOff, function() {});
+    var count = forEachFileSector(data, entry.entryOff, function() {}, getCurrentCtx());
     assert.strictEqual(count, blocks);
   });
 
@@ -132,7 +132,7 @@ describe('forEachFileSector', () => {
     }
     assert.ok(entry, 'should find a GEOS Sequential file');
     var blocks = data[entry.entryOff + 30] | (data[entry.entryOff + 31] << 8);
-    var count = forEachFileSector(data, entry.entryOff, function() {});
+    var count = forEachFileSector(data, entry.entryOff, function() {}, getCurrentCtx());
     assert.strictEqual(count, blocks);
   });
 
@@ -143,7 +143,7 @@ describe('forEachFileSector', () => {
     var sectors = [];
     forEachFileSector(data, entry.entryOff, function(t, s) {
       sectors.push(t + ':' + s);
-    });
+    }, getCurrentCtx());
     assert.ok(sectors.length > 0);
     // No duplicates
     var unique = new Set(sectors);
@@ -181,20 +181,20 @@ describe('buildTrueAllocationMap', () => {
   });
 
   it('returns an object with sector keys', () => {
-    var map = buildTrueAllocationMap(currentBuffer);
+    var map = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
     assert.ok(map['18:0'], 'BAM sector should be allocated');
     assert.ok(map['18:1'], 'first directory sector should be allocated');
   });
 
   it('all file sectors are in the map', () => {
-    var map = buildTrueAllocationMap(currentBuffer);
+    var map = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
     var info = parseDisk(currentBuffer);
     var data = new Uint8Array(currentBuffer);
     for (var i = 0; i < info.entries.length; i++) {
       if (info.entries[i].deleted) continue;
       forEachFileSector(data, info.entries[i].entryOff, function(t, s) {
         assert.ok(map[t + ':' + s], 'sector ' + t + ':' + s + ' should be in allocation map');
-      });
+      }, getCurrentCtx());
     }
   });
 });

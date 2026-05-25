@@ -446,7 +446,6 @@ function updateTabName() {
 // ── BAM integrity check (read-only, doesn't modify disk) ─────────────
 /** @param {ArrayBuffer} buffer @returns {BAMIntegrityResult} */
 function checkBAMIntegrity(buffer, ctx) {
-  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
   var fmt = ctx.format;
   var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, ctx);
@@ -594,7 +593,6 @@ function checkBAMIntegrity(buffer, ctx) {
 // defragmenting (packing files onto consecutive tracks).
 // Returns { filesOptimized, sectorsRewritten, log[] }
 function optimizeDisk(buffer, interleave, defragment, ctx) {
-  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
   var fmt = ctx.format;
   var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, ctx);
@@ -865,7 +863,6 @@ function optimizeDisk(buffer, interleave, defragment, ctx) {
 
 // ── Validate disk ────────────────────────────────────────────────────
 function validateDisk(buffer, ctx) {
-  ctx = ctx || getCurrentCtx();
   const data = new Uint8Array(buffer);
   const fmt = ctx.format;
   const bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, ctx);
@@ -1072,7 +1069,6 @@ function validateDisk(buffer, ctx) {
 
 // Validate a D81 partition's contents and rebuild its internal BAM
 function validatePartition(buffer, startTrack, partSize, ctx) {
-  ctx = ctx || getCurrentCtx();
   const data = new Uint8Array(buffer);
   const fmt = ctx.format;
   const numPartTracks = Math.floor(partSize / fmt.partitionSpt);
@@ -1232,7 +1228,6 @@ function validatePartition(buffer, startTrack, partSize, ctx) {
 // Finds file data remaining on disk after directory entries have been
 // completely removed. Read-only — does not modify the buffer.
 function scanOrphanedChains(buffer, ctx) {
-  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
   var fmt = ctx.format;
 
