@@ -1593,10 +1593,11 @@ function hasC128BootSignature(buffer) {
 // "COPYRIGHT CBM 86" on reset and executes it. Independent of the C128
 // boot-block signature above. Gated by `fmt.hasAutoBootFlag` so any
 // future format that grows the same convention can opt in.
-function hasD81AutoBootLoader(buffer) {
-  if (!buffer || !currentFormat.hasAutoBootFlag) return false;
+function hasD81AutoBootLoader(buffer, ctx) {
+  ctx = ctx || getCurrentCtx();
+  if (!buffer || !ctx.format.hasAutoBootFlag) return false;
   var data = new Uint8Array(buffer);
-  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  var bamOff = sectorOffset(ctx.format.bamTrack, ctx.format.bamSector, ctx);
   if (bamOff < 0 || bamOff + 8 > data.length) return false;
   return data[bamOff + 0x07] !== 0x00;
 }
@@ -1816,12 +1817,13 @@ function d81PartitionBamBase(partBamOff, track) {
 // ── Parse a D81 partition/subdirectory ────────────────────────────────
 // startTrack = first track of the partition (header at sector 0, BAM at 1-2, dir at 3+)
 // partSize = size in sectors from directory entry bytes 30-31
-function parsePartition(buffer, startTrack, partSize) {
+function parsePartition(buffer, startTrack, partSize, ctx) {
+  ctx = ctx || getCurrentCtx();
   const data = new Uint8Array(buffer);
-  const fmt = currentFormat;
+  const fmt = ctx.format;
 
   // Partition header is at (startTrack, 0) — same layout as D81 root header
-  const headerOff = sectorOffset(startTrack, 0);
+  const headerOff = sectorOffset(startTrack, 0, ctx);
   if (headerOff < 0) return null;
 
   const diskName = readPetsciiString(data, headerOff + fmt.nameOffset, fmt.nameLength);
@@ -1829,7 +1831,7 @@ function parsePartition(buffer, startTrack, partSize) {
 
   // Partition BAM is at (startTrack, 1) and (startTrack, 2)
   // Count free blocks from the partition's own BAM
-  const partBamOff = sectorOffset(startTrack, 1);
+  const partBamOff = sectorOffset(startTrack, 1, ctx);
   const numPartTracks = Math.floor(partSize / fmt.partitionSpt);
   let freeBlocks = 0;
   for (let t = 1; t <= numPartTracks; t++) {
@@ -1855,7 +1857,7 @@ function parsePartition(buffer, startTrack, partSize) {
     // the end of an 8-entry dir) terminate cleanly instead of being
     // followed via sectorOffset's LBA fallback into file content.
     if (dirSector < 0 || dirSector >= fmt.sectorsPerTrack(dirTrack)) break;
-    const off = sectorOffset(dirTrack, dirSector);
+    const off = sectorOffset(dirTrack, dirSector, ctx);
     if (off < 0) break;
 
     for (let i = 0; i < fmt.entriesPerSector; i++) {
@@ -1894,7 +1896,7 @@ function parsePartition(buffer, startTrack, partSize) {
     dirSector = data[off + 1];
   }
 
-  return { diskName, diskId, freeBlocks, entries, format: fmt.name, tracks: currentTracks, isPartition: true };
+  return { diskName, diskId, freeBlocks, entries, format: fmt.name, tracks: ctx.tracks, isPartition: true };
 }
 
 
