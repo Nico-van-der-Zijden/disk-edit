@@ -1580,10 +1580,11 @@ function _hasFdEntries(data, off) {
 // C128 auto-boot disks have the literal bytes 'CBM' at T1/S0 +$00..+$02
 // (C128BOOT.TXT rev 1.1). Routed through sectorOffset so the check
 // also works on D71/D81 if anyone ever stamps a boot block there.
-function hasC128BootSignature(buffer) {
+function hasC128BootSignature(buffer, ctx) {
   if (!buffer) return false;
+  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
-  var off = sectorOffset(1, 0);
+  var off = sectorOffset(1, 0, ctx);
   if (off < 0 || off + 3 > data.length) return false;
   return data[off] === 0x43 && data[off + 1] === 0x42 && data[off + 2] === 0x4D;
 }
