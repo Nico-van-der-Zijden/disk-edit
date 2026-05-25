@@ -73,7 +73,7 @@ function showFileInfo(entryOff) {
   var startSector = data[entryOff + 4];
 
   var addr = getFileAddresses(currentBuffer, entryOff);
-  var result = readFileData(currentBuffer, entryOff);
+  var result = readFileData(currentBuffer, entryOff, getCurrentCtx());
   var fileData = result.data;
 
   var lines = [];

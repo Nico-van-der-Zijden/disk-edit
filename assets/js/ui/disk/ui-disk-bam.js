@@ -6,11 +6,11 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
 
   var data = new Uint8Array(currentBuffer);
   var fmt = currentFormat;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
   var bamTracks = fmt.bamTracksRange(currentTracks);
 
   // Use shared BAM integrity check
-  var bamCheck = checkBAMIntegrity(currentBuffer);
+  var bamCheck = checkBAMIntegrity(currentBuffer, getCurrentCtx());
   var sectorOwner = bamCheck.sectorOwner;
 
   var bamWarnings = '';
@@ -33,10 +33,10 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
 
   // Informational notes about format-specific spec features detected in
   // the current image (D64.TXT / D71.TXT / D81.TXT). Flags, not errors.
-  var swp = isSoftWriteProtected(currentBuffer);
-  var speeder = getSpeederVariant(currentBuffer);
-  var c128Boot = hasC128BootSignature(currentBuffer);
-  var d81Boot = hasD81AutoBootLoader(currentBuffer);
+  var swp = isSoftWriteProtected(currentBuffer, getCurrentCtx());
+  var speeder = getSpeederVariant(currentBuffer, getCurrentCtx());
+  var c128Boot = hasC128BootSignature(currentBuffer, getCurrentCtx());
+  var d81Boot = hasD81AutoBootLoader(currentBuffer, getCurrentCtx());
   if (swp !== null || speeder || c128Boot || d81Boot) {
     bamWarnings += '<ul class="bam-warnings">';
     if (swp !== null) {
@@ -73,7 +73,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     spt = fmt.sectorsPerTrack(t);
     var tFree = 0, tUsed = 0;
     for (var cs = 0; cs < spt; cs++) {
-      if (checkSectorFree(data, bamOff, t, cs)) tFree++; else tUsed++;
+      if (checkSectorFree(data, bamOff, t, cs, getCurrentCtx())) tFree++; else tUsed++;
     }
     totalFree += tFree;
     totalUsed += tUsed;
@@ -115,7 +115,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     var sectors = [];
     forEachFileSector(data, fe.entryOff, function(ft2, fs2) {
       sectors.push({ t: ft2, s: fs2 });
-    });
+    }, getCurrentCtx());
     if (sectors.length < 2) continue;
     // Count non-adjacent transitions (different track or non-sequential sector with interleave)
     var jumps = 0;
@@ -192,7 +192,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       sectorsHtml += '<span class="bam-sectors">';
 
       for (var s = 0; s < spt; s++) {
-        var isFree = checkSectorFree(data, bamOff, t, s);
+        var isFree = checkSectorFree(data, bamOff, t, s, getCurrentCtx());
         var sKey = t + ':' + s;
         var isError = bamCheck.errorSectors[sKey];
         var isOrphan = bamCheck.orphanSectors[sKey];
@@ -408,7 +408,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
 
       for (var ms = 0; ms < mSpt; ms++) {
         var mx = labelW + ms * stepX + gap;
-        var mFree = checkSectorFree(data, bamOff, mt, ms);
+        var mFree = checkSectorFree(data, bamOff, mt, ms, getCurrentCtx());
         var mKey = mt + ':' + ms;
         var mError = bamCheck.errorSectors[mKey];
         var mOrphan = bamCheck.orphanSectors[mKey];
@@ -448,7 +448,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       }
       var ttKey = pos.track + ':' + pos.sector;
       var ttOwner = sectorOwner[ttKey];
-      var ttFree = checkSectorFree(data, bamOff, pos.track, pos.sector);
+      var ttFree = checkSectorFree(data, bamOff, pos.track, pos.sector, getCurrentCtx());
       var tt = 'T:$' + pos.track.toString(16).toUpperCase().padStart(2, '0') +
         ' S:$' + pos.sector.toString(16).toUpperCase().padStart(2, '0');
       if (bamCheck.errorSectors[ttKey]) tt += ' \u26a0 BAM error';
@@ -476,10 +476,10 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       if (mt4 < 1 || mt4 > bamTracks || ms4 < 0 || ms4 >= fmt.sectorsPerTrack(mt4)) return;
       pushUndo();
       var d = new Uint8Array(currentBuffer);
-      var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+      var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
       var base2 = fmt.getBamBitmapBase(bOff, mt4);
       d[base2 + (ms4 >> 3)] ^= fmt.bamBitMask(ms4);
-      if (fmt.hasBamFreeCounts) bamRecalcFree(d, mt4, bOff);
+      if (fmt.hasBamFreeCounts) bamRecalcFree(d, mt4, bOff, getCurrentCtx());
       document.getElementById('modal-overlay').classList.remove('open');
       document.getElementById('opt-view-bam').click();
     });
@@ -529,7 +529,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     function dmSectorColor(t, s) {
       var key = t + ':' + s;
       var isDirTrack = (t === fmt.dirTrack);
-      var isFree = checkSectorFree(data, bamOff, t, s);
+      var isFree = checkSectorFree(data, bamOff, t, s, getCurrentCtx());
       if (isDirTrack) return isFree ? dmColDirFree : dmColDirUsed;
       if (bamCheck.errorSectors[key]) return dmColError;
       if (bamCheck.orphanSectors[key]) return dmColOrphan;
@@ -542,7 +542,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
         ' S:$' + s.toString(16).toUpperCase().padStart(2, '0');
       if (bamCheck.errorSectors[key]) tt += ' \u26a0 BAM error';
       else if (bamCheck.orphanSectors[key]) tt += ' (orphan)';
-      else if (checkSectorFree(data, bamOff, t, s)) tt += ' (free)';
+      else if (checkSectorFree(data, bamOff, t, s, getCurrentCtx())) tt += ' (free)';
       else if (sectorOwner[key]) tt += ' (' + petsciiToReadable(sectorOwner[key]) + ')';
       else tt += ' (used)';
       return tt;
@@ -643,12 +643,12 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
 
     pushUndo();
     var d = new Uint8Array(currentBuffer);
-    var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+    var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
     var base = fmt.getBamBitmapBase(bOff, bt);
     var byteIdx = bs >> 3;
     var bitMask = fmt.bamBitMask(bs);
     d[base + byteIdx] ^= bitMask;
-    if (fmt.hasBamFreeCounts) bamRecalcFree(d, bt, bOff);
+    if (fmt.hasBamFreeCounts) bamRecalcFree(d, bt, bOff, getCurrentCtx());
 
     // Refresh BAM view
     document.getElementById('modal-overlay').classList.remove('open');

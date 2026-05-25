@@ -128,7 +128,7 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
 
   if (!currentBuffer) return;
 
-  var results = scanOrphanedChains(currentBuffer);
+  var results = scanOrphanedChains(currentBuffer, getCurrentCtx());
 
   if (results.length === 0) {
     showModal('Scan for Lost Files', ['No lost files found.']);
@@ -203,7 +203,7 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
         var typeIdx = r.suggestedType === 'PRG' ? 2 : r.suggestedType === 'SEQ' ? 1 : 3;
 
         var snapshot = currentBuffer.slice(0);
-        var entryOff = findFreeDirEntry(currentBuffer);
+        var entryOff = findFreeDirEntry(currentBuffer, getCurrentCtx());
         if (entryOff < 0) {
           currentBuffer = snapshot;
           showModal('Restore Error', ['No free directory entry available.']);
@@ -238,7 +238,7 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
         var ctx = getDirContext();
         var bamOff = ctx.bamOff;
         for (var si = 0; si < r.sectors.length; si++) {
-          bamMarkSectorUsed(wd, r.sectors[si].t, r.sectors[si].s, bamOff);
+          bamMarkSectorUsed(wd, r.sectors[si].t, r.sectors[si].s, bamOff, getCurrentCtx());
         }
 
         selectedEntryIndex = entryOff;
@@ -528,7 +528,7 @@ document.getElementById('opt-fill-free').addEventListener('click', function(e) {
     pushUndo();
 
     // Build true allocation map (don't trust BAM)
-    var allocated = buildTrueAllocationMap(currentBuffer);
+    var allocated = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
     var data = new Uint8Array(currentBuffer);
     var fmt = currentFormat;
     var filled = 0;
@@ -537,7 +537,7 @@ document.getElementById('opt-fill-free').addEventListener('click', function(e) {
       var spt = fmt.sectorsPerTrack(t);
       for (var s = 0; s < spt; s++) {
         if (allocated[t + ':' + s]) continue;
-        var off = sectorOffset(t, s);
+        var off = sectorOffset(t, s, getCurrentCtx());
         if (off < 0) continue;
 
         // Set track/sector link to 00 00 (no chain)
@@ -569,7 +569,7 @@ document.getElementById('opt-fill-free').addEventListener('click', function(e) {
 // ── Disk menu: Optimize Disk ─────────────────────────────────────────
 document.getElementById('opt-optimize').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer || isTapeFormat()) return;
+  if (!currentBuffer || isTapeFormat(getCurrentCtx())) return;
   closeMenus();
 
   var fmt = currentFormat;
@@ -685,7 +685,7 @@ document.getElementById('opt-optimize').addEventListener('click', function(e) {
     document.getElementById('modal-overlay').classList.remove('open');
 
     pushUndo();
-    var result = optimizeDisk(currentBuffer, ilVal, defrag);
+    var result = optimizeDisk(currentBuffer, ilVal, defrag, getCurrentCtx());
 
     // Update global interleave so new files use the same setting
     fileInterleave = ilVal;
@@ -748,7 +748,7 @@ document.getElementById('opt-resize-dnp').addEventListener('click', async functi
 
   // Work on a scratch buffer so a failure leaves the real image untouched.
   var scratch = currentBuffer.slice(0);
-  var attempt = resizeDnpImage(scratch, newTracks);
+  var attempt = resizeDnpImage(scratch, newTracks, getCurrentCtx());
 
   // Shrink blocked? Auto-compact and retry. optimizeDisk reads currentBuffer/
   // currentTracks indirectly via parseDisk, so point it at the scratch copy
@@ -757,12 +757,12 @@ document.getElementById('opt-resize-dnp').addEventListener('click', async functi
     var savedBuf = currentBuffer;
     currentBuffer = scratch;
     try {
-      optimizeDisk(scratch, currentFormat.defaultInterleave, true);
+      optimizeDisk(scratch, currentFormat.defaultInterleave, true, getCurrentCtx());
     } finally {
       currentBuffer = savedBuf;
       currentTracks = oldTracks;
     }
-    attempt = resizeDnpImage(scratch, newTracks);
+    attempt = resizeDnpImage(scratch, newTracks, getCurrentCtx());
   }
 
   if (attempt.error === 'blocked') {
@@ -1489,11 +1489,11 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
     pushUndo();
     var data = new Uint8Array(currentBuffer);
     var fmt = currentFormat;
-    var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+    var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
 
     // Allocate 2 sectors: header + first dir sector
-    var allocated = buildTrueAllocationMap(currentBuffer);
-    var sectorList = allocateSectors(allocated, 2);
+    var allocated = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
+    var sectorList = allocateSectors(allocated, 2, getCurrentCtx());
     if (sectorList.length < 2) {
       showModal('Add Directory Error', ['Not enough free sectors.']);
       return;
@@ -1511,7 +1511,7 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
     }
 
     // Write header sector
-    var hdrOff = sectorOffset(hdrSec.track, hdrSec.sector);
+    var hdrOff = sectorOffset(hdrSec.track, hdrSec.sector, getCurrentCtx());
     for (var hi = 0; hi < 256; hi++) data[hdrOff + hi] = 0x00;
     data[hdrOff + 0x00] = dirSec.track;  // dir chain T/S
     data[hdrOff + 0x01] = dirSec.sector;
@@ -1526,7 +1526,7 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
       }
     }
     // Copy disk ID region from root header (includes pad + DOS type)
-    var rootHdrOff = sectorOffset(fmt.headerTrack, fmt.headerSector);
+    var rootHdrOff = sectorOffset(fmt.headerTrack, fmt.headerSector, getCurrentCtx());
     for (var idi = 0; idi < fmt.idLength; idi++) {
       data[hdrOff + fmt.idOffset + idi] = data[rootHdrOff + fmt.idOffset + idi];
     }
@@ -1538,17 +1538,17 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
     data[hdrOff + fmt.subdirParentRef + 1] = parentHeaderS;
 
     // Write empty dir sector
-    var dirOff = sectorOffset(dirSec.track, dirSec.sector);
+    var dirOff = sectorOffset(dirSec.track, dirSec.sector, getCurrentCtx());
     for (var di = 0; di < 256; di++) data[dirOff + di] = 0x00;
     data[dirOff + 0x00] = 0x00;
     data[dirOff + 0x01] = 0xFF;
 
     // Mark sectors as used in BAM
-    bamMarkSectorUsed(data, hdrSec.track, hdrSec.sector, bamOff);
-    bamMarkSectorUsed(data, dirSec.track, dirSec.sector, bamOff);
+    bamMarkSectorUsed(data, hdrSec.track, hdrSec.sector, bamOff, getCurrentCtx());
+    bamMarkSectorUsed(data, dirSec.track, dirSec.sector, bamOff, getCurrentCtx());
 
     // Create directory entry
-    var entryOff = findFreeDirEntry(currentBuffer);
+    var entryOff = findFreeDirEntry(currentBuffer, getCurrentCtx());
     if (entryOff < 0) {
       showModal('Add Directory Error', ['No free directory entry.']);
       return;
@@ -1604,7 +1604,7 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
   var actualBlocks = dataTracks * pSpt;
 
   // Build true allocation map to find contiguous free tracks
-  var allocated = buildTrueAllocationMap(currentBuffer);
+  var allocated = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
   var fmt = currentFormat;
 
   // Find contiguous free tracks (must not include track 40, must start at sector 0)
@@ -1643,7 +1643,7 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
   var data = new Uint8Array(currentBuffer);
 
   // Create directory entry for the partition
-  var entryOff = findFreeDirEntry(currentBuffer);
+  var entryOff = findFreeDirEntry(currentBuffer, getCurrentCtx());
   if (entryOff < 0) {
     currentBuffer = snapshot;
     showModal('Add Directory Error', ['Failed to allocate directory entry.']);
@@ -1674,7 +1674,7 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
   data[entryOff + 31] = (partSectors >> 8) & 0xFF;
 
   // Format the partition: header (sector 0), BAM (sectors 1-2), directory (sector 3)
-  var headerOff = sectorOffset(startTrack, 0);
+  var headerOff = sectorOffset(startTrack, 0, getCurrentCtx());
 
   // Header sector — mirrors D81 root header layout
   data[headerOff + 0x00] = startTrack; // dir track (self-referencing)
@@ -1695,7 +1695,7 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
   for (var fi = 0x1B; fi < 0x100; fi++) data[headerOff + fi] = 0x00;
 
   // BAM sector 1 (startTrack, 1) — covers tracks 1..40 of the partition
-  var bam1Off = sectorOffset(startTrack, 1);
+  var bam1Off = sectorOffset(startTrack, 1, getCurrentCtx());
   data[bam1Off + 0x00] = startTrack;
   data[bam1Off + 0x01] = 2;        // link to BAM sector 2
   data[bam1Off + 0x02] = 0x44;     // DOS version
@@ -1705,7 +1705,7 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
   for (var b1 = 0x06; b1 < 0x10; b1++) data[bam1Off + b1] = 0x00;
 
   // BAM sector 2 (startTrack, 2) — covers tracks 41..80 of the partition
-  var bam2Off = sectorOffset(startTrack, 2);
+  var bam2Off = sectorOffset(startTrack, 2, getCurrentCtx());
   data[bam2Off + 0x00] = 0x00;     // end of chain
   data[bam2Off + 0x01] = 0xFF;
   data[bam2Off + 0x02] = 0x44;
@@ -1739,13 +1739,13 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
   }
 
   // Initialize first directory sector (startTrack, 3)
-  var dirOff = sectorOffset(startTrack, 3);
+  var dirOff = sectorOffset(startTrack, 3, getCurrentCtx());
   data[dirOff + 0] = 0x00; // end of chain
   data[dirOff + 1] = 0xFF;
   for (var di = 2; di < 256; di++) data[dirOff + di] = 0x00;
 
   // Mark all partition sectors as allocated in the root BAM
-  var rootBamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var rootBamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
   for (var rt = startTrack; rt < startTrack + numTracks; rt++) {
     var spt = fmt.sectorsPerTrack(rt);
     // Clear all bits (mark all sectors as used)

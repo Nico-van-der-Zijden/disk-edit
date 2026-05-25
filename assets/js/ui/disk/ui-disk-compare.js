@@ -94,7 +94,7 @@ function readDiskForCompare(buffer) {
     if (info && info.entries) {
       info.entries.forEach(function(e) {
         if (e.deleted) return;
-        var r = readFileData(buffer, e.entryOff);
+        var r = readFileData(buffer, e.entryOff, getCurrentCtx());
         // Rich PETSCII for proper rendering of reversed bytes; the
         // PUA-mapped chars need the C64 Pro Mono font to display as
         // anything other than boxes.
@@ -115,7 +115,7 @@ function readDiskForCompare(buffer) {
     var richDiskName = null, richDiskId = null;
     if (currentFormat && typeof getHeaderOffset === 'function' && info) {
       try {
-        var hdrOff = getHeaderOffset();
+        var hdrOff = getHeaderOffset(getCurrentCtx());
         var nameLen = currentFormat.nameLength || 16;
         var idLen = currentFormat.idLength || 5;
         richDiskName = readPetsciiRich(data, hdrOff + currentFormat.nameOffset, nameLen);
@@ -282,7 +282,7 @@ function showSectorHexDiff(body, diskA, diskB, track, sector, sd) {
     currentFormat = diskA.formatRef;
     currentTracks = diskA.tracks;
     currentBuffer = diskA.buffer;
-    off = sectorOffset(track, sector);
+    off = sectorOffset(track, sector, getCurrentCtx());
   } finally {
     currentFormat = savedFormat;
     currentTracks = savedTracks;
@@ -406,7 +406,7 @@ function computeSectorDiff(diskA, diskB) {
       if (spt > maxSpt) maxSpt = spt;
       for (var s = 0; s < spt; s++) {
         totalSectors++;
-        var off = sectorOffset(t, s);
+        var off = sectorOffset(t, s, getCurrentCtx());
         if (off < 0 || off + 256 > dataA.length || off + 256 > dataB.length) continue;
         var n = 0;
         for (var i = 0; i < 256; i++) if (dataA[off + i] !== dataB[off + i]) n++;

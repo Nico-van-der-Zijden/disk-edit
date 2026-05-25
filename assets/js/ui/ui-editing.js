@@ -23,7 +23,7 @@ function bindTouchTapEdit(el, openEdit) {
 }
 
 function startEditing(el) {
-  if (isTapeFormat()) return;
+  if (isTapeFormat(getCurrentCtx())) return;
   if (el.classList.contains('editing')) return;
   if (el.querySelector('.petscii-editor')) return;
   cancelActiveEdits();
@@ -38,7 +38,7 @@ function startEditing(el) {
   const stopAtPadding = field === 'name';
   if (currentBuffer) {
     const data = new Uint8Array(currentBuffer);
-    const headerOff = getHeaderOffset();
+    const headerOff = getHeaderOffset(getCurrentCtx());
     const fieldOff = field === 'name' ? headerOff + currentFormat.nameOffset : headerOff + currentFormat.idOffset;
     for (let i = 0; i < maxLen; i++) {
       origBytes[i] = data[fieldOff + i];
@@ -93,7 +93,7 @@ function startEditing(el) {
     if (currentBuffer && changed) {
       pushUndo();
       const data = new Uint8Array(currentBuffer);
-      const headerOff = getHeaderOffset();
+      const headerOff = getHeaderOffset(getCurrentCtx());
       const fieldOff = field === 'name' ? headerOff + currentFormat.nameOffset : headerOff + currentFormat.idOffset;
       for (let i = 0; i < maxLen; i++) data[fieldOff + i] = newBytes[i];
 
@@ -172,7 +172,7 @@ function downloadD64(buffer, fileName) {
 
 function updateMenuState() {
   const hasDisk = currentBuffer !== null;
-  const tape = isTapeFormat();
+  const tape = isTapeFormat(getCurrentCtx());
   // CMD container partition list — at this level we're looking at
   // a container, not a filesystem. Disk-edit / file-level operations
   // don't apply, so they grey out exactly like for tape images.
@@ -204,9 +204,9 @@ function updateMenuState() {
   document.getElementById('opt-view-bam').classList.toggle('disabled', !hasDisk || noEdit);
   document.getElementById('opt-view-errors').classList.toggle('disabled', !hasDisk || noEdit || !hasErrorBytes(currentBuffer));
   // GEOS isn't a CFS concept.
-  document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || noEdit || hasGeosSignature(currentBuffer) || hddCtx);
-  document.getElementById('opt-view-border').classList.toggle('disabled', !hasDisk || !hasGeosSignature(currentBuffer));
-  document.getElementById('opt-restore-dos-version').classList.toggle('disabled', !hasDisk || noEdit || isSoftWriteProtected(currentBuffer) === null);
+  document.getElementById('opt-convert-geos').classList.toggle('disabled', !hasDisk || noEdit || hasGeosSignature(currentBuffer, getCurrentCtx()) || hddCtx);
+  document.getElementById('opt-view-border').classList.toggle('disabled', !hasDisk || !hasGeosSignature(currentBuffer, getCurrentCtx()));
+  document.getElementById('opt-restore-dos-version').classList.toggle('disabled', !hasDisk || noEdit || isSoftWriteProtected(currentBuffer, getCurrentCtx()) === null);
   // Install HD-DOS: only meaningful on a DHD container view, only enabled
   // when a donor shadow is cached AND the active image is missing its own.
   // The label tracks the cached version so the user sees what would be
@@ -1310,9 +1310,9 @@ document.getElementById('opt-validate').addEventListener('click', async (e) => {
   var pre = currentBuffer.slice(0);
   var log;
   if (currentPartition && !currentPartition.dnpDir) {
-    log = validatePartition(currentBuffer, currentPartition.startTrack, currentPartition.partSize);
+    log = validatePartition(currentBuffer, currentPartition.startTrack, currentPartition.partSize, getCurrentCtx());
   } else {
-    log = validateDisk(currentBuffer);
+    log = validateDisk(currentBuffer, getCurrentCtx());
   }
   var preArr = new Uint8Array(pre);
   var postArr = new Uint8Array(currentBuffer);

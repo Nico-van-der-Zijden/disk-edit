@@ -20,7 +20,7 @@ function showGeoWriteViewer(entryOff) {
   if (!currentBuffer) return;
   var data = new Uint8Array(currentBuffer);
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
-  var records = readVLIRRecords(currentBuffer, entryOff);
+  var records = readVLIRRecords(currentBuffer, entryOff, getCurrentCtx());
   if (records.length === 0) {
     showModal('geoWrite', ['No data found in this document.']);
     return;

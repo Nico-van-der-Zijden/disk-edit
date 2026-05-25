@@ -32,7 +32,7 @@ function showFilePetsciiViewer(entryOff, preloaded) {
   } else {
     if (!currentBuffer) return;
     var data = new Uint8Array(currentBuffer);
-    result = readFileData(currentBuffer, entryOff);
+    result = readFileData(currentBuffer, entryOff, getCurrentCtx());
     fileData = result.data;
     name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
   }
@@ -227,7 +227,7 @@ function showFileHexViewer(entryOff, preloaded) {
   } else {
     if (!currentBuffer) return;
     var data = new Uint8Array(currentBuffer);
-    result = readFileData(currentBuffer, entryOff);
+    result = readFileData(currentBuffer, entryOff, getCurrentCtx());
     fileData = result.data;
     name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
     typeIdx = data[entryOff + 2] & 0x07;
@@ -302,7 +302,7 @@ function showFileDisasmViewer(entryOff, preloaded) {
   } else {
     if (!currentBuffer) return;
     var data = new Uint8Array(currentBuffer);
-    result = readFileData(currentBuffer, entryOff);
+    result = readFileData(currentBuffer, entryOff, getCurrentCtx());
     fileData = result.data;
     name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
   }
@@ -423,7 +423,7 @@ var sectorClipboard = null;
 
 function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
   if (!currentBuffer) return;
-  var off = sectorOffset(track, sector);
+  var off = sectorOffset(track, sector, getCurrentCtx());
   if (off < 0) return;
   var data = new Uint8Array(currentBuffer);
 
@@ -603,7 +603,7 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     function(newTrack) {
       navTrack = newTrack;
       // Only reset sector if current sector is invalid for the new track
-      if (navSector >= sectorsPerTrack(navTrack)) navSector = 0;
+      if (navSector >= sectorsPerTrack(navTrack, getCurrentCtx())) navSector = 0;
       document.getElementById('hex-nav-track').textContent = newTrack.toString(16).toUpperCase().padStart(2, '0');
       // Auto-focus sector
       var secSpan = document.getElementById('hex-nav-sector');
@@ -614,7 +614,7 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
 
   setupNavClick('hex-nav-sector',
     function() { return navSector; },
-    function(val) { return val >= 0 && val < sectorsPerTrack(navTrack); },
+    function(val) { return val >= 0 && val < sectorsPerTrack(navTrack, getCurrentCtx()); },
     function(newSector) {
       navSector = newSector;
       saveCurrentAndNavigate(navTrack, navSector);
@@ -625,19 +625,19 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
   document.getElementById('hex-track-up').addEventListener('click', function() {
     if (navTrack < currentTracks) {
       navTrack++;
-      if (navSector >= sectorsPerTrack(navTrack)) navSector = 0;
+      if (navSector >= sectorsPerTrack(navTrack, getCurrentCtx())) navSector = 0;
       saveCurrentAndNavigate(navTrack, navSector);
     }
   });
   document.getElementById('hex-track-down').addEventListener('click', function() {
     if (navTrack > 1) {
       navTrack--;
-      if (navSector >= sectorsPerTrack(navTrack)) navSector = 0;
+      if (navSector >= sectorsPerTrack(navTrack, getCurrentCtx())) navSector = 0;
       saveCurrentAndNavigate(navTrack, navSector);
     }
   });
   document.getElementById('hex-sector-up').addEventListener('click', function() {
-    if (navSector < sectorsPerTrack(navTrack) - 1) {
+    if (navSector < sectorsPerTrack(navTrack, getCurrentCtx()) - 1) {
       navSector++;
     } else if (navTrack < currentTracks) {
       navTrack++;
@@ -652,7 +652,7 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
       navSector--;
     } else if (navTrack > 1) {
       navTrack--;
-      navSector = sectorsPerTrack(navTrack) - 1;
+      navSector = sectorsPerTrack(navTrack, getCurrentCtx()) - 1;
     } else {
       return;
     }
@@ -834,7 +834,7 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     for (var bt = 1; bt <= currentTracks; bt++) {
       var spt = currentFormat.sectorsPerTrack(bt);
       for (var bs = 0; bs < spt; bs++) {
-        var boff = sectorOffset(bt, bs);
+        var boff = sectorOffset(bt, bs, getCurrentCtx());
         if (boff < 0) continue;
         if (d2[boff] === track && d2[boff + 1] === sector) {
           saveCurrentAndNavigate(bt, bs);
@@ -907,7 +907,7 @@ document.getElementById('opt-edit-sector').addEventListener('click', function(e)
     var key = dt + ':' + ds;
     if (visited.has(key)) break;
     visited.add(key);
-    var doff = sectorOffset(dt, ds);
+    var doff = sectorOffset(dt, ds, getCurrentCtx());
     dt = data[doff]; ds = data[doff + 1];
   }
 

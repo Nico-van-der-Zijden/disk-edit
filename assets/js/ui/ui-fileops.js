@@ -37,7 +37,7 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
     var entOff = entries[ei];
     var ext, name;
 
-    if (isTapeFormat()) {
+    if (isTapeFormat(getCurrentCtx())) {
       var tapeEntry = getTapeEntry(entOff);
       if (!tapeEntry) continue;
       ext = tapeEntry.type.trim() === 'SEQ' ? '.seq' : '.prg';
@@ -52,7 +52,7 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
       name = petsciiToReadable(readPetsciiString(data, entOff + 5, 16)).trim();
     }
 
-    var result = readFileData(currentBuffer, entOff);
+    var result = readFileData(currentBuffer, entOff, getCurrentCtx());
     if (result.error || result.data.length === 0) continue;
 
     name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
@@ -70,7 +70,7 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
 // ── Export as CVT (GEOS ConVerT format) ──────────────────────────────
 function buildCvtFile(entryOff) {
   var data = new Uint8Array(currentBuffer);
-  var geos = readGeosInfo(currentBuffer, entryOff);
+  var geos = readGeosInfo(currentBuffer, entryOff, getCurrentCtx());
 
   // Block 1: directory entry bytes 2-31 + signature + zero padding
   var block1 = new Uint8Array(254);
@@ -82,18 +82,18 @@ function buildCvtFile(entryOff) {
   // Block 2: info block (254 bytes = sector bytes 2-255)
   var block2 = new Uint8Array(254);
   if (geos.infoTrack > 0) {
-    var infoOff = sectorOffset(geos.infoTrack, geos.infoSector);
+    var infoOff = sectorOffset(geos.infoTrack, geos.infoSector, getCurrentCtx());
     if (infoOff >= 0) {
       for (var j = 0; j < 254; j++) block2[j] = data[infoOff + 2 + j];
     }
   }
 
   if (isVlir) {
-    var records = readVLIRRecords(currentBuffer, entryOff);
+    var records = readVLIRRecords(currentBuffer, entryOff, getCurrentCtx());
 
     // Read VLIR index sector to distinguish 00/00 vs 00/FF
     var vlirT = data[entryOff + 3], vlirS = data[entryOff + 4];
-    var vlirOff = sectorOffset(vlirT, vlirS);
+    var vlirOff = sectorOffset(vlirT, vlirS, getCurrentCtx());
     var vlirRaw = (vlirOff >= 0) ? data.subarray(vlirOff, vlirOff + 256) : null;
 
     // Block 3: record index
@@ -133,7 +133,7 @@ function buildCvtFile(entryOff) {
     return cvt;
   } else {
     // Sequential file
-    var result = readFileData(currentBuffer, entryOff);
+    var result = readFileData(currentBuffer, entryOff, getCurrentCtx());
     var fileBytes = result.data;
     var seqBlocks = Math.max(1, Math.ceil(fileBytes.length / 254));
     var seqPadded = new Uint8Array(seqBlocks * 254);
@@ -277,7 +277,7 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
     var typeIdx, nameBytes, geosBytes, geosInfoBlock;
     var fileName = '';
 
-    if (isTapeFormat()) {
+    if (isTapeFormat(getCurrentCtx())) {
       var tapeEntry = getTapeEntry(entOff);
       if (!tapeEntry) continue;
       typeIdx = tapeEntry.type.trim() === 'SEQ' ? 1 : 2;
@@ -306,7 +306,7 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
         var fileS = data[entOff + 4];
         var childCtx;
         if (currentFormat.subdirLinked) {
-          var hdrOff2 = sectorOffset(fileT, fileS);
+          var hdrOff2 = sectorOffset(fileT, fileS, getCurrentCtx());
           if (hdrOff2 < 0) {
             skipped.push({ name: fileName, reason: 'Subdir header out of range' });
             continue;
@@ -353,7 +353,7 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
       var infoTrack = data[entOff + 0x15];
       var infoSector = data[entOff + 0x16];
       if (data[entOff + 0x18] > 0 && infoTrack > 0) {
-        var infoOff = sectorOffset(infoTrack, infoSector);
+        var infoOff = sectorOffset(infoTrack, infoSector, getCurrentCtx());
         if (infoOff >= 0) {
           geosInfoBlock = new Uint8Array(256);
           for (var ib = 0; ib < 256; ib++) geosInfoBlock[ib] = data[infoOff + ib];
@@ -366,13 +366,13 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
     var vlirRecords = null;
     var fileData = null;
     if (isVlirFile(data, entOff)) {
-      vlirRecords = readVLIRRecordsForCopy(currentBuffer, entOff);
+      vlirRecords = readVLIRRecordsForCopy(currentBuffer, entOff, getCurrentCtx());
       if (!vlirRecords || vlirRecords.length === 0) {
         skipped.push({ name: fileName, reason: 'Empty VLIR file (no records)' });
         continue;
       }
     } else {
-      var result = readFileData(currentBuffer, entOff);
+      var result = readFileData(currentBuffer, entOff, getCurrentCtx());
       if (result.error) {
         skipped.push({ name: fileName, reason: result.error });
         continue;
@@ -559,7 +559,7 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
   var hasGeos = clipboard.some(function(c) {
     return c.kind !== 'cfs-dir-tree' && c.kind !== 'cbm-dir-tree' && c.geosInfoBlock != null;
   });
-  if (hasGeos && !hasGeosSignature(currentBuffer)) {
+  if (hasGeos && !hasGeosSignature(currentBuffer, getCurrentCtx())) {
     var choice = await showChoiceModal(
       'GEOS File',
       'Clipboard contains GEOS file(s) but the disk is not in GEOS format. Convert disk to GEOS format?',
@@ -571,7 +571,7 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     );
     if (choice === 'cancel') return;
     if (choice === 'convert') {
-      writeGeosSignature(currentBuffer);
+      writeGeosSignature(currentBuffer, getCurrentCtx());
       updateMenuState();
     }
   }
@@ -730,7 +730,7 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
       if (item.geosBytes || item.geosInfoBlock) {
         geosData = { geosBytes: item.geosBytes, geosInfoBlock: item.geosInfoBlock };
       }
-      success = writeFileToDisk(item.typeIdx, item.nameBytes, item.data, geosData);
+      success = writeFileToDisk(item.typeIdx, item.nameBytes, item.data, geosData, getCurrentCtx());
     }
     if (success) {
       pasted++;
@@ -995,7 +995,7 @@ function importFileToDisk(fileName, fileData) {
     }
   }
 
-  if (writeFileToDisk(typeIdx, nameBytes, fileData)) {
+  if (writeFileToDisk(typeIdx, nameBytes, fileData, getCurrentCtx())) {
     var info = parseCurrentDir(currentBuffer);
     renderDisk(info);
     var numSectors = fileData.length === 0 ? 1 : Math.ceil(fileData.length / 254);
@@ -1065,7 +1065,7 @@ async function importCvtFile(fileName, cvt) {
   }
 
   // Warn if disk will be converted to GEOS format
-  if (!hasGeosSignature(currentBuffer)) {
+  if (!hasGeosSignature(currentBuffer, getCurrentCtx())) {
     var ok = await showConfirmModal('Import CVT',
       'This disk does not have a GEOS signature. Importing a CVT file will convert it to a GEOS disk. Continue?');
     if (!ok) return;
@@ -1133,7 +1133,7 @@ function importCvtFileCore(cvt, silent) {
     var geosData = { geosBytes: geosBytes, geosInfoBlock: infoBlock };
     geosBytes[0] = 0; // info track placeholder
     geosBytes[1] = 0; // info sector placeholder
-    if (writeFileToDisk(typeIdx | 0x80, nameBytes, seqData, geosData, silent)) {
+    if (writeFileToDisk(typeIdx | 0x80, nameBytes, seqData, geosData, silent, getCurrentCtx())) {
       return { name: displayName };
     }
     return { error: 'Failed to write "' + displayName + '" (disk or directory full).' };
@@ -1173,7 +1173,7 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock,
   if (!silent) pushUndo();
   var snapshot = currentBuffer.slice(0);
   var data = new Uint8Array(currentBuffer);
-  var allocated = buildTrueAllocationMap(currentBuffer);
+  var allocated = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
 
   // Count total sectors needed: 1 info block + 1 VLIR index + data sectors
   var totalSectors = 2; // info + index
@@ -1189,14 +1189,14 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock,
     totalSectors += numBlocks;
   }
 
-  var sectorList = allocateSectors(allocated, totalSectors);
+  var sectorList = allocateSectors(allocated, totalSectors, getCurrentCtx());
   if (sectorList.length < totalSectors) {
     currentBuffer = snapshot;
     if (!silent) showModal('Write Error', ['Not enough free sectors. Need ' + totalSectors + ', have ' + sectorList.length + '.']);
     return false;
   }
 
-  var entryOff = findFreeDirEntry(currentBuffer, allocated);
+  var entryOff = findFreeDirEntry(currentBuffer, allocated, getCurrentCtx());
   if (entryOff < 0) {
     currentBuffer = snapshot;
     if (!silent) showModal('Write Error', ['No free directory entry available.']);
@@ -1207,13 +1207,13 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock,
 
   // Write info block
   var infoSec = sectorList[secIdx++];
-  var infoOff = sectorOffset(infoSec.track, infoSec.sector);
+  var infoOff = sectorOffset(infoSec.track, infoSec.sector, getCurrentCtx());
   for (var ib2 = 0; ib2 < 256; ib2++) data[infoOff + ib2] = infoBlock[ib2];
   data[infoOff] = 0x00; data[infoOff + 1] = 0xFF;
 
   // Write VLIR index sector
   var vlirSec = sectorList[secIdx++];
-  var vlirOff = sectorOffset(vlirSec.track, vlirSec.sector);
+  var vlirOff = sectorOffset(vlirSec.track, vlirSec.sector, getCurrentCtx());
   for (var vi = 0; vi < 256; vi++) data[vlirOff + vi] = 0x00;
   data[vlirOff] = 0x00; data[vlirOff + 1] = 0xFF;
 
@@ -1246,7 +1246,7 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock,
     var recPos = 0;
     for (var rsi = 0; rsi < recSectors.length; rsi++) {
       var sec = recSectors[rsi];
-      var soff = sectorOffset(sec.track, sec.sector);
+      var soff = sectorOffset(sec.track, sec.sector, getCurrentCtx());
 
       if (rsi < recSectors.length - 1) {
         var nextSec = recSectors[rsi + 1];
@@ -1291,12 +1291,12 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock,
   var ctx = getDirContext();
   var bamOff = ctx.bamOff;
   for (var ai = 0; ai < sectorList.length; ai++) {
-    bamMarkSectorUsed(data, sectorList[ai].track, sectorList[ai].sector, bamOff);
+    bamMarkSectorUsed(data, sectorList[ai].track, sectorList[ai].sector, bamOff, getCurrentCtx());
   }
 
   // Ensure GEOS disk signature is present
-  if (!hasGeosSignature(currentBuffer)) {
-    writeGeosSignature(currentBuffer);
+  if (!hasGeosSignature(currentBuffer, getCurrentCtx())) {
+    writeGeosSignature(currentBuffer, getCurrentCtx());
   }
 
   selectedEntryIndex = entryOff;
@@ -1543,15 +1543,15 @@ document.getElementById('opt-scratch').addEventListener('click', async (e) => {
   var data = new Uint8Array(currentBuffer);
   var entryOff = selectedEntryIndex;
   var fmt = currentFormat;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
 
   // Clear the closed bit (scratch the file)
   data[entryOff + 2] &= ~0x80;
 
   // Free all file sectors in BAM (main chain + REL + GEOS)
   forEachFileSector(data, entryOff, function(t, s) {
-    bamMarkSectorFree(data, t, s, bamOff);
-  });
+    bamMarkSectorFree(data, t, s, bamOff, getCurrentCtx());
+  }, getCurrentCtx());
 
   var info = parseCurrentDir(currentBuffer);
   renderDisk(info);
@@ -1604,10 +1604,10 @@ document.getElementById('opt-unscratch').addEventListener('click', (e) => {
 
   // Mark all file sectors as used in BAM (main chain + REL + GEOS)
   var fmt = currentFormat;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
   var sectorCount = forEachFileSector(data, entryOff, function(t, s) {
-    bamMarkSectorUsed(data, t, s, bamOff);
-  });
+    bamMarkSectorUsed(data, t, s, bamOff, getCurrentCtx());
+  }, getCurrentCtx());
 
   // Update block count in directory entry
   data[entryOff + 30] = sectorCount & 0xFF;

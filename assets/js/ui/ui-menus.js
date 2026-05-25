@@ -370,7 +370,7 @@ document.addEventListener('keydown', (e) => {
   // routes through the opt-remove menu handler so the CFS-aware path
   // (cfsRemoveDirEntry, sector free) runs instead of the CBM-DOS
   // removeFileEntry which would corrupt the buffer.
-  if (e.key === 'Delete' && selectedEntryIndex >= 0 && !isTapeFormat()) {
+  if (e.key === 'Delete' && selectedEntryIndex >= 0 && !isTapeFormat(getCurrentCtx())) {
     if (cfsPartitionIdx >= 0 && cfsDirEntries) {
       e.preventDefault();
       var rmEl = document.getElementById('opt-remove');
@@ -601,7 +601,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  if (e.ctrlKey && selectedEntryIndex >= 0 && !isTapeFormat()) {
+  if (e.ctrlKey && selectedEntryIndex >= 0 && !isTapeFormat(getCurrentCtx())) {
     // Ctrl+Arrow: move the selected entry
     moveEntry(dir);
   } else {
@@ -645,7 +645,7 @@ function updateEntryMenuState() {
   const hasSelection = selectedEntryIndex >= 0 && currentBuffer;
   const multiSelect = selectedEntries.length > 1;
   const inPartition = currentPartition !== null;
-  const tape = isTapeFormat();
+  const tape = isTapeFormat(getCurrentCtx());
   // The CMD container partition list isn't a filesystem — file-
   // level operations (insert, rename, etc.) make no sense, so we treat
   // it like a tape image for the disabled-state checks.
@@ -810,7 +810,7 @@ function updateEntryMenuState() {
       // Check if PRG with BASIC load address
       if (tapeEntry.type.trim() === 'PRG') {
         prgSelected = true;
-        var tResult = readFileData(currentBuffer, selectedEntryIndex);
+        var tResult = readFileData(currentBuffer, selectedEntryIndex, getCurrentCtx());
         if (tResult.data.length >= 2) {
           var tAddr = tResult.data[0] | (tResult.data[1] << 8);
           basicEnabled = BASIC_LOAD_ADDRS[tAddr] !== undefined;
@@ -839,7 +839,7 @@ function updateEntryMenuState() {
       var ft = edata[selectedEntryIndex + 3];
       var fs = edata[selectedEntryIndex + 4];
       if (ft > 0) {
-        var foff = sectorOffset(ft, fs);
+        var foff = sectorOffset(ft, fs, getCurrentCtx());
         if (foff >= 0) {
           var addr = edata[foff + 2] | (edata[foff + 3] << 8);
           basicEnabled = BASIC_LOAD_ADDRS[addr] !== undefined;
@@ -852,7 +852,7 @@ function updateEntryMenuState() {
       var gwInfoT = edata[selectedEntryIndex + 0x15];
       var gwInfoS = edata[selectedEntryIndex + 0x16];
       if (gwInfoT > 0) {
-        var gwInfo = readGeosInfoBlock(currentBuffer, gwInfoT, gwInfoS);
+        var gwInfo = readGeosInfoBlock(currentBuffer, gwInfoT, gwInfoS, getCurrentCtx());
         if (gwInfo && gwInfo.className && gwInfo.className.toLowerCase().indexOf('write image') === 0) {
           geoWriteEnabled = true;
         }
@@ -883,7 +883,7 @@ function updateEntryMenuState() {
     var tt = edata[selectedEntryIndex + 3];
     var ts = edata[selectedEntryIndex + 4];
     if (tt > 0) {
-      var tassFoff = sectorOffset(tt, ts);
+      var tassFoff = sectorOffset(tt, ts, getCurrentCtx());
       if (tassFoff >= 0 && tassFoff + 0x12 <= edata.length &&
           edata[tassFoff + 0x11] === 0xFF && edata[tassFoff + 0x10] < 0x20) {
         isTassCandidate = true;
@@ -944,7 +944,7 @@ function updateEntryMenuState() {
         var dk = dt + ':' + ds;
         if (dVisited.has(dk)) break;
         dVisited.add(dk);
-        var doff = sectorOffset(dt, ds);
+        var doff = sectorOffset(dt, ds, getCurrentCtx());
         dt = data2[doff]; ds = data2[doff + 1];
       }
       footerTs.textContent = 'T:$' + dt.toString(16).toUpperCase().padStart(2, '0') +

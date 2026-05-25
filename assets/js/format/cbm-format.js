@@ -76,7 +76,7 @@
 function _cmdBamBase(track) {
   var bamSec = 2 + (track >> 3);
   var bamByteOff = (track & 7) * 32;
-  return sectorOffset(1, bamSec) + bamByteOff;
+  return sectorOffset(1, bamSec, getCurrentCtx()) + bamByteOff;
 }
 function _cmdIsSectorFree(data, bamOff, track, sector) {
   var base = this._bamBase(track);
@@ -134,10 +134,10 @@ function _cmdNoop() {}
 //      reserved overhead (header / BAM / dir-start), exactly mirroring
 //      DNP's _dnpReadTrackFree convention.
 function _fdBamBase(track) {
-  return sectorOffset(1, 2) + 32 + (track - 1) * 32;
+  return sectorOffset(1, 2, getCurrentCtx()) + 32 + (track - 1) * 32;
 }
 function _fdLogicalTrackCount(data) {
-  var hdr = sectorOffset(1, 2);
+  var hdr = sectorOffset(1, 2, getCurrentCtx());
   if (hdr < 0 || hdr + 0x09 > data.length) return 0;
   return data[hdr + 0x08];
 }
@@ -153,7 +153,7 @@ function _fdLastSlotIsSystemMarker(data, hdrOff, n) {
   return true;
 }
 function _fdEffectiveSlots(data) {
-  var hdr = sectorOffset(1, 2);
+  var hdr = sectorOffset(1, 2, getCurrentCtx());
   var n = _fdLogicalTrackCount(data);
   if (n === 0 || hdr < 0) return 0;
   return _fdLastSlotIsSystemMarker(data, hdr, n) ? n - 1 : n;
@@ -233,21 +233,21 @@ const DISK_FORMATS = {
     // a variant-dependent offset — see getSpeederVariant / _d64BamEntry.
     bamTracksRange(numTracks) {
       if (numTracks <= 35) return numTracks;
-      return (currentBuffer && getSpeederVariant(currentBuffer)) ? numTracks : 35;
+      return (currentBuffer && getSpeederVariant(currentBuffer, getCurrentCtx())) ? numTracks : 35;
     },
-    getBamBitmapBase(bamOff, track) { return _d64BamEntry(bamOff, track) + 1; },
+    getBamBitmapBase(bamOff, track) { return _d64BamEntry(bamOff, track, getCurrentCtx()) + 1; },
     readTrackFree(data, bamOff, track) {
-      return data[_d64BamEntry(bamOff, track)];
+      return data[_d64BamEntry(bamOff, track, getCurrentCtx())];
     },
     writeTrackFree(data, bamOff, track, free) {
-      data[_d64BamEntry(bamOff, track)] = free;
+      data[_d64BamEntry(bamOff, track, getCurrentCtx())] = free;
     },
     readTrackBitmap(data, bamOff, track) {
-      const base = _d64BamEntry(bamOff, track);
+      const base = _d64BamEntry(bamOff, track, getCurrentCtx());
       return data[base + 1] | (data[base + 2] << 8) | (data[base + 3] << 16);
     },
     writeTrackBitmap(data, bamOff, track, bm) {
-      const base = _d64BamEntry(bamOff, track);
+      const base = _d64BamEntry(bamOff, track, getCurrentCtx());
       data[base + 1] = bm & 0xFF;
       data[base + 2] = (bm >> 8) & 0xFF;
       data[base + 3] = (bm >> 16) & 0xFF;
@@ -670,7 +670,7 @@ const DISK_FORMATS = {
       data[b+2] = (bm >> 16) & 0xFF; data[b+3] = (bm >> 24) & 0xFF;
     },
     initBAM(data, bamOff, numTracks) {
-      var headerOff = sectorOffset(this.headerTrack, this.headerSector);
+      var headerOff = sectorOffset(this.headerTrack, this.headerSector, getCurrentCtx());
 
       // Header sector T39/S0: points to first BAM sector
       data[headerOff + 0] = this.bamTrack; // 38
@@ -708,7 +708,7 @@ const DISK_FORMATS = {
       }
 
       // First dir sector T39/S1
-      var dirOff = sectorOffset(this.dirTrack, this.dirSector);
+      var dirOff = sectorOffset(this.dirTrack, this.dirSector, getCurrentCtx());
       data[dirOff + 0] = 0x00; data[dirOff + 1] = 0xFF;
     },
   },
@@ -777,7 +777,7 @@ const DISK_FORMATS = {
       data[b+2] = (bm >> 16) & 0xFF; data[b+3] = (bm >> 24) & 0xFF;
     },
     initBAM(data, bamOff, numTracks) {
-      var headerOff = sectorOffset(this.headerTrack, this.headerSector);
+      var headerOff = sectorOffset(this.headerTrack, this.headerSector, getCurrentCtx());
 
       // Header sector T39/S0
       data[headerOff + 0] = this.bamTrack;
@@ -817,7 +817,7 @@ const DISK_FORMATS = {
         this.writeTrackBitmap(data, bamOff, t, bm);
       }
 
-      var dirOff = sectorOffset(this.dirTrack, this.dirSector);
+      var dirOff = sectorOffset(this.dirTrack, this.dirSector, getCurrentCtx());
       data[dirOff + 0] = 0x00; data[dirOff + 1] = 0xFF;
     },
   },
@@ -1729,8 +1729,8 @@ function parseDisk(buffer, formatHint) {
   parsedTAPEntries = null;
 
   const fmt = currentFormat;
-  const bamOffset = sectorOffset(fmt.bamTrack, fmt.bamSector);
-  const headerOff = getHeaderOffset();
+  const bamOffset = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
+  const headerOff = getHeaderOffset(getCurrentCtx());
 
   const diskName = readPetsciiString(data, headerOff + fmt.nameOffset, fmt.nameLength);
   const diskId = readPetsciiString(data, headerOff + fmt.idOffset, fmt.idLength, false);
@@ -1764,7 +1764,7 @@ function parseDisk(buffer, formatHint) {
     // the end of an 8-entry dir) terminate cleanly instead of being
     // followed via sectorOffset's LBA fallback into file content.
     if (dirSector < 0 || dirSector >= fmt.sectorsPerTrack(dirTrack)) break;
-    const off = sectorOffset(dirTrack, dirSector);
+    const off = sectorOffset(dirTrack, dirSector, getCurrentCtx());
     if (off < 0) break;
 
     for (let i = 0; i < fmt.entriesPerSector; i++) {

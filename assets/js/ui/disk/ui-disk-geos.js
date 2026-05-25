@@ -4,7 +4,7 @@ document.getElementById('opt-view-geos').addEventListener('click', function(e) {
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
 
-  var geos = readGeosInfo(currentBuffer, selectedEntryIndex);
+  var geos = readGeosInfo(currentBuffer, selectedEntryIndex, getCurrentCtx());
   if (!geos.isGeos) {
     showModal('GEOS Info', ['This file is not a GEOS file.']);
     return;
@@ -21,7 +21,7 @@ document.getElementById('opt-view-geos').addEventListener('click', function(e) {
 
   // Try to read the info block
   if (geos.hasInfoBlock) {
-    var infoBlock = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
+    var infoBlock = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector, getCurrentCtx());
     if (infoBlock) {
       if (infoBlock.className) lines.push('Class: ' + infoBlock.className);
       if (infoBlock.author) lines.push('Author: ' + infoBlock.author);
@@ -102,10 +102,10 @@ document.getElementById('opt-view-geos').addEventListener('click', function(e) {
 // ── Convert to GEOS ──────────────────────────────────────────────────
 document.getElementById('opt-convert-geos').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer || hasGeosSignature(currentBuffer)) return;
+  if (!currentBuffer || hasGeosSignature(currentBuffer, getCurrentCtx())) return;
   closeMenus();
   pushUndo();
-  writeGeosSignature(currentBuffer);
+  writeGeosSignature(currentBuffer, getCurrentCtx());
   updateMenuState();
   showModal('Convert to GEOS', ['Disk has been marked as GEOS format.']);
 });
@@ -118,12 +118,12 @@ document.getElementById('opt-convert-geos').addEventListener('click', function(e
 document.getElementById('opt-restore-dos-version').addEventListener('click', function(e) {
   e.stopPropagation();
   if (!currentBuffer) return;
-  var current = isSoftWriteProtected(currentBuffer);
+  var current = isSoftWriteProtected(currentBuffer, getCurrentCtx());
   if (current === null) return;
   closeMenus();
   pushUndo();
   var data = new Uint8Array(currentBuffer);
-  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector, getCurrentCtx());
   var target = currentFormat.dosVersion;
   data[bamOff + 0x02] = target;
   updateMenuState();
@@ -142,10 +142,10 @@ document.getElementById('opt-restore-dos-version').addEventListener('click', fun
 // zeroed; populated borders are rare but the data exists on real disks.
 document.getElementById('opt-view-border').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer || !hasGeosSignature(currentBuffer)) return;
+  if (!currentBuffer || !hasGeosSignature(currentBuffer, getCurrentCtx())) return;
   closeMenus();
 
-  var ref = readGeosBorderRef(currentBuffer);
+  var ref = readGeosBorderRef(currentBuffer, getCurrentCtx());
   if (!ref) {
     showModal('GEOS Border Sector', [
       'This disk has no GEOS border sector allocated (header +$AB/$AC = $00/$00).',
@@ -156,7 +156,7 @@ document.getElementById('opt-view-border').addEventListener('click', function(e)
     return;
   }
 
-  var entries = readGeosBorderEntries(currentBuffer);
+  var entries = readGeosBorderEntries(currentBuffer, getCurrentCtx());
   if (entries.length === 0) {
     showModal('GEOS Border Sector', [
       'Border sector at T:$' + hex8(ref.track) + ' S:$' + hex8(ref.sector) + ' is empty.'
@@ -175,10 +175,10 @@ document.getElementById('opt-view-border').addEventListener('click', function(e)
     var typeStr = FILE_TYPES[ent.typeIdx] || '?';
     if (!ent.closed) typeStr = '*' + typeStr;
     if (ent.locked) typeStr += '<';
-    var geos = readGeosInfo(currentBuffer, ent.entryOff);
+    var geos = readGeosInfo(currentBuffer, ent.entryOff, getCurrentCtx());
     var klass = '';
     if (geos.hasInfoBlock) {
-      var ib = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
+      var ib = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector, getCurrentCtx());
       if (ib && ib.className) klass = ib.className;
     }
     html += '<tr>' +

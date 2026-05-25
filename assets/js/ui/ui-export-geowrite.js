@@ -8,7 +8,7 @@ var GEOS_RTF_FONTS = {
 
 // Parse geoWrite VLIR records into a structured document
 function parseGeoWriteDoc(entryOff) {
-  var records = readVLIRRecords(currentBuffer, entryOff);
+  var records = readVLIRRecords(currentBuffer, entryOff, getCurrentCtx());
   if (records.length === 0) return null;
 
   // Pre-render inline images as PNG data URLs

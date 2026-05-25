@@ -7,7 +7,7 @@ function showRelViewer(entryOff) {
   if (recordLen === 0) recordLen = 254;
 
   // Read file data (follows the data chain)
-  var result = readFileData(currentBuffer, entryOff);
+  var result = readFileData(currentBuffer, entryOff, getCurrentCtx());
   var fileData = result.data;
   if (fileData.length === 0) {
     showModal('REL View', ['No data found or empty file.']);

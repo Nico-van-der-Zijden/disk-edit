@@ -945,7 +945,7 @@ function showFileTassViewer(entryOff, preloaded) {
   } else {
     if (!currentBuffer) return;
     var data = new Uint8Array(currentBuffer);
-    result = readFileData(currentBuffer, entryOff);
+    result = readFileData(currentBuffer, entryOff, getCurrentCtx());
     fileData = result.data;
     name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
   }

@@ -158,15 +158,15 @@ function detectGfxFormats(fileData) {
 
 // Detect GEOS graphics formats from directory entry metadata and info block
 function detectGeosGfxFormats(entryOff) {
-  if (!currentBuffer || isTapeFormat()) return [];
-  var geos = readGeosInfo(currentBuffer, entryOff);
+  if (!currentBuffer || isTapeFormat(getCurrentCtx())) return [];
+  var geos = readGeosInfo(currentBuffer, entryOff, getCurrentCtx());
   if (!geos.isGeos || geos.structure !== 1) return []; // must be VLIR
   var matches = [];
 
   // Check file type and class name for geoPaint documents
   var isPaint = (geos.fileType === 0x14);
   if (!isPaint && geos.hasInfoBlock) {
-    var infoBlock = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
+    var infoBlock = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector, getCurrentCtx());
     if (infoBlock && infoBlock.className && infoBlock.className.toLowerCase().indexOf('paint') === 0) {
       isPaint = true;
     }
@@ -182,7 +182,7 @@ function detectGeosGfxFormats(entryOff) {
   }
   // Check class name for photo album (stored as application data $07)
   if (!isPaint && geos.fileType === 0x07 && geos.hasInfoBlock) {
-    var infoBlock2 = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
+    var infoBlock2 = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector, getCurrentCtx());
     if (infoBlock2 && infoBlock2.className && infoBlock2.className.toLowerCase().indexOf('photo album') === 0) {
       matches.push({ name: 'Photo Album', mode: 'geosalbum', layout: 'geosalbum', geosEntry: entryOff });
     }
@@ -192,7 +192,7 @@ function detectGeosGfxFormats(entryOff) {
   }
   // geoWrite documents (type $07 or $13, class "Write Image") — embedded images in records 64-126
   if (geos.fileType === 0x07 || geos.fileType === 0x13) {
-    var infoBlk = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector);
+    var infoBlk = readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector, getCurrentCtx());
     if (infoBlk && infoBlk.className && infoBlk.className.toLowerCase().indexOf('write image') === 0) {
       matches.push({ name: 'geoWrite Images', mode: 'geoswrite', layout: 'geoswrite', geosEntry: entryOff });
     }
@@ -208,7 +208,7 @@ function detectGeosGfxFormats(entryOff) {
 //   1288-1367: color row 0 (80 bytes, high nybble=fg, low=bg)
 //   1368-1447: color row 1
 function renderGeoPaint(ctx, entryOff) {
-  var records = readVLIRRecords(currentBuffer, entryOff);
+  var records = readVLIRRecords(currentBuffer, entryOff, getCurrentCtx());
   if (records.length === 0) return false;
 
   var w = 640, h = records.length * 16;
@@ -290,7 +290,7 @@ function renderScrapData(ctx, scrapBytes, yOffset) {
 
 // Render GEOS Photo Scrap (sequential file, single image)
 function renderGeoScrap(ctx, entryOff) {
-  var result = readFileData(currentBuffer, entryOff);
+  var result = readFileData(currentBuffer, entryOff, getCurrentCtx());
   if (result.error || result.data.length < 4) return false;
   var scrapData = result.data;
   var wCards = scrapData[0];
@@ -303,7 +303,7 @@ function renderGeoScrap(ctx, entryOff) {
 
 // Render GEOS Photo Album (VLIR, each record is a photo scrap)
 function renderGeoAlbum(ctx, entryOff) {
-  var records = readVLIRRecords(currentBuffer, entryOff);
+  var records = readVLIRRecords(currentBuffer, entryOff, getCurrentCtx());
   if (records.length === 0) return false;
 
   // First pass: measure total height and max width
@@ -339,7 +339,7 @@ function renderGeoAlbum(ctx, entryOff) {
 
 // Render geoWrite embedded images (VLIR records 64-126, each in Photo Scrap format)
 function renderGeoWrite(ctx, entryOff) {
-  var records = readVLIRRecords(currentBuffer, entryOff);
+  var records = readVLIRRecords(currentBuffer, entryOff, getCurrentCtx());
   if (records.length <= 64) return false;
 
   // Collect valid image records (indices 64-126)
@@ -423,7 +423,7 @@ function geosFontC64TileFit(f) {
 // Modal dialog that lists every size of a GEOS font with its C64 charset
 // tile fit and offers a download for each. Uses the existing modal-overlay.
 function showGeosFontCharsetExport(entryOff) {
-  var records = readVLIRRecords(currentBuffer, entryOff);
+  var records = readVLIRRecords(currentBuffer, entryOff, getCurrentCtx());
   var fonts = parseGeosFontRecords(records || []);
   if (fonts.length === 0) { showModal('Export C64 Charset', ['No usable font records found.']); return; }
 
@@ -432,7 +432,7 @@ function showGeosFontCharsetExport(entryOff) {
   var className = '';
   var infoT = data[entryOff + 0x15], infoS = data[entryOff + 0x16];
   if (infoT > 0) {
-    var info = readGeosInfoBlock(currentBuffer, infoT, infoS);
+    var info = readGeosInfoBlock(currentBuffer, infoT, infoS, getCurrentCtx());
     if (info && info.className) className = info.className.trim();
   }
   var safeName = (className || fileName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/\s+/g, '_') || 'font';
@@ -598,7 +598,7 @@ function geosFontToC64Charset(f, cols, rows) {
 //   xTable[96] = bitmap width in pixels (one past the last glyph).
 // Bitmap: height rows x rowLength bytes (all glyphs concatenated horizontally).
 function renderGeosFont(ctx, entryOff) {
-  var records = readVLIRRecords(currentBuffer, entryOff);
+  var records = readVLIRRecords(currentBuffer, entryOff, getCurrentCtx());
   if (records.length === 0) return false;
 
   var fonts = parseGeosFontRecords(records);
@@ -744,7 +744,7 @@ function renderGeosFont(ctx, entryOff) {
     fileName = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
     var infoT = data[entryOff + 0x15], infoS = data[entryOff + 0x16];
     if (infoT > 0) {
-      var info = readGeosInfoBlock(currentBuffer, infoT, infoS);
+      var info = readGeosInfoBlock(currentBuffer, infoT, infoS, getCurrentCtx());
       if (info && info.className) className = info.className.trim();
     }
   } catch (e) {}
@@ -1220,7 +1220,7 @@ function showFileGfxViewer(entryOff, preloaded) {
   } else {
     if (!currentBuffer) return;
     var data = new Uint8Array(currentBuffer);
-    var result = readFileData(currentBuffer, entryOff);
+    var result = readFileData(currentBuffer, entryOff, getCurrentCtx());
     fileData = result.data;
     name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
   }

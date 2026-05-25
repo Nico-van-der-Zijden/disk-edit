@@ -1041,7 +1041,7 @@ function validateDisk(buffer, ctx) {
       }
     }
 
-    let bamByteBase = getBamBitmapBase(t, bamOff);
+    let bamByteBase = getBamBitmapBase(t, bamOff, getCurrentCtx());
 
     // Check if anything changed
     const oldFree = fmt.readTrackFree(data, bamOff, t);

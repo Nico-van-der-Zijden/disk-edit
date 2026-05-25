@@ -95,7 +95,7 @@ document.getElementById('opt-compact-dir').addEventListener('click', function(e)
     var key = t + ':' + s;
     if (visited[key]) break;
     visited[key] = true;
-    var off = sectorOffset(t, s);
+    var off = sectorOffset(t, s, getCurrentCtx());
     if (off < 0) break;
     for (var i = 0; i < fmt.entriesPerSector; i++) {
       var eo = off + i * fmt.entrySize;
@@ -118,7 +118,7 @@ document.getElementById('opt-compact-dir').addEventListener('click', function(e)
     var key2 = t + ':' + s;
     if (visited[key2]) break;
     visited[key2] = true;
-    var off2 = sectorOffset(t, s);
+    var off2 = sectorOffset(t, s, getCurrentCtx());
     if (off2 < 0) break;
     for (var i2 = 0; i2 < fmt.entriesPerSector; i2++) {
       var eo2 = off2 + i2 * fmt.entrySize;
@@ -202,7 +202,7 @@ document.getElementById('opt-unzip').addEventListener('click', async function(e)
   // Read all 4 files
   var files = [];
   for (var fi = 1; fi <= 4; fi++) {
-    var result = readFileData(currentBuffer, set.offsets[String(fi)]);
+    var result = readFileData(currentBuffer, set.offsets[String(fi)], getCurrentCtx());
     if (result.error || result.data.length < 3) {
       showModal('Decompress Error', ['Failed to read file ' + fi + '!' + set.name + ': ' + (result.error || 'too small')]);
       return;
@@ -357,7 +357,7 @@ function extractLnxToNewD64(buffer) {
   for (var ci = 0; ci < parsed.files.length; ci++) {
     if (isCvtFile(parsed.files[ci].data)) { hasCvt = true; break; }
   }
-  if (hasCvt) writeGeosSignature(currentBuffer);
+  if (hasCvt) writeGeosSignature(currentBuffer, getCurrentCtx());
 
   var imported = 0;
   var skipped = [];
@@ -392,7 +392,7 @@ function extractLnxToNewD64(buffer) {
     }
     for (var pi = trailStart; pi < 16; pi++) nameBytes[pi] = 0xA0;
 
-    if (writeFileToDisk(f.typeIdx, nameBytes, f.data, null, true)) {
+    if (writeFileToDisk(f.typeIdx, nameBytes, f.data, null, true, getCurrentCtx())) {
       imported++;
     } else {
       skipped.push({ name: display, reason: 'disk or directory full' });
@@ -457,7 +457,7 @@ function fchainWalkChain(data, startT, startS) {
     if (visited[key]) { loop = true; break; }
     visited[key] = true;
     sectors.push({ t: ft, s: fs });
-    var off = sectorOffset(ft, fs);
+    var off = sectorOffset(ft, fs, getCurrentCtx());
     if (off < 0) break;
     ft = data[off]; fs = data[off + 1];
   }
@@ -490,7 +490,7 @@ function fchainAnalyse(data, entryOff) {
   if (isVlir) {
     addInfoBlock();
     chains.push({ kind: 'index', label: 'VLIR index', sectors: [{ t: startT, s: startS }] });
-    var idxOff = sectorOffset(startT, startS);
+    var idxOff = sectorOffset(startT, startS, getCurrentCtx());
     if (idxOff >= 0) {
       for (var vri = 0; vri < 127; vri++) {
         var recT = data[idxOff + 2 + vri * 2];
@@ -734,7 +734,7 @@ document.getElementById('opt-export-all').addEventListener('click', function(e) 
       if (typeIdx < 1 || typeIdx > 4) continue;
       // GEOS VLIR: dir T/S is the index sector, not file data — use Export CVT
       if (isVlirFile(data, en.entryOff)) continue;
-      var result = readFileData(currentBuffer, en.entryOff);
+      var result = readFileData(currentBuffer, en.entryOff, getCurrentCtx());
       if (result.error || result.data.length === 0) continue;
       var name = petsciiToReadable(en.name || '').trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
       if (!name) name = 'file' + i;

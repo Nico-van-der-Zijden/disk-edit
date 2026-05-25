@@ -111,7 +111,7 @@ document.getElementById('opt-run-in-emulator').addEventListener('click', functio
 
   if (!currentBuffer) return;
   var name;
-  if (isTapeFormat()) {
+  if (isTapeFormat(getCurrentCtx())) {
     var tapeEntry = getTapeEntry(selectedEntryIndex);
     name = (tapeEntry && tapeEntry.name ? tapeEntry.name : 'program').trim() + '.prg';
   } else {
@@ -119,7 +119,7 @@ document.getElementById('opt-run-in-emulator').addEventListener('click', functio
     name = petsciiToReadable(readPetsciiString(data, selectedEntryIndex + 5, 16)).trim() + '.prg';
   }
 
-  var result = readFileData(currentBuffer, selectedEntryIndex);
+  var result = readFileData(currentBuffer, selectedEntryIndex, getCurrentCtx());
   if (result.error || !result.data || result.data.length === 0) {
     if (typeof showModal === 'function') {
       showModal('Run in Emulator', [

@@ -24,7 +24,7 @@ function bindGripTouchDrag(rowEl, allEntries) {
   if (!grip) return;
   grip.addEventListener('pointerdown', function(e) {
     if (e.pointerType !== 'touch' && e.pointerType !== 'pen') return;
-    if (isTapeFormat() || !currentBuffer) return;
+    if (isTapeFormat(getCurrentCtx()) || !currentBuffer) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -195,7 +195,7 @@ function renderDisk(info) {
 
   // Wrap the buffer once; the entry loop below reads bytes per row and used
   // to rewrap 4x per entry (nameHtml, tsHtml, icons-deleted, icons-regular).
-  const isTape = isTapeFormat();
+  const isTape = isTapeFormat(getCurrentCtx());
   const data = (currentBuffer && !isTape) ? new Uint8Array(currentBuffer) : null;
   const bufByteLen = data ? data.byteLength : 0;
   const dirTrack = currentFormat.dirTrack;
@@ -214,7 +214,7 @@ function renderDisk(info) {
   };
   let nameHtml, idHtml;
   if (data) {
-    const headerOff = getHeaderOffset();
+    const headerOff = getHeaderOffset(getCurrentCtx());
     const nameStart = headerOff + currentFormat.nameOffset;
     const idStart = headerOff + currentFormat.idOffset;
     // Name stops at $A0 padding; pad to full width with regular spaces.
@@ -369,7 +369,7 @@ function renderDisk(info) {
   // Filesystem health indicator
   var healthEl = document.getElementById('footer-health');
   if (healthEl && currentBuffer && !currentPartition) {
-    var integrity = checkBAMIntegrity(currentBuffer);
+    var integrity = checkBAMIntegrity(currentBuffer, getCurrentCtx());
     var bamIssues = integrity.bamErrors.length > 0 || integrity.allocMismatch > 0;
     var bamOrphans = integrity.orphanCount > 0;
     var diskErrors = hasErrorBytes(currentBuffer);
@@ -392,10 +392,10 @@ function renderDisk(info) {
     } else {
       healthEl.textContent = '\u25CF';
       healthEl.classList.add('health-ok');
-      var extBam = getSpeederVariant(currentBuffer);
-      var swp = isSoftWriteProtected(currentBuffer);
-      var c128Boot = hasC128BootSignature(currentBuffer);
-      var d81Boot = hasD81AutoBootLoader(currentBuffer);
+      var extBam = getSpeederVariant(currentBuffer, getCurrentCtx());
+      var swp = isSoftWriteProtected(currentBuffer, getCurrentCtx());
+      var c128Boot = hasC128BootSignature(currentBuffer, getCurrentCtx());
+      var d81Boot = hasD81AutoBootLoader(currentBuffer, getCurrentCtx());
       var bits = ['Disk OK'];
       if (extBam) bits.push(extBam + ' extended BAM');
       if (swp !== null) bits.push('soft write-protected (DOS version $' + hex8(swp) + ')');
@@ -524,7 +524,7 @@ function bindDirSelection() {
           return;
         }
       }
-      if (isTapeFormat()) return;
+      if (isTapeFormat(getCurrentCtx())) return;
       if (e.target.classList.contains('dir-type')) {
         showTypeDropdown(e.target, entryOff);
       } else if (e.target.classList.contains('dir-blocks')) {
@@ -725,7 +725,7 @@ function enterPartition(entryOff) {
 
   // Linked directory (e.g. DNP): header + dir chain
   if (currentFormat.subdirLinked && typeIdx === currentFormat.subdirType) {
-    var hdrOff = sectorOffset(startTrack, startSector);
+    var hdrOff = sectorOffset(startTrack, startSector, getCurrentCtx());
     if (hdrOff < 0) {
       showModal('Directory Error', ['Invalid header sector.']);
       return;
@@ -765,7 +765,7 @@ function enterPartition(entryOff) {
     return;
   }
 
-  var headerOff = sectorOffset(startTrack, 0);
+  var headerOff = sectorOffset(startTrack, 0, getCurrentCtx());
   if (headerOff < 0) {
     showModal('Partition Error', ['Invalid partition start track ' + startTrack + '.']);
     return;
@@ -774,7 +774,7 @@ function enterPartition(entryOff) {
   currentPartition = { entryOff: entryOff, startTrack: startTrack, partSize: partSize, name: name };
   selectedEntryIndex = -1;
 
-  var info2 = parsePartition(currentBuffer, startTrack, partSize);
+  var info2 = parsePartition(currentBuffer, startTrack, partSize, getCurrentCtx());
   if (!info2) {
     currentPartition = null;
     showModal('Partition Error', ['Failed to parse partition directory.']);
@@ -787,7 +787,7 @@ function leavePartition() {
   if (currentPartition && currentPartition.dnpDir) {
     // DNP directory: go to parent using header's parent reference
     var data = new Uint8Array(currentBuffer);
-    var hdrOff = sectorOffset(currentPartition.dnpHeaderT, currentPartition.dnpHeaderS);
+    var hdrOff = sectorOffset(currentPartition.dnpHeaderT, currentPartition.dnpHeaderS, getCurrentCtx());
     var parentHeaderT = data[hdrOff + currentFormat.subdirParentRef];
     var parentHeaderS = data[hdrOff + currentFormat.subdirParentRef + 1];
 
@@ -801,7 +801,7 @@ function leavePartition() {
     }
 
     // Otherwise navigate to parent directory
-    var parentHdrOff = sectorOffset(parentHeaderT, parentHeaderS);
+    var parentHdrOff = sectorOffset(parentHeaderT, parentHeaderS, getCurrentCtx());
     if (parentHdrOff >= 0) {
       var pDirT = data[parentHdrOff + 0x00];
       var pDirS = data[parentHdrOff + 0x01];
@@ -837,7 +837,7 @@ function parseDnpDirectory(buffer, dirTrack, dirSector, dirName, headerT, header
     var key = t + ':' + s;
     if (visited[key]) break;
     visited[key] = true;
-    var off = sectorOffset(t, s);
+    var off = sectorOffset(t, s, getCurrentCtx());
     if (off < 0) break;
 
     for (var i = 0; i < fmt.entriesPerSector; i++) {
@@ -863,7 +863,7 @@ function parseDnpDirectory(buffer, dirTrack, dirSector, dirName, headerT, header
   }
 
   // Count free blocks from main BAM (skip track 1)
-  var bamOffset = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var bamOffset = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
   var freeBlocks = 0;
   for (var ft = 2; ft <= currentTracks; ft++) {
     freeBlocks += fmt.readTrackFree(data, bamOffset, ft);
@@ -893,7 +893,7 @@ function countLinkedSubdirs(buffer) {
       var key = dirT + ':' + dirS;
       if (visited[key]) break;
       visited[key] = true;
-      var off = sectorOffset(dirT, dirS);
+      var off = sectorOffset(dirT, dirS, getCurrentCtx());
       if (off < 0) break;
       for (var i = 0; i < fmt.entriesPerSector; i++) {
         var entOff = off + i * fmt.entrySize;
@@ -901,7 +901,7 @@ function countLinkedSubdirs(buffer) {
         if ((tb & 0x07) === fmt.subdirType && (tb & 0x80)) {
           count++;
           var ht = data[entOff + 3], hs = data[entOff + 4];
-          var hOff = sectorOffset(ht, hs);
+          var hOff = sectorOffset(ht, hs, getCurrentCtx());
           if (hOff >= 0) walkDir(data[hOff], data[hOff + 1]);
         }
       }
@@ -917,7 +917,7 @@ function countLinkedSubdirs(buffer) {
 function updateLinkedSubdirIds(buffer) {
   var data = new Uint8Array(buffer);
   var fmt = currentFormat;
-  var rootHdrOff = sectorOffset(fmt.headerTrack, fmt.headerSector);
+  var rootHdrOff = sectorOffset(fmt.headerTrack, fmt.headerSector, getCurrentCtx());
 
   function walkDir(dirT, dirS) {
     var visited = {};
@@ -925,14 +925,14 @@ function updateLinkedSubdirIds(buffer) {
       var key = dirT + ':' + dirS;
       if (visited[key]) break;
       visited[key] = true;
-      var off = sectorOffset(dirT, dirS);
+      var off = sectorOffset(dirT, dirS, getCurrentCtx());
       if (off < 0) break;
       for (var i = 0; i < fmt.entriesPerSector; i++) {
         var entOff = off + i * fmt.entrySize;
         var tb = data[entOff + 2];
         if ((tb & 0x07) === fmt.subdirType && (tb & 0x80)) {
           var ht = data[entOff + 3], hs = data[entOff + 4];
-          var hOff = sectorOffset(ht, hs);
+          var hOff = sectorOffset(ht, hs, getCurrentCtx());
           if (hOff >= 0) {
             // Copy ID region from root header
             for (var idi = 0; idi < fmt.idLength; idi++) {

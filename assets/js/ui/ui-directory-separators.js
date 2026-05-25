@@ -332,7 +332,7 @@ function renderSepFloatBody() {
   var inCfs = typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0;
   var canInsert = inCfs
     ? !!(hddBuffer && cfsFindEmptyDirSlot(hddBuffer, cfsDirLba))
-    : (!!currentBuffer && !isTapeFormat() && canInsertFile());
+    : (!!currentBuffer && !isTapeFormat(getCurrentCtx()) && canInsertFile());
 
   var html = '';
   for (var i = 0; i < all.length; i++) {
@@ -342,7 +342,7 @@ function renderSepFloatBody() {
     var why = inCfs
       ? 'Directory is full — no room for another entry.'
       : (!currentBuffer ? 'Open an editable disk to insert separators.'
-         : isTapeFormat() ? 'Tape images are read-only.'
+         : isTapeFormat(getCurrentCtx()) ? 'Tape images are read-only.'
          : 'Directory is full — no room for another entry.');
     html += '<div class="sep-float-hint">' + escHtml(why) + '</div>';
   }

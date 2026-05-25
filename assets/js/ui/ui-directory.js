@@ -13,7 +13,7 @@ function parseCurrentDir(buffer) {
       return parseDnpDirectory(buffer, currentPartition.dnpDirT, currentPartition.dnpDirS,
         currentPartition.name, currentPartition.dnpHeaderT, currentPartition.dnpHeaderS);
     }
-    return parsePartition(buffer, currentPartition.startTrack, currentPartition.partSize);
+    return parsePartition(buffer, currentPartition.startTrack, currentPartition.partSize, getCurrentCtx());
   }
   // Inside a CMD container partition slice: preserve the format set by
   // enterCmdContainerPartition. detectFormat would otherwise misidentify
@@ -69,7 +69,7 @@ function getDirSlotOffsets(buffer) {
     const key = `${t}:${s}`;
     if (visited.has(key)) break;
     visited.add(key);
-    const off = sectorOffset(t, s);
+    const off = sectorOffset(t, s, getCurrentCtx());
     if (off < 0) break;
     for (let i = 0; i < currentFormat.entriesPerSector; i++) offsets.push(off + i * currentFormat.entrySize);
     t = data[off];
@@ -160,7 +160,7 @@ function sortDirectory(buffer, sortType) {
     const key = `${t}:${s}`;
     if (visited.has(key)) break;
     visited.add(key);
-    const off = sectorOffset(t, s);
+    const off = sectorOffset(t, s, getCurrentCtx());
     if (off < 0) break;
     sectorOffsets.push(off);
 
@@ -349,7 +349,7 @@ function removeFileEntry(buffer, entryOff) {
     var partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
     var fmt = currentFormat;
     var partTracks = Math.floor(partSize / fmt.partitionSpt);
-    var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+    var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
 
     for (var pt = partStart; pt < partStart + partTracks; pt++) {
       var spt = fmt.sectorsPerTrack(pt);
@@ -399,7 +399,7 @@ function countDirEntries() {
     const key = `${t}:${s}`;
     if (visited.has(key)) break;
     visited.add(key);
-    const off = sectorOffset(t, s);
+    const off = sectorOffset(t, s, getCurrentCtx());
     if (off < 0) break;
     for (let i = 0; i < 8; i++) {
       const eo = off + i * 32;
@@ -437,7 +437,7 @@ function insertFileEntry() {
     const key = `${t}:${s}`;
     if (visited.has(key)) break;
     visited.add(key);
-    const off = sectorOffset(t, s);
+    const off = sectorOffset(t, s, getCurrentCtx());
     if (off < 0) break;
     lastOff = off;
 
@@ -462,15 +462,15 @@ function insertFileEntry() {
 
   if (currentFormat.subdirLinked && currentPartition && currentPartition.dnpDir) {
     // Linked subdirs: directory can span any track
-    var allocated = buildTrueAllocationMap(currentBuffer);
-    var secList = allocateSectors(allocated, 1);
+    var allocated = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
+    var secList = allocateSectors(allocated, 1, getCurrentCtx());
     if (secList.length === 0) return -1;
     dirTrk = secList[0].track;
     newSector = secList[0].sector;
   } else {
     // Standard: allocate on the directory track only
     dirTrk = ctx.dirTrackNum;
-    const spt = sectorsPerTrack(dirTrk);
+    const spt = sectorsPerTrack(dirTrk, getCurrentCtx());
     var protectedSecs = new Set(currentFormat.getProtectedSectors(dirTrk));
     newSector = -1;
     for (let cs = 1; cs < spt; cs++) {
@@ -487,7 +487,7 @@ function insertFileEntry() {
     data[lastOff + 1] = newSector;
   }
 
-  const newOff = sectorOffset(dirTrk, newSector);
+  const newOff = sectorOffset(dirTrk, newSector, getCurrentCtx());
   data[newOff] = 0x00;
   data[newOff + 1] = 0xFF;
   for (let i = 2; i < 256; i++) data[newOff + i] = 0x00;
@@ -495,7 +495,7 @@ function insertFileEntry() {
   writeNewEntry(data, newOff);
 
   // Mark sector as used in BAM
-  bamMarkSectorUsed(data, dirTrk, newSector, bamOff);
+  bamMarkSectorUsed(data, dirTrk, newSector, bamOff, getCurrentCtx());
 
   // DNP subdir: bump the parent entry's block count by 1. Spec D2M-DNP.TXT
   // §directory header bytes 24-26: track/sector + index of the entry for
@@ -503,14 +503,14 @@ function insertFileEntry() {
   // header + dir-chain blocks only; growing the chain must keep it in sync.
   if (currentFormat.subdirLinked && currentPartition && currentPartition.dnpDir
       && currentPartition.dnpHeaderT) {
-    var hdrOff = sectorOffset(currentPartition.dnpHeaderT, currentPartition.dnpHeaderS);
+    var hdrOff = sectorOffset(currentPartition.dnpHeaderT, currentPartition.dnpHeaderS, getCurrentCtx());
     if (hdrOff >= 0) {
       var pe = currentFormat.subdirParentEntry;
       var pT = data[hdrOff + pe];
       var pS = data[hdrOff + pe + 1];
       var pIdx = data[hdrOff + pe + 2];
       if (pT !== 0) {
-        var pDirOff = sectorOffset(pT, pS);
+        var pDirOff = sectorOffset(pT, pS, getCurrentCtx());
         if (pDirOff >= 0) {
           var pEntry = pDirOff + pIdx * 32;
           var sz = (data[pEntry + 0x1E] | (data[pEntry + 0x1F] << 8)) + 1;
@@ -624,7 +624,7 @@ function checkScratchedRecoverable(buffer, entryOff) {
   var fmt = currentFormat;
   var t = data[entryOff + 3], s = data[entryOff + 4];
   if (t === 0) return 'no';
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
   var totalSectors = 0, freeSectors = 0;
   var visited = {};
   var chainClean = false;
@@ -635,8 +635,8 @@ function checkScratchedRecoverable(buffer, entryOff) {
     if (visited[key]) break;
     visited[key] = true;
     totalSectors++;
-    if (checkSectorFree(data, bamOff, t, s)) freeSectors++;
-    var off = sectorOffset(t, s);
+    if (checkSectorFree(data, bamOff, t, s, getCurrentCtx())) freeSectors++;
+    var off = sectorOffset(t, s, getCurrentCtx());
     if (off < 0) break;
     var nt = data[off], ns = data[off + 1];
     if (nt === 0) { chainClean = true; break; }
@@ -663,7 +663,7 @@ function getFileAddresses(buffer, entryOff) {
   // File chain follows sectorOffset, which transparently switches to
   // FD's LBA-encoded T:S (S = 0..255) for D1M/D2M/D4M and physical T:S
   // for everyone else.
-  const firstOff = sectorOffset(t, s);
+  const firstOff = sectorOffset(t, s, getCurrentCtx());
   if (firstOff < 0 || firstOff + 4 > data.length) return null;
 
   // For PRG files, bytes 2-3 of first sector are the load address
@@ -675,7 +675,7 @@ function getFileAddresses(buffer, entryOff) {
   let totalBytes = 0;
   let lastUsed = 0;
   while (t !== 0) {
-    const off = sectorOffset(t, s);
+    const off = sectorOffset(t, s, getCurrentCtx());
     if (off < 0 || off + 2 > data.length) break;
     const key = `${t}:${s}`;
     if (visited.has(key)) break;
@@ -712,7 +712,7 @@ function getFileAddresses(buffer, entryOff) {
 function countActualBlocks(buffer, entryOff) {
   var data = new Uint8Array(buffer);
   if (data[entryOff + 3] === 0) return 0;
-  return forEachFileSector(data, entryOff, function() {});
+  return forEachFileSector(data, entryOff, function() {}, getCurrentCtx());
 }
 
 // ── Free blocks editing ───────────────────────────────────────────────
@@ -727,7 +727,7 @@ function getMaxFreeBlocks() {
 
 function writeFreeBlocks(buffer, freeBlocks) {
   const data = new Uint8Array(buffer);
-  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector, getCurrentCtx());
 
   // BAM only covers tracks 1-35
   const bamTracks = currentFormat.bamTracksRange(currentTracks);
@@ -738,7 +738,7 @@ function writeFreeBlocks(buffer, freeBlocks) {
   for (let t = 1; t <= bamTracks; t++) {
     if (t === currentFormat.dirTrack) continue;
     const free = currentFormat.readTrackFree(data, bamOff, t);
-    const spt = sectorsPerTrack(t);
+    const spt = sectorsPerTrack(t, getCurrentCtx());
     tracks.push({ t, free, spt });
     currentTotal += free;
   }
@@ -793,7 +793,7 @@ function writeFreeBlocks(buffer, freeBlocks) {
 
 function countActualFreeBlocks(buffer) {
   const data = new Uint8Array(buffer);
-  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector, getCurrentCtx());
   let free = 0;
   const bamTracks = currentFormat.bamTracksRange(currentTracks);
   for (let t = 1; t <= bamTracks; t++) {
@@ -821,7 +821,7 @@ function clampInt(raw, min, max) {
 // format. Track 1..totalTracks and sector 0..(spt-1).
 function isTrackSectorInRange(t, s, totalTracks) {
   if (t < 1 || t > totalTracks) return false;
-  if (s < 0 || s >= sectorsPerTrack(t)) return false;
+  if (s < 0 || s >= sectorsPerTrack(t, getCurrentCtx())) return false;
   return true;
 }
 
@@ -837,7 +837,7 @@ function filenameBytesDiffer(buffer, entryOff, newBytes) {
 }
 
 function startEditFreeBlocks(blocksSpan) {
-  if (!currentBuffer || !blocksSpan || isTapeFormat()) return;
+  if (!currentBuffer || !blocksSpan || isTapeFormat(getCurrentCtx())) return;
   if (blocksSpan.querySelector('input')) return;
 
   cancelActiveEdits();
@@ -1115,7 +1115,7 @@ function startEditBlockSize(entryEl) {
 }
 
 function startRenameEntry(entryEl) {
-  if (!currentBuffer || !entryEl || isTapeFormat()) return;
+  if (!currentBuffer || !entryEl || isTapeFormat(getCurrentCtx())) return;
   const entryOff = parseInt(entryEl.dataset.offset, 10);
   const nameSpan = entryEl.querySelector('.dir-name');
   if (nameSpan.querySelector('.petscii-editor')) return;
@@ -1428,7 +1428,7 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
   if (isCBM) {
     var partStart = data[removeEntryOff + 3];
     var partSize = data[removeEntryOff + 30] | (data[removeEntryOff + 31] << 8);
-    var partInfo = parsePartition(currentBuffer, partStart, partSize);
+    var partInfo = parsePartition(currentBuffer, partStart, partSize, getCurrentCtx());
     var fileEntries = partInfo ? partInfo.entries.filter(function(en) { return !en.deleted; }) : [];
 
     if (fileEntries.length > 0) {
@@ -1480,7 +1480,7 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
         var moveCount = Math.min(fileEntries.length, freeSlots);
         for (var fi = 0; fi < moveCount; fi++) {
           var srcOff = fileEntries[fi].entryOff;
-          var dstOff = findFreeDirEntry(currentBuffer);
+          var dstOff = findFreeDirEntry(currentBuffer, getCurrentCtx());
           if (dstOff < 0) break;
           var moveData = new Uint8Array(currentBuffer);
           for (var j = 2; j < 32; j++) moveData[dstOff + j] = moveData[srcOff + j];

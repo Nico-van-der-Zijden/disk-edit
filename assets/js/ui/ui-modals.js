@@ -302,7 +302,7 @@ document.addEventListener('keydown', (e) => {
   // Ctrl+Shift+G: go to track/sector (Ctrl+G conflicts with browser Find Next)
   if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyG') {
     e.preventDefault();
-    if (currentBuffer && !isTapeFormat()) showGoToSector();
+    if (currentBuffer && !isTapeFormat(getCurrentCtx())) showGoToSector();
   }
   // Ctrl+Alt+W: close current tab (Ctrl+W conflicts with browser close tab)
   if (e.ctrlKey && e.altKey && e.code === 'KeyW') {
@@ -362,9 +362,9 @@ document.addEventListener('keydown', (e) => {
   // Ctrl+Alt+S: save disk
   if (e.ctrlKey && e.altKey && e.code === 'KeyS') {
     e.preventDefault();
-    if (currentBuffer && currentFileName && !isTapeFormat()) {
+    if (currentBuffer && currentFileName && !isTapeFormat(getCurrentCtx())) {
       document.getElementById('opt-save').click();
-    } else if (currentBuffer && !isTapeFormat()) {
+    } else if (currentBuffer && !isTapeFormat(getCurrentCtx())) {
       document.getElementById('opt-save-as').click();
     }
   }

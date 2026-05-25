@@ -242,7 +242,7 @@ function showFileBasicRendered(entryOff, dialect, preloaded) {
     name = preloaded.name || '';
     result = { error: preloaded.error || null };
   } else {
-    result = readFileData(currentBuffer, entryOff);
+    result = readFileData(currentBuffer, entryOff, getCurrentCtx());
     fileData = result.data;
     var data = new Uint8Array(currentBuffer);
     name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();

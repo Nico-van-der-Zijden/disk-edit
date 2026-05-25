@@ -441,7 +441,7 @@ function showGoToSector() {
 
 document.getElementById('opt-goto-sector').addEventListener('click', function(e) {
   e.stopPropagation();
-  if (!currentBuffer || isTapeFormat()) return;
+  if (!currentBuffer || isTapeFormat(getCurrentCtx())) return;
   showGoToSector();
 });
 
@@ -558,12 +558,12 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
   // Recalculate by following all file sector chains to find used sectors,
   // then rebuild the BAM free counts from scratch. Don't trust the existing BAM.
   const data = new Uint8Array(currentBuffer);
-  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector, getCurrentCtx());
 
   // Build allocation map for all tracks
   const used = {};
   for (let t = 1; t <= currentTracks; t++) {
-    used[t] = new Uint8Array(sectorsPerTrack(t));
+    used[t] = new Uint8Array(sectorsPerTrack(t, getCurrentCtx()));
   }
 
   // Track 18 sector 0 (BAM) is always used
@@ -576,9 +576,9 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
     const key = `${dirT}:${dirS}`;
     if (dirVisited.has(key)) break;
     dirVisited.add(key);
-    if (dirT < 1 || dirT > currentTracks || dirS < 0 || dirS >= sectorsPerTrack(dirT)) break;
+    if (dirT < 1 || dirT > currentTracks || dirS < 0 || dirS >= sectorsPerTrack(dirT, getCurrentCtx())) break;
     used[dirT][dirS] = 1;
-    const off = sectorOffset(dirT, dirS);
+    const off = sectorOffset(dirT, dirS, getCurrentCtx());
     dirT = data[off];
     dirS = data[off + 1];
   }
@@ -589,7 +589,7 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
     if (entry.deleted) continue;
     forEachFileSector(data, entry.entryOff, function(t, s) {
       used[t][s] = 1;
-    });
+    }, getCurrentCtx());
   }
 
   // Read old total
@@ -600,7 +600,7 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
   // BAM only covers tracks 1-35
   for (let t = 1; t <= currentFormat.bamTracksRange(currentTracks); t++) {
     if (t === currentFormat.dirTrack) continue;
-    const spt = sectorsPerTrack(t);
+    const spt = sectorsPerTrack(t, getCurrentCtx());
     let free = 0;
     for (let s = 0; s < spt; s++) {
       if (!used[t][s]) free++;

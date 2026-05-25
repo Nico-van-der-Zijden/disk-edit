@@ -200,7 +200,7 @@ document.addEventListener('dragstart', function(e) {
       var typeIdx = typeByte & 0x07;
       if (typeIdx < 1 || typeIdx > 4 || !(typeByte & 0x80)) return null;
       if (isVlirFile(data, entryOff)) return null; // GEOS VLIR needs Export CVT
-      var result = readFileData(currentBuffer, entryOff);
+      var result = readFileData(currentBuffer, entryOff, getCurrentCtx());
       if (result.error || result.data.length === 0) return null;
       var extMap = { 1: '.seq', 2: '.prg', 3: '.usr', 4: '.rel' };
       var rName = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
