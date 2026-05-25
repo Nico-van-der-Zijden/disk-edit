@@ -1438,9 +1438,10 @@ function readFileData(buffer, entryOff, ctx) {
 }
 
 /** @returns {number} Byte offset of the header sector */
-function getHeaderOffset() {
-  var fmt = currentFormat;
-  return sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector);
+function getHeaderOffset(ctx) {
+  ctx = ctx || getCurrentCtx();
+  var fmt = ctx.format;
+  return sectorOffset(fmt.headerTrack || fmt.bamTrack, fmt.headerSector != null ? fmt.headerSector : fmt.bamSector, ctx);
 }
 
 function petsciiToReadable(str) {
@@ -1510,9 +1511,10 @@ var ERROR_CODES = {
 // speeder-DOS extended BAM at the variant's offset, or -1 when no
 // variant is detected (the caller shouldn't reach here in that case
 // because bamTracksRange caps at 35).
-function _d64BamEntry(bamOff, track) {
+function _d64BamEntry(bamOff, track, ctx) {
   if (track <= 35) return bamOff + 4 * track;
-  var v = currentBuffer ? getSpeederVariant(currentBuffer) : null;
+  ctx = ctx || getCurrentCtx();
+  var v = ctx.buffer ? getSpeederVariant(ctx.buffer, ctx) : null;
   if (v === 'SpeedDOS') return bamOff + 0xC0 + (track - 36) * 4;
   if (v === 'DolphinDOS') return bamOff + 0xAC + (track - 36) * 4;
   return -1;
@@ -1529,13 +1531,14 @@ function _d64BamEntry(bamOff, track) {
 // We don't block writes (the user knows what they're doing); we just
 // surface the state in the health-dot tooltip and the BAM-view banner.
 // Returns the offending byte value, or null when the disk is writable.
-function isSoftWriteProtected(buffer) {
-  if (!buffer || !currentFormat.hasSoftWriteProtect) return null;
+function isSoftWriteProtected(buffer, ctx) {
+  ctx = ctx || getCurrentCtx();
+  if (!buffer || !ctx.format.hasSoftWriteProtect) return null;
   var data = new Uint8Array(buffer);
-  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  var bamOff = sectorOffset(ctx.format.bamTrack, ctx.format.bamSector, ctx);
   if (bamOff < 0) return null;
   var v = data[bamOff + 0x02];
-  return (v === currentFormat.dosVersion || v === 0x00) ? null : v;
+  return (v === ctx.format.dosVersion || v === 0x00) ? null : v;
 }
 
 // Spec lines 327-364: 40-track speeder-DOS variants store the extra
@@ -1548,11 +1551,12 @@ function isSoftWriteProtected(buffer) {
 // Returns 'SpeedDOS' | 'DolphinDOS' | null. Gated by
 // `fmt.supportsSpeederBam` so the check stays inert on formats that
 // don't define the speeder-BAM layout (D71/D80/D82/D81/CMD native).
-function getSpeederVariant(buffer) {
-  if (!buffer || !currentFormat.supportsSpeederBam) return null;
-  if (currentTracks < 40) return null;
+function getSpeederVariant(buffer, ctx) {
+  ctx = ctx || getCurrentCtx();
+  if (!buffer || !ctx.format.supportsSpeederBam) return null;
+  if (ctx.tracks < 40) return null;
   var data = new Uint8Array(buffer);
-  var bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector);
+  var bamOff = sectorOffset(ctx.format.bamTrack, ctx.format.bamSector, ctx);
   if (bamOff < 0) return null;
   if (_hasFdEntries(data, bamOff + 0xC0)) return 'SpeedDOS';
   if (_hasFdEntries(data, bamOff + 0xAC)) return 'DolphinDOS';
