@@ -144,7 +144,8 @@ function isGeosDisk(buffer, ctx) {
 //   3. Structure must be 0 or 1; any other value = not GEOS.
 //   4. Structure=1 → VLIR; else → GEOS-Sequential.
 //   5. Filetype != 0 → INFO block likely exists; verify info T/S range.
-function readGeosInfo(buffer, entryOff) {
+function readGeosInfo(buffer, entryOff, ctx) {
+  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
   var cbmTypeBits = data[entryOff + 0x02] & 0x07;
   var infoTrack = data[entryOff + 0x15];     // byte 21: info block track
@@ -164,7 +165,7 @@ function readGeosInfo(buffer, entryOff) {
                     (geosStructure === 0 || geosStructure === 1);
   // Step 4 — VLIR-ness flags it as GEOS even when filetype byte is 0.
   // Step 5 — INFO block presence requires filetype != 0 AND valid T/S.
-  var infoTrackInRange = infoTrack > 0 && infoTrack <= currentTracks;
+  var infoTrackInRange = infoTrack > 0 && infoTrack <= ctx.tracks;
   var hasInfoBlock = couldBeGeos && geosFileType > 0 && infoTrackInRange;
   var isGeos = couldBeGeos && (geosFileType > 0 || geosStructure === 1);
 
@@ -533,8 +534,9 @@ function findDnpHighTrackOwners(buffer, minTrack) {
 // Grow: always succeeds. Appends empty tracks and sets their BAM bitmap to all-free.
 // Shrink: only succeeds if every sector above newTracks is already free. The UI
 // handler is expected to compact first (via optimizeDisk) and retry.
-function resizeDnpImage(buffer, newTracks) {
-  if (currentFormat !== DISK_FORMATS.dnp) return { error: 'Resize is only supported for DNP images.' };
+function resizeDnpImage(buffer, newTracks, ctx) {
+  ctx = ctx || getCurrentCtx();
+  if (ctx.format !== DISK_FORMATS.dnp) return { error: 'Resize is only supported for DNP images.' };
   if (typeof newTracks !== 'number' || !isFinite(newTracks) || newTracks < 2 || newTracks > 255) {
     return { error: 'Track count must be between 2 and 255.' };
   }

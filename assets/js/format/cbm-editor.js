@@ -445,11 +445,12 @@ function updateTabName() {
 
 // ── BAM integrity check (read-only, doesn't modify disk) ─────────────
 /** @param {ArrayBuffer} buffer @returns {BAMIntegrityResult} */
-function checkBAMIntegrity(buffer) {
+function checkBAMIntegrity(buffer, ctx) {
+  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
-  var fmt = currentFormat;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
-  var bamTracks = fmt.bamTracksRange(currentTracks);
+  var fmt = ctx.format;
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, ctx);
+  var bamTracks = fmt.bamTracksRange(ctx.tracks);
 
   // Follow all file chains to build sector ownership map
   var sectorOwner = {};
@@ -457,13 +458,13 @@ function checkBAMIntegrity(buffer) {
   // Walk a directory chain, processing file entries and recursing into linked subdirs
   function walkIntegrityDir(dirT, dirS, parentName) {
     var dirVisited = {};
-    while (dirT !== 0 && dirT <= currentTracks) {
+    while (dirT !== 0 && dirT <= ctx.tracks) {
       if (dirS >= fmt.sectorsPerTrack(dirT)) break;
       var dk = dirT + ':' + dirS;
       if (dirVisited[dk]) break;
       dirVisited[dk] = true;
       sectorOwner[dk] = parentName || 'Directory';
-      var doff = sectorOffset(dirT, dirS);
+      var doff = sectorOffset(dirT, dirS, ctx);
       if (doff < 0) break;
 
       for (var i = 0; i < fmt.entriesPerSector; i++) {
@@ -480,7 +481,7 @@ function checkBAMIntegrity(buffer) {
         // Linked subdirectory: mark header + recurse
         if (fmt.subdirLinked && typeIdx === fmt.subdirType && closed) {
           sectorOwner[et + ':' + es] = ownerName;
-          var hOff = sectorOffset(et, es);
+          var hOff = sectorOffset(et, es, ctx);
           if (hOff >= 0) walkIntegrityDir(data[hOff], data[hOff + 1], ownerName);
           continue;
         }
@@ -490,7 +491,7 @@ function checkBAMIntegrity(buffer) {
           var partStart = et;
           var partSize = data[entOff + 30] | (data[entOff + 31] << 8);
           var partTracks = Math.floor(partSize / fmt.partitionSpt);
-          for (var pt = partStart; pt < partStart + partTracks && pt <= currentTracks; pt++) {
+          for (var pt = partStart; pt < partStart + partTracks && pt <= ctx.tracks; pt++) {
             var pspt = fmt.sectorsPerTrack(pt);
             for (var ps = 0; ps < pspt; ps++) {
               sectorOwner[pt + ':' + ps] = ownerName;
@@ -503,7 +504,7 @@ function checkBAMIntegrity(buffer) {
         if (closed) {
           forEachFileSector(data, entOff, function(t, s) {
             sectorOwner[t + ':' + s] = ownerName;
-          });
+          }, ctx);
         }
       }
 
@@ -518,7 +519,7 @@ function checkBAMIntegrity(buffer) {
   // these are protected from allocation but intentionally marked *free* in the main
   // BAM (e.g. CMD FD system partition on the last track of D1M/D2M/D4M). Owning them
   // here would falsely trigger allocMismatch because BAM-free + owned = mismatch.
-  for (var pst = 1; pst <= currentTracks; pst++) {
+  for (var pst = 1; pst <= ctx.tracks; pst++) {
     if (pst === fmt.dirTrack) continue; // dir track already skipped in orphan check
     var protSecs = fmt.getProtectedSectors(pst);
     var bamOmitted = fmt.getBamOmittedSectors ? fmt.getBamOmittedSectors(pst) : [];
@@ -537,7 +538,7 @@ function checkBAMIntegrity(buffer) {
     // Skip count comparison for formats without per-track free counts
     if (!fmt.hasBamFreeCounts) continue;
     var actualFree = 0;
-    var bbBase = getBamBitmapBase(t, bamOff);
+    var bbBase = getBamBitmapBase(t, bamOff, ctx);
     var numBytes = Math.ceil(spt / 8);
     for (var bi = 0; bi < numBytes; bi++) {
       var bval = data[bbBase + bi];
@@ -570,7 +571,7 @@ function checkBAMIntegrity(buffer) {
     if (t === fmt.dirTrack) continue;
     var spt2 = iterSptFn.call(fmt, t);
     for (var s2 = 0; s2 < spt2; s2++) {
-      var isFree = checkSectorFree(data, bamOff, t, s2);
+      var isFree = checkSectorFree(data, bamOff, t, s2, ctx);
       var isUsed = sectorOwner[t + ':' + s2] !== undefined;
       if (isFree && isUsed) {
         allocMismatch++;
@@ -592,11 +593,12 @@ function checkBAMIntegrity(buffer) {
 // Rewrite all file sector chains with a chosen interleave, optionally
 // defragmenting (packing files onto consecutive tracks).
 // Returns { filesOptimized, sectorsRewritten, log[] }
-function optimizeDisk(buffer, interleave, defragment) {
+function optimizeDisk(buffer, interleave, defragment, ctx) {
+  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
-  var fmt = currentFormat;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
-  var bamTracks = fmt.bamTracksRange(currentTracks);
+  var fmt = ctx.format;
+  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, ctx);
+  var bamTracks = fmt.bamTracksRange(ctx.tracks);
   var log = [];
 
   // Phase 1: Read all file data into memory
@@ -637,12 +639,12 @@ function optimizeDisk(buffer, interleave, defragment) {
     var t = ft, s = fs;
     var visited = {};
     while (t !== 0) {
-      if (t < 1 || t > currentTracks) break;
+      if (t < 1 || t > ctx.tracks) break;
       if (s >= fmt.sectorsPerTrack(t)) break;
       var key = t + ':' + s;
       if (visited[key]) break;
       visited[key] = true;
-      var soff = sectorOffset(t, s);
+      var soff = sectorOffset(t, s, ctx);
       if (soff < 0) break;
       // Save data payload (bytes 2-255)
       var payload = new Uint8Array(254);
@@ -659,8 +661,8 @@ function optimizeDisk(buffer, interleave, defragment) {
     var geosInfoT = data[entry.entryOff + 0x15];
     var geosInfoS = data[entry.entryOff + 0x16];
     var geosInfoData = null;
-    if (geosInfoT > 0 && geosInfoT <= currentTracks && data[entry.entryOff + 0x18] > 0) {
-      var giOff = sectorOffset(geosInfoT, geosInfoS);
+    if (geosInfoT > 0 && geosInfoT <= ctx.tracks && data[entry.entryOff + 0x18] > 0) {
+      var giOff = sectorOffset(geosInfoT, geosInfoS, ctx);
       if (giOff >= 0) {
         geosInfoData = new Uint8Array(256);
         for (var gi = 0; gi < 256; gi++) geosInfoData[gi] = data[giOff + gi];
@@ -695,7 +697,7 @@ function optimizeDisk(buffer, interleave, defragment) {
     if (dirVisited[dkey]) break;
     dirVisited[dkey] = true;
     protectedSectors[dkey] = true;
-    var doff = sectorOffset(dirT, dirS);
+    var doff = sectorOffset(dirT, dirS, ctx);
     if (doff < 0) break;
     dirT = data[doff]; dirS = data[doff + 1];
   }
@@ -710,7 +712,7 @@ function optimizeDisk(buffer, interleave, defragment) {
         var partStart = data[pe.entryOff + 3];
         var partSize = data[pe.entryOff + 30] | (data[pe.entryOff + 31] << 8);
         var partTracks = Math.floor(partSize / fmt.partitionSpt);
-        for (var pt = partStart; pt < partStart + partTracks && pt <= currentTracks; pt++) {
+        for (var pt = partStart; pt < partStart + partTracks && pt <= ctx.tracks; pt++) {
           var pspt = fmt.sectorsPerTrack(pt);
           for (var ps = 0; ps < pspt; ps++) {
             protectedSectors[pt + ':' + ps] = true;
@@ -728,7 +730,7 @@ function optimizeDisk(buffer, interleave, defragment) {
     if (ptb2 === FILE_TYPE.REL || isVlirFile(data, pe2.entryOff)) {
       forEachFileSector(data, pe2.entryOff, function(t, s) {
         protectedSectors[t + ':' + s] = true;
-      });
+      }, ctx);
     }
   }
 
@@ -773,7 +775,7 @@ function optimizeDisk(buffer, interleave, defragment) {
     var totalNeed = numSectors + needExtra;
 
     // Allocate sectors with chosen interleave
-    var sectorList = allocateSectorsFromTrackOrder(allocated, totalNeed, trackOrder, interleave);
+    var sectorList = allocateSectorsFromTrackOrder(allocated, totalNeed, trackOrder, interleave, ctx);
 
     if (sectorList.length < totalNeed) {
       log.push('ERROR: Not enough free sectors for "' + petsciiToReadable(file.name) + '"');
@@ -784,7 +786,7 @@ function optimizeDisk(buffer, interleave, defragment) {
     var dataSectorStart = 0;
     if (file.geosInfoData) {
       var infoSec = sectorList[0];
-      var infoOff = sectorOffset(infoSec.track, infoSec.sector);
+      var infoOff = sectorOffset(infoSec.track, infoSec.sector, ctx);
       for (var ib = 0; ib < 256; ib++) data[infoOff + ib] = file.geosInfoData[ib];
       data[infoOff] = 0x00;
       data[infoOff + 1] = 0xFF;
@@ -798,7 +800,7 @@ function optimizeDisk(buffer, interleave, defragment) {
     var fileSectors = sectorList.slice(dataSectorStart);
     for (var si = 0; si < fileSectors.length; si++) {
       var sec = fileSectors[si];
-      var soff2 = sectorOffset(sec.track, sec.sector);
+      var soff2 = sectorOffset(sec.track, sec.sector, ctx);
 
       if (si < fileSectors.length - 1) {
         var nextSec = fileSectors[si + 1];
@@ -826,7 +828,7 @@ function optimizeDisk(buffer, interleave, defragment) {
   for (var bt = 1; bt <= bamTracks; bt++) {
     var bspt = fmt.sectorsPerTrack(bt);
     var numBytes = Math.ceil(bspt / 8);
-    var bbBase = getBamBitmapBase(bt, bamOff);
+    var bbBase = getBamBitmapBase(bt, bamOff, ctx);
     var free = 0;
     var newBytes = new Uint8Array(numBytes);
     for (var bs = 0; bs < bspt; bs++) {
@@ -845,7 +847,7 @@ function optimizeDisk(buffer, interleave, defragment) {
   var verifyErrors = 0;
   for (fIdx = 0; fIdx < files.length; fIdx++) {
     var vf = files[fIdx];
-    var verify = readFileData(buffer, vf.entryOff);
+    var verify = readFileData(buffer, vf.entryOff, ctx);
     if (verify.error) {
       log.push('VERIFY ERROR: "' + petsciiToReadable(vf.name) + '": ' + verify.error);
       verifyErrors++;
@@ -862,11 +864,12 @@ function optimizeDisk(buffer, interleave, defragment) {
 }
 
 // ── Validate disk ────────────────────────────────────────────────────
-function validateDisk(buffer) {
+function validateDisk(buffer, ctx) {
+  ctx = ctx || getCurrentCtx();
   const data = new Uint8Array(buffer);
-  const fmt = currentFormat;
-  const bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector);
-  const numTracks = currentTracks;
+  const fmt = ctx.format;
+  const bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, ctx);
+  const numTracks = ctx.tracks;
   const log = [];
 
   const allocated = [];
@@ -905,7 +908,7 @@ function validateDisk(buffer) {
       }
       allocated[t][s] = 1;
       blocks++;
-      const off = sectorOffset(t, s);
+      const off = sectorOffset(t, s, ctx);
       t = data[off + 0];
       s = data[off + 1];
     }
@@ -926,7 +929,7 @@ function validateDisk(buffer) {
       }
       allocated[dTrack][dSector] = 1;
 
-      const off = sectorOffset(dTrack, dSector);
+      const off = sectorOffset(dTrack, dSector, ctx);
       for (let i = 0; i < fmt.entriesPerSector; i++) {
         const entryOff = off + i * fmt.entrySize;
         const typeByte = data[entryOff + 2];
@@ -957,7 +960,7 @@ function validateDisk(buffer) {
             continue;
           }
           allocated[fileTrack][fileSector] = 1; // header sector
-          var hdrOff = sectorOffset(fileTrack, fileSector);
+          var hdrOff = sectorOffset(fileTrack, fileSector, ctx);
           if (hdrOff >= 0) {
             walkValidateDir(data[hdrOff], data[hdrOff + 1], dirVisited);
           }
@@ -1001,7 +1004,7 @@ function validateDisk(buffer) {
           },
           function(recT, recS, recIdx) {
             totalBlocks += followChain(recT, recS, label + ' record ' + recIdx).blocks;
-          });
+          }, ctx);
 
         const expectedBlocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
         if (totalBlocks !== expectedBlocks && !result.error) {
@@ -1068,11 +1071,12 @@ function validateDisk(buffer) {
 }
 
 // Validate a D81 partition's contents and rebuild its internal BAM
-function validatePartition(buffer, startTrack, partSize) {
+function validatePartition(buffer, startTrack, partSize, ctx) {
+  ctx = ctx || getCurrentCtx();
   const data = new Uint8Array(buffer);
-  const fmt = currentFormat;
+  const fmt = ctx.format;
   const numPartTracks = Math.floor(partSize / fmt.partitionSpt);
-  const partBamOff = sectorOffset(startTrack, 1);
+  const partBamOff = sectorOffset(startTrack, 1, ctx);
   const log = [];
 
   // Build allocation table for partition tracks (relative: 1..numPartTracks)
@@ -1112,7 +1116,7 @@ function validatePartition(buffer, startTrack, partSize) {
       }
       allocated[relT][s] = 1;
       blocks++;
-      const off = sectorOffset(t, s);
+      const off = sectorOffset(t, s, ctx);
       t = data[off]; s = data[off + 1];
     }
     return { blocks, error: false };
@@ -1133,13 +1137,13 @@ function validatePartition(buffer, startTrack, partSize) {
     }
     allocated[relT][dirSector] = 1;
     dirSectors.push({ track: dirTrack, sector: dirSector });
-    const off = sectorOffset(dirTrack, dirSector);
+    const off = sectorOffset(dirTrack, dirSector, ctx);
     dirTrack = data[off]; dirSector = data[off + 1];
   }
 
   let splatCount = 0;
   for (const ds of dirSectors) {
-    const off = sectorOffset(ds.track, ds.sector);
+    const off = sectorOffset(ds.track, ds.sector, ctx);
     for (let i = 0; i < fmt.entriesPerSector; i++) {
       const entryOff = off + i * fmt.entrySize;
       const typeByte = data[entryOff + 2];
@@ -1174,7 +1178,7 @@ function validatePartition(buffer, startTrack, partSize) {
         },
         function(recT, recS, recIdx) {
           totalBlocks += followChain(recT, recS, label + ' record ' + recIdx).blocks;
-        });
+        }, ctx);
 
       const expectedBlocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
       if (totalBlocks !== expectedBlocks && !result.error) {
@@ -1227,18 +1231,19 @@ function validatePartition(buffer, startTrack, partSize) {
 // ── Scan for orphaned sector chains (lost files) ─────────────────────
 // Finds file data remaining on disk after directory entries have been
 // completely removed. Read-only — does not modify the buffer.
-function scanOrphanedChains(buffer) {
+function scanOrphanedChains(buffer, ctx) {
+  ctx = ctx || getCurrentCtx();
   var data = new Uint8Array(buffer);
-  var fmt = currentFormat;
+  var fmt = ctx.format;
 
   // Step 1: Build set of all owned sectors
-  var owned = buildTrueAllocationMap(buffer);
+  var owned = buildTrueAllocationMap(buffer, ctx);
 
   // Determine scan range (partition-aware)
-  var minTrack = 1, maxTrack = currentTracks;
-  if (currentPartition) {
-    minTrack = currentPartition.startTrack;
-    maxTrack = currentPartition.startTrack + Math.floor(currentPartition.partSize / currentFormat.partitionSpt) - 1;
+  var minTrack = 1, maxTrack = ctx.tracks;
+  if (ctx.partition) {
+    minTrack = ctx.partition.startTrack;
+    maxTrack = ctx.partition.startTrack + Math.floor(ctx.partition.partSize / fmt.partitionSpt) - 1;
   }
 
   // Step 2: Classify unowned sectors
@@ -1251,7 +1256,7 @@ function scanOrphanedChains(buffer) {
       var key = t + ':' + s;
       if (owned[key]) continue;
 
-      var off = sectorOffset(t, s);
+      var off = sectorOffset(t, s, ctx);
       if (off < 0) continue;
 
       // Skip all-zero sectors (never written)
@@ -1326,7 +1331,7 @@ function scanOrphanedChains(buffer) {
       visited[ck] = true;
       globalVisited[ck] = true;
 
-      var coff = sectorOffset(ct, cs);
+      var coff = sectorOffset(ct, cs, ctx);
       if (coff < 0) { integrity = 'broken'; break; }
 
       sectors.push({ t: ct, s: cs });
