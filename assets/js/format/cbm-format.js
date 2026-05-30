@@ -2355,19 +2355,20 @@ function _cbmCreateDnpSubdir(diskCtx, name) {
 
 // Create a D81-style CBM partition (file type $05) for formats with
 // supportsSubdirs && !subdirLinked. Allocates a contiguous run of
-// tracks (minimum 3 = 120 sectors), formats the run as a self-
-// contained sub-disk (header + 2 BAM sectors + first dir sector),
-// then writes a partition entry in the current root dir + marks the
-// allocated tracks as used in the root BAM. Returns
-// { ok, error?, partition } where `partition` is a {startTrack,
-// partSize, name} shape suitable for building a child diskCtx.
+// tracks, formats the run as a self-contained sub-disk (header +
+// 2 BAM sectors + first dir sector), then writes a partition entry
+// in the current root dir + marks the allocated tracks as used in
+// the root BAM. Returns { ok, error?, partition } where `partition`
+// is a {startTrack, partSize, name} shape suitable for building a
+// child diskCtx.
 //
-// `desiredSectors` is the number of free sectors the caller wants
-// inside the partition (after the system track). Rounded up to the
-// next multiple of partitionSpt; minimum is one data track (so the
-// final partition is 2 tracks = 80 sectors of which 40 are free
-// minus the 4 sys sectors).
-function _cbmCreateD81Partition(diskCtx, name, desiredSectors) {
+// `totalSectors` is the on-disk partition size — the same number that
+// ends up in the parent dir entry +30/+31. Spec rules from D81.TXT
+// lines 433-435 are enforced here: rounded up to the next multiple of
+// 40 (partitionSpt), floored at 120 (3-track minimum). The first 4
+// sectors of the partition's first track are reserved for header +
+// 2 BAM + first dir, so usable space is `totalSectors - 4`.
+function _cbmCreateD81Partition(diskCtx, name, totalSectors) {
   if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return { ok: false, error: 'invalid disk context' };
   if (!name) return { ok: false, error: 'empty name' };
   var fmt = diskCtx.format;
@@ -2381,13 +2382,10 @@ function _cbmCreateD81Partition(diskCtx, name, desiredSectors) {
   var data = new Uint8Array(diskCtx.buffer);
   var pSpt = fmt.partitionSpt;
 
-  // Track budget. D81 spec minimum is 3 tracks (120 sectors) before
-  // 1581 firmware will treat it as a sub-directory. Compute from
-  // caller's desired free-sector count, +1 sys track. Always at least
-  // 3 tracks.
-  var dataTracks = Math.max(1, Math.ceil((desiredSectors || 1) / pSpt));
-  var numTracks = Math.max(3, dataTracks + 1); // +1 sys track, min 3 total
-  var partSectors = numTracks * pSpt;
+  // Enforce D81.TXT spec rules (lines 433-435): partition size is a
+  // multiple of 40 sectors with a 120-sector (3-track) minimum.
+  var partSectors = Math.max(120, Math.ceil((totalSectors || 0) / pSpt) * pSpt);
+  var numTracks = partSectors / pSpt;
 
   // Find a contiguous free track run that doesn't include the dir
   // track. Search via the live allocation map so the result respects
@@ -2522,7 +2520,9 @@ function _cbmCreateD81Partition(diskCtx, name, desiredSectors) {
 // located; no contiguous free root tracks immediately after the
 // partition; or growth would push past partition track 80 (1581 BAM
 // can only address 80 tracks worth of bitmap).
-function _cbmGrowD81Partition(diskCtx, extraSectorsNeeded) {
+function _cbmGrowD81Partition(diskCtx, extraSectorsNeeded, opts) {
+  opts = opts || {};
+  var dryRun = !!opts.dryRun;
   if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return { ok: false, error: 'invalid disk context' };
   if (!diskCtx.partition || !diskCtx.partition.startTrack) {
     return { ok: false, error: 'not inside a D81 sub-partition' };
@@ -2600,6 +2600,16 @@ function _cbmGrowD81Partition(diskCtx, extraSectorsNeeded) {
   }
   if (addableTracks <= 0) {
     return { ok: false, error: 'no contiguous free tracks immediately after the partition' };
+  }
+
+  if (dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      addedSectors: addableTracks * pSpt,
+      addedTracks: addableTracks,
+      newPartSize: curPartSize + addableTracks * pSpt,
+    };
   }
 
   // 1) Mark the new tracks free in the partition's own BAM.
@@ -2718,10 +2728,72 @@ function cbmCountFreeSectors(diskCtx) {
   return total;
 }
 
+// Inspect a tree against a CBM-DOS destination to enumerate name
+// collisions BEFORE writing. Returns:
+//   {
+//     topLevel: display-name string or null,  // wrap-mode dir collision
+//     files: [display-name, ...],             // immediate file conflicts
+//     subdirs: [display-name, ...],           // immediate subdir conflicts
+//     total: count of all of the above
+//   }
+// The walk follows cbmPasteDirTree's decision tree:
+//   * If the destination hosts subdirs AND tree.nameBytes is non-empty,
+//     a top-level wrapper would be created; check that name.
+//   * Otherwise the tree's files / subdirs land directly at the current
+//     dir level; check each of them.
+// Conflicts inside an existing-overwritten subdir aren't enumerated
+// (the recursion is intentionally one level deep — overwriting an
+// existing dir is the user's explicit "merge" intent).
+function cbmFindTreeConflicts(diskCtx, tree) {
+  var out = { topLevel: null, files: [], subdirs: [], total: 0 };
+  if (!diskCtx || !diskCtx.buffer || !diskCtx.format || !tree) return out;
+  function _decode(nb) {
+    var s = '';
+    if (!nb) return s;
+    for (var i = 0; i < 16; i++) {
+      var b = nb[i];
+      if (b === 0xA0 || b === 0x00) break;
+      if (b >= 0xC1 && b <= 0xDA) s += String.fromCharCode(b - 0x80);
+      else if (b >= 0x20 && b <= 0x7E) s += String.fromCharCode(b);
+    }
+    return s.replace(/ +$/, '');
+  }
+  var fmt = diskCtx.format;
+  var hostsSubdirs = !!fmt.supportsSubdirs &&
+                     (fmt.subdirLinked || !(diskCtx.partition && diskCtx.partition.startTrack));
+  if (hostsSubdirs && tree.nameBytes) {
+    if (_cbmFindDirEntryByNameBytes(diskCtx, tree.nameBytes) >= 0) {
+      out.topLevel = _decode(tree.nameBytes);
+      out.total++;
+    }
+    return out;  // wrap mode: files inside go into the new wrapper, no inner conflicts
+  }
+  // No wrap: tree.files + tree.subdirs are pasted directly.
+  if (tree.files) {
+    for (var i = 0; i < tree.files.length; i++) {
+      var f = tree.files[i];
+      if (_cbmFindDirEntryByNameBytes(diskCtx, f.nameBytes) >= 0) {
+        out.files.push(_decode(f.nameBytes));
+        out.total++;
+      }
+    }
+  }
+  if (tree.subdirs) {
+    for (var si = 0; si < tree.subdirs.length; si++) {
+      var sub = tree.subdirs[si];
+      if (_cbmFindDirEntryByNameBytes(diskCtx, sub.nameBytes) >= 0) {
+        out.subdirs.push(_decode(sub.nameBytes));
+        out.total++;
+      }
+    }
+  }
+  return out;
+}
+
 // Paste a generic dir tree into a CBM-DOS partition. opts.onConflict
 // behaves like cfsPasteDirTree: 'overwrite' removes the existing file
-// before writing, 'rename' would auto-suffix (deferred for now since
-// CBM-DOS rename + truncation isn't built yet), 'cancel' refuses.
+// before writing, 'rename' auto-suffixes via _cbmAutoRenameInDir,
+// 'cancel' refuses on first conflict.
 // Returns { ok, error?, copiedFiles, copiedDirs, skippedLnks, skippedDirs }.
 function cbmPasteDirTree(diskCtx, tree, opts) {
   if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return { ok: false, error: 'invalid disk context' };
@@ -2769,10 +2841,15 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
     // D81-style: only at the root, not nested inside a sub-partition.
     return !!f.supportsSubdirs && !(ctx.partition && ctx.partition.startTrack);
   }
-  function _createSubdir(ctx, subName, neededSectors) {
+  function _createSubdir(ctx, subName, dataSectors) {
     var f = ctx.format;
     if (f.subdirLinked) return _cbmCreateDnpSubdir(ctx, subName);
-    return _cbmCreateD81Partition(ctx, subName, neededSectors || 120);
+    // D81: caller passes data-sector demand; size the partition to fit
+    // it plus a reserved system track, then let _cbmCreateD81Partition
+    // apply the spec floor (min 120) and multiple-of-40 alignment.
+    var pSpt = (f.partitionSpt || 40);
+    var totalSectors = (Math.ceil((dataSectors || 0) / pSpt) + 1) * pSpt;
+    return _cbmCreateD81Partition(ctx, subName, totalSectors);
   }
   function _childCtxForExisting(ctx, existingEntryOff) {
     // Build a child ctx that points INTO the existing subdir referenced
@@ -2856,26 +2933,33 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
       continue;
     }
     var typeIdx = resolveFileCbmTypeIdx(file);
-    // Conflict check on the file name
-    if (onConflict === 'overwrite' || onConflict === 'cancel') {
-      var existing = _cbmFindDirEntryByNameBytes(diskCtx, file.nameBytes);
-      if (existing >= 0) {
-        if (onConflict === 'cancel') {
-          var displayName = '';
-          for (var dn = 0; dn < 16; dn++) {
-            var dnb = file.nameBytes[dn];
-            if (dnb === 0xA0 || dnb === 0x00) break;
-            if (dnb >= 0xC1 && dnb <= 0xDA) displayName += String.fromCharCode(dnb - 0x80);
-            else if (dnb >= 0x20 && dnb <= 0x7E) displayName += String.fromCharCode(dnb);
-          }
-          return { ok: false, error: 'File "' + displayName.trim() + '" already exists; choose Overwrite (or remove it first).' };
+    // Conflict check on the file name. We may rewrite writeNameBytes for
+    // rename mode without mutating the caller's tree.
+    var writeNameBytes = file.nameBytes;
+    var existing = _cbmFindDirEntryByNameBytes(diskCtx, file.nameBytes);
+    if (existing >= 0) {
+      if (onConflict === 'cancel') {
+        var displayName = '';
+        for (var dn = 0; dn < 16; dn++) {
+          var dnb = file.nameBytes[dn];
+          if (dnb === 0xA0 || dnb === 0x00) break;
+          if (dnb >= 0xC1 && dnb <= 0xDA) displayName += String.fromCharCode(dnb - 0x80);
+          else if (dnb >= 0x20 && dnb <= 0x7E) displayName += String.fromCharCode(dnb);
         }
-        // Overwrite: scratch the existing entry first (closed bit cleared
-        // makes the slot reusable on next write).
+        return { ok: false, error: 'File "' + displayName.trim() + '" already exists; choose Overwrite or Rename.' };
+      }
+      if (onConflict === 'rename') {
+        var renamedFile = _cbmAutoRenameInDir(diskCtx, file.nameBytes);
+        if (!renamedFile) {
+          return { ok: false, error: 'All " (N)" rename suffixes 2..99 are taken for a colliding file.' };
+        }
+        writeNameBytes = renamedFile;
+      } else { // overwrite
+        // Scratch the existing entry first (closed bit cleared makes
+        // the slot reusable on next write). Wipe other bytes too so
+        // findFreeDirEntry treats the slot as empty on its scan.
         var dataBefore = new Uint8Array(diskCtx.buffer);
-        dataBefore[existing + 2] = 0x00; // wipe type — full scratch happens by writeFileToDisk picking the slot
-        // Wipe other bytes too so findFreeDirEntry treats the slot as
-        // empty on its scan.
+        dataBefore[existing + 2] = 0x00;
         for (var w = 3; w < 32; w++) dataBefore[existing + w] = 0x00;
       }
     }
@@ -2886,7 +2970,7 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
         geosInfoBlock: file.geosInfoBlock || null,
       };
     }
-    var ok = writeFileToDisk(typeIdx, file.nameBytes, file.payload, geosData, true, diskCtx);
+    var ok = writeFileToDisk(typeIdx, writeNameBytes, file.payload, geosData, true, diskCtx);
     if (!ok) {
       return { ok: false, error: 'writeFileToDisk failed for a file' };
     }
@@ -2916,12 +3000,20 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
           continue;
         }
       } else if (existing >= 0 && onConflict === 'cancel') {
-        return { ok: false, error: 'Directory "' + subName + '" already exists; choose Overwrite (or rename it first).' };
+        return { ok: false, error: 'Directory "' + subName + '" already exists; choose Overwrite or Rename.' };
       } else {
+        var createName = subName;
+        if (existing >= 0 && onConflict === 'rename') {
+          var renamedSub = _cbmAutoRenameInDir(diskCtx, sub.nameBytes);
+          if (!renamedSub) {
+            return { ok: false, error: 'All " (N)" rename suffixes 2..99 are taken for "' + subName + '".' };
+          }
+          createName = _displayName(renamedSub);
+        }
         var neededSub = cbmEstimateTreeSectors(sub, diskCtx.format);
-        var creation = _createSubdir(diskCtx, subName, neededSub);
+        var creation = _createSubdir(diskCtx, createName, neededSub);
         if (!creation.ok) {
-          return { ok: false, error: 'creating subdir "' + subName + '": ' + (creation.error || 'unknown') };
+          return { ok: false, error: 'creating subdir "' + createName + '": ' + (creation.error || 'unknown') };
         }
         subCtx = Object.assign({}, diskCtx, { partition: creation.partition });
         copiedDirs++;

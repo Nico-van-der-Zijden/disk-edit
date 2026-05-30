@@ -183,7 +183,7 @@ describe('cbmPasteDirTree (task #12 — MVP file-only writer)', () => {
     global.currentPartition = null;
     var rootCtx = getCurrentCtx();
     // Create a 3-track sub-partition (the spec minimum)
-    var res = _cbmCreateD81Partition(rootCtx, 'GAMES', 40); // ~1 data track + 1 sys = 80 sectors, hits 3-track floor → 120
+    var res = _cbmCreateD81Partition(rootCtx, 'GAMES', 40); // 40 below spec floor → bumped to 120 (3 tracks)
     assert.strictEqual(res.ok, true);
     var startTrack = res.partition.startTrack;
     var origSize = res.partition.partSize;

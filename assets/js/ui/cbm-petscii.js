@@ -10,7 +10,11 @@ var petsciiPicker = {
   modifier: 'normal', // 'normal', 'shift', 'cbm', 'all'
   reverse: false,
   defaultAll: localStorage.getItem('cbm-pickerAll') === 'true',
-  stick: localStorage.getItem('cbm-pickerStick') === 'true'
+  stick: localStorage.getItem('cbm-pickerStick') === 'true',
+  // Active tab in the floating PETSCII window. 'hex' = the 16×16 grid
+  // with row/col hex labels; 'chart' = a denser unlabelled C64 charset
+  // chart in the style of older builder tools.
+  floatTab: localStorage.getItem('cbm-pickerFloatTab') || 'hex'
 };
 
 // PETSCII byte ranges that render reversed (white-on-text vs text-on-background)
@@ -39,23 +43,13 @@ const KB_ROWS = [
   [['Z',0x5A,0xDA,0xAD],['X',0x58,0xD8,0xBD],['C',0x43,0xC3,0xBC],['V',0x56,0xD6,0xBE],['B',0x42,0xC2,0xBF],['N',0x4E,0xCE,0xAA],['M',0x4D,0xCD,0xA7],[',',0x2C,0x3C,-1],['.',0x2E,0x3E,-1],['/',0x2F,0x3F,-1]],
 ];
 
-// 16x16 PETSCII character grid HTML, with hex column/row headers. Used
-// by the floating "All charset" window and (legacy) by renderPicker's
-// All branch. Doesn't include any modifier bar — that's the caller's
-// concern.
+// 16x16 PETSCII character grid HTML in raw byte order. Tooltip on each
+// cell carries the hex code, so no row/column header chrome.
 function buildAllGridHtml() {
-  var html = '';
-  // Header row with column numbers
-  html += '<div class="petscii-kb-row"><div class="petscii-key empty" style="width:28px;font-size:9px;color:var(--text-muted)"></div>';
-  for (var col = 0; col < 16; col++) {
-    html += '<div class="petscii-key empty" style="font-size:9px;color:var(--text-muted);cursor:default">' + col.toString(16).toUpperCase() + '</div>';
-  }
-  html += '</div>';
-
+  var html = '<div class="petscii-grid">';
   for (var row = 0; row < 16; row++) {
     html += '<div class="petscii-kb-row">';
-    html += '<div class="petscii-key empty" style="width:28px;font-size:9px;color:var(--text-muted);cursor:default">' + row.toString(16).toUpperCase() + 'x</div>';
-    for (col = 0; col < 16; col++) {
+    for (var col = 0; col < 16; col++) {
       var code = row * 16 + col;
       var isSafe = SAFE_PETSCII.has(code);
       var disabled = !isSafe && !allowUnsafeChars;
@@ -69,6 +63,97 @@ function buildAllGridHtml() {
     }
     html += '</div>';
   }
+  html += '</div>';
+  return html;
+}
+
+// Filename-Builder style PETSCII chart — 16×16 grid in the layout used
+// by Petmate (https://github.com/nurpax/petmate/blob/master/src/utils/index.ts).
+// Each entry is a SCREEN CODE; positions $80-$FF give the reversed half
+// of the chart naturally (rows 9-16 are the reversed mirror of rows 1-8).
+//
+// Click → PETSCII byte conversion goes through _chartScToPetscii below;
+// for screencode positions that have no single-byte PETSCII equivalent
+// (reversed punct/digits/graphics) we fall back to the non-reversed
+// counterpart so the filename still gets something sensible.
+var CHART_SC_UPPER = [
+  32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+  16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 46, 44, 59, 33, 63,
+  48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 34, 35, 36, 37, 38, 39,
+  112, 110, 108, 123, 85, 73, 79, 80, 113, 114, 40, 41, 60, 62, 78, 77,
+  109, 125, 124, 126, 74, 75, 76, 122, 107, 115, 27, 29, 31, 30, 95, 105,
+  100, 111, 121, 98, 120, 119, 99, 116, 101, 117, 97, 118, 103, 106, 91, 43,
+  82, 70, 64, 45, 67, 68, 69, 84, 71, 66, 93, 72, 89, 47, 86, 42,
+  61, 58, 28, 0, 127, 104, 92, 102, 81, 87, 65, 83, 88, 90, 94, 96,
+  160, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
+  144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 174, 172, 187, 161, 191,
+  176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 162, 163, 164, 165, 166, 167,
+  240, 238, 236, 251, 213, 201, 207, 208, 241, 242, 168, 169, 188, 190, 206, 205,
+  237, 253, 252, 254, 202, 203, 204, 250, 235, 243, 155, 157, 159, 158, 223, 233,
+  228, 239, 249, 226, 248, 247, 227, 244, 229, 245, 225, 246, 231, 234, 219, 171,
+  210, 198, 192, 173, 195, 196, 197, 212, 199, 194, 221, 200, 217, 175, 214, 170,
+  189, 186, 156, 128, 255, 232, 220, 230, 209, 215, 193, 211, 216, 218, 222, 224,
+];
+var CHART_SC_LOWER = [
+  32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+  16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 46, 44, 59, 33, 63,
+  96, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+  80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 34, 35, 36, 37, 38,
+  48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 43, 45, 42, 61, 39, 0,
+  112, 110, 108, 123, 113, 114, 40, 41, 95, 105, 92, 127, 60, 62, 28, 47,
+  109, 125, 124, 126, 107, 115, 27, 29, 94, 102, 104, 58, 30, 31, 91, 122,
+  100, 111, 121, 98, 99, 119, 120, 101, 116, 117, 97, 103, 106, 118, 64, 93,
+  160, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
+  144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 174, 172, 187, 161, 191,
+  224, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207,
+  208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 162, 163, 164, 165, 166,
+  176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 171, 173, 170, 189, 167, 128,
+  240, 238, 236, 251, 241, 242, 168, 169, 223, 233, 220, 255, 188, 190, 156, 175,
+  237, 253, 252, 254, 235, 243, 155, 157, 222, 230, 232, 186, 158, 159, 219, 250,
+  228, 239, 249, 226, 227, 247, 248, 229, 244, 245, 225, 231, 234, 246, 192, 221,
+];
+
+// Screencode → PETSCII byte. Inverse of petsciiToScreencode for the
+// ranges that have a clean inverse; lossy fallback otherwise so the
+// chart cell stays clickable.
+function _chartScToPetscii(sc) {
+  if (sc <= 0x1F) return sc + 0x40;         // letters → $40-$5F
+  if (sc <= 0x3F) return sc;                 // punct/digits identity
+  if (sc <= 0x5F) return sc + 0x80;          // graphics A → $C0-$DF (matches the shifted-alt convention)
+  if (sc <= 0x7F) return sc + 0x40;          // graphics B → $A0-$BF
+  if (sc <= 0x9F) return sc - 0x80;          // reversed letters → $00-$1F (real reversed byte)
+  if (sc <= 0xBF) return sc - 0x80;          // reversed punct/digits → $20-$3F (lossy: filename won't actually render reversed)
+  if (sc <= 0xDF) return sc - 0x20;          // reversed graphics A → $A0-$BF (lossy)
+  return sc - 0x40;                           // reversed graphics B → $A0-$BF (lossy)
+}
+
+function buildChartGridHtml() {
+  // Follows the global charset mode (toggled via the Options menu or
+  // Ctrl+Shift) — no separate per-chart switch.
+  var mode = charsetMode === 'lowercase' ? 'lowercase' : 'uppercase';
+  var scOrder = mode === 'lowercase' ? CHART_SC_LOWER : CHART_SC_UPPER;
+  var scMap = buildScreencodeMap(mode);
+
+  var html = '<div class="petscii-chart">';
+  for (var idx = 0; idx < scOrder.length; idx++) {
+    if (idx % 16 === 0) {
+      if (idx > 0) html += '</div>';
+      html += '<div class="petscii-chart-row">';
+    }
+    var sc = scOrder[idx];
+    var entry = scMap[sc];
+    var petsciiCode = _chartScToPetscii(sc);
+    var isSafe = SAFE_PETSCII.has(petsciiCode);
+    var disabled = !isSafe && !allowUnsafeChars;
+    var title = 'SC $' + sc.toString(16).toUpperCase().padStart(2, '0') +
+                ' → $' + petsciiCode.toString(16).toUpperCase().padStart(2, '0');
+    html += '<div class="petscii-key' +
+      (entry.reversed ? ' rev-char' : '') +
+      (disabled ? ' disabled' : (!isSafe ? ' unsafe' : '')) +
+      '" data-code="' + petsciiCode + '" title="' + title + '">' +
+      escHtml(entry.char) + '</div>';
+  }
+  html += '</div></div>';
   return html;
 }
 
@@ -531,14 +616,44 @@ function ensureFloatBuilt() {
       '<i class="fa-solid fa-grip-vertical"></i>' +
       '<span class="petscii-float-label">PETSCII Charset</span>' +
     '</div>' +
+    '<div class="petscii-float-tabs">' +
+      '<div class="petscii-float-tab" data-tab="hex">Default</div>' +
+      '<div class="petscii-float-tab" data-tab="chart">Graphical</div>' +
+    '</div>' +
     '<div class="petscii-float-body"></div>';
   document.body.appendChild(fl);
 
   var titleBar = fl.querySelector('.petscii-float-titlebar');
   var body = fl.querySelector('.petscii-float-body');
+  var tabBar = fl.querySelector('.petscii-float-tabs');
 
   bindFloatDrag(fl, titleBar, function(x, y) {
     floatPosition = { left: x, top: y };
+  });
+
+  // Tab strip needs the same petsciiPicker.clicking bracket as the body
+  // so the editor's blur handler doesn't close the picker between
+  // mousedown and click on a tab.
+  tabBar.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    petsciiPicker.clicking = true;
+  });
+  tabBar.addEventListener('mouseup', function() {
+    setTimeout(function() { petsciiPicker.clicking = false; }, 200);
+  });
+
+  // Tab clicks swap the body content + persist the choice.
+  tabBar.addEventListener('click', function(e) {
+    var tab = e.target.closest('.petscii-float-tab');
+    if (!tab) return;
+    var which = tab.getAttribute('data-tab');
+    if (!which || which === petsciiPicker.floatTab) return;
+    petsciiPicker.floatTab = which;
+    localStorage.setItem('cbm-pickerFloatTab', which);
+    refreshFloatBody();
+    // Return focus to the target editor so subsequent typing / Enter
+    // keeps working without an extra click.
+    if (petsciiPicker.target) petsciiPicker.target.focus();
   });
 
   // Same petsciiPicker.clicking bracket as the compact picker, so the editor's
@@ -620,10 +735,35 @@ function bindFloatDrag(fl, handle, onPosChange) {
   });
 }
 
+// Keep the chart in sync when the user toggles charset mode (menu or
+// Ctrl+Shift). Deferred to a microtask so we don't mutate the float DOM
+// in the same call stack as the menu handler's renderDisk — innerHTML on
+// #content was racing with our refresh and throwing NotFoundError.
+document.addEventListener('cbm-charsetchange', function() {
+  setTimeout(function() {
+    var fl = document.getElementById('petscii-float');
+    if (fl && fl.classList.contains('open')) refreshFloatBody();
+  }, 0);
+});
+
+// Render the float's body based on the active tab, and sync the
+// .active class on the tab bar. Safe to call multiple times.
+function refreshFloatBody() {
+  var fl = document.getElementById('petscii-float');
+  if (!fl) return;
+  var tab = petsciiPicker.floatTab === 'chart' ? 'chart' : 'hex';
+  fl.querySelector('.petscii-float-body').innerHTML =
+    tab === 'chart' ? buildChartGridHtml() : buildAllGridHtml();
+  var tabs = fl.querySelectorAll('.petscii-float-tab');
+  for (var i = 0; i < tabs.length; i++) {
+    tabs[i].classList.toggle('active', tabs[i].getAttribute('data-tab') === tab);
+  }
+}
+
 function showPetsciiFloat(targetEl) {
   petsciiPicker.target = targetEl;
   var fl = ensureFloatBuilt();
-  fl.querySelector('.petscii-float-body').innerHTML = buildAllGridHtml();
+  refreshFloatBody();
 
   if (floatPosition) {
     fl.style.left = floatPosition.left + 'px';

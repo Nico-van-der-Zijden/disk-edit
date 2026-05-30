@@ -1586,22 +1586,22 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
   if (!name) return;
   name = name.toUpperCase().substring(0, 16);
 
-  // D81.TXT lines 430-437: sub-directory partitions must be a minimum of
-  // 120 sectors (3 tracks). Below that, real 1581 firmware would refuse
-  // to mount the area as a sub-directory.
-  var blocksStr = await showInputModal('Blocks Free (min 120, multiples of 40)', '120');
-  if (!blocksStr) return;
-  var desiredBlocks = parseInt(blocksStr, 10);
-  if (isNaN(desiredBlocks) || desiredBlocks < 120) {
-    showModal('Add Directory Error', ['Minimum is 120 blocks (3 tracks).']);
+  // D81.TXT lines 433-435: sub-directory partitions must be a minimum
+  // of 120 sectors (3 tracks) and a multiple of 40 sectors. Below that,
+  // real 1581 firmware will not treat the area as a sub-directory. The
+  // value the user enters is the total partition size — same number
+  // stored in the parent dir entry's +30/+31 size field.
+  var pSpt = currentFormat.partitionSpt;
+  var sizeStr = await showInputModal('Partition size in sectors (min 120, multiples of 40)', '120');
+  if (!sizeStr) return;
+  var requestedSectors = parseInt(sizeStr, 10);
+  if (isNaN(requestedSectors) || requestedSectors < 120) {
+    showModal('Add Directory Error', ['Minimum is 120 sectors (3 tracks).']);
     return;
   }
-  // Round up to next multiple of sectors-per-track
-  var pSpt = currentFormat.partitionSpt;
-  var dataTracks = Math.ceil(desiredBlocks / pSpt);
-  var numTracks = dataTracks + 1; // +1 for system track (header, BAM, dir)
-  var partSectors = numTracks * pSpt;
-  var actualBlocks = dataTracks * pSpt;
+  // Round up to the next 40-sector boundary (spec rule).
+  var partSectors = Math.ceil(requestedSectors / pSpt) * pSpt;
+  var numTracks = partSectors / pSpt;
 
   // Build true allocation map to find contiguous free tracks
   var allocated = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
@@ -1627,7 +1627,7 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
   }
 
   if (startTrack < 0) {
-    showModal('Add Directory Error', ['Not enough contiguous free space. Need ' + numTracks + ' tracks (' + actualBlocks + ' blocks + 1 system track).']);
+    showModal('Add Directory Error', ['Not enough contiguous free space. Need ' + numTracks + ' tracks (' + partSectors + ' sectors).']);
     return;
   }
 
@@ -1766,7 +1766,7 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
   updateMenuState();
   showModal('Directory Created', [
     'Directory "' + name + '" created.',
-    numTracks + ' tracks (' + startTrack + '-' + (startTrack + numTracks - 1) + '), ' + actualBlocks + ' blocks free.',
+    numTracks + ' tracks (' + startTrack + '-' + (startTrack + numTracks - 1) + '), ' + partSectors + ' sectors total (' + (partSectors - 4) + ' free for data).',
     'Double-click to enter the directory.'
   ]);
 });

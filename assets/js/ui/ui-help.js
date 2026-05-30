@@ -291,6 +291,15 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.6', title: 'D81 paste polish, PETSCII picker chart, UX cleanup', items: [
+      'D81 Add Directory and cross-family paste now follow D81.TXT: partition size is the on-disk total (matches the dir entry +30/+31 field), min 120 sectors, multiples of 40 — enter 120, get a 120-sector partition instead of 160',
+      'Paste into a full sub-directory shows a Cancel / Grow prompt with the exact shortfall in blocks and proposed grow size — was silently auto-growing or refusing with a confusing "needs N sectors" message',
+      'Cross-family paste pre-scans every immediate file + subdir against the destination (not just the top-level dir name), and the resulting Cancel / Rename / Overwrite prompt now applies to file-level conflicts too — including auto-suffix " (2)" rename at the file level',
+      'IDE64 .hdd dialogs (CFS rename / delete / file attributes, HDD partition attributes) match the rest of the app: Cancel (secondary) on the left, primary on the right. Enter-to-primary now confirms instead of deleting',
+      'No-op rename on a CFS entry no longer marks the tab dirty — the diff now treats $00 and $A0 padding as equivalent (CFS producers vary)',
+      'Ctrl+Shift charset toggle in CFS view no longer throws NotFoundError — active editable is blurred first so its commit doesn\'t race with renderDisk\'s innerHTML',
+      'PETSCII picker floating window has Default + Graphical tabs — Default is the 16×16 byte grid (labels removed); Graphical is the Petmate-style C64 charset chart in 16×16 with the bottom half as the reversed mirror. Tab choice persists; chart follows the global charset mode (Options menu / Ctrl+Shift)',
+    ]},
     { ver: '1.4.5', title: 'Directory copy/paste across all disk formats', items: [
       'Copy a directory (or sub-partition) in any view and paste into any other. Works across .hdd ↔ DNP ↔ D81 ↔ DHD ↔ RAMLink ↔ D1M/D2M/D4M with cross-family type translation (PRG / SEQ / USR / REL round-trip; LNK and GEOS VLIR skipped with a warning at the end)',
       'Conflict prompt offers Cancel / Rename / Overwrite. Rename auto-suffixes " (2)".." (99)" with name truncation to stay within 16 bytes. Overwrite merges into the existing dir, replacing same-name files. Pre-check refuses before any write if the destination doesn\'t have enough free sectors',

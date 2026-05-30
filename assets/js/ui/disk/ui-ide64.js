@@ -996,7 +996,7 @@ function showCfsRenameDialog(entry) {
   var input = document.getElementById('cfs-rename-input');
   input.value = readableName;
   setTimeout(function() { input.focus(); input.select(); }, 0);
-  footer.innerHTML = '<button id="cfs-rename-ok">OK</button> <button id="cfs-rename-cancel">Cancel</button>';
+  footer.innerHTML = '<button class="modal-btn-secondary" id="cfs-rename-cancel">Cancel</button> <button id="cfs-rename-ok">OK</button>';
   function commit() {
     var newName = _sanitiseCfsName(input.value, 'Rename');
     if (newName == null) return;
@@ -1140,9 +1140,18 @@ function startInlineRenameCfsEntry(entryEl) {
       refreshIde64View();
       return;
     }
+    // CFS names pad with either $00 or $A0 depending on producer (cfsfdisk
+    // vs IDEDOS firmware vs our own writers). Treat the two as equivalent
+    // pad bytes so a roundtrip with no visible change doesn't mark dirty.
     var differs = false;
     for (var di = 0; di < 16; di++) {
-      if (newBytes[di] !== disk[entryOff + di]) { differs = true; break; }
+      var a = newBytes[di], b = disk[entryOff + di];
+      if (a === b) continue;
+      var aIsPad = (a === 0x00 || a === 0xA0);
+      var bIsPad = (b === 0x00 || b === 0xA0);
+      if (aIsPad && bIsPad) continue;
+      differs = true;
+      break;
     }
     if (differs) {
       pushUndo();
@@ -1413,9 +1422,18 @@ function startInlineRenameHddPartition(entryEl) {
       refreshIde64View();
       return;
     }
+    // CFS names pad with either $00 or $A0 depending on producer (cfsfdisk
+    // vs IDEDOS firmware vs our own writers). Treat the two as equivalent
+    // pad bytes so a roundtrip with no visible change doesn't mark dirty.
     var differs = false;
     for (var di = 0; di < 16; di++) {
-      if (newBytes[di] !== disk[entryOff + di]) { differs = true; break; }
+      var a = newBytes[di], b = disk[entryOff + di];
+      if (a === b) continue;
+      var aIsPad = (a === 0x00 || a === 0xA0);
+      var bIsPad = (b === 0x00 || b === 0xA0);
+      if (aIsPad && bIsPad) continue;
+      differs = true;
+      break;
     }
     if (differs) {
       pushUndo();
@@ -1626,7 +1644,7 @@ function showHddPartitionAttrsDialog(idx) {
       (isDefault ? ' checked' : '') + (defaultLocked ? ' disabled' : '') + ' /> Default partition' +
       (defaultLocked ? ' <span class="text-sm text-muted">(only partition — must remain default)</span>' : '') +
       '</label>';
-  footer.innerHTML = '<button id="hdd-attr-ok">OK</button> <button id="hdd-attr-cancel">Cancel</button>';
+  footer.innerHTML = '<button class="modal-btn-secondary" id="hdd-attr-cancel">Cancel</button> <button id="hdd-attr-ok">OK</button>';
   document.getElementById('hdd-attr-ok').addEventListener('click', function() {
     var newHidden = document.getElementById('hdd-attr-hidden').checked;
     var newWriteable = document.getElementById('hdd-attr-writeable').checked;
@@ -1923,7 +1941,7 @@ function showCfsDeleteConfirm(entry) {
   body.innerHTML =
     '<div class="text-md mb-md">Delete <b>' + escHtml(petsciiToReadable(entry.name)) + '</b> (' + entry.size + ' bytes)?</div>' +
     '<div class="text-sm text-muted">Data sectors are returned to the partition\'s free-block pool. The directory entry is marked deleted with the original tree pointer preserved (recovery context).</div>';
-  footer.innerHTML = '<button id="cfs-del-ok">Delete</button> <button id="cfs-del-cancel">Cancel</button>';
+  footer.innerHTML = '<button class="modal-btn-secondary" id="cfs-del-cancel">Cancel</button> <button id="cfs-del-ok">Delete</button>';
   document.getElementById('cfs-del-ok').addEventListener('click', function() {
     pushUndo();
     var res = cfsDeleteFile(hddBuffer, part.startLba, part.endLba, entry);
@@ -1965,7 +1983,7 @@ function showCfsAttrsDialog(entry) {
       ((attr & 0x08) ? ' checked' : '') + ' /> Executable</label>' +
     '<div class="text-sm text-muted" style="margin-top:8px">File type (' +
       escHtml(_cfsFtypeLabel(entry.ftype)) + ') is preserved.</div>';
-  footer.innerHTML = '<button id="cfs-attrs-ok">OK</button> <button id="cfs-attrs-cancel">Cancel</button>';
+  footer.innerHTML = '<button class="modal-btn-secondary" id="cfs-attrs-cancel">Cancel</button> <button id="cfs-attrs-ok">OK</button>';
   document.getElementById('cfs-attrs-ok').addEventListener('click', function() {
     var newAttr = entry.attrByte & 0x07; // keep file type
     if (document.getElementById('cfs-attr-c').checked) newAttr |= 0x80;

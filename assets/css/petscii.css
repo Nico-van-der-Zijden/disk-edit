@@ -157,9 +157,62 @@
   .petscii-float-titlebar.dragging { cursor: grabbing; }
   .petscii-float-titlebar i { font-size: 12px; opacity: 0.8; }
 
+  /* Tab strip under the titlebar. Same look as .bam-tabs for consistency
+     but lives in its own class because the float draws its own border. */
+  .petscii-float-tabs {
+    display: flex;
+    gap: 0;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .petscii-float-tab {
+    padding: 5px 14px;
+    font-size: 11px;
+    cursor: pointer;
+    color: var(--text-muted);
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .petscii-float-tab:hover { color: var(--text); }
+  .petscii-float-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
   .petscii-float-body {
     padding: 10px;
   }
+
+  /* Compact 16×16 PETSCII grid. Uses the same .petscii-key cells as
+     the keyboard but at chart density so the floating window stays
+     compact. */
+  .petscii-grid .petscii-kb-row {
+    gap: 1px;
+    margin-bottom: 1px;
+    justify-content: flex-start;
+  }
+  .petscii-grid .petscii-key {
+    width: 22px;
+    height: 22px;
+    border-radius: 2px;
+    font-size: 13px;
+  }
+
+  /* Filename-Builder style chart — 16 rows × 16 cols. Top 8 rows are
+     normal, bottom 8 rows are the reversed mirror. Same cell look as
+     the Hex Grid tab so both tabs feel like one app. */
+  .petscii-chart-row {
+    display: flex;
+    gap: 1px;
+    margin-bottom: 1px;
+  }
+  .petscii-chart .petscii-key {
+    width: 22px;
+    height: 22px;
+    border-radius: 2px;
+    font-size: 13px;
+  }
+
 
   /* Separators float — same draggable-titled-window shell as
      petscii-float, but the body is a vertical list of preview rows

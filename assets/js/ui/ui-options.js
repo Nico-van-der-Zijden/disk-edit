@@ -9,10 +9,11 @@ document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
   document.getElementById('check-unsafe').innerHTML = allowUnsafeChars ? '<i class="fa-solid fa-check"></i>' : '';
   if (petsciiPicker.target) renderPicker();
   // The floating charset window has its own DOM — refresh its grid too
-  // so disabled/unsafe cell classes stay in sync with the toggle.
+  // so disabled/unsafe cell classes stay in sync with the toggle. Honor
+  // whichever tab is active.
   var fl = document.getElementById('petscii-float');
   if (fl && fl.classList.contains('open')) {
-    fl.querySelector('.petscii-float-body').innerHTML = buildAllGridHtml();
+    refreshFloatBody();
   }
 });
 

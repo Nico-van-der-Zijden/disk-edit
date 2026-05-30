@@ -596,36 +596,56 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     }
     var cbmFree = cbmCountFreeSectors(cbmPreCtx);
     if (cbmNeeded > cbmFree) {
-      // If we're inside a D81 sub-partition and there are free tracks
-      // immediately after it on the root disk, grow the partition to
-      // absorb them before refusing. The user explicitly opted into a
-      // tight-fit allocation at create time; this lets follow-up pastes
-      // reclaim the disk slack instead of forcing a delete/recreate.
-      var growReport = null;
-      if (cbmPreCtx.partition && cbmPreCtx.partition.startTrack &&
-          cbmPreCtx.format.supportsSubdirs && !cbmPreCtx.format.subdirLinked) {
-        var growRes = _cbmGrowD81Partition(cbmPreCtx, cbmNeeded - cbmFree);
-        if (growRes.ok) {
-          growReport = growRes;
-          // Update the local cmdc partition record + ctx so subsequent
-          // helpers (writeFileToDisk, allocateSectors, etc.) see the
-          // new partition size.
-          cbmPreCtx.partition.partSize = growRes.newPartSize;
-          if (typeof currentPartition !== 'undefined' && currentPartition) {
-            currentPartition.partSize = growRes.newPartSize;
-          }
-          cbmFree = cbmCountFreeSectors(cbmPreCtx);
-        }
+      var shortfall = cbmNeeded - cbmFree;
+      // If we're inside a D81 sub-partition, see whether growing it into
+      // adjacent free root tracks could close the gap, and ask the user
+      // before mutating anything.
+      var canGrow = (cbmPreCtx.partition && cbmPreCtx.partition.startTrack &&
+                     cbmPreCtx.format.supportsSubdirs && !cbmPreCtx.format.subdirLinked);
+      var growPreview = null;
+      if (canGrow) {
+        var preview = _cbmGrowD81Partition(cbmPreCtx, shortfall, { dryRun: true });
+        if (preview.ok) growPreview = preview;
       }
-      if (cbmNeeded > cbmFree) {
-        var msg = [
-          'Pasting needs at least ' + cbmNeeded + ' free sectors but the destination has ' + cbmFree + '.',
-        ];
-        if (growReport) {
-          msg.push('Grew the partition by ' + growReport.addedTracks + ' track(s) (' + growReport.addedSectors + ' sectors) but still short.');
+
+      if (growPreview && growPreview.addedSectors >= shortfall) {
+        // Grow can close the gap. Offer it as a choice.
+        var grow = await showChoiceModal(
+          'Directory full',
+          'Need ' + shortfall + ' more block(s) (' + cbmNeeded + ' needed, ' + cbmFree + ' free).\n' +
+          'Grow this directory by ' + growPreview.addedTracks + ' track(s) (' +
+            growPreview.addedSectors + ' blocks) into adjacent free space?',
+          [
+            { label: 'Cancel', value: false, secondary: true },
+            { label: 'Grow', value: true },
+          ]
+        );
+        if (!grow) return;
+        var grown = _cbmGrowD81Partition(cbmPreCtx, shortfall);
+        if (!grown.ok) {
+          showModal('Grow failed', [grown.error || 'Could not grow the directory.']);
+          return;
         }
-        msg.push('Free up ' + (cbmNeeded - cbmFree) + ' more sector(s) (or pick a bigger destination) and try again.');
-        showModal('Paste — not enough space', msg);
+        cbmPreCtx.partition.partSize = grown.newPartSize;
+        if (typeof currentPartition !== 'undefined' && currentPartition) {
+          currentPartition.partSize = grown.newPartSize;
+        }
+        cbmFree = cbmCountFreeSectors(cbmPreCtx);
+      } else if (growPreview) {
+        // Grow possible but not enough. Tell the user the partial figure.
+        showModal('Directory full', [
+          'Need ' + shortfall + ' more block(s) (' + cbmNeeded + ' needed, ' + cbmFree + ' free).',
+          'This directory can only be grown by ' + growPreview.addedSectors +
+            ' block(s) — still ' + (shortfall - growPreview.addedSectors) + ' block(s) short.',
+          'Free up space or paste into a different directory.',
+        ]);
+        return;
+      } else {
+        // No growth possible (root dir, no adjacent free tracks, or BAM cap hit).
+        showModal('Directory full', [
+          'Need ' + shortfall + ' more block(s) (' + cbmNeeded + ' needed, ' + cbmFree + ' free).',
+          'Free up space or paste into a different directory.',
+        ]);
         return;
       }
     }
@@ -645,14 +665,35 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
           else if (dnB >= 0x20 && dnB <= 0x7E) dispName += String.fromCharCode(dnB);
         }
       }
-      // Conflict check at the destination root level
+      // Conflict pre-scan: covers both top-level wrap (D81 root partition
+      // collision) AND immediate child file / subdir collisions when the
+      // tree pastes flat into the current dir (e.g. inside an existing
+      // D81 sub-partition). One prompt for any of the above.
       var cbmCtx = getCurrentCtx();
-      var existing = _cbmFindDirEntryByNameBytes(cbmCtx, titem.nameBytes);
+      var conflicts = cbmFindTreeConflicts(cbmCtx, titem.tree);
       var mode = 'cancel';
-      if (existing >= 0) {
+      if (conflicts.total > 0) {
+        var msgLines = [];
+        if (conflicts.topLevel) {
+          msgLines.push('Directory "' + conflicts.topLevel + '" already exists at the destination.');
+        } else {
+          if (conflicts.files.length) {
+            msgLines.push(conflicts.files.length + ' file(s) at the destination have the same name:');
+            for (var ci = 0; ci < Math.min(conflicts.files.length, 8); ci++) msgLines.push('  ' + conflicts.files[ci]);
+            if (conflicts.files.length > 8) msgLines.push('  … and ' + (conflicts.files.length - 8) + ' more');
+          }
+          if (conflicts.subdirs.length) {
+            if (msgLines.length) msgLines.push('');
+            msgLines.push(conflicts.subdirs.length + ' director(y/ies) at the destination have the same name:');
+            for (var cs = 0; cs < Math.min(conflicts.subdirs.length, 8); cs++) msgLines.push('  ' + conflicts.subdirs[cs]);
+            if (conflicts.subdirs.length > 8) msgLines.push('  … and ' + (conflicts.subdirs.length - 8) + ' more');
+          }
+        }
+        msgLines.push('');
+        msgLines.push('What would you like to do?');
         var cbmChoice = await showChoiceModal(
-          'Directory exists',
-          'The destination already has an entry named "' + dispName.trim() + '". What would you like to do?',
+          conflicts.topLevel ? 'Directory exists' : 'Existing items',
+          msgLines.join('\n'),
           [
             { label: 'Cancel', value: 'cancel', secondary: true },
             { label: 'Rename', value: 'rename' },
