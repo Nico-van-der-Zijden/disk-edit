@@ -378,6 +378,25 @@ function createPetsciiEditor(opts) {
     return node ? node.textContent.length : 0;
   }
 
+  // Walk childNodes to find the text node + local text-offset that holds
+  // the given byte position `pos`. Returns null when `pos` is past the
+  // last byte (so the caller can fall back to "after last child" logic).
+  function _byteToTextOffset(pos) {
+    var byteIdx = 0;
+    for (var c = 0; c < el.childNodes.length; c++) {
+      var node = el.childNodes[c];
+      var len = _childByteLen(node);
+      if (pos <= byteIdx + len) {
+        var local = pos - byteIdx;
+        if (node.nodeType === 3) return { node: node, offset: local };
+        if (node.firstChild && node.firstChild.nodeType === 3) return { node: node.firstChild, offset: local };
+        return { node: node, offset: 0 };
+      }
+      byteIdx += len;
+    }
+    return null;
+  }
+
   function setCaret(pos) {
     pos = Math.max(0, Math.min(pos, shadowLen));
     var sel = window.getSelection();
@@ -385,26 +404,9 @@ function createPetsciiEditor(opts) {
     if (shadowLen === 0) {
       range.setStart(el, 0);
     } else {
-      var byteIdx = 0;
-      var placed = false;
-      for (var c = 0; c < el.childNodes.length; c++) {
-        var node = el.childNodes[c];
-        var len = _childByteLen(node);
-        if (pos <= byteIdx + len) {
-          var local = pos - byteIdx;
-          if (node.nodeType === 3) {
-            range.setStart(node, local);
-          } else if (node.firstChild && node.firstChild.nodeType === 3) {
-            range.setStart(node.firstChild, local);
-          } else {
-            range.setStart(node, 0);
-          }
-          placed = true;
-          break;
-        }
-        byteIdx += len;
-      }
-      if (!placed) range.setStart(el, el.childNodes.length);
+      var slot = _byteToTextOffset(pos);
+      if (slot) range.setStart(slot.node, slot.offset);
+      else range.setStart(el, el.childNodes.length);
     }
     range.collapse(true);
     sel.removeAllRanges();
@@ -438,39 +440,22 @@ function createPetsciiEditor(opts) {
     // Probe the visual position by building a temporary collapsed range
     // at the caret's byte offset and reading its bounding rect.
     var probe = document.createRange();
-    var anchored = false;
-    var byteIdx = 0;
-    for (var c = 0; c < el.childNodes.length; c++) {
-      var node = el.childNodes[c];
-      var len = _childByteLen(node);
-      if (pos <= byteIdx + len) {
-        var local = pos - byteIdx;
-        if (node.nodeType === 3) {
-          probe.setStart(node, local);
-          probe.setEnd(node, local);
-        } else if (node.firstChild && node.firstChild.nodeType === 3) {
-          probe.setStart(node.firstChild, local);
-          probe.setEnd(node.firstChild, local);
-        }
-        anchored = true;
-        break;
-      }
-      byteIdx += len;
-    }
-    if (!anchored) {
-      // Past the last char or empty editor — anchor at editor end.
-      if (el.lastChild) {
-        if (el.lastChild.nodeType === 3) {
-          probe.setStart(el.lastChild, el.lastChild.data.length);
-          probe.setEnd(el.lastChild, el.lastChild.data.length);
-        } else {
-          probe.setStartAfter(el.lastChild);
-          probe.setEndAfter(el.lastChild);
-        }
+    var slot = _byteToTextOffset(pos);
+    if (slot) {
+      probe.setStart(slot.node, slot.offset);
+      probe.setEnd(slot.node, slot.offset);
+    } else if (el.lastChild) {
+      // Past the last char — anchor at the end of the last child.
+      if (el.lastChild.nodeType === 3) {
+        probe.setStart(el.lastChild, el.lastChild.data.length);
+        probe.setEnd(el.lastChild, el.lastChild.data.length);
       } else {
-        probe.setStart(el, 0);
-        probe.setEnd(el, 0);
+        probe.setStartAfter(el.lastChild);
+        probe.setEndAfter(el.lastChild);
       }
+    } else {
+      probe.setStart(el, 0);
+      probe.setEnd(el, 0);
     }
     var pr = probe.getBoundingClientRect();
     // For an empty/end-of-text probe the rect can be zero-sized — fall

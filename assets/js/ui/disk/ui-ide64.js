@@ -992,7 +992,7 @@ function showCfsRenameDialog(entry) {
   titleEl.textContent = 'Rename — ' + readableName;
   body.innerHTML =
     '<div class="text-md mb-md">New name (up to 16 characters):</div>' +
-    '<input type="text" id="cfs-rename-input" maxlength="16" style="width:100%;font-family:monospace;font-size:14px;padding:6px" />';
+    '<input type="text" id="cfs-rename-input" class="petscii-text-input" maxlength="16" style="width:100%;font-family:monospace;font-size:14px;padding:6px" />';
   var input = document.getElementById('cfs-rename-input');
   input.value = readableName;
   setTimeout(function() { input.focus(); input.select(); }, 0);
@@ -1031,19 +1031,11 @@ function showCfsRenameDialog(entry) {
 // as printable punctuation, but CFS treats it as the path separator and
 // our cfsResolvePath splits on it. Returns a 16-char string whose
 // char codes are the bytes cfsImportFile should write.
-function _cfsImportNameBytes(rawName) {
-  var dotIdx = rawName.lastIndexOf('.');
-  var base = dotIdx >= 0 ? rawName.substring(0, dotIdx) : rawName;
-  var bytes = asciiToNameBytes(base);
-  for (var i = 0; i < bytes.length; i++) {
-    if (bytes[i] === 0x2F) bytes[i] = 0x20; // strip CFS path separator
-  }
-  return String.fromCharCode.apply(null, bytes);
-}
-
-// Same as _cfsImportNameBytes but prompts the user when the base name
-// (extension stripped) exceeds 16 chars. Returns the 16-char name
-// string ready for cfsImportFile, or null on user cancel.
+// Convert an OS file name into a 16-char CFS name string ready for
+// cfsImportFile. Reuses CBM-DOS's asciiToNameBytes so dropped files
+// land the same way as on a D64, then strips '/' (CFS path separator).
+// When the base name (extension stripped) exceeds 16 chars, prompts
+// the user with the auto-truncated suggestion. Returns null on cancel.
 async function _cfsImportNameBytesPrompted(rawName) {
   var dotIdx = rawName.lastIndexOf('.');
   var base = dotIdx >= 0 ? rawName.substring(0, dotIdx) : rawName;

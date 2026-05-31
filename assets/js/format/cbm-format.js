@@ -2728,6 +2728,23 @@ function cbmCountFreeSectors(diskCtx) {
   return total;
 }
 
+// Decode a raw 16-byte PETSCII name into a printable JS string. Used
+// by cbmFindTreeConflicts and cbmPasteDirTree's _displayName / by any
+// paste/conflict-message code that needs to show a name to the user.
+// Stops on $A0 or $00 padding; converts shifted letters $C1-$DA back
+// to ASCII A-Z; drops anything outside the printable PETSCII range.
+function decodePetsciiNameForDisplay(nameBytes) {
+  var s = '';
+  if (!nameBytes) return s;
+  for (var i = 0; i < 16; i++) {
+    var b = nameBytes[i];
+    if (b === 0xA0 || b === 0x00) break;
+    if (b >= 0xC1 && b <= 0xDA) s += String.fromCharCode(b - 0x80);
+    else if (b >= 0x20 && b <= 0x7E) s += String.fromCharCode(b);
+  }
+  return s.replace(/ +$/, '');
+}
+
 // Inspect a tree against a CBM-DOS destination to enumerate name
 // collisions BEFORE writing. Returns:
 //   {
@@ -2747,23 +2764,12 @@ function cbmCountFreeSectors(diskCtx) {
 function cbmFindTreeConflicts(diskCtx, tree) {
   var out = { topLevel: null, files: [], subdirs: [], total: 0 };
   if (!diskCtx || !diskCtx.buffer || !diskCtx.format || !tree) return out;
-  function _decode(nb) {
-    var s = '';
-    if (!nb) return s;
-    for (var i = 0; i < 16; i++) {
-      var b = nb[i];
-      if (b === 0xA0 || b === 0x00) break;
-      if (b >= 0xC1 && b <= 0xDA) s += String.fromCharCode(b - 0x80);
-      else if (b >= 0x20 && b <= 0x7E) s += String.fromCharCode(b);
-    }
-    return s.replace(/ +$/, '');
-  }
   var fmt = diskCtx.format;
   var hostsSubdirs = !!fmt.supportsSubdirs &&
                      (fmt.subdirLinked || !(diskCtx.partition && diskCtx.partition.startTrack));
   if (hostsSubdirs && tree.nameBytes) {
     if (_cbmFindDirEntryByNameBytes(diskCtx, tree.nameBytes) >= 0) {
-      out.topLevel = _decode(tree.nameBytes);
+      out.topLevel = decodePetsciiNameForDisplay(tree.nameBytes);
       out.total++;
     }
     return out;  // wrap mode: files inside go into the new wrapper, no inner conflicts
@@ -2773,7 +2779,7 @@ function cbmFindTreeConflicts(diskCtx, tree) {
     for (var i = 0; i < tree.files.length; i++) {
       var f = tree.files[i];
       if (_cbmFindDirEntryByNameBytes(diskCtx, f.nameBytes) >= 0) {
-        out.files.push(_decode(f.nameBytes));
+        out.files.push(decodePetsciiNameForDisplay(f.nameBytes));
         out.total++;
       }
     }
@@ -2782,7 +2788,7 @@ function cbmFindTreeConflicts(diskCtx, tree) {
     for (var si = 0; si < tree.subdirs.length; si++) {
       var sub = tree.subdirs[si];
       if (_cbmFindDirEntryByNameBytes(diskCtx, sub.nameBytes) >= 0) {
-        out.subdirs.push(_decode(sub.nameBytes));
+        out.subdirs.push(decodePetsciiNameForDisplay(sub.nameBytes));
         out.total++;
       }
     }
@@ -2810,19 +2816,9 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
   var skippedLnks = (tree.skippedLnks || []).slice();
   var skippedDirs = [];
 
-  // Decode a raw 16-byte PETSCII name into a display string. Inline so
-  // the file + subdir loops below stay self-contained.
-  function _displayName(nameBytes) {
-    var s = '';
-    if (!nameBytes) return s;
-    for (var i = 0; i < 16; i++) {
-      var b = nameBytes[i];
-      if (b === 0xA0 || b === 0x00) break;
-      if (b >= 0xC1 && b <= 0xDA) s += String.fromCharCode(b - 0x80);
-      else if (b >= 0x20 && b <= 0x7E) s += String.fromCharCode(b);
-    }
-    return s.replace(/ +$/, '');
-  }
+  // Local alias for the module-level decoder so the loops below read
+  // tightly. Same as decodePetsciiNameForDisplay.
+  var _displayName = decodePetsciiNameForDisplay;
 
   // When wrap is on and the format supports subdirs, create (or reuse
   // on overwrite) a top-level subdir for tree.nameBytes and recurse

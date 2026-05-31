@@ -291,63 +291,52 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
-    { ver: '1.4.8', title: 'Import: prompt when file name is too long', items: [
-      'Importing a file whose name (extension stripped) exceeds 16 characters now pops a dialog with the auto-truncated suggestion. Edit the proposed name and confirm; OK enabled only while length is 1-16. Cancel skips the import. Applies to CBM-DOS and CFS (.hdd) imports via both file picker and drag-drop',
-      '`.cvt` files still get their name from inside the file (the original GEOS dir entry); the OS file name on the .cvt container has never been used and that\'s by design — round-trips back to a GEOS disk with the correct original name',
-      '`showInputModal` gained `opts.description` (multi-line via \\n) + `opts.maxLen` (sets `<input maxlength>` and gates OK on length 1..maxLen). Input modal width capped at 480px so a long filename description wraps to multiple lines instead of stretching the modal',
+    { ver: '1.4.9', title: 'Plain text inputs follow the C64 charset mode', items: [
+      'Name input fields (Import, Add Directory, Disk Label, CFS file rename modal) now render in the current charset case. Type "i" in uppercase mode, see "I" — matching what the file name will look like in the directory. Flip the charset (Ctrl+Shift or Options menu) and the inputs follow',
     ]},
-    { ver: '1.4.7', title: 'PETSCII rename editor: caret + arrow navigation', items: [
-      'Inline filename rename was missing a visible caret and ignored Left/Right arrow keys — Chromium refused to draw the native caret in this exact contenteditable / flex / user-select combo even with caret-color forced to hot pink. The editor now hides the native caret and renders its own blinking caret element positioned via getBoundingClientRect, with manual handling of Left / Right / Home / End',
-      'Reversed bytes ($00-$1F / $80-$9F) still round-trip losslessly: the editor splits content into text nodes for normal bytes and .pe-rev spans for reversed runs (was per-character spans, which broke caret nav)',
-      'Ctrl+Shift charset toggle while editing a name preserves the edit — captures the editor state, suppresses the blur-commit, lets renderDisk rebuild the row, then re-enters edit on the new DOM node with the same typed bytes and caret position',
+    { ver: '1.4.8', title: 'Friendlier file-import names', items: [
+      'Importing a file with a name longer than 16 characters now opens a dialog with the auto-truncated suggestion — edit it and click OK. The OK button stays disabled until the name is a valid length',
+      '.cvt files keep using the original GEOS name embedded inside the file, so they still round-trip back to a GEOS disk correctly',
     ]},
-    { ver: '1.4.6', title: 'D81 paste polish, PETSCII picker chart, UX cleanup', items: [
-      'D81 Add Directory and cross-family paste now follow D81.TXT: partition size is the on-disk total (matches the dir entry +30/+31 field), min 120 sectors, multiples of 40 — enter 120, get a 120-sector partition instead of 160',
-      'Paste into a full sub-directory shows a Cancel / Grow prompt with the exact shortfall in blocks and proposed grow size — was silently auto-growing or refusing with a confusing "needs N sectors" message',
-      'Cross-family paste pre-scans every immediate file + subdir against the destination (not just the top-level dir name), and the resulting Cancel / Rename / Overwrite prompt now applies to file-level conflicts too — including auto-suffix " (2)" rename at the file level',
-      'IDE64 .hdd dialogs (CFS rename / delete / file attributes, HDD partition attributes) match the rest of the app: Cancel (secondary) on the left, primary on the right. Enter-to-primary now confirms instead of deleting',
-      'No-op rename on a CFS entry no longer marks the tab dirty — the diff now treats $00 and $A0 padding as equivalent (CFS producers vary)',
-      'Ctrl+Shift charset toggle in CFS view no longer throws NotFoundError — active editable is blurred first so its commit doesn\'t race with renderDisk\'s innerHTML',
-      'PETSCII picker floating window has Default + Graphical tabs — Default is the 16×16 byte grid (labels removed); Graphical is the Petmate-style C64 charset chart in 16×16 with the bottom half as the reversed mirror. Tab choice persists; chart follows the global charset mode (Options menu / Ctrl+Shift)',
+    { ver: '1.4.7', title: 'Rename editor: visible cursor + arrow keys', items: [
+      'Renaming a filename now shows a visible cursor, and Left / Right / Home / End move it through the name as you\'d expect',
+      'Pressing Ctrl+Shift to switch upper/lower case while editing a name no longer drops you out of edit mode — your typed text and caret position are preserved',
     ]},
-    { ver: '1.4.5', title: 'Directory copy/paste across all disk formats', items: [
-      'Copy a directory (or sub-partition) in any view and paste into any other. Works across .hdd ↔ DNP ↔ D81 ↔ DHD ↔ RAMLink ↔ D1M/D2M/D4M with cross-family type translation (PRG / SEQ / USR / REL round-trip; LNK and GEOS VLIR skipped with a warning at the end)',
-      'Conflict prompt offers Cancel / Rename / Overwrite. Rename auto-suffixes " (2)".." (99)" with name truncation to stay within 16 bytes. Overwrite merges into the existing dir, replacing same-name files. Pre-check refuses before any write if the destination doesn\'t have enough free sectors',
-      'D81 sub-partitions auto-create on paste and auto-grow into adjacent free root tracks when later pastes need more room — instead of refusing, the partition extends to absorb the free tracks immediately after it',
-      'New Disk Tools items for .hdd images: Rename Disk Label (edits the 16-byte boot-sector label, container header now shows it instead of the filename) and Restore Partition Table from Backup (copies the backup at boot $1C\'s LBA over the primary at LBA 1 — cfsfdisk\'s "u" command, for emergency recovery)',
-      'Heat-map fidelity: bitmap-companion sectors at partStart+1+4096k and the partition-end LBA are now classified as system instead of LOST. createEmptyHdd\'s bitmap matches cfsfdisk\'s byte-for-byte. CFS dir-name display follows the dir\'s own slot-0 self-reference (matches IDEDOS — visible on the ide.hdd CREATURES2 / C2 drift)',
-      'Resize Image refuses when invoked inside a CMD-container DNP partition (DHD / RAMLink / FD) with a clear modal explaining the workaround. Previously could silently truncate the tail on save because the container slot has a fixed allocation',
+    { ver: '1.4.6', title: 'D81 sizing, PETSCII picker chart, UX cleanup', items: [
+      'D81 Add Directory now creates exactly the partition size you ask for. Enter 120, get a 120-sector partition (was adding an extra system track)',
+      'Pasting into a full sub-directory now offers a Cancel / Grow prompt with the exact shortfall and proposed grow size, instead of silently growing or refusing',
+      'Cross-family paste conflicts apply at every level (top-level dir, files, sub-dirs). The Rename option auto-suffixes " (2)" through " (99)"',
+      'PETSCII picker floating window has a new Graphical tab — the C64 charset laid out as a chart — next to the existing hex grid. Tab choice is remembered, the chart follows the current charset mode',
+      'Smaller polish: dialog button order standardised across the app (Cancel on the left, primary on the right), no-op renames no longer mark the tab dirty, Ctrl+Shift charset toggle in .hdd view no longer crashes',
     ]},
-    { ver: '1.4.4', title: 'IDE64 .hdd — readable disk map + backup-LBA bitmap fix', items: [
-      'Disk-map strip is laid out as flexbox now: MBR, partition table and partition-table backup get fixed-width labelled blocks (MBR / PT / PT⁺) instead of competing proportionally with multi-MiB partitions — on any disk size they\'re now visible and clickable',
-      'Partitions and gaps still scale relative to each other by sector count, so a 4 MiB partition is still ~2× as wide as a 2 MiB one',
-      'Fixed a silent allocator bug: a freshly-created .hdd\'s default partition spans the disk\'s backup partition-table LBA, but the partition bitmap left that LBA marked free. Filling the partition to capacity could therefore hand it out for file data and clobber the backup — the bitmap now reserves it, matching cfsfdisk',
+    { ver: '1.4.5', title: 'Copy directories between disk formats', items: [
+      'Copy a directory (or sub-partition) in one disk and paste it into a different format. Works across .hdd, DNP, D81, DHD, RAMLink, D1M / D2M / D4M; file types are translated so PRG / SEQ / USR / REL stay correct on the other side',
+      'When the destination already has matching names, choose Cancel, Rename ("(2)" auto-suffix), or Overwrite. The pre-check refuses before any writing if the destination doesn\'t have enough free space',
+      'D81 sub-partitions auto-create on first paste, and auto-grow into adjacent free space when later pastes need more room',
+      'New for .hdd images under Disk → Disk Tools: Rename Disk Label and Restore Partition Table from Backup (emergency recovery)',
     ]},
-    { ver: '1.4.3', title: 'IDE64 .hdd — disk map + heat map share one tabbed modal', items: [
-      'View BAM on an .hdd image now opens a single tabbed modal. The Partitions tab shows the disk-map strip; a second tab labelled with the current partition\'s name shows the CFS bitmap heat map. Default tab is the partition heat map when you\'re inside a CFS partition, the disk map otherwise',
-      'Double-click a partition region in the disk map to load that partition\'s heat map into the second tab — switches tabs without changing the underlying disk view. Works for both live and soft-deleted CFS partitions',
-      'Modal frame is now a fixed 720px so the body width stays the same across tab switches. The CFS bitmap grid lost its 520px cap; it now fills the modal body just like the disk-map strip',
+    { ver: '1.4.4', title: 'Disk map fixes for .hdd', items: [
+      'The MBR / partition-table / backup markers in the disk map are now always visible regardless of disk size — they no longer get squashed by multi-MiB partitions',
+      'Fixed a silent allocator bug that could corrupt the backup partition table when a freshly-created .hdd was filled to capacity',
     ]},
-    { ver: '1.4.2', title: 'IDE64 .hdd — disk map, modal polish, dir auto-extend', items: [
-      'View BAM on the HDD partition-list view now opens a horizontal Disk Map strip — MBR, partition table, every live / deleted / hidden partition, gaps of unallocated space, and the backup partition-table mirror at the last sector. Click a region for details, double-click a CFS partition to drill in. Inside a CFS partition View BAM still opens the per-partition heat map',
-      'Pasting into a CFS partition now extends the directory chain when every existing dir sector is full — same dir-next bit-slicing IDEDOS uses. No more "No empty directory slot available." errors when a directory exceeds 14 files',
-      'New partition modal restyled to match the CMD-container picker (table layout, modal-input class, Cancel on the left). Name field auto-uppercases as you type — CFS names are raw ASCII, so lowercase letters were rendering as PETSCII graphic glyphs in the partition list',
-      'New Options → Partition Sizes in MiB toggle (default on). HDD + CMD-container partition lists now show "512 MiB" / "1.50 MiB" instead of a CBM block count — fits the column, matches what IDEDOS / cfsfdisk / VICE show. Flip the toggle for the old block-count view',
-      'Modal Enter key triggers the bright (primary) button — matches the visual styling. Delete-partition confirmation now puts the recoverability sentence on its own line. Number-input spinner arrows hidden (they rendered as low-contrast specks in dark theme)',
-      'Disk Map fixes: MBR / partition-table / backup markers now actually paint above the partition fill instead of being hidden underneath; default-partition indicator reads the boot byte as 0-based to match the partition-list view',
+    { ver: '1.4.3', title: 'Disk map + heat map in one modal', items: [
+      'View BAM on an .hdd now opens a tabbed modal: a Partitions tab with the disk map, and a second tab with the current partition\'s heat map. Double-click a partition in the map to load its heat map into the second tab',
     ]},
-    { ver: '1.4.1', title: 'IDE64 .hdd — validator polish', items: [
-      'Validate now reports overlapping allocations — sectors claimed by more than one file (or a file + a system structure). The log lines name both owners so you can tell which file shares which sector. This is real corruption: at least one of the owners is reading garbage',
-      'Scan for Lost Files (Deep) is less noisy. The plausible-pointer threshold went from 4 → 8 of 16 contiguous slots, so a junk sector with a few accidentally-LBA-shaped bytes no longer shows up as a "lost file" candidate',
-      'B-tree walker now bails out cleanly on circular trees (malformed images with a tree node pointing back at one of its ancestors) instead of running to the depth limit. Costs nothing on healthy disks',
-      'Validator log uses the entry\'s parsed name instead of a raw byte read, so filenames in the overlap / missing / lost reports come out as plain ASCII rather than control glyphs',
+    { ver: '1.4.2', title: '.hdd disk map + directory auto-extend', items: [
+      'View BAM at the .hdd partition list now shows a horizontal Disk Map: MBR, partition table, every partition (with deleted / hidden styling), gaps, and the partition-table backup. Click a region for details; double-click a CFS partition to drill in',
+      'Pasting into a full CFS directory now extends the directory chain automatically — no more "no empty directory slot" errors past 14 files',
+      'New Options → Partition Sizes in MiB toggle — partition lists show "512 MiB" / "1.50 MiB" instead of a block count',
+      'Modal Enter triggers the primary button. Number-input spinner arrows hidden (they rendered as low-contrast specks in dark theme)',
     ]},
-    { ver: '1.4.0', title: 'IDE64 .hdd', items: [
-      'Open IDE64 .hdd images. The 16-slot partition table renders CMD-container style; double-click a CFS partition to enter it. New / Rename / Delete Partition work, and File → New → IDE64 HDD creates fresh images from 4 to 512 MiB with a cfsfdisk-compatible byte layout (MBR + boot total-LBA count) so VICE\'s IDE64 auto-detect picks them up without the manual C/H/S dance',
-      'Full read/write inside a CFS partition, with the same UX as D64 / D71 / etc: subdirectory navigation with breadcrumb + ".." row, LNK following, PETSCII filenames, multi-select, drag-to-reorder, keyboard shortcuts, drag-drop import/export, Rename, Scratch / Unscratch, Restore Directory, Restore Partition, Insert / Remove / Align / Name Case / Lock / Splat / Separators, File Type changes, View As Hex / Disassembly / PETSCII / BASIC / Graphics / TASS, Run in Emulator, Save as Separator',
-      'Disk-level: Validate (reconciles partition bitmap against the B-tree set), Sort Directory, Scan for Lost Files (Quick + Deep, recovers via the byte-slice decoder with Export / Restore per candidate), Export Disk (zip + Text / CSV / HTML listing), and a CFS-aware View BAM with a 64×64 heat map and Density / Ownership colour modes',
-      'Critical correctness fix: CFS data sectors are byte-sliced with stride 4 (file byte N at offset (N & 0x7F) * 4 + (N >> 7)), not sequential. Every reader and writer now applies the slicing — round-trips through DirMaster and VICE match byte-for-byte. Any file exported from a CFS partition before this release was wrong, re-export now',
-      'Recovery is byte-equal to IDEDOS: scratching files / dirs / partitions matches what the firmware writes (including the partition-table backup mirror at the last sector); Unscratch + Restore Directory + Restore Partition reverse it. Spec source: singularcrew.hu/idedos/cfs.html — layout reverse-engineered against IDEDOS, fusecfs, cfsfdisk, and the official 64m_image.zip',
+    { ver: '1.4.1', title: '.hdd validator improvements', items: [
+      'Validate now reports overlapping allocations — sectors claimed by more than one file. The log names both owners so you can tell which file shares which sector',
+      'Scan for Lost Files (Deep) is less noisy on healthy disks. The B-tree walker also handles malformed circular trees cleanly',
+    ]},
+    { ver: '1.4.0', title: 'Open IDE64 .hdd images', items: [
+      'Read and edit IDE64 hard-disk images (.hdd). Browse CFS partitions, navigate subdirectories, rename / scratch / restore files, drag in / out, view files as Hex / BASIC / PETSCII / Graphics / TASS, run in an emulator — same UX as D64 / D71 / D81. Byte-for-byte round-trip with DirMaster and VICE',
+      'File → New → IDE64 HDD creates fresh .hdd images from 4 MiB to 512 MiB. VICE\'s auto-detect picks them up without the manual C/H/S dance',
+      'CFS-aware Validate, Sort Directory, Scan for Lost Files (Quick + Deep with per-candidate Export / Restore), Export Disk (zip + HTML / CSV listing), and View BAM with a Density / Ownership heat map',
+      'Recovery matches what IDEDOS writes — scratched files / directories / partitions can be unscratched, and the backup partition table at the last sector mirrors the primary, so accidental wipes are recoverable in the same way the firmware allows',
     ]},
     { ver: '1.3.112', title: 'Run / Open in Emulator', items: [
       'New Disk → Open in Emulator and File → Run in Emulator hand the current disk or selected PRG to <a href="https://c64.sannic.nl/" target="_blank" class="link">c64.sannic.nl</a> (VICE x64sc via EmulatorJS) over postMessage — no upload, no URL length limit',

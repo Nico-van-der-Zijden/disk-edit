@@ -254,6 +254,20 @@
     outline: none;
   }
 
+  /* Plain <input> name fields can't render via the C64 Pro PUA glyphs
+     (those go through createPetsciiEditor). Force their case to match
+     the active charset mode so typing 'i' shows 'I' in uppercase mode
+     and 'i' in lowercase mode — matching what the C64 will display.
+     asciiToNameBytes uppercases on commit, so the byte is unchanged. */
+  body[data-charset="uppercase"] .modal-input,
+  body[data-charset="uppercase"] .petscii-text-input {
+    text-transform: uppercase;
+  }
+  body[data-charset="lowercase"] .modal-input,
+  body[data-charset="lowercase"] .petscii-text-input {
+    text-transform: lowercase;
+  }
+
   /* Optional description block above .modal-input (showInputModal opts.description). */
   .modal-input-desc {
     font-size: 13px;

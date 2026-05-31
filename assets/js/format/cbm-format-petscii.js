@@ -78,6 +78,7 @@ function setCharsetMode(mode) {
   localStorage.setItem('cbm-charsetMode', mode);
   PETSCII_MAP = buildPetsciiMap(mode);
   SCREENCODE_MAP = buildScreencodeMap(mode);
+  applyCharsetBodyAttr();
   // Tell anyone showing PETSCII glyphs (modals, viewers, the picker) to
   // re-render with the new map. The directory listing is refreshed by
   // the menu/click handler that triggered this change; modal content
@@ -87,6 +88,17 @@ function setCharsetMode(mode) {
     document.dispatchEvent(new CustomEvent('cbm-charsetchange', { detail: { mode: mode } }));
   }
 }
+
+// Mirror the current charset mode onto <body data-charset="..."> so CSS
+// can render plain <input> filename fields with text-transform matching
+// the C64's case (typing 'i' shows as 'I' in uppercase mode etc.).
+// asciiToNameBytes still uppercases on commit either way, so this is
+// purely visual.
+function applyCharsetBodyAttr() {
+  if (typeof document === 'undefined' || !document.body) return;
+  document.body.setAttribute('data-charset', charsetMode);
+}
+applyCharsetBodyAttr();
 
 /** @param {number} byte @returns {string} PUA character */
 function petsciiToAscii(byte) {
