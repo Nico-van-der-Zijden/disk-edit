@@ -254,6 +254,19 @@
     outline: none;
   }
 
+  /* Optional description block above .modal-input (showInputModal opts.description). */
+  .modal-input-desc {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    word-break: break-word;
+  }
+  /* Cap the input modal's width so a long filename in the description
+     wraps over multiple lines instead of stretching the modal. */
+  #input-modal-overlay .modal {
+    max-width: 480px;
+  }
+
   .modal-input:focus {
     border-color: var(--accent);
   }

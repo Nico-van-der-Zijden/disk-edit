@@ -968,6 +968,23 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent, diskCtx
 }
 
 // Convert ASCII filename to 16-byte PETSCII name padded with $A0
+// When the OS file name (extension stripped) is longer than 16 chars,
+// prompt the user with the auto-truncated suggestion and let them edit
+// it. Returns the chosen name string, or null if the user cancelled.
+// Pass-through when the name already fits.
+async function promptShortenImportName(baseName, fullFileName) {
+  if (baseName.length <= 16) return baseName;
+  var picked = await showInputModal(
+    'File name too long',
+    baseName.substring(0, 16).toUpperCase(),
+    {
+      description: '"' + fullFileName + '" exceeds 16 characters.\nEdit the name as it should appear in the directory:',
+      maxLen: 16,
+    }
+  );
+  return picked == null ? null : picked;
+}
+
 function asciiToNameBytes(name) {
   var bytes = new Uint8Array(16);
   name = name.toUpperCase().substring(0, 16);
@@ -986,7 +1003,7 @@ function asciiToNameBytes(name) {
   return bytes;
 }
 
-function importFileToDisk(fileName, fileData) {
+async function importFileToDisk(fileName, fileData) {
   var dotIdx = fileName.lastIndexOf('.');
   var ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1).toLowerCase() : '';
 
@@ -1023,6 +1040,12 @@ function importFileToDisk(fileName, fileData) {
   }
 
   var baseName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
+  // Too-long names get a Cancel / OK prompt with the auto-truncated
+  // suggestion; OK is gated on length 1..16. PC64-format names are
+  // re-read from the file header further down and override this.
+  var chosen = await promptShortenImportName(baseName, fileName);
+  if (chosen == null) return;
+  baseName = chosen;
   var nameBytes = asciiToNameBytes(baseName);
 
   // PC64 format (.P00/.S00/etc.): 26-byte header with original filename

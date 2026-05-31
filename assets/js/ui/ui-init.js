@@ -132,10 +132,13 @@ document.addEventListener('drop', async function(e) {
         var ent = importEntries[ii];
         var iext = ent.name.substring(ent.name.lastIndexOf('.')).toLowerCase();
         if (inCfsImport && cfsImportPart) {
-          // Reuse CBM-DOS's asciiToNameBytes via _cfsImportNameBytes so
-          // dropped files name the same way as on a D64 (only "/" is
-          // stripped — CFS treats it as the path separator).
-          var baseName = _cfsImportNameBytes(ent.name);
+          // Reuse CBM-DOS's asciiToNameBytes via _cfsImportNameBytesPrompted
+          // so dropped files name the same way as on a D64 (only "/" is
+          // stripped — CFS treats it as the path separator). The prompted
+          // variant pops a "name too long" modal when the OS file name
+          // exceeds 16 chars.
+          var baseName = await _cfsImportNameBytesPrompted(ent.name);
+          if (baseName == null) { failed++; continue; } // user cancelled
           var extM = (ent.name.match(/\.([^.]+)$/) || [])[1] || 'PRG';
           extM = extM.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'PRG';
           pushUndo();
@@ -148,7 +151,7 @@ document.addEventListener('drop', async function(e) {
         } else if (iext === '.cvt') {
           await importCvtFile(ent.name, new Uint8Array(ent.buffer));
         } else {
-          importFileToDisk(ent.name, new Uint8Array(ent.buffer));
+          await importFileToDisk(ent.name, new Uint8Array(ent.buffer));
           imported++;
         }
       } catch (err) {

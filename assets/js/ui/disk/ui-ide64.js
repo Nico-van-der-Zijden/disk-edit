@@ -1041,6 +1041,24 @@ function _cfsImportNameBytes(rawName) {
   return String.fromCharCode.apply(null, bytes);
 }
 
+// Same as _cfsImportNameBytes but prompts the user when the base name
+// (extension stripped) exceeds 16 chars. Returns the 16-char name
+// string ready for cfsImportFile, or null on user cancel.
+async function _cfsImportNameBytesPrompted(rawName) {
+  var dotIdx = rawName.lastIndexOf('.');
+  var base = dotIdx >= 0 ? rawName.substring(0, dotIdx) : rawName;
+  if (base.length > 16 && typeof promptShortenImportName === 'function') {
+    var chosen = await promptShortenImportName(base, rawName);
+    if (chosen == null) return null;
+    base = chosen;
+  }
+  var bytes = asciiToNameBytes(base);
+  for (var i = 0; i < bytes.length; i++) {
+    if (bytes[i] === 0x2F) bytes[i] = 0x20;
+  }
+  return String.fromCharCode.apply(null, bytes);
+}
+
 // Disallows `/` since CFS uses it as the path separator in cfsResolvePath
 // (and the IDEDOS firmware treats slashes the same way).
 function _sanitiseCfsName(input, title) {
@@ -1903,11 +1921,13 @@ function showCfsImportPicker() {
       ]);
       return;
     }
-    file.arrayBuffer().then(function(buf) {
+    file.arrayBuffer().then(async function(buf) {
       var payload = new Uint8Array(buf);
-      // Reuse CBM-DOS's asciiToNameBytes (via _cfsImportNameBytes) so
-      // dropped files get the same byte layout in CFS as on a D64.
-      var baseName = _cfsImportNameBytes(file.name);
+      // Reuse CBM-DOS's asciiToNameBytes (via _cfsImportNameBytesPrompted)
+      // so dropped files get the same byte layout in CFS as on a D64,
+      // and prompts when the OS name exceeds 16 chars.
+      var baseName = await _cfsImportNameBytesPrompted(file.name);
+      if (baseName == null) return; // user cancelled
       // Type suffix from extension (if present and 1-3 chars)
       var ext = (file.name.match(/\.([^.]+)$/) || [])[1] || 'PRG';
       ext = ext.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'PRG';

@@ -413,12 +413,47 @@ document.addEventListener('keyup', (e) => {
 // ── Input Modal ───────────────────────────────────────────────────────
 let inputModalResolve = null;
 
-function showInputModal(title, defaultValue) {
+// opts (all optional):
+//   description: extra line shown above the input
+//   maxLen:      input maxlength + OK is disabled while value.length > maxLen or 0
+function showInputModal(title, defaultValue, opts) {
+  opts = opts || {};
   return new Promise((resolve) => {
     inputModalResolve = resolve;
     document.getElementById('input-modal-title').textContent = title;
+    var bodyEl = document.querySelector('#input-modal-overlay .modal-body');
+    // Replace / remove any prior description blocks (there can be many
+    // when a previous call passed a multi-line description).
+    var prevDescs = bodyEl.querySelectorAll('.modal-input-desc');
+    for (var pi = 0; pi < prevDescs.length; pi++) prevDescs[pi].remove();
+    if (opts.description) {
+      // Split on \n so callers can split a long explanation onto multiple
+      // lines without forcing the modal wider than it needs to be.
+      var lines = String(opts.description).split('\n');
+      for (var li = lines.length - 1; li >= 0; li--) {
+        var desc = document.createElement('div');
+        desc.className = 'modal-input-desc';
+        desc.textContent = lines[li];
+        bodyEl.insertBefore(desc, bodyEl.firstChild);
+      }
+    }
     const field = document.getElementById('input-modal-field');
     field.value = defaultValue || '';
+    field.removeAttribute('maxlength');
+    if (opts.maxLen) field.setAttribute('maxlength', String(opts.maxLen));
+
+    var okBtn = document.getElementById('input-modal-ok');
+    function validate() {
+      var len = field.value.length;
+      if (opts.maxLen) okBtn.disabled = (len === 0 || len > opts.maxLen);
+      else okBtn.disabled = (len === 0);
+    }
+    // Replace any prior input listener (we attach a fresh one per call).
+    if (field._validate) field.removeEventListener('input', field._validate);
+    field._validate = validate;
+    field.addEventListener('input', validate);
+    validate();
+
     document.getElementById('input-modal-overlay').classList.add('open');
     field.focus();
     field.select();

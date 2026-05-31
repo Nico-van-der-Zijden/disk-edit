@@ -291,6 +291,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.8', title: 'Import: prompt when file name is too long', items: [
+      'Importing a file whose name (extension stripped) exceeds 16 characters now pops a dialog with the auto-truncated suggestion. Edit the proposed name and confirm; OK enabled only while length is 1-16. Cancel skips the import. Applies to CBM-DOS and CFS (.hdd) imports via both file picker and drag-drop',
+      '`.cvt` files still get their name from inside the file (the original GEOS dir entry); the OS file name on the .cvt container has never been used and that\'s by design — round-trips back to a GEOS disk with the correct original name',
+      '`showInputModal` gained `opts.description` (multi-line via \\n) + `opts.maxLen` (sets `<input maxlength>` and gates OK on length 1..maxLen). Input modal width capped at 480px so a long filename description wraps to multiple lines instead of stretching the modal',
+    ]},
     { ver: '1.4.7', title: 'PETSCII rename editor: caret + arrow navigation', items: [
       'Inline filename rename was missing a visible caret and ignored Left/Right arrow keys — Chromium refused to draw the native caret in this exact contenteditable / flex / user-select combo even with caret-color forced to hot pink. The editor now hides the native caret and renders its own blinking caret element positioned via getBoundingClientRect, with manual handling of Left / Right / Home / End',
       'Reversed bytes ($00-$1F / $80-$9F) still round-trip losslessly: the editor splits content into text nodes for normal bytes and .pe-rev spans for reversed runs (was per-character spans, which broke caret nav)',
