@@ -1197,6 +1197,7 @@ function startRenameEntry(entryEl) {
 
   editor.addEventListener('blur', () => {
     if (petsciiPicker.clicking) { editor.focus(); editor._setCaret(editor._lastCursorPos || 0); return; }
+    if (typeof suppressActiveEditCommit !== 'undefined' && suppressActiveEditCommit) return;
     commitRename();
   });
   editor.addEventListener('keydown', (ev) => {

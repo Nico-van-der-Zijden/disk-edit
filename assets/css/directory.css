@@ -635,8 +635,23 @@
     min-height: 1em;
     user-select: text;
     -webkit-user-select: text;
+    /* Chromium refuses to draw the native caret in this exact DOM /
+       CSS combo (contenteditable inside a flex .dir-entry with
+       user-select:none cascade — verified: caret-color computes to the
+       right value, selection has a valid collapsed range, but no caret
+       renders). We hide the native caret and draw our own via the
+       .pe-fake-caret element positioned absolutely on document.body. */
+    caret-color: transparent;
   }
-  .petscii-editor .pe-char {
-    display: inline-block;
+  .pe-fake-caret {
+    position: absolute;
+    width: 2px;
+    background: var(--text);   /* high-contrast against either theme's bg */
+    pointer-events: none;
+    z-index: 9999;
+    animation: pe-caret-blink 1.06s steps(2, jump-none) infinite;
+  }
+  @keyframes pe-caret-blink {
+    50% { opacity: 0; }
   }
 

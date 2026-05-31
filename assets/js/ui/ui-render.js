@@ -421,6 +421,10 @@ function renderDisk(info) {
 
 let activeEditEl = null;
 let activeEditCleanup = null;
+// Set to true to make inline-rename blur handlers skip their commit/revert.
+// Used by the Ctrl+Shift charset toggle so an in-progress edit can survive
+// the renderDisk rebuild and be re-created on the new DOM afterwards.
+var suppressActiveEditCommit = false;
 
 function registerActiveEdit(el, cleanup) {
   activeEditEl = el;
@@ -433,6 +437,67 @@ function cancelActiveEdits() {
   }
   activeEditEl = null;
   activeEditCleanup = null;
+}
+
+// Capture enough state from the current inline edit to re-create it after
+// renderDisk rebuilds the DOM. Returns a thunk that re-enters the edit
+// with the same bytes + cursor — or null if no resumable edit is active.
+// Looks at the editing row's data-* attributes to dispatch to the right
+// start-edit function (CFS file rename / HDD partition rename / CBM-DOS
+// file rename). Block-count / timestamp edits aren't resumed today.
+function captureActiveEditResume() {
+  if (!activeEditEl) return null;
+  var editor = activeEditEl.querySelector ? activeEditEl.querySelector('.petscii-editor') : null;
+  if (!editor || !editor._isPetsciiEditor) return null;
+  var entryRow = activeEditEl.closest ? activeEditEl.closest('.dir-entry') : null;
+  if (!entryRow) return null;
+
+  var maxLen = editor._maxLen || 16;
+  var savedBytes = editor.getBytes(maxLen, 0xA0);
+  var savedLen = editor.getLength();
+  var savedCursor = editor._lastCursorPos != null ? editor._lastCursorPos : savedLen;
+
+  // Detach from the soon-to-be-stale DOM right away. Without this, the
+  // resume thunk's startInlineRename... → cancelActiveEdits() would fire
+  // the OLD revert, which calls refreshIde64View again and destroys the
+  // freshly-created editor (causing "addRange: range isn't in document"
+  // when _setCaret then runs against a detached node).
+  activeEditEl = null;
+  activeEditCleanup = null;
+
+  function rehydrate(starterFn, selector) {
+    var newRow = document.querySelector(selector);
+    if (!newRow || typeof starterFn !== 'function') return;
+    starterFn(newRow);
+    var newEditor = newRow.querySelector('.petscii-editor');
+    if (newEditor && typeof newEditor.replaceBytes === 'function') {
+      newEditor.replaceBytes(savedBytes, savedLen);
+      if (typeof newEditor._setCaret === 'function') newEditor._setCaret(savedCursor);
+    }
+  }
+
+  var cfsIdx = entryRow.dataset.cfsEntry;
+  if (cfsIdx != null && typeof startInlineRenameCfsEntry === 'function') {
+    return function() {
+      rehydrate(startInlineRenameCfsEntry,
+        '.dir-entry[data-cfs-entry="' + cfsIdx + '"]');
+    };
+  }
+  var hddPart = entryRow.dataset.hddPart;
+  if (hddPart != null && typeof startInlineRenameHddPartition === 'function') {
+    return function() {
+      rehydrate(startInlineRenameHddPartition,
+        '.dir-entry[data-hdd-part="' + hddPart + '"]');
+    };
+  }
+  var entryOff = entryRow.dataset.offset;
+  if (entryOff != null && typeof startRenameEntry === 'function') {
+    return function() {
+      rehydrate(startRenameEntry,
+        '.dir-entry[data-offset="' + entryOff + '"]');
+    };
+  }
+  return null;
 }
 
 function bindDirSelection() {

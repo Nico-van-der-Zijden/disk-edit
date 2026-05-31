@@ -389,13 +389,24 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keyup', (e) => {
   if ((e.key === 'Shift' || e.key === 'Control') && ctrlShiftClean) {
     ctrlShiftClean = false;
-    // Commit any in-progress edit first: opt-charset-mode synchronously
-    // calls renderDisk → content.innerHTML, and a focused editable's
-    // blur handler firing mid-innerHTML reparents siblings and throws
+    // If an inline rename is active, capture enough state to re-enter
+    // it after renderDisk rebuilds the DOM, then suppress its commit so
+    // the typed-but-uncommitted bytes survive the round-trip.
+    var resumeEdit = (typeof captureActiveEditResume === 'function')
+      ? captureActiveEditResume() : null;
+    if (resumeEdit) suppressActiveEditCommit = true;
+    // Blur active editable first: opt-charset-mode synchronously calls
+    // renderDisk → content.innerHTML, and a focused editable's blur
+    // handler firing mid-innerHTML reparents siblings and throws
     // NotFoundError (Chrome's "moved in a blur event handler" error).
     var ae = document.activeElement;
     if (ae && typeof ae.blur === 'function' && ae !== document.body) ae.blur();
     document.getElementById('opt-charset-mode').click();
+    if (resumeEdit) {
+      suppressActiveEditCommit = false;
+      // Defer to a microtask so the re-entered edit sees the new DOM.
+      setTimeout(resumeEdit, 0);
+    }
   }
 });
 

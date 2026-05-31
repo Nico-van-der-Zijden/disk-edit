@@ -291,6 +291,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.7', title: 'PETSCII rename editor: caret + arrow navigation', items: [
+      'Inline filename rename was missing a visible caret and ignored Left/Right arrow keys — Chromium refused to draw the native caret in this exact contenteditable / flex / user-select combo even with caret-color forced to hot pink. The editor now hides the native caret and renders its own blinking caret element positioned via getBoundingClientRect, with manual handling of Left / Right / Home / End',
+      'Reversed bytes ($00-$1F / $80-$9F) still round-trip losslessly: the editor splits content into text nodes for normal bytes and .pe-rev spans for reversed runs (was per-character spans, which broke caret nav)',
+      'Ctrl+Shift charset toggle while editing a name preserves the edit — captures the editor state, suppresses the blur-commit, lets renderDisk rebuild the row, then re-enters edit on the new DOM node with the same typed bytes and caret position',
+    ]},
     { ver: '1.4.6', title: 'D81 paste polish, PETSCII picker chart, UX cleanup', items: [
       'D81 Add Directory and cross-family paste now follow D81.TXT: partition size is the on-disk total (matches the dir entry +30/+31 field), min 120 sectors, multiples of 40 — enter 120, get a 120-sector partition instead of 160',
       'Paste into a full sub-directory shows a Cancel / Grow prompt with the exact shortfall in blocks and proposed grow size — was silently auto-growing or refusing with a confusing "needs N sectors" message',

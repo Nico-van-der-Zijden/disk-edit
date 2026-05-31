@@ -284,6 +284,13 @@ function insertCharAtCursor(input, ch, petsciiCode) {
   if (input._isPetsciiEditor) {
     if (petsciiCode === undefined) return;
     input.focus();
+    // Picker click can collapse the live selection outside the editor
+    // (preventDefault on mousedown preserves focus but not the range).
+    // Restore the caret from the last tracked position before inserting
+    // so the byte lands where the user expects.
+    if (input._setCaret && input._lastCursorPos != null) {
+      input._setCaret(input._lastCursorPos);
+    }
     input.insertByte(petsciiCode);
     return;
   }
@@ -339,41 +346,168 @@ function createPetsciiEditor(opts) {
   el._isPetsciiEditor = true;
   el._maxLen = maxLen;
 
+  // Render as merged runs: text nodes for normal bytes, .pe-rev spans
+  // for reversed runs. Keeps the in-progress visual aligned with the
+  // commit view (reversed bytes show as such) while letting the caret
+  // walk through text nodes naturally.
   function render() {
-    var html = '';
-    for (var i = 0; i < shadowLen; i++) {
-      var b = shadow[i];
-      var rev = isPetsciiReversed(b);
-      var ch = escHtml(petsciiToAscii(b));
-      html += '<span class="pe-char' + (rev ? ' pe-rev' : '') + '">' + ch + '</span>';
+    el.textContent = '';
+    var i = 0;
+    while (i < shadowLen) {
+      var rev = isPetsciiReversed(shadow[i]);
+      var chunk = '';
+      var j = i;
+      while (j < shadowLen && isPetsciiReversed(shadow[j]) === rev) {
+        chunk += petsciiToAscii(shadow[j]);
+        j++;
+      }
+      if (rev) {
+        var span = document.createElement('span');
+        span.className = 'pe-rev';
+        span.textContent = chunk;
+        el.appendChild(span);
+      } else {
+        el.appendChild(document.createTextNode(chunk));
+      }
+      i = j;
     }
-    el.innerHTML = html;
+    if (typeof updateFakeCaret === 'function') updateFakeCaret();
+  }
+
+  function _childByteLen(node) {
+    return node ? node.textContent.length : 0;
   }
 
   function setCaret(pos) {
     pos = Math.max(0, Math.min(pos, shadowLen));
     var sel = window.getSelection();
     var range = document.createRange();
-    if (shadowLen === 0 || pos === 0) {
+    if (shadowLen === 0) {
       range.setStart(el, 0);
     } else {
-      range.setStartAfter(el.children[pos - 1]);
+      var byteIdx = 0;
+      var placed = false;
+      for (var c = 0; c < el.childNodes.length; c++) {
+        var node = el.childNodes[c];
+        var len = _childByteLen(node);
+        if (pos <= byteIdx + len) {
+          var local = pos - byteIdx;
+          if (node.nodeType === 3) {
+            range.setStart(node, local);
+          } else if (node.firstChild && node.firstChild.nodeType === 3) {
+            range.setStart(node.firstChild, local);
+          } else {
+            range.setStart(node, 0);
+          }
+          placed = true;
+          break;
+        }
+        byteIdx += len;
+      }
+      if (!placed) range.setStart(el, el.childNodes.length);
     }
     range.collapse(true);
     sel.removeAllRanges();
     sel.addRange(range);
     el._lastCursorPos = pos;
+    updateFakeCaret();
   }
 
-  function nodeToByteIdx(node, offset) {
-    if (node === el) return Math.min(offset, shadowLen);
-    if (node.nodeType === 3 && node.parentNode && node.parentNode.parentNode === el) {
-      var idx = Array.prototype.indexOf.call(el.children, node.parentNode);
-      return idx + (offset > 0 ? 1 : 0);
+  // Fake caret: Chromium refuses to draw the native caret in this
+  // contenteditable (verified — caret-color computes hot-pink, the
+  // selection has a valid collapsed range, but no caret is rendered).
+  // We position our own .pe-fake-caret element absolutely on document.body
+  // to match the current selection, blinking via CSS.
+  var fakeCaret = null;
+  function ensureFakeCaret() {
+    if (fakeCaret && fakeCaret.isConnected) return fakeCaret;
+    fakeCaret = document.createElement('div');
+    fakeCaret.className = 'pe-fake-caret';
+    document.body.appendChild(fakeCaret);
+    return fakeCaret;
+  }
+  function removeFakeCaret() {
+    if (fakeCaret && fakeCaret.parentNode) fakeCaret.parentNode.removeChild(fakeCaret);
+    fakeCaret = null;
+  }
+  function updateFakeCaret() {
+    if (document.activeElement !== el) { removeFakeCaret(); return; }
+    var pos = el._lastCursorPos != null ? el._lastCursorPos : shadowLen;
+    pos = Math.max(0, Math.min(pos, shadowLen));
+    var fc = ensureFakeCaret();
+    // Probe the visual position by building a temporary collapsed range
+    // at the caret's byte offset and reading its bounding rect.
+    var probe = document.createRange();
+    var anchored = false;
+    var byteIdx = 0;
+    for (var c = 0; c < el.childNodes.length; c++) {
+      var node = el.childNodes[c];
+      var len = _childByteLen(node);
+      if (pos <= byteIdx + len) {
+        var local = pos - byteIdx;
+        if (node.nodeType === 3) {
+          probe.setStart(node, local);
+          probe.setEnd(node, local);
+        } else if (node.firstChild && node.firstChild.nodeType === 3) {
+          probe.setStart(node.firstChild, local);
+          probe.setEnd(node.firstChild, local);
+        }
+        anchored = true;
+        break;
+      }
+      byteIdx += len;
     }
-    if (node.parentNode === el) {
-      var spanIdx = Array.prototype.indexOf.call(el.children, node);
-      return spanIdx + (offset > 0 ? 1 : 0);
+    if (!anchored) {
+      // Past the last char or empty editor — anchor at editor end.
+      if (el.lastChild) {
+        if (el.lastChild.nodeType === 3) {
+          probe.setStart(el.lastChild, el.lastChild.data.length);
+          probe.setEnd(el.lastChild, el.lastChild.data.length);
+        } else {
+          probe.setStartAfter(el.lastChild);
+          probe.setEndAfter(el.lastChild);
+        }
+      } else {
+        probe.setStart(el, 0);
+        probe.setEnd(el, 0);
+      }
+    }
+    var pr = probe.getBoundingClientRect();
+    // For an empty/end-of-text probe the rect can be zero-sized — fall
+    // back to the editor's own rect so the caret still has dimensions.
+    var er = el.getBoundingClientRect();
+    var caretH = pr.height || er.height || 14;
+    var caretX = (pr.left || er.left) + window.scrollX;
+    var caretY = (pr.top || er.top) + window.scrollY;
+    fc.style.left = caretX + 'px';
+    fc.style.top = caretY + 'px';
+    fc.style.height = caretH + 'px';
+  }
+  el.addEventListener('focus', updateFakeCaret);
+  el.addEventListener('blur', removeFakeCaret);
+  el.addEventListener('keyup', updateFakeCaret);
+  el.addEventListener('mouseup', updateFakeCaret);
+
+  function nodeToByteIdx(node, offset) {
+    if (node === el) {
+      var sum = 0;
+      var lim = Math.min(offset, el.childNodes.length);
+      for (var k = 0; k < lim; k++) sum += _childByteLen(el.childNodes[k]);
+      return Math.min(sum, shadowLen);
+    }
+    var target = node;
+    if (node.nodeType === 3 && node.parentNode && node.parentNode.parentNode === el) {
+      target = node.parentNode;
+    }
+    if (target.parentNode === el) {
+      var pre = 0;
+      for (var m = 0; m < el.childNodes.length; m++) {
+        if (el.childNodes[m] === target) {
+          var localOff = (node.nodeType === 3) ? offset : (offset > 0 ? _childByteLen(target) : 0);
+          return Math.min(pre + localOff, shadowLen);
+        }
+        pre += _childByteLen(el.childNodes[m]);
+      }
     }
     return shadowLen;
   }
@@ -435,10 +569,33 @@ function createPetsciiEditor(opts) {
   el.addEventListener('keydown', function(e) {
     // Let outer handlers see Enter / Escape.
     if (e.key === 'Enter' || e.key === 'Escape') return;
-    // Don't interfere with arrow navigation, Home/End, Tab etc.
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' ||
-        e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
-        e.key === 'Home' || e.key === 'End' || e.key === 'Tab') return;
+    // Manually handle arrow navigation + Home/End. Browser-native caret
+    // navigation can fail when the native caret isn't being drawn (the
+    // fake-caret path we use as a Chromium workaround), so we move the
+    // caret position ourselves and re-anchor the visible fake caret.
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      var cur = el._lastCursorPos != null ? el._lastCursorPos : shadowLen;
+      setCaret(Math.max(0, cur - 1));
+      return;
+    }
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      var curR = el._lastCursorPos != null ? el._lastCursorPos : shadowLen;
+      setCaret(Math.min(shadowLen, curR + 1));
+      return;
+    }
+    if (e.key === 'Home') {
+      e.preventDefault();
+      setCaret(0);
+      return;
+    }
+    if (e.key === 'End') {
+      e.preventDefault();
+      setCaret(shadowLen);
+      return;
+    }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Tab') return;
 
     // Backspace: delete the char before the caret (or the selection).
     if (e.key === 'Backspace') {
@@ -499,6 +656,15 @@ function createPetsciiEditor(opts) {
     return out;
   };
   el.getLength = function() { return shadowLen; };
+  // Wholesale-replace the shadow buffer + re-render. Used by the
+  // Ctrl+Shift resume path so an in-progress edit can be re-created with
+  // the user's typed-but-uncommitted bytes after a charset re-render.
+  el.replaceBytes = function(bytes, len) {
+    shadowLen = Math.min(len != null ? len : bytes.length, maxLen);
+    for (var i = 0; i < shadowLen; i++) shadow[i] = bytes[i];
+    for (var j = shadowLen; j < maxLen; j++) shadow[j] = 0;
+    render();
+  };
   el.insertByte = function(byte) {
     var r = getSelectionRange();
     replaceRange(r.start, r.end, [byte]);

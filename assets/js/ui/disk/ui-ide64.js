@@ -1185,6 +1185,7 @@ function startInlineRenameCfsEntry(entryEl) {
       editor._setCaret(editor._lastCursorPos || 0);
       return;
     }
+    if (typeof suppressActiveEditCommit !== 'undefined' && suppressActiveEditCommit) return;
     commit();
   });
   editor.addEventListener('keydown', function(ev) {
@@ -1462,6 +1463,7 @@ function startInlineRenameHddPartition(entryEl) {
       editor._setCaret(editor._lastCursorPos || 0);
       return;
     }
+    if (typeof suppressActiveEditCommit !== 'undefined' && suppressActiveEditCommit) return;
     commit();
   });
   editor.addEventListener('keydown', function(ev) {
