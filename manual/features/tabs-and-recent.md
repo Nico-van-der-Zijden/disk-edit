@@ -17,7 +17,7 @@ disk1.d64 ●   disk2.d81   ide.hdd   +
 
 ## Tab management
 
-- **Close a tab**: click the `✕` on the tab, or **File → Close Tab**, or middle-click
+- **Close a tab**: click the `✕` on the tab, or **Disk → Close**, or middle-click
 - **Reorder tabs**: drag the tab horizontally to a new position
 - **Tab overflow**: if tabs don't fit, scroll arrows appear on either end of the bar; a dropdown list lets you jump to any tab
 
@@ -30,11 +30,11 @@ Closing a tab with the `●` indicator brings up a confirmation prompt:
 
 The Cancel option keeps the tab open. There's no "Save and close" — you need to save first via Ctrl+Alt+S, then close.
 
-**Close All Tabs** in the File menu prompts once for the whole batch.
+**Close All** in the Disk menu prompts once for the whole batch.
 
 ## Recent disks
 
-**File → Recent** lists the last 10 disks you opened. Click one to re-open it (your browser's localStorage holds the disk path + the bytes themselves).
+**Disk → Recent** lists the last 10 disks you opened. Click one to re-open it (your browser's localStorage holds the disk path + the bytes themselves).
 
 A disk in the Recent list is opened from the cached byte buffer — no file picker, no upload. Useful for jumping back into work from yesterday's session.
 
@@ -42,7 +42,7 @@ The Recent list persists in localStorage. It's per-browser and per-tab — openi
 
 ### Clearing the Recent list
 
-**File → Recent → Clear list** wipes the cache. Useful if you opened something sensitive you don't want lingering.
+**Disk → Recent → Clear list** wipes the cache. Useful if you opened something sensitive you don't want lingering.
 
 ## Multi-disk operations
 

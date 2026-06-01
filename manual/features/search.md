@@ -4,7 +4,7 @@ Find files by name or byte content within one disk or across all open tabs.
 
 ## Find in current tab
 
-**Edit → Find** (Ctrl+F) opens a search modal:
+**Search → Find...** (Ctrl+F) opens a search modal:
 
 - **Filename** — matches against the dir-entry names (case-insensitive, partial matches OK)
 - **Byte pattern** — searches all file content + system structures for a byte sequence. Specify as hex (`A2 41 8E ...`) or PETSCII (`HELLO`)
@@ -14,13 +14,13 @@ Results show inline with row numbers; click a result to navigate to it.
 
 ## Find in all open tabs
 
-**Edit → Find in All Tabs** (Ctrl+Shift+F) — same search but spans every open disk. Results are grouped by tab.
+**Search → Find in All Tabs...** (Ctrl+Shift+F) — same search but spans every open disk. Results are grouped by tab.
 
 Useful when you've got 5+ disks open and you're hunting for a specific file (e.g., "where did I put COMPILER.PRG?").
 
 ## Go to track / sector
 
-**Disk → Go To Track/Sector** (Ctrl+Shift+G) opens a small modal:
+**Search → Go to Sector...** (Ctrl+Shift+G) opens a small modal:
 
 ```
 Track:  [18]

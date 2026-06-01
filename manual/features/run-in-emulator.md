@@ -32,4 +32,4 @@ The emulator opens in a new browser tab; first time it takes a moment to downloa
 
 ## Alternative: download and run locally
 
-If you prefer a local emulator (VICE, Hoxs64, CCS64, etc.), use **File → Save** to write the disk to your OS, then mount it in your emulator. The editor's output is byte-identical to what other tools produce, so any emulator that handles the format will accept the saved file.
+If you prefer a local emulator (VICE, Hoxs64, CCS64, etc.), use **Disk → Save** to write the disk to your OS, then mount it in your emulator. The editor's output is byte-identical to what other tools produce, so any emulator that handles the format will accept the saved file.

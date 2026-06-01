@@ -14,7 +14,7 @@ The track/sector references inside a CVT are zeroed out — they'd be wrong once
 ## What you can do
 
 - **Open** a CVT — shows the GEOS info block (icon, description, class, author) on its own, no disk attached.
-- **Import** a CVT into the currently active disk via **File → Import** or drag-drop. The editor parses the CVT, writes the GEOS file to the disk (including the INFO block and all VLIR records), and refreshes the directory listing.
+- **Import** a CVT into the currently active disk via **File → Import File** or drag-drop. The editor parses the CVT, writes the GEOS file to the disk (including the INFO block and all VLIR records), and refreshes the directory listing.
 - View the file as Hex / Graphics / GEOS / BASIC / TASS like any other file.
 
 ## Important: file name comes from inside the CVT
@@ -29,7 +29,7 @@ Use CVT to move a single GEOS file between disks (e.g., a font, a document, a de
 
 ## Reverse — exporting a GEOS file as CVT
 
-**Right-click a GEOS file → Export as CVT** (or **File → Export Selected** when the file is GEOS). The editor produces a valid CVT with the original GEOS filename, INFO block, and (for VLIR) all records.
+**Right-click a GEOS file → Export as CVT** (or **File → Export ▸ Export as CVT** when the file is GEOS). The editor produces a valid CVT with the original GEOS filename, INFO block, and (for VLIR) all records.
 
 The exported CVT is GEOS-app compatible — drop it into GEOS via your tooling and it reconstructs.
 

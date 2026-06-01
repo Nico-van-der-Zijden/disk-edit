@@ -4,7 +4,7 @@ Every "View as …" option, what it does, and when to use it.
 
 ## Hex
 
-**View → As Hex** opens a hex + PETSCII dump:
+**File → View As ▸ Hex** opens a hex + PETSCII dump:
 
 ```
 Offset   00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  ASCII / PETSCII
@@ -15,13 +15,13 @@ $0010    ...
 - For PRG files, the first 2 bytes show the load address (e.g., `$0801` for BASIC).
 - The PETSCII column renders chars in screen-code form via `SCREENCODE_MAP`. Reversed bytes (`$80-$FF`) show with inverted background.
 - **Options → Hex Coloring** adds per-byte colouring (None / hexyl / xcd-rgb / Nybble).
-- **Goto Track/Sector** (Ctrl+Shift+G) jumps to a specific position.
+- **Search → Go to Sector...** (Ctrl+Shift+G) jumps to a specific position.
 
 Best for inspecting raw bytes — debugging file structure, finding magic numbers, etc.
 
 ## Disassembly
 
-**View → As Disassembly** runs the PRG through a 6502 disassembler starting at the load address. Each line shows:
+**File → View As ▸ Disassembly** runs the PRG through a 6502 disassembler starting at the load address. Each line shows:
 
 ```
 $0801  0C 08  ...           ; BASIC line ptr
@@ -40,13 +40,13 @@ Best for reverse-engineering a PRG. For serious work, export to a real disassemb
 
 ## PETSCII
 
-**View → As PETSCII** shows the whole file as PETSCII glyphs in a 40-column screen-style layout. Useful for inspecting text files or PETSCII art.
+**File → View As ▸ PETSCII** shows the whole file as PETSCII glyphs in a 40-column screen-style layout. Useful for inspecting text files or PETSCII art.
 
-Reversed bytes render with inverted background. The current charset mode (Options → Switch Uppercase/Lowercase) determines the glyph set.
+Reversed bytes render with inverted background. The current charset mode (View → Switch to Uppercase / Lowercase) determines the glyph set.
 
 ## BASIC
 
-**View → As BASIC** detokenizes a BASIC PRG into readable source. Auto-detects the dialect:
+**File → View As ▸ BASIC** detokenizes a BASIC PRG into readable source. Auto-detects the dialect:
 
 - **V2** — Commodore 64 / VIC-20 (default)
 - **V3.5** — Commodore 16 / Plus/4
@@ -59,7 +59,7 @@ Tokens are rendered as their PETSCII keywords (e.g., `PRINT`, `INPUT#`). Line nu
 
 ## TASS (Turbo Assembler)
 
-**View → As TASS** decodes a Turbo Assembler V5 / V6 source file. The source has its own binary format with tokens, expressions, labels, and label-references.
+**File → View As ▸ TASS** decodes a Turbo Assembler V5 / V6 source file. The source has its own binary format with tokens, expressions, labels, and label-references.
 
 Output is rendered as an assembler listing matching what TASS shows on a real C64:
 
@@ -71,7 +71,7 @@ This is the most accurate part of the editor — the viewer was built by diffing
 
 ## Graphics
 
-**View → As Graphics** auto-detects the bitmap format and renders the file as an image. Recognises:
+**File → View As ▸ Graphics** auto-detects the bitmap format and renders the file as an image. Recognises:
 
 - **Hires** (8000 bytes) — standard C64 320×200 bitmap
 - **Multicolor** (8000 + 1000 + 1000 bytes) — bitmap + color RAM + screen RAM
@@ -91,7 +91,7 @@ Save the rendered image as **PNG**, **JPG**, **GIF**, or **SVG** via the Save dr
 
 ## GEOS
 
-**View → As GEOS** opens GEOS-specific viewers for GEOS files. Handles:
+**File → View As ▸ GEOS** opens GEOS-specific viewers for GEOS files. Handles:
 
 ### INFO block
 
@@ -115,13 +115,13 @@ VLIR record viewer for any VLIR file. Shows record index, lets you click into in
 
 ## REL
 
-**View → As REL** decodes a Relative file record-by-record. Shows record length (from byte `$17` of the dir entry), record count, and per-record content.
+**File → View As ▸ REL** decodes a Relative file record-by-record. Shows record length (from byte `$17` of the dir entry), record count, and per-record content.
 
 REL files use a side-sector chain that the standard file walker can follow.
 
 ## VLIR
 
-**View → As VLIR** shows the record index for a GEOS VLIR file:
+**File → View As ▸ VLIR** shows the record index for a GEOS VLIR file:
 
 ```
 Record 0:  T 18 S  5   17 sectors
@@ -135,7 +135,7 @@ Click a record to view its content as Hex.
 
 ## File info
 
-**View → File Info** is a minimal modal showing:
+**View → GEOS File Info** is a minimal modal showing:
 
 - Filename, file type, block count
 - First track/sector

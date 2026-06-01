@@ -9,7 +9,7 @@ The editor stores PETSCII bytes raw. The charset mode (Options → Uppercase / L
 - Switching modes doesn't modify the disk
 - Saving and re-opening uses whatever mode is active at open-time
 - A filename that looks like garbage in one mode might look fine in the other
-- **Edit → Name Case** is the tool to actually change bytes (uppercase / lowercase / toggle each letter)
+- **File → Name Case** is the tool to actually change bytes (uppercase / lowercase / toggle each letter)
 
 ## PETSCII vs ASCII confusion
 
@@ -19,7 +19,7 @@ The C64's PETSCII isn't quite ASCII:
 - Bytes `$C1-$DA` are the **shifted variants** — graphics in uppercase mode, uppercase A-Z in lowercase mode
 - Bytes `$61-$7A` (= ASCII `a-z`) don't exist as letters in PETSCII; they overlap with graphic chars
 
-If you import a file whose PC filename has lowercase letters, the editor uppercases them (`asciiToNameBytes` converts `$61-$7A` to `$41-$5A`) so the result looks right in uppercase mode. If you want lowercase, use **Edit → Name Case → lowercase** after importing.
+If you import a file whose PC filename has lowercase letters, the editor uppercases them (`asciiToNameBytes` converts `$61-$7A` to `$41-$5A`) so the result looks right in uppercase mode. If you want lowercase, use **File → Name Case → lowercase** after importing.
 
 ## Block-count cap = 65,024
 
@@ -73,15 +73,15 @@ For real recovery work, use **Disk → Disk Tools → Scan for Lost Files** whic
 
 Scratching a file marks the dir entry deleted and returns the data sectors to the BAM. If you immediately write a new file, those same sectors get reused — and the scratched file is lost.
 
-The recoverability indicator (🟢 / 🟡 / ⚪) tells you if Unscratch will still work.
+The recoverability indicator (heart-pulse / broken-heart / skull icons) tells you if Unscratch will still work.
 
 ## Multi-disk operations + memory
 
-The editor holds every open disk in memory. 5-10 tabs is fine; 30+ may slow your browser down. Use **File → Close Tab** to free memory (Recent will re-open the disk).
+The editor holds every open disk in memory. 5-10 tabs is fine; 30+ may slow your browser down. Use **Disk → Close** to free memory (Recent will re-open the disk).
 
 ## Backup before bulk edits
 
-There's no auto-save and no "save to a different file automatically" option. Before doing a destructive bulk op (sort, validate, scratch many), do a quick **File → Save As** with a "-backup" suffix.
+There's no auto-save and no "save to a different file automatically" option. Before doing a destructive bulk op (sort, validate, scratch many), do a quick **Disk → Save As...** with a "-backup" suffix.
 
 ## TAP / T64 are read-only
 

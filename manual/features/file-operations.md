@@ -68,7 +68,7 @@ For CFS file rename you can also right-click → **Rename…** which opens a mod
 
 ### Scratch
 
-**Delete** key or **Edit → Scratch** marks the file deleted: the directory entry's "closed" bit is cleared and the data sectors are returned to the BAM. Mirrors `S0:filename` on a real C64.
+**Delete** key or **File → Scratch File** marks the file deleted: the directory entry's "closed" bit is cleared and the data sectors are returned to the BAM. Mirrors `S0:filename` on a real C64.
 
 In CFS (.hdd) the file goes to a `<<DELETED FILES>>` deldir per partition, with the original tree pointer preserved for full recoverability.
 
@@ -76,11 +76,11 @@ In CFS (.hdd) the file goes to a `<<DELETED FILES>>` deldir per partition, with 
 
 Restores a previously scratched file. **Only works if the data sectors haven't been claimed** by a fresh write — once another file allocates the sectors, unscratch isn't recoverable.
 
-The recoverability indicator (green / yellow / no dot) next to a scratched file tells you if unscratch will work:
+The recoverability indicator next to a scratched file tells you if unscratch will work. The editor renders Font Awesome icons:
 
-- 🟢 **Green** — data sectors are still free; unscratch will restore the file completely
-- 🟡 **Yellow** — partial: some sectors are still free but the chain is incomplete or tail-overwritten
-- ⚪ **No dot** — data sectors have been overwritten; only the dir entry can be restored (data will be garbage)
+- **Heart-pulse** (`fa-heart-pulse`) — data sectors are still free; unscratch will restore the file completely
+- **Broken heart** (`fa-heart-crack`) — partial: some sectors are still free but the chain is incomplete or tail-overwritten
+- **Skull** (`fa-skull`) — data sectors have been overwritten; only the dir entry can be restored (data will be garbage)
 
 ## Lock / Splat
 
@@ -98,13 +98,13 @@ Toggle via right-click → **Splat / Unsplat**, or **Ctrl+\***.
 
 ## Change file type
 
-**Edit → Change Type ▸** picks from DEL / SEQ / PRG / USR / REL / CBM. The data sectors don't change; only the type byte (`$02` of the dir entry, low 3 bits) does.
+**File → File Type ▸** picks from DEL / SEQ / PRG / USR / REL / CBM. The data sectors don't change; only the type byte (`$02` of the dir entry, low 3 bits) does.
 
 For CFS the available types are slightly different — see [IDE64 .hdd](../formats/ide64-hdd.md).
 
 ## Align name
 
-**Edit → Align ▸** repositions the filename within the 16-byte field:
+**File → Align ▸** repositions the filename within the 16-byte field:
 
 - **Left** — name at the start, `$A0` padding after
 - **Right** — `$A0` padding before, name at the end
@@ -116,7 +116,7 @@ This affects how the name sorts (CBM sort is byte-based) and how it appears in a
 
 ## Name case
 
-**Edit → Name Case ▸** converts the file's letter bytes:
+**File → Name Case ▸** converts the file's letter bytes:
 
 - **UPPERCASE** — converts `$C1-$DA` to `$41-$5A`
 - **lowercase** — converts `$41-$5A` to `$C1-$DA`
@@ -133,8 +133,8 @@ A file can be both locked and splat at the same time. The dir-entry type byte ho
 Most operations work on a selection. Ctrl+click / Shift+click to multi-select, then:
 
 - **Delete** scratches all selected
-- **Edit → Change Type** changes all selected
-- **Edit → Align** aligns all selected
+- **File → File Type** changes all selected
+- **File → Align** aligns all selected
 - **Drag** moves all selected as a group
 
 When a multi-select group contains incompatible files (e.g., a GEOS VLIR and a plain PRG), the action only applies where applicable; the others are skipped with a warning at the end.

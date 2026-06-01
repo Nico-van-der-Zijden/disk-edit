@@ -1,6 +1,6 @@
 # Compare disks
 
-**Disk → Compare With…** runs a side-by-side diff of the current disk against a second disk. Useful for spotting differences between two versions, two backups, or for verifying that a copy round-tripped correctly.
+**Disk → Disk Tools → Compare with...** runs a side-by-side diff of the current disk against a second disk. Useful for spotting differences between two versions, two backups, or for verifying that a copy round-tripped correctly.
 
 ## How it works
 

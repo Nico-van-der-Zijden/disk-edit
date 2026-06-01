@@ -23,7 +23,7 @@ The editor opens these as a **partition list** (like a [DHD](dhd.md) or [RAMLink
 - **File → Import Partition** — pull a partition's data in from an external `.dnp` / `.d64` / `.d71` / `.d81`.
 - **File → Export Partition** — write a partition out as a standalone file.
 - Drill in and use the partition as a regular disk — full read/write.
-- **File → Save** writes the whole container.
+- **Disk → Save** writes the whole container.
 
 ## Geometry of the system partition
 

@@ -31,7 +31,7 @@ RAMLink uses **byte32 / sizeUnit: 256** for partition entries. CMD HD uses **blo
 ## What you can do
 
 - Open — partition list view with up to 31 partitions.
-- **File → New → RAMLink** creates fresh containers in standard sizes (1 / 2 / 4 / 8 / 16 MiB). VICE will mount the output.
+- **Disk → New → RAMLink** creates fresh containers in standard sizes (1 / 2 / 4 / 8 / 16 MiB). VICE will mount the output.
 - **File → New Partition** adds a partition into free space; the picker UI shows free slots / available LBA ranges.
 - **File → Import / Export Partition** — round-trip as `.dnp` / `.d64` / `.d71` / `.d81`.
 - Drill into a partition; full read/write.

@@ -13,7 +13,7 @@ Variable. The container grows when you add partitions and shrinks when you delet
 - **File → New Partition** adds a partition into free space.
 - **File → Import / Export Partition** — round-trip individual partitions as `.dnp` / `.d64` / `.d71` / `.d81`.
 - Drill into a partition by double-clicking; full read/write inside.
-- **File → Save** writes the whole container.
+- **Disk → Save** writes the whole container.
 
 ## Important gotcha — CMD HD vs RAMLink
 
@@ -29,7 +29,7 @@ The "HD-DOS donor" is the system partition image that makes a CMD HD bootable. T
 
 ## Resize
 
-Per-partition resize works through the normal **Disk → Resize Image** flow when you're drilled into a Native partition (Native is the only type that supports resize). 1541 / 1571 / 1581 partitions have fixed sizes.
+Per-partition resize works through the normal **Disk → Disk Tools → Resize Image** flow when you're drilled into a Native partition (Native is the only type that supports resize). 1541 / 1571 / 1581 partitions have fixed sizes.
 
 ## Saving
 

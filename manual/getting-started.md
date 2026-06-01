@@ -6,17 +6,17 @@ CBM Disk Editor is a single HTML page hosted at <https://d64.sannic.nl>. There i
 
 Three ways to load a disk:
 
-1. **File → Open** — opens your OS file picker. Pick a disk image (`.d64`, `.d71`, `.d81`, `.hdd`, etc.) and the editor will detect the format from the file size + magic bytes.
+1. **Disk → Open** — opens your OS file picker. Pick a disk image (`.d64`, `.d71`, `.d81`, `.hdd`, etc.) and the editor will detect the format from the file size + magic bytes.
 2. **Drag and drop** — drop one or more files onto the page. Disks open as tabs; files (`.prg`, `.cvt`, etc.) get imported into the *currently active* disk tab; archives (`.lnx`) extract to a new D64; CMD-container files (`.dhd`, `.rml`) open as partition lists.
-3. **File → Recent** — your last opened disks (stored in browser localStorage; nothing leaves your computer).
+3. **Disk → Recent** — your last opened disks (stored in browser localStorage; nothing leaves your computer).
 
-If you don't have a disk image to try, **File → New** creates a freshly-formatted blank disk in any supported format.
+If you don't have a disk image to try, **Disk → New** creates a freshly-formatted blank disk in any supported format.
 
 ## What you see
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  File   Disk   Edit   View   Options   Help        │  ← Menubar
+│  Disk  File  Edit  Search  View  Options  Help    │  ← Menubar
 ├─────────────────────────────────────────────────────┤
 │  [Open] [Save] [Close] | [Undo] [Copy] [Paste] ...  │  ← Toolbar (optional)
 ├─────────────────────────────────────────────────────┤
@@ -54,10 +54,10 @@ Disk-level changes (sort, validate, scan for lost files, etc.) live under **Disk
 
 The editor never writes to your disk automatically. To save:
 
-- **File → Save** writes the current disk image to your Downloads folder, with the file extension the format expects.
-- **File → Save As** lets you change the extension or filename.
-- **File → Export Disk** can produce a zip with the disk + a Text / CSV / HTML directory listing.
-- **File → Export Selected** exports the selected file(s) to your OS as raw bytes.
+- **Disk → Save** writes the current disk image to your Downloads folder, with the file extension the format expects.
+- **Disk → Save As...** lets you change the extension or filename.
+- **Disk → Export Disk** can produce a zip with the disk + a Text / CSV / HTML directory listing.
+- **File → Export ▸ Export File** writes the selected file(s) to your OS as raw bytes.
 
 The tab title shows a `●` next to the disk name when there are unsaved changes. Closing a tab with unsaved changes brings up a confirmation prompt.
 
@@ -68,7 +68,7 @@ C64 disks store filenames in PETSCII. The two on-screen rendering modes are:
 - **Uppercase mode** (default, C64 boot mode) — letters render as `A-Z`; the C= and other graphic codes show as graphic glyphs.
 - **Lowercase mode** — letters render as `a-z`; some bytes display differently (uppercase letters at the shifted positions).
 
-Switch via **Options → Switch to Uppercase / Lowercase** or the keyboard shortcut **Ctrl+Shift** (matches what a real C64 does with **C= + Shift**). The choice persists in localStorage and applies across all open tabs.
+Switch via **View → Switch to Uppercase / Lowercase** (the label flips to show the *other* mode) or the keyboard shortcut **Ctrl+Shift** (matches what a real C64 does with **C= + Shift**). The choice persists in localStorage and applies across all open tabs.
 
 ## What's not supported
 

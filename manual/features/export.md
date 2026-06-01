@@ -4,7 +4,7 @@ Three ways to get data out of the editor: whole disk, individual files, embedded
 
 ## Export disk as ZIP + listing
 
-**File → Export Disk → As ZIP** writes a `.zip` archive with:
+**Disk → Export Disk → As ZIP** writes a `.zip` archive with:
 
 - The disk image itself (`.d64` / `.d81` / etc.) — your edited version
 - A directory listing in one or more formats:
@@ -19,7 +19,7 @@ The HTML listing has clickable file links — clicking one downloads that file a
 
 ## Export single files
 
-**File → Export Selected** writes the selected dir entries out as raw bytes. Per file:
+**File → Export ▸ Export File** writes the selected dir entries out as raw bytes. Per file:
 
 - Filename + format-appropriate extension
 - File type → extension: PRG → `.prg`, SEQ → `.seq`, USR → `.usr`, REL → `.rel`
@@ -31,7 +31,7 @@ For multi-select, each file is downloaded individually (your browser typically a
 
 ## Export disk as base64 data URI
 
-**File → Export Disk → Show as Base64 Data URI** opens a modal with:
+**Disk → Export Disk → Show as Base64 Data URI** opens a modal with:
 
 ```
 data:application/octet-stream;base64,UEsDBAo...

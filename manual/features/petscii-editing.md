@@ -11,7 +11,7 @@ PETSCII has 256 byte values. The editor maps each to a Unicode Private Use Area 
 - **Uppercase mode**: PUA `$E000-$E0FF`
 - **Lowercase mode**: PUA `$E100-$E1FF`
 
-The C64 Pro Mono font has glyphs at those PUA positions. Switch modes via Ctrl+Shift or **Options → Switch to Uppercase / Lowercase**.
+The C64 Pro Mono font has glyphs at those PUA positions. Switch modes via Ctrl+Shift or **View → Switch to Uppercase / Lowercase**.
 
 ### Reversed bytes
 
@@ -70,7 +70,7 @@ Modals with plain `<input>` fields (Import dialog, Add Directory, Disk Label) fo
 ## Charset detection caveats
 
 - File names are stored as PETSCII; the editor doesn't try to detect "actually-ASCII" filenames. If your disk was created with mixed-case (e.g., a PC tool wrote `Filename.PRG`), the bytes are PETSCII `$46 $69 $6C ...` which in uppercase mode renders as `F` + lowercase-graphic + lowercase-graphic — garbled.
-- **Edit → Name Case → UPPERCASE** fixes this by converting `$61-$7A` (lowercase ASCII) bytes to `$41-$5A` (PETSCII A-Z).
+- **File → Name Case → UPPERCASE** fixes this by converting `$61-$7A` (lowercase ASCII) bytes to `$41-$5A` (PETSCII A-Z).
 
 ## PETSCII vs screen codes
 

@@ -4,7 +4,7 @@
 
 ## Sizes
 
-Variable, 4 MiB to 512 MiB on creation. The editor's **File → New → IDE64 HDD** writes a `cfsfdisk`-compatible byte layout (MBR + boot total-LBA count), so VICE's IDE64 auto-detect picks them up without the manual C/H/S dance.
+Variable, 4 MiB to 512 MiB on creation. The editor's **Disk → New → IDE64 HDD** writes a `cfsfdisk`-compatible byte layout (MBR + boot total-LBA count), so VICE's IDE64 auto-detect picks them up without the manual C/H/S dance.
 
 ## Structure
 

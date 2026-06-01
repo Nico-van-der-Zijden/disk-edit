@@ -4,7 +4,7 @@ Operations on the directory listing itself — rows, ordering, separators.
 
 ## Sort
 
-**Disk → Sort Directory ▸** offers four orderings, ascending or descending each:
+**Disk → Sort ▸** offers four orderings, ascending or descending each:
 
 | Sort | Effect |
 |---|---|
@@ -19,11 +19,11 @@ Sort writes the dir chain in the new order. Free sectors are unaffected — only
 
 ### Insert (blank entry)
 
-**Edit → Insert** adds a blank dir entry at the current cursor position. Subsequent entries shift down. The new entry has no filename, no data sectors — useful for visual spacing or as a placeholder before adding a file.
+**File → Insert File** adds a blank dir entry at the current cursor position. Subsequent entries shift down. The new entry has no filename, no data sectors — useful for visual spacing or as a placeholder before adding a file.
 
 ### Remove
 
-**Edit → Remove** deletes the directory entry **without** scratching the file. The data sectors stay (potentially orphaned); the row vanishes.
+**File → Remove Entry** deletes the directory entry **without** scratching the file. The data sectors stay (potentially orphaned); the row vanishes.
 
 This is different from **Scratch** which returns the data sectors to the BAM. Use Remove when you want to fix a directory layout without losing the underlying file data.
 
@@ -33,7 +33,7 @@ Reorder a row:
 
 - **Drag** the row to its new position
 - **Ctrl+↑** / **Ctrl+↓** to move the selected row one step
-- **Edit → Move Up / Down**
+- **File → Move Up / Down**
 
 Multi-select supports batch moves: select several rows, drag them as a group.
 
@@ -41,7 +41,7 @@ Multi-select supports batch moves: select several rows, drag them as a group.
 
 Separators are dir entries with type DEL and a recognisable pattern in the filename. They're used to visually segment a directory into sections (e.g., `--- DEMOS ---`, `=== UTILITIES ===`).
 
-The editor has a **separator library** — pre-defined separator patterns you can drop into any disk. Show the palette via **Disk → Show Separators…** (draggable floating window).
+The editor has a **separator library** — pre-defined separator patterns you can drop into any disk. Show the palette via **View → Show Separators** (draggable floating window).
 
 To insert: select a row, click a separator in the palette → it's inserted above the row.
 
@@ -57,7 +57,7 @@ See [File operations → Align name](file-operations.md#align-name).
 
 ## Add Directory
 
-Format-dependent:
+**File → Add Directory**. Format-dependent:
 
 | Format | What happens |
 |---|---|

@@ -4,9 +4,9 @@ Copy a file or directory in one disk and paste it into another — including acr
 
 ## File-level copy / paste
 
-Select one or more files in a directory → **Edit → Copy** (or Ctrl+C). The clipboard now holds those file entries (name + type + data + GEOS metadata if applicable).
+Select one or more files in a directory → **File → Copy** (or Ctrl+C). The clipboard now holds those file entries (name + type + data + GEOS metadata if applicable).
 
-Switch to another tab (different disk), navigate to where you want the files → **Edit → Paste** (or Ctrl+V). Each file is written to the destination dir with its original name, type, and content.
+Switch to another tab (different disk), navigate to where you want the files → **File → Paste** (or Ctrl+V). Each file is written to the destination dir with its original name, type, and content.
 
 If the destination has matching names, you get a **Cancel / Rename / Overwrite** prompt:
 
@@ -34,7 +34,7 @@ LNK and GEOS VLIR are captured into the clipboard but skipped on paste. You get 
 
 ## Directory-level copy / paste
 
-Select a **DIR** entry (sub-directory / sub-partition) → **Edit → Copy**. The whole tree — files + nested sub-directories — gets captured.
+Select a **DIR** entry (sub-directory / sub-partition) → **File → Copy**. The whole tree — files + nested sub-directories — gets captured.
 
 Paste into:
 

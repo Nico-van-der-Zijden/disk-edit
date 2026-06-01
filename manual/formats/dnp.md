@@ -29,7 +29,7 @@ Full read/write. The viewer renders the BAM in a single concentric strip (a DNP 
 
 ### Sub-directories
 
-DNP supports **real sub-directories** (linked, not partition-style like D81). Add via **Disk → Add Directory** — creates a header sector + a first dir sector, both allocated from the BAM, plus a directory entry of type `$06` (DIR) in the current dir pointing at the new header.
+DNP supports **real sub-directories** (linked, not partition-style like D81). Add via **File → Add Directory** — creates a header sector + a first dir sector, both allocated from the BAM, plus a directory entry of type `$06` (DIR) in the current dir pointing at the new header.
 
 Each sub-directory has its own dir chain. You can navigate in/out via double-click and the "..\\" row at the top.
 
@@ -41,7 +41,7 @@ CMD Native uses a 32-byte BAM per track. The first 8 bytes of the directory trac
 
 ### Resize
 
-**Disk → Resize Image** grows or shrinks a DNP. Growing always succeeds (appends empty tracks); shrinking only succeeds if every sector above the new track count is already free. The editor will tell you which files are in the way otherwise — typically the fix is to run **Disk → Optimize Disk** to pack files toward the start, then resize.
+**Disk → Disk Tools → Resize Image** grows or shrinks a DNP. Growing always succeeds (appends empty tracks); shrinking only succeeds if every sector above the new track count is already free. The editor will tell you which files are in the way otherwise — typically the fix is to run **Disk → Disk Tools → Optimize Disk** to pack files toward the start, then resize.
 
 **Note:** Resize is *disabled* when the DNP lives inside a CMD container (DHD, RAMLink, FD) — the container slot has a fixed allocation and the surrounding header bytes encode the size. Resize from the container's partition list instead.
 
@@ -51,4 +51,4 @@ A DNP inside DHD / RAMLink / FD-container is technically the same file format, b
 
 ## Saving
 
-**File → Save** writes the natural size (tracks × 65,536).
+**Disk → Save** writes the natural size (tracks × 65,536).

@@ -67,7 +67,7 @@ The editor reads every Commodore disk format in widespread use. Most are full re
 
 ## UI reference
 
-- [Menus](ui/menus.md) — every File / Disk / Edit / View / Options / Help item
+- [Menus](ui/menus.md) — every Disk / File / Edit / Search / View / Options / Help item
 - [Keyboard shortcuts](ui/keyboard-shortcuts.md) — every shortcut, grouped by context
 - [Toolbar](ui/toolbar.md) — single-click access to common actions
 - [Modals and dialogs](ui/dialogs.md) — reference for every dialog the editor shows

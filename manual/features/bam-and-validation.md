@@ -4,7 +4,7 @@ The Block Allocation Map (BAM) tracks which sectors are in use on a disk. The ed
 
 ## View BAM
 
-**Disk → View BAM** opens the heat map. Each disk format has its own layout:
+**View → View BAM** opens the heat map. Each disk format has its own layout:
 
 ### CBM-DOS (D64 / D71 / D81 / D80 / D82)
 
@@ -53,7 +53,7 @@ Below the heat map, a table lists each track with its free-block count and the s
 
 ## Validate
 
-**Disk → Validate** rebuilds the BAM from the directory chain + every file's sector chain. Equivalent to `V0:` on a real C64.
+**Disk → Disk Tools → Validate** rebuilds the BAM from the directory chain + every file's sector chain. Equivalent to `V0:` on a real C64.
 
 Validate performs these passes:
 
@@ -67,15 +67,17 @@ Validate performs these passes:
 
 Validate produces a log modal:
 
-- 🟢 No errors → "Disk is valid. No changes."
-- 🟡 Cleaned up splat files / recalculated BAM → "Validation complete. N changes."
-- 🔴 Real corruption (cross-links, broken chains) → "Validation complete with errors." Each error names the affected file.
+- No errors → "Disk is valid. No errors found."
+- Cleaned up splat files / recalculated BAM → "Validation complete." Each line above the summary names what was fixed.
+- Real corruption (cross-links, broken chains) → "Validation complete with errors." Each error names the affected file.
 
 Splat removal and BAM rebuild mark the tab dirty (you need to **Save** to commit). Errors are *reports* — Validate doesn't try to repair corruption beyond the splat removal.
 
 ## Scan for Lost Files
 
-**Disk → Disk Tools → Scan for Lost Files ▸**
+**Disk → Disk Tools → Scan for Lost Files**
+
+Picks Quick or Deep through an in-modal prompt rather than a submenu split.
 
 When you scratch a file, the dir entry's "closed" bit clears but the data sectors stay. As long as nothing has been written to the disk since, the file content is recoverable.
 
@@ -105,7 +107,7 @@ The status footer shows a coloured dot:
 - 🔴 **Red** — real corruption (cross-links, broken chain)
 - ⚪ **Grey** — not yet computed
 
-Hover for a one-line summary; **Disk → Validate** for the full report.
+Hover for a one-line summary; **Disk → Disk Tools → Validate** for the full report.
 
 ## Disk Map (.hdd only)
 

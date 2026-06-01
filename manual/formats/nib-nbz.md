@@ -15,7 +15,7 @@ The editor **reads** NIB and NBZ files by:
 2. Converting the NIB to G64 in memory using nibtools' standard alignment logic.
 3. From there, treating it like a normal G64 — directory listing, file viewing, validate, etc.
 
-**Saving** produces a real `.g64`. The editor doesn't write NIB or NBZ — they're considered an archival input format only. If you opened a `.nib` and want to keep editing it, **File → Save As** writes a `.g64` and the filename gets the new extension.
+**Saving** produces a real `.g64`. The editor doesn't write NIB or NBZ — they're considered an archival input format only. If you opened a `.nib` and want to keep editing it, **Disk → Save As...** writes a `.g64` and the filename gets the new extension.
 
 ## When to use NIB / NBZ
 

@@ -1,12 +1,14 @@
 # Options menu reference
 
-Every persisted setting in the editor. Settings are stored in your browser's localStorage and apply across tabs. **File → Export Settings** dumps them to JSON; **File → Import Settings** restores.
+Every persisted setting in the editor. Settings are stored in your browser's localStorage and apply across tabs. **Options → Export Settings** dumps them to JSON; **Options → Import Settings / Separators** restores.
+
+Note: a few display-related items below (Switch to Uppercase / Lowercase, Show Addresses) live under the **View** menu, not Options — they're listed here because they're persisted across sessions like other settings.
 
 ## Charset display
 
 ### Switch to Uppercase / Lowercase
 
-Toggles which PETSCII charset the directory listing + viewers render in.
+(In the **View** menu.) Toggles which PETSCII charset the directory listing + viewers render in.
 
 - **Uppercase** (C64 default boot mode) — letters appear as `A-Z`; the C= positions show graphic glyphs.
 - **Lowercase** — letters appear as `a-z`; the C= positions show uppercase `A-Z`.
@@ -34,9 +36,9 @@ Switching schemes recolours every open hex modal instantly.
 
 The toolbar under the menubar. On by default; off on phones (toggle to enable on mobile).
 
-### Show Address
+### Show Addresses
 
-When you hover a directory entry / cell, show its byte / track-sector position in the footer. Useful for low-level debugging.
+(In the **View** menu.) When you hover a directory entry / cell, show its byte / track-sector position in the footer. Useful for low-level debugging.
 
 ### Partition Sizes in MiB
 
@@ -48,7 +50,7 @@ Default **on**. Partition lists in CMD-container / IDE64 views show sizes as `51
 
 When you start a rename, jump straight to the floating chart window instead of the compact keyboard. Off by default (compact keyboard first, ALL button opens the chart).
 
-### Stick PETSCII picker
+### Stick Keyboard to Edit Field
 
 Picker stays anchored to the editor when you scroll a modal. Off by default — picker can drift when scrolling but doesn't cover text.
 

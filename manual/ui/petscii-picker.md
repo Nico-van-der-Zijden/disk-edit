@@ -68,7 +68,7 @@ The C64 screen-code chart, Filename-Builder style:
 
 Bottom 8 rows are the reversed mirror of the top 8 — same characters with inverted colors (achieved via the reversed PETSCII byte where one exists, or visual styling where it doesn't).
 
-The chart follows the current global charset mode — flip via Ctrl+Shift or Options menu and the chart re-renders in the other charset.
+The chart follows the current global charset mode — flip via Ctrl+Shift or **View → Switch to Uppercase / Lowercase** and the chart re-renders in the other charset.
 
 ### Tab choice persists
 
@@ -84,7 +84,7 @@ When you click a cell:
 
 ## Sticky-in-modal mode
 
-If you turn on **Options → Stick PETSCII picker**, the picker stays anchored to the editor even when you scroll the modal. Off by default to avoid covering text.
+If you turn on **Options → Stick Keyboard to Edit Field**, the picker stays anchored to the editor even when you scroll the modal. Off by default to avoid covering text.
 
 ## Keyboard shortcuts inside the rename editor
 

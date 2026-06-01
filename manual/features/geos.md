@@ -52,7 +52,7 @@ Every GEOS file has a 256-byte INFO block at the location stored in dir-entry by
 - **Author 2** at +`$8D-$AC` — optional, longer author field (rev 1.4 addition)
 - **Created-by app** at +`$AD-$DC` — optional, the app that wrote the file (rev 1.4 addition)
 
-**View → As GEOS** renders all of this. The icon shows as a 24×21 pixel image; the description and class strings are decoded from PETSCII.
+**File → View As ▸ GEOS** renders all of this. The icon shows as a 24×21 pixel image; the description and class strings are decoded from PETSCII.
 
 ## VLIR files
 
@@ -65,11 +65,11 @@ A VLIR file has:
 - Index sector: 254 bytes of (T/S, sector count) pairs — one per record. Up to 127 records.
 - Per record: a sector chain holding that record's data
 
-**View → As VLIR** opens the record index. Empty records (`T=0, S=0`) show as "—empty—".
+**File → View As ▸ VLIR** opens the record index. Empty records (`T=0, S=0`) show as "—empty—".
 
 ## CVT round-trip
 
-[CVT (GEOS ConVerT)](../formats/cvt.md) is the standard way to move a GEOS file between disks. Right-click → **Export as CVT** produces a CVT with INFO + records. Drag-drop or **File → Import** brings a CVT back in.
+[CVT (GEOS ConVerT)](../formats/cvt.md) is the standard way to move a GEOS file between disks. Right-click → **Export as CVT** produces a CVT with INFO + records. Drag-drop or **File → Import File** brings a CVT back in.
 
 The 16-byte filename in bytes `$03-$12` of the CVT is the GEOS file's original name. The OS file name on the `.cvt` container is ignored on import.
 
