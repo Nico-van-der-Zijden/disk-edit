@@ -302,6 +302,13 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.15', title: 'Copy directory art (DEL entries), G64 read fix', items: [
+      'DEL entries used for directory art now copy and paste like regular files. Name, lock and block count (often deliberately set to a year or version number) come through exactly as on the source disk',
+      'Works across formats: art entries copy from a D64 into an .hdd (shown there as separators) and back',
+      'A few demo loaders hide real data behind a DEL entry. If a copy looks like one of those, you\'re asked once whether to bring the data along — otherwise the entry copies on its own without dragging in unrelated sectors',
+      'G64: tolerate sectors that skip the two trailing padding bytes some custom-encoded disks (e.g. Creatures by Thalamus) write — they now load cleanly',
+      'G64: half-tracks and high copy-protection tracks (V-MAX / Vorpal / hidden tracks past 35) are now preserved on save. Loading a protected disk, editing a file, and saving keeps the protection intact — no more silent damage to disks like Creatures',
+    ]},
     { ver: '1.4.14', title: 'Ctrl+Alt+E and Ctrl+Shift+D extended to partition lists', items: [
       'Ctrl+Alt+E now also exports the selected partition when you\'re on a CMD container partition list (DHD / RAMLink / FD)',
       'Ctrl+Shift+D now also creates a new partition on partition list views, matching its Add-Directory role on a regular directory',

@@ -76,6 +76,34 @@ For files only (not whole directories), you can drag a row out of one tab onto a
 
 Paste is undoable via Ctrl+Z. The undo restores the full pre-paste state of the destination disk in one step.
 
+## Directory-art (closed DEL) entries
+
+Closed-DEL dir entries — the ones used to draw graphics into the directory listing — are first-class clipboard content. Select them like any other file and Ctrl+C / Ctrl+V.
+
+What's preserved:
+
+- The 16-byte name (PETSCII bytes verbatim, including reversed-bit glyphs)
+- The closed bit and the lock bit (so a `< ` -suffixed entry stays `< ` on paste)
+- The block-count field — verbatim. Some productions deliberately set this to the year, a version number, or anything that reads nicely in a `LOAD"$",8` listing; we keep your value, not a chain-derived one
+
+Cross-family: CBM-DOS art-DEL pastes into an IDE64 .hdd partition as a CFS separator (the equivalent feature inside `cbm-format-ide64.js`), and CFS separators paste into CBM-DOS disks as closed-DEL entries.
+
+### The rare "DEL with a real chain" case
+
+A few demo loaders stash actual loadable bytes behind a DEL-typed dir entry. The copy step detects this when:
+
+- block count > 0
+- T/S is in range, not the dir track, not 0/0
+- The chain walks cleanly (visited-set + length cap)
+- Walked length is within ±2 of the source's block count
+- The chain doesn't overlap any live file's sectors
+
+If all of those pass, you get a one-shot prompt — **Yes / No / Yes to all / No to all** — asking whether to bring the payload along. Bare entry every other time. We never blindly follow a track/sector that might point into the directory, into another file's chain, or just garbage.
+
+Pasting into CFS drops the payload (CFS has no DEL-with-payload convention) and logs the skip. The bare separator still gets written.
+
+Conflict prompts skip DEL entries — dir art duplicates name bytes by design.
+
 ## Limitations
 
 - **GEOS VLIR write** isn't implemented yet — VLIR files (geoWrite docs, fonts) round-trip via CVT (export to .cvt, import to other disk).

@@ -167,6 +167,156 @@ document.getElementById('opt-export-cvt').addEventListener('click', function(e) 
 });
 
 
+// ── DEL-art detection helpers ──────────────────────────────────────────
+// Closed-DEL dir entries are usually directory art — graphic name bytes,
+// block count often deliberately set to a number with no relation to a
+// real chain (e.g. the year the production was made), T/S pointing at
+// the dir track or some other "looks nice" value that isn't a real file
+// start. A rare alternative is the "DEL with hidden payload" trick: a
+// closed-DEL whose T/S really does start a chain of loadable bytes.
+//
+// _tryWalkDelPayload walks the candidate chain with strict sanity guards
+// and returns the data only if every check passes — including a tight
+// length match to the source block count and the constraint that the
+// chain doesn't pass through the dir track. Callers should additionally
+// check that the chain sectors don't overlap any other live file's
+// chain (via _collectLiveFileSectorOwners).
+function _tryWalkDelPayload(buffer, ctx, startT, startS, expectedBlocks) {
+  if (startT === 0 || expectedBlocks <= 0) return null;
+  var dirCtx = getDirContext(ctx);
+  if (startT === dirCtx.dirTrack) return null;
+  if (startT < 1 || startT > ctx.tracks) return null;
+  var disk = new Uint8Array(buffer);
+  var visited = {};
+  var sectors = [];
+  var bytes = [];
+  var blocks = 0;
+  var cap = expectedBlocks + 4;
+  var t = startT, s = startS;
+  while (t !== 0) {
+    if (blocks > cap) return null;
+    if (t < 1 || t > ctx.tracks) return null;
+    if (t === dirCtx.dirTrack) return null;
+    var spt = ctx.format.sectorsPerTrack(t);
+    if (s < 0 || s >= spt) return null;
+    var key = t * 256 + s;
+    if (visited[key]) return null;
+    visited[key] = true;
+    sectors.push(key);
+    var off = sectorOffset(t, s, ctx);
+    if (off < 0) return null;
+    var nextT = disk[off];
+    var nextS = disk[off + 1];
+    if (nextT === 0) {
+      var lastIdx = nextS;
+      for (var i = 2; i <= lastIdx && i < 256; i++) bytes.push(disk[off + i]);
+    } else {
+      for (var j = 2; j < 256; j++) bytes.push(disk[off + j]);
+    }
+    blocks++;
+    t = nextT;
+    s = nextS;
+  }
+  if (Math.abs(blocks - expectedBlocks) > 2) return null;
+  return { data: new Uint8Array(bytes), blocks: blocks, sectors: sectors };
+}
+
+// Map every sector owned by a closed regular file (typeIdx 1-4) in the
+// current directory to "true". Used to make sure a DEL-payload chain we
+// just walked doesn't trespass on a real file's storage — that'd mean we
+// were just following someone else's chain and would duplicate the data
+// (and risk corrupting the source on paste).
+function _collectLiveFileSectorOwners(buffer, ctx, excludeEntryOff) {
+  var data = new Uint8Array(buffer);
+  var slots = getDirSlotOffsets(buffer);
+  var owned = {};
+  for (var si = 0; si < slots.length; si++) {
+    var eo = slots[si];
+    if (eo === excludeEntryOff) continue;
+    var tb = data[eo + 2];
+    if ((tb & 0x80) === 0) continue;
+    var ti = tb & 0x07;
+    if (ti < 1 || ti > 4) continue;
+    var t = data[eo + 3], s = data[eo + 4];
+    if (t === 0) continue;
+    var visited = {};
+    var hops = 0;
+    while (t !== 0 && hops < 65536) {
+      var key = t * 256 + s;
+      if (visited[key]) break;
+      visited[key] = true;
+      owned[key] = true;
+      var off = sectorOffset(t, s, ctx);
+      if (off < 0) break;
+      t = data[off]; s = data[off + 1];
+      hops++;
+    }
+  }
+  return owned;
+}
+
+
+// Paste an art-DEL clipboard item into a CBM-DOS destination. Bare path
+// (no payload): allocate a dir slot via insertFileEntry, patch the bytes
+// to match the source (typeByte preserves Closed + Lock, T/S=0/0, block
+// count from source — could be 0, the year, anything). Payload path:
+// writeFileToDisk allocates the chain, then we override the type byte
+// (to preserve the lock bit writeFileToDisk doesn't carry) and the
+// block-count field (source's value, which may not match the chain
+// length).
+function _pasteArtDelToCbmDos(item) {
+  if (!item.payload) {
+    var off = insertFileEntry();
+    if (off < 0) return false;
+    var d = new Uint8Array(currentBuffer);
+    d[off + 2] = item.typeByte;
+    d[off + 3] = 0;
+    d[off + 4] = 0;
+    for (var bn = 0; bn < 16; bn++) d[off + 5 + bn] = item.nameBytes[bn];
+    for (var bg = 0; bg < 9; bg++) d[off + 21 + bg] = item.geosBytes[bg];
+    d[off + 30] = item.blockCount & 0xFF;
+    d[off + 31] = (item.blockCount >> 8) & 0xFF;
+    return true;
+  }
+  // Payload path. Snapshot the existing dir slot offsets so we can find
+  // the entry writeFileToDisk just added (it doesn't return an offset).
+  var beforeSlots = getDirSlotOffsets(currentBuffer);
+  var snap = new Uint8Array(currentBuffer);
+  var beforeFingerprints = {};
+  for (var bsi = 0; bsi < beforeSlots.length; bsi++) {
+    var bo = beforeSlots[bsi];
+    beforeFingerprints[bo] = snap[bo + 2];
+  }
+  if (!writeFileToDisk(0, item.nameBytes, item.payload, null, true, getCurrentCtx())) return false;
+  var afterSlots = getDirSlotOffsets(currentBuffer);
+  var nowData = new Uint8Array(currentBuffer);
+  for (var asi = 0; asi < afterSlots.length; asi++) {
+    var ao = afterSlots[asi];
+    // Newly written entry: either a slot that didn't exist before, or
+    // a slot whose type byte just flipped from 0 (empty) to non-zero.
+    var wasFingerprint = beforeFingerprints[ao];
+    if (wasFingerprint !== undefined && wasFingerprint !== 0) continue;
+    if (nowData[ao + 2] === 0) continue;
+    // Confirm by nameBytes match — guards against picking up an
+    // unrelated concurrent write.
+    var match = true;
+    for (var nm = 0; nm < 16; nm++) {
+      if (nowData[ao + 5 + nm] !== item.nameBytes[nm]) { match = false; break; }
+    }
+    if (!match) continue;
+    nowData[ao + 2] = item.typeByte;   // restore Lock bit; writeFileToDisk only set 0x80|typeIdx
+    nowData[ao + 30] = item.blockCount & 0xFF;
+    nowData[ao + 31] = (item.blockCount >> 8) & 0xFF;
+    for (var gb = 0; gb < 9; gb++) nowData[ao + 21 + gb] = item.geosBytes[gb];
+    return true;
+  }
+  // Fallback — entry was written but we couldn't locate it to patch.
+  // Disk is still consistent (just block count derived from chain length
+  // and lock bit cleared), so report success.
+  return true;
+}
+
+
 // ── File menu: Copy / Paste ──────────────────────────────────────────
 document.getElementById('opt-copy').addEventListener('click', async (e) => {
   e.stopPropagation();
@@ -215,6 +365,26 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
           nameBytes: dirNameBytes,
           tree: dirColl.tree,
           skippedLnks: dirColl.skippedLnks,
+        });
+        continue;
+      }
+      // Separator entries: CFS-side directory art (cfsInsertSeparator).
+      // Closed-DEL with no real data — capture as a 'cbm-del' clipboard
+      // entry so cross-family pastes (CFS → CBM-DOS) and CFS → CFS both
+      // work. Scratched DEL (closed bit clear) keeps falling through to
+      // the skip path below.
+      if (ce.ftype === CFS_FTYPE.DEL && ce.closed) {
+        var sepDisk = new Uint8Array(hddBuffer);
+        var sepNameBytes = new Uint8Array(16);
+        var sepSrcOff = ce.dirLba * 512 + ce.index * 32;
+        for (var spi = 0; spi < 16; spi++) sepNameBytes[spi] = sepDisk[sepSrcOff + spi];
+        clipboard.push({
+          kind: 'cbm-del',
+          typeByte: 0x80,     // CBM-DOS-equivalent: closed DEL, no lock (CFS has no source lock to carry)
+          nameBytes: sepNameBytes,
+          blockCount: 0,
+          geosBytes: new Uint8Array(9),
+          payload: null
         });
         continue;
       }
@@ -269,6 +439,10 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
 
   var total = entries.length;
   var skipped = [];
+  // 'ask' | 'yes' | 'no' — for the rare DEL-with-real-payload case, the
+  // user gets a single Yes/No/Yes-all/No-all prompt; their answer applies
+  // to the rest of this copy.
+  var delPayloadDecision = 'ask';
 
   var progress = total > 1 ? showProgressModal('Copying Files') : null;
 
@@ -340,6 +514,55 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
           nameBytes: nameBytes,
           tree: coll.tree,
           skippedLnks: [],
+        });
+        continue;
+      }
+      // Closed-DEL = directory art (or, rarely, a DEL with a real chain
+      // behind it). Capture the dir-entry bytes; only follow the chain if
+      // the detection helpers think it's a real payload AND the user
+      // confirms.
+      if (typeIdx === 0 && (typeByte & 0x80) !== 0) {
+        var delBlockCount = data[entOff + 0x1E] | (data[entOff + 0x1F] << 8);
+        var delGeos = new Uint8Array(9);
+        for (var dg = 0; dg < 9; dg++) delGeos[dg] = data[entOff + 21 + dg];
+        var delPayload = null;
+        if (delBlockCount > 0) {
+          var startT = data[entOff + 3], startS = data[entOff + 4];
+          var walked = _tryWalkDelPayload(currentBuffer, getCurrentCtx(), startT, startS, delBlockCount);
+          if (walked) {
+            var owners = _collectLiveFileSectorOwners(currentBuffer, getCurrentCtx(), entOff);
+            var overlap = false;
+            for (var wi = 0; wi < walked.sectors.length; wi++) {
+              if (owners[walked.sectors[wi]]) { overlap = true; break; }
+            }
+            if (!overlap) {
+              var decision = delPayloadDecision;
+              if (decision === 'ask') {
+                var choice = await showChoiceModal(
+                  'Copy DEL payload?',
+                  '"' + fileName + '" is a closed DEL entry but its track/sector points at what looks like a real ' + walked.blocks + '-block file. Copy the chain too?',
+                  [
+                    { label: 'No to all', value: 'no-all', secondary: true },
+                    { label: 'No', value: 'no', secondary: true },
+                    { label: 'Yes', value: 'yes' },
+                    { label: 'Yes to all', value: 'yes-all' }
+                  ]
+                );
+                if (choice === 'yes-all') { delPayloadDecision = 'yes'; decision = 'yes'; }
+                else if (choice === 'no-all') { delPayloadDecision = 'no'; decision = 'no'; }
+                else decision = choice || 'no';
+              }
+              if (decision === 'yes') delPayload = walked.data;
+            }
+          }
+        }
+        clipboard.push({
+          kind: 'cbm-del',
+          typeByte: typeByte,   // preserves Closed (0x80) + Lock (0x40)
+          nameBytes: nameBytes,
+          blockCount: delBlockCount,
+          geosBytes: delGeos,
+          payload: delPayload
         });
         continue;
       }
@@ -519,6 +742,20 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     var cSkipped = [];
     for (var pi2 = 0; pi2 < cTotal; pi2++) {
       var item = clipboard[pi2];
+      // Closed-DEL clipboard entry (directory art) — route through the
+      // existing CFS separator insert. Block count + lock bit don't
+      // translate; payload, if captured on the source side, is dropped.
+      if (item.kind === 'cbm-del') {
+        if (cProgress) await cProgress.update(pi2, cTotal, '<separator>');
+        var sepRes = cfsInsertSeparator(hddBuffer, cfsDirLba, item.nameBytes);
+        if (sepRes.ok) {
+          cPasted++;
+          if (item.payload) cSkipped.push('separator: payload dropped (CFS has no DEL-with-data convention)');
+        } else {
+          cSkipped.push('separator: ' + (sepRes.error || 'unknown'));
+        }
+        continue;
+      }
       if (!item.data || item.vlirRecords) {
         cSkipped.push((item.cfsTypeSuffix || cfsTypeIdxToSuffix[item.typeIdx] || '?') + ': cannot paste VLIR / empty');
         continue;
@@ -756,6 +993,15 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
     var fileName = petsciiToReadable(readPetsciiString(item.nameBytes, 0, 16)).trim() || '?';
 
     await progress.update(pi, total, fileName);
+
+    // Closed-DEL clipboard entry (directory art). Bare or payload — the
+    // helper handles both, and preserves typeByte (Closed + Lock) +
+    // block count from the source verbatim.
+    if (item.kind === 'cbm-del') {
+      if (_pasteArtDelToCbmDos(item)) pasted++;
+      else { skipped.push({ name: fileName, reason: 'No directory space' }); break; }
+      continue;
+    }
 
     var success;
     if (item.vlirRecords) {

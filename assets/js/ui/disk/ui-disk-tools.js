@@ -963,7 +963,13 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
   closeMenus();
   if (!currentG64Layout) return;
 
-  var layout = currentG64Layout;
+  // Half-tracks are preserved in currentG64Layout for save round-trip
+  // but don't belong in the per-track D64 layout view (they carry
+  // copy-protection bytes with no D64 sector mapping). Surface them
+  // only as a count in the headline.
+  var fullLayout = currentG64Layout;
+  var layout = fullLayout.filter(function(t) { return !t.halfTrack; });
+  var halfTrackCount = fullLayout.length - layout.length;
   var fmt = currentFormat || DISK_FORMATS.d64;
 
   // Per-track physical interleave: distance between the first two
@@ -1050,6 +1056,7 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
   if (byKind.scrambled)  chipsHtml += '<span class="g64-tag g64-tag-scrambled">' + byKind.scrambled + ' scrambled</span>';
   if (byKind.irregular)  chipsHtml += '<span class="g64-tag g64-tag-scrambled">' + byKind.irregular + ' irregular</span>';
   if (byKind.empty)      chipsHtml += '<span class="g64-tag g64-tag-empty">' + byKind.empty + ' empty</span>';
+  if (halfTrackCount)    chipsHtml += '<span class="g64-tag g64-tag-protected">' + halfTrackCount + ' half-track' + (halfTrackCount === 1 ? '' : 's') + '</span>';
   chipsHtml += '</span>';
 
   // Sector cell layout. We size to the widest track (track 1, 21 sectors
