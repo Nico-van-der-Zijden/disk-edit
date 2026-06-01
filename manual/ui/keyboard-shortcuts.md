@@ -24,9 +24,10 @@ Grouped by what you'd be doing when you'd reach for the shortcut. **Ctrl** here 
 | **Ctrl+V** | Paste clipboard contents |
 | **Ctrl+A** | Select all entries |
 | **Delete** | Scratch selected file(s) |
-| **Enter** | Start renaming the selected entry |
+| **Enter** / **F2** | Start renaming the selected entry |
 | **Escape** | Cancel an active rename / close a modal |
 | **Ctrl+Shift+I** | Insert file |
+| **Ctrl+Alt+E** | Export selected file(s) |
 | **Ctrl+Shift+D** | Add directory (D81 / DNP / IDE64 / DHD / RAMLink) |
 | **Ctrl+Shift+H** | Edit disk name |
 | **Ctrl+Alt+I** | Edit disk ID |
@@ -44,6 +45,7 @@ Grouped by what you'd be doing when you'd reach for the shortcut. **Ctrl** here 
 | Shortcut | Action |
 |---|---|
 | **↑ / ↓** | Move selection up / down |
+| **Shift+↑ / Shift+↓** | Extend selection |
 | **Ctrl+↑ / Ctrl+↓** | Move selected entry up / down within the directory |
 | **Click** | Select |
 | **Ctrl+Click** | Toggle selection (multi-select) |

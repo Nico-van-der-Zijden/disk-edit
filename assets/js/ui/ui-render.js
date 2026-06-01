@@ -541,6 +541,10 @@ function bindDirSelection() {
       }
       cancelActiveEdits();
       var offset = parseInt(el.dataset.offset, 10);
+      // Click resets the Shift+Arrow extend-selection anchor — the next
+      // Shift+Arrow should anchor at whatever we're clicking now, not at
+      // some stale position from before.
+      if (typeof shiftSelectAnchor !== 'undefined') shiftSelectAnchor = -1;
 
       if (e.ctrlKey) {
         // Ctrl+click: toggle this entry in multi-select

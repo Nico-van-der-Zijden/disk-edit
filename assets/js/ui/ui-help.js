@@ -302,6 +302,11 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.13', title: 'Selection shortcuts work on every view', items: [
+      'F2 starts inline rename on the selected entry — the Windows Explorer / VS Code muscle-memory key. Enter still works too',
+      'Arrow keys, Shift+Arrow, Ctrl+A, Ctrl+click, Shift+click and Delete now behave the same on every list — CBM-DOS directories, the dir view inside an IDE64 partition, CMD container partition lists, and .hdd partition lists',
+      'Delete on a partition list deletes every selected partition with a single confirm dialog. SYSTEM is excluded from CMD-container batches automatically',
+    ]},
     { ver: '1.4.11', title: 'Redo', items: [
       'Edit → Redo (Ctrl+Y or Ctrl+Shift+Z) reapplies an undone action. Same 20-step history as Undo; making a new edit drops the redo trail',
     ]},

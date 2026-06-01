@@ -1,6 +1,53 @@
 // ── Context menu on directory entries ─────────────────────────────────
 var contextMenu = document.getElementById('context-menu');
 
+// Offset of the row the user was on when Shift+Arrow started extending
+// the selection. Stays put across consecutive Shift+Arrow presses so the
+// range can grow or shrink relative to that anchor; resets on plain
+// Arrow / click / Escape.
+var shiftSelectAnchor = -1;
+// Anchor *element* for the partition-list views (CMD container + .hdd).
+// These views don't use selectedEntryIndex — selection is class-only —
+// so the anchor is tracked by DOM reference instead of by id.
+var shiftSelectAnchorRow = null;
+
+// Arrow-key handler shared by the CMD container partition list and the
+// .hdd partition list. Both use class-only selection (no
+// selectedEntryIndex). Shift+Arrow extends a range from the anchor;
+// plain Arrow replaces the selection.
+function _arrowOnPartitionList(rowsNodeList, dir, isShift) {
+  const rows = Array.prototype.slice.call(rowsNodeList);
+  if (rows.length === 0) return;
+  // Current cursor row: last (in DOM order, in the direction of travel)
+  // currently-selected row, so consecutive Shift+Arrow presses advance
+  // monotonically through the list.
+  const selRows = rows.filter(r => r.classList.contains('selected'));
+  let curRow = null;
+  if (selRows.length > 0) {
+    curRow = dir === 1 ? selRows[selRows.length - 1] : selRows[0];
+  }
+  const curIdx = curRow ? rows.indexOf(curRow) : -1;
+  let newIdx;
+  if (curIdx < 0) newIdx = dir === 1 ? 0 : rows.length - 1;
+  else newIdx = Math.max(0, Math.min(rows.length - 1, curIdx + dir));
+  if (isShift) {
+    if (!shiftSelectAnchorRow || rows.indexOf(shiftSelectAnchorRow) < 0) {
+      shiftSelectAnchorRow = curRow || rows[newIdx];
+    }
+    const anchorIdx = rows.indexOf(shiftSelectAnchorRow);
+    const lo = Math.min(anchorIdx, newIdx);
+    const hi = Math.max(anchorIdx, newIdx);
+    rows.forEach(r => r.classList.remove('selected'));
+    for (let i = lo; i <= hi; i++) rows[i].classList.add('selected');
+  } else {
+    shiftSelectAnchorRow = null;
+    rows.forEach(r => r.classList.remove('selected'));
+    rows[newIdx].classList.add('selected');
+  }
+  rows[newIdx].scrollIntoView({ block: 'nearest' });
+  updateEntryMenuState();
+}
+
 function closeContextMenu() {
   contextMenu.style.display = 'none';
   contextMenu.innerHTML = '';
@@ -328,7 +375,7 @@ document.addEventListener('keydown', (e) => {
   // Enter on the CMD container partition list — start rename on the
   // selected partition, mirroring how Enter renames a selected D81 subdir
   // entry. Double-click is what opens the partition (matching subdir UX).
-  if (e.key === 'Enter' && isCmdContainerListView()) {
+  if ((e.key === 'Enter' || e.key === 'F2') && isCmdContainerListView()) {
     var cSelRow = document.querySelector('.dir-entry.selected[data-cmdc-part]');
     if (cSelRow) {
       e.preventDefault();
@@ -339,10 +386,23 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // Enter: edit selected filename (CFS branch uses the CFS-aware
+  // Enter / F2 on the .hdd partition list — rename the selected partition.
+  // selectedEntryIndex isn't used in this view, so check the row directly.
+  if ((e.key === 'Enter' || e.key === 'F2') &&
+      typeof isIde64ContainerView === 'function' && isIde64ContainerView() &&
+      cfsPartitionIdx < 0 && !isCmdContainerListView()) {
+    var hSelRow = document.querySelector('.dir-entry.selected[data-hdd-part]');
+    if (hSelRow) {
+      e.preventDefault();
+      if (typeof startInlineRenameHddPartition === 'function') startInlineRenameHddPartition(hSelRow);
+      return;
+    }
+  }
+
+  // Enter / F2: edit selected filename (CFS branch uses the CFS-aware
   // inline rename helper since startRenameEntry reads data-offset which
   // CFS rows don't have).
-  if (e.key === 'Enter' && selectedEntryIndex >= 0) {
+  if ((e.key === 'Enter' || e.key === 'F2') && selectedEntryIndex >= 0) {
     e.preventDefault();
     const selected = document.querySelector('.dir-entry.selected');
     if (!selected) return;
@@ -362,6 +422,26 @@ document.addEventListener('keydown', (e) => {
     if (cDel) {
       e.preventDefault();
       deleteCmdContainerPartition();
+      return;
+    }
+  }
+
+  // Delete on the .hdd partition list — same routing as CMD list, but
+  // through the IDE64 soft-delete path. Multi-select aware.
+  if (e.key === 'Delete' &&
+      typeof isIde64ContainerView === 'function' && isIde64ContainerView() &&
+      cfsPartitionIdx < 0 && !isCmdContainerListView()) {
+    var hDelRows = document.querySelectorAll('.dir-entry.selected[data-hdd-part]');
+    if (hDelRows.length > 0) {
+      e.preventDefault();
+      var hDelIdxs = [];
+      hDelRows.forEach(function(el) {
+        var n = parseInt(el.dataset.hddPart, 10);
+        if (!isNaN(n)) hDelIdxs.push(n);
+      });
+      if (hDelIdxs.length > 0 && typeof confirmHddPartitionDelete === 'function') {
+        confirmHddPartitionDelete(hDelIdxs);
+      }
       return;
     }
   }
@@ -471,10 +551,25 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl+A: select all files. CFS rows carry data-cfs-entry (slot
-  // indices in cfsDirEntries) instead of data-offset; select via that.
+  // Ctrl+A: select all files / partitions. Each view has its own row
+  // attribute (data-offset for CBM-DOS, data-cfs-entry for CFS,
+  // data-cmdc-part for CMD container, data-hdd-part for .hdd).
   if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'a' && currentBuffer) {
     e.preventDefault();
+    if (isCmdContainerListView()) {
+      document.querySelectorAll('.dir-entry[data-cmdc-part]').forEach(function(el) {
+        el.classList.add('selected');
+      });
+      updateEntryMenuState();
+      return;
+    }
+    if (typeof isIde64ContainerView === 'function' && isIde64ContainerView() && cfsPartitionIdx < 0) {
+      document.querySelectorAll('.dir-entry[data-hdd-part]').forEach(function(el) {
+        el.classList.add('selected');
+      });
+      updateEntryMenuState();
+      return;
+    }
     if (cfsPartitionIdx >= 0 && cfsDirEntries) {
       var cfsRows = document.querySelectorAll('.dir-entry[data-cfs-entry]');
       selectedEntries = [];
@@ -587,27 +682,81 @@ document.addEventListener('keydown', (e) => {
 
   const dir = e.key === 'ArrowUp' ? -1 : 1;
 
+  // Plain Arrow (no shift) — reset the shift-extend anchor so the next
+  // Shift+Arrow starts from the new cursor position.
+  if (!e.shiftKey) shiftSelectAnchor = -1;
+
+  // Shift+Arrow on the CBM-DOS dir view — anchor-based range extend.
+  // CFS / CMD list / HDD list have their own shift-extend logic below
+  // because their selection state differs.
+  if (e.shiftKey && !e.ctrlKey && !e.altKey &&
+      !(cfsPartitionIdx >= 0 && cfsDirEntries) &&
+      !isCmdContainerListView() &&
+      !(typeof isIde64ContainerView === 'function' && isIde64ContainerView() && cfsPartitionIdx < 0) &&
+      selectedEntryIndex >= 0) {
+    const allEntriesS = document.querySelectorAll('.dir-entry:not(.dir-header-row)');
+    if (allEntriesS.length === 0) return;
+    const offsetsS = [];
+    allEntriesS.forEach(el => offsetsS.push(parseInt(el.dataset.offset, 10)));
+    let curIdxS = offsetsS.indexOf(selectedEntryIndex);
+    if (curIdxS < 0) return;
+    const newIdxS = curIdxS + dir;
+    if (newIdxS < 0 || newIdxS >= allEntriesS.length) return;
+    if (selectedEntries.length <= 1 || selectedEntries.indexOf(shiftSelectAnchor) < 0) {
+      shiftSelectAnchor = selectedEntryIndex;
+    }
+    const anchorIdx = offsetsS.indexOf(shiftSelectAnchor);
+    const lo = Math.min(anchorIdx, newIdxS);
+    const hi = Math.max(anchorIdx, newIdxS);
+    allEntriesS.forEach(el => el.classList.remove('selected'));
+    selectedEntries = [];
+    for (let si = lo; si <= hi; si++) {
+      allEntriesS[si].classList.add('selected');
+      selectedEntries.push(offsetsS[si]);
+    }
+    selectedEntryIndex = offsetsS[newIdxS];
+    updateEntryMenuState();
+    allEntriesS[newIdxS].scrollIntoView({ block: 'nearest' });
+    return;
+  }
+
   // CFS view: row attr is data-cfs-entry (slot index in cfsDirEntries),
-  // not data-offset. Ctrl+Arrow → move via moveCfsEntries; plain Arrow
-  // → walk rows and update selection.
+  // not data-offset. Ctrl+Arrow → move via moveCfsEntries; Shift+Arrow
+  // → extend the multi-select range; plain Arrow → walk rows and
+  // replace the selection.
   if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-    if (e.ctrlKey) {
+    if (e.ctrlKey && !e.shiftKey) {
       if (typeof moveCfsEntries === 'function') moveCfsEntries(dir);
       return;
     }
     var cfsRowsArr = Array.prototype.slice.call(document.querySelectorAll('.dir-entry[data-cfs-entry]'));
     if (cfsRowsArr.length === 0) return;
-    var curIdx2 = -1;
-    for (var ri = 0; ri < cfsRowsArr.length; ri++) {
-      if (parseInt(cfsRowsArr[ri].dataset.cfsEntry, 10) === selectedEntryIndex) { curIdx2 = ri; break; }
-    }
+    var cfsIdsArr = cfsRowsArr.map(function(r) { return parseInt(r.dataset.cfsEntry, 10); });
+    var curIdx2 = cfsIdsArr.indexOf(selectedEntryIndex);
     var newIdx2;
     if (curIdx2 < 0) newIdx2 = dir === 1 ? 0 : cfsRowsArr.length - 1;
     else newIdx2 = Math.max(0, Math.min(cfsRowsArr.length - 1, curIdx2 + dir));
-    cfsRowsArr.forEach(function(r) { r.classList.remove('selected'); });
-    cfsRowsArr[newIdx2].classList.add('selected');
-    selectedEntryIndex = parseInt(cfsRowsArr[newIdx2].dataset.cfsEntry, 10);
-    selectedEntries = [selectedEntryIndex];
+
+    if (e.shiftKey && curIdx2 >= 0) {
+      if (selectedEntries.length <= 1 || selectedEntries.indexOf(shiftSelectAnchor) < 0) {
+        shiftSelectAnchor = selectedEntryIndex;
+      }
+      var cfsAnchorIdx = cfsIdsArr.indexOf(shiftSelectAnchor);
+      var cfsLo = Math.min(cfsAnchorIdx, newIdx2);
+      var cfsHi = Math.max(cfsAnchorIdx, newIdx2);
+      cfsRowsArr.forEach(function(r) { r.classList.remove('selected'); });
+      selectedEntries = [];
+      for (var cfsI = cfsLo; cfsI <= cfsHi; cfsI++) {
+        cfsRowsArr[cfsI].classList.add('selected');
+        selectedEntries.push(cfsIdsArr[cfsI]);
+      }
+      selectedEntryIndex = cfsIdsArr[newIdx2];
+    } else {
+      cfsRowsArr.forEach(function(r) { r.classList.remove('selected'); });
+      cfsRowsArr[newIdx2].classList.add('selected');
+      selectedEntryIndex = cfsIdsArr[newIdx2];
+      selectedEntries = [selectedEntryIndex];
+    }
     updateEntryMenuState();
     cfsRowsArr[newIdx2].scrollIntoView({ block: 'nearest' });
     return;
@@ -619,18 +768,15 @@ document.addEventListener('keydown', (e) => {
   // the click handler's selection model, and refresh the menu state
   // so Delete Partition flips on as soon as a row is picked.
   if (isCmdContainerListView()) {
-    const cRows = document.querySelectorAll('.dir-entry[data-cmdc-part]');
-    if (cRows.length === 0) return;
-    let curIdx = -1;
-    const selRow = document.querySelector('.dir-entry.selected[data-cmdc-part]');
-    if (selRow) cRows.forEach((r, i) => { if (r === selRow) curIdx = i; });
-    let newIdx;
-    if (curIdx < 0) newIdx = dir === 1 ? 0 : cRows.length - 1;
-    else newIdx = Math.max(0, Math.min(cRows.length - 1, curIdx + dir));
-    cRows.forEach(r => r.classList.remove('selected'));
-    cRows[newIdx].classList.add('selected');
-    cRows[newIdx].scrollIntoView({ block: 'nearest' });
-    updateEntryMenuState();
+    _arrowOnPartitionList(document.querySelectorAll('.dir-entry[data-cmdc-part]'), dir, e.shiftKey);
+    return;
+  }
+
+  // .hdd partition list — same shape as the CMD container branch but
+  // rows use data-hdd-part. Selection is class-only (selectedEntryIndex
+  // isn't used in this view).
+  if (typeof isIde64ContainerView === 'function' && isIde64ContainerView() && cfsPartitionIdx < 0) {
+    _arrowOnPartitionList(document.querySelectorAll('.dir-entry[data-hdd-part]'), dir, e.shiftKey);
     return;
   }
 

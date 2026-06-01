@@ -297,12 +297,31 @@ function renderCmdContainerPartitionList() {
     var idx = parseInt(row.dataset.cmdcPart, 10);
     var part = cmdcPartitions[idx];
     var canOpen = part.type !== 0xFF;
-    row.addEventListener('click', function() {
-      // Click selects (so Delete Partition can target it), dblclick
-      // enters. updateEntryMenuState picks up the new selection right
-      // away.
-      content.querySelectorAll('.dir-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
-      row.classList.add('selected');
+    row.addEventListener('click', function(ev) {
+      // Click resets the Shift+Arrow extend anchors; ctrl-click toggles
+      // individual rows; shift-click selects the range from the last
+      // single-selected row to here.
+      if (typeof shiftSelectAnchor !== 'undefined') shiftSelectAnchor = -1;
+      if (typeof shiftSelectAnchorRow !== 'undefined') shiftSelectAnchorRow = null;
+      var allRows = Array.prototype.slice.call(content.querySelectorAll('.dir-entry[data-cmdc-part]'));
+      if (ev.ctrlKey) {
+        row.classList.toggle('selected');
+      } else if (ev.shiftKey) {
+        var firstSel = content.querySelector('.dir-entry.selected[data-cmdc-part]');
+        if (firstSel && firstSel !== row) {
+          var startIdx = allRows.indexOf(firstSel);
+          var endIdx = allRows.indexOf(row);
+          if (startIdx > endIdx) { var t = startIdx; startIdx = endIdx; endIdx = t; }
+          allRows.forEach(function(r) { r.classList.remove('selected'); });
+          for (var si = startIdx; si <= endIdx; si++) allRows[si].classList.add('selected');
+        } else {
+          content.querySelectorAll('.dir-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
+          row.classList.add('selected');
+        }
+      } else {
+        content.querySelectorAll('.dir-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
+        row.classList.add('selected');
+      }
       updateEntryMenuState();
     });
     row.addEventListener('dblclick', function() {
@@ -717,23 +736,39 @@ function renameCmdContainerPartition() {
 
 async function deleteCmdContainerPartition() {
   if (!isCmdContainerListView()) return;
-  var listSelEl = document.querySelector('.dir-entry.selected[data-cmdc-part]');
-  if (!listSelEl) {
+  var selRows = Array.prototype.slice.call(document.querySelectorAll('.dir-entry.selected[data-cmdc-part]'));
+  if (selRows.length === 0) {
     showModal('Container', ['Select a partition first.']);
     return;
   }
-  var idx = parseInt(listSelEl.dataset.cmdcPart, 10);
-  var part = cmdcPartitions[idx];
-  if (!part || part.type === 0xFF) {
+  // SYSTEM partition (type 0xFF) is never deletable; silently skip it in
+  // a multi-select batch instead of refusing the whole operation.
+  var targets = [];
+  var skippedSystem = false;
+  for (var i = 0; i < selRows.length; i++) {
+    var ti = parseInt(selRows[i].dataset.cmdcPart, 10);
+    var tp = cmdcPartitions[ti];
+    if (!tp) continue;
+    if (tp.type === 0xFF) { skippedSystem = true; continue; }
+    targets.push(tp);
+  }
+  if (targets.length === 0) {
     showModal('Container', ['The SYSTEM partition can\'t be deleted.']);
     return;
   }
-  var sizeStr = partitionSizeInMib
-    ? formatPartitionSize(part.sizeBlocks * 256, part.sizeBlocks)
-    : (part.sizeBlocks + ' blocks');
+  var prompt;
+  if (targets.length === 1) {
+    var p = targets[0];
+    var sizeStr = partitionSizeInMib
+      ? formatPartitionSize(p.sizeBlocks * 256, p.sizeBlocks)
+      : (p.sizeBlocks + ' blocks');
+    prompt = 'Delete partition "' + petsciiToReadable(p.name) + '" (' + p.typeName + ', ' + sizeStr + ')?';
+  } else {
+    prompt = 'Delete ' + targets.length + ' partitions?' + (skippedSystem ? ' (SYSTEM is excluded.)' : '');
+  }
   var choice = await showChoiceModal(
-    'Delete Partition',
-    'Delete partition "' + petsciiToReadable(part.name) + '" (' + part.typeName + ', ' + sizeStr + ')?',
+    targets.length === 1 ? 'Delete Partition' : 'Delete Partitions',
+    prompt,
     [
       { label: 'Cancel', value: false, secondary: true },
       { label: 'Delete', value: true }
@@ -742,9 +777,11 @@ async function deleteCmdContainerPartition() {
   if (!choice) return;
 
   pushUndo();
-  clearCmdContainerPartitionEntry(cmdcBuffer, cmdcContainerKey, part.index);
-  // Grow-as-needed containers (DHD) shrink the file once the partition
-  // is gone; fixed-size containers (RAMLink, FD) keep their byte length.
+  for (var di = 0; di < targets.length; di++) {
+    clearCmdContainerPartitionEntry(cmdcBuffer, cmdcContainerKey, targets[di].index);
+  }
+  // Grow-as-needed containers (DHD) shrink the file once partitions are
+  // gone; fixed-size containers (RAMLink, FD) keep their byte length.
   var shrunk = compactCmdContainer(cmdcBuffer, cmdcContainerKey);
   if (shrunk !== cmdcBuffer) {
     cmdcBuffer = shrunk;
@@ -785,9 +822,13 @@ document.getElementById('opt-cmdc-delete-partition').addEventListener('click', f
   closeMenus();
   if (this.classList.contains('disabled')) return;
   if (typeof isIde64ContainerView === 'function' && isIde64ContainerView() && cfsPartitionIdx < 0 && !isCmdContainerListView()) {
-    var selEl2 = document.querySelector('.dir-entry.selected[data-hdd-part]');
-    var idx2 = selEl2 ? parseInt(selEl2.dataset.hddPart, 10) : -1;
-    if (idx2 >= 0) confirmHddPartitionDelete(idx2);
+    var hddSelRows = document.querySelectorAll('.dir-entry.selected[data-hdd-part]');
+    var hddIdxs = [];
+    hddSelRows.forEach(function(el) {
+      var n = parseInt(el.dataset.hddPart, 10);
+      if (!isNaN(n)) hddIdxs.push(n);
+    });
+    if (hddIdxs.length > 0) confirmHddPartitionDelete(hddIdxs);
   } else {
     deleteCmdContainerPartition();
   }

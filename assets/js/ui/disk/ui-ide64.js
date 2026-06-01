@@ -217,9 +217,31 @@ function renderIde64PartitionList() {
 
   content.querySelectorAll('.dir-entry[data-hdd-part]').forEach(function(row) {
     var idx = parseInt(row.dataset.hddPart, 10);
-    row.addEventListener('click', function() {
-      content.querySelectorAll('.dir-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
-      row.classList.add('selected');
+    row.addEventListener('click', function(ev) {
+      // Click resets the Shift+Arrow extend anchors; ctrl-click toggles
+      // individual rows; shift-click selects the range from the last
+      // single-selected row to here.
+      if (typeof shiftSelectAnchor !== 'undefined') shiftSelectAnchor = -1;
+      if (typeof shiftSelectAnchorRow !== 'undefined') shiftSelectAnchorRow = null;
+      var allRows = Array.prototype.slice.call(content.querySelectorAll('.dir-entry[data-hdd-part]'));
+      if (ev.ctrlKey) {
+        row.classList.toggle('selected');
+      } else if (ev.shiftKey) {
+        var firstSel = content.querySelector('.dir-entry.selected[data-hdd-part]');
+        if (firstSel && firstSel !== row) {
+          var startIdx = allRows.indexOf(firstSel);
+          var endIdx = allRows.indexOf(row);
+          if (startIdx > endIdx) { var t = startIdx; startIdx = endIdx; endIdx = t; }
+          allRows.forEach(function(r) { r.classList.remove('selected'); });
+          for (var si = startIdx; si <= endIdx; si++) allRows[si].classList.add('selected');
+        } else {
+          content.querySelectorAll('.dir-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
+          row.classList.add('selected');
+        }
+      } else {
+        content.querySelectorAll('.dir-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
+        row.classList.add('selected');
+      }
       updateEntryMenuState();
     });
     row.addEventListener('dblclick', function() {
@@ -548,6 +570,9 @@ function renderCfsDirectoryView() {
     var idx = parseInt(row.dataset.cfsEntry, 10);
     var entry = cfsDirEntries[idx];
     row.addEventListener('click', function(ev) {
+      // Click resets the Shift+Arrow extend-selection anchor — next
+      // Shift+Arrow should anchor at whatever we're clicking now.
+      if (typeof shiftSelectAnchor !== 'undefined') shiftSelectAnchor = -1;
       var allRows = Array.prototype.slice.call(content.querySelectorAll('.dir-entry[data-cfs-entry]'));
       if (ev.ctrlKey) {
         if (row.classList.contains('selected')) {
@@ -1704,20 +1729,37 @@ function showHddPartitionAttrsDialog(idx) {
 // delete dialog shape (showChoiceModal with the same "Delete partition
 // "<name>" (<type>, <blocks>)" wording) for cross-container consistency.
 // CFS partition names are ASCII so no PETSCII conversion is needed.
-async function confirmHddPartitionDelete(idx) {
+async function confirmHddPartitionDelete(idxOrIndices) {
   if (!hddBuffer || !hddPartitions) return;
-  var p = hddPartitions[idx];
-  if (!p || p.empty || p.deleted) return;
-  var sizeBlocks = p.sizeSectors !== null ? (p.sizeSectors * 2) : null;
-  var sizeStr = p.sizeSectors !== null
-    ? (partitionSizeInMib ? formatPartitionSize(p.sizeBytes, sizeBlocks) : sizeBlocks + ' blocks')
-    : '? blocks';
-  // p.name may carry PUA-PETSCII codepoints — petsciiToReadable strips
-  // them down to plain ASCII for the modal text.
-  var nameForModal = petsciiToReadable(p.name || '') || ('slot ' + idx);
+  // Accept a single idx (legacy) or an array (multi-select).
+  var indices = Array.isArray(idxOrIndices) ? idxOrIndices.slice() : [idxOrIndices];
+  // Filter to deletable partitions — skip empty / already-deleted slots.
+  var targets = [];
+  for (var ii = 0; ii < indices.length; ii++) {
+    var pi = indices[ii];
+    var p0 = hddPartitions[pi];
+    if (!p0 || p0.empty || p0.deleted) continue;
+    targets.push(pi);
+  }
+  if (targets.length === 0) return;
+
+  var prompt;
+  if (targets.length === 1) {
+    var p = hddPartitions[targets[0]];
+    var sizeBlocks = p.sizeSectors !== null ? (p.sizeSectors * 2) : null;
+    var sizeStr = p.sizeSectors !== null
+      ? (partitionSizeInMib ? formatPartitionSize(p.sizeBytes, sizeBlocks) : sizeBlocks + ' blocks')
+      : '? blocks';
+    // p.name may carry PUA-PETSCII codepoints — petsciiToReadable strips
+    // them down to plain ASCII for the modal text.
+    var nameForModal = petsciiToReadable(p.name || '') || ('slot ' + targets[0]);
+    prompt = 'Delete partition "' + nameForModal + '" (' + p.typeName + ', ' + sizeStr + ')?\nIt will be recoverable via Restore Partition until the slot is reused.';
+  } else {
+    prompt = 'Delete ' + targets.length + ' partitions?\nThey will be recoverable via Restore Partition until their slots are reused.';
+  }
   var choice = await showChoiceModal(
-    'Delete Partition',
-    'Delete partition "' + nameForModal + '" (' + p.typeName + ', ' + sizeStr + ')?\nIt will be recoverable via Restore Partition until the slot is reused.',
+    targets.length === 1 ? 'Delete Partition' : 'Delete Partitions',
+    prompt,
     [
       { label: 'Cancel', value: false, secondary: true },
       { label: 'Delete', value: true }
@@ -1725,21 +1767,25 @@ async function confirmHddPartitionDelete(idx) {
   );
   if (!choice) return;
   pushUndo();
-  // Soft delete — clears the VALID bit, preserves all metadata, mirrors
-  // to the backup partition directory + bumps the boot-sector generation
-  // counter. Matches IDEDOS scratch byte-for-byte.
-  var res = cfsSoftDeletePartition(hddBuffer, idx);
-  if (!res.ok) {
-    showModal('Delete partition failed', [res.error || 'Unknown error.']);
+  // Soft delete each — clears the VALID bit, preserves metadata,
+  // mirrors to the backup partition directory + bumps the boot-sector
+  // generation counter per slot. Matches IDEDOS scratch byte-for-byte.
+  var hitErr = null;
+  for (var di = 0; di < targets.length; di++) {
+    var res = cfsSoftDeletePartition(hddBuffer, targets[di]);
+    if (!res.ok) { hitErr = res.error || 'Unknown error.'; break; }
+  }
+  if (hitErr) {
+    showModal('Delete partition failed', [hitErr]);
     if (typeof popUndo === 'function') popUndo();
     return;
   }
   // If we just dropped the default, point it at the first remaining
   // live partition (skip deleted slots too — they can't be the default).
-  if (hddBootInfo && hddBootInfo.defaultPart === idx) {
+  if (hddBootInfo && targets.indexOf(hddBootInfo.defaultPart) >= 0) {
     var newDefault = 0;
-    for (var pi = 0; pi < hddPartitions.length; pi++) {
-      if (pi !== idx && !hddPartitions[pi].empty && !hddPartitions[pi].deleted) { newDefault = pi; break; }
+    for (var ni = 0; ni < hddPartitions.length; ni++) {
+      if (targets.indexOf(ni) < 0 && !hddPartitions[ni].empty && !hddPartitions[ni].deleted) { newDefault = ni; break; }
     }
     cfsSetDefaultPartition(hddBuffer, newDefault);
   }
