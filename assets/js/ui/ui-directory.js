@@ -1331,8 +1331,27 @@ document.getElementById('opt-undo').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
   if (popUndo()) {
-    var info = parseCurrentDir(currentBuffer);
-    renderDisk(info);
+    if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+      if (typeof refreshIde64View === 'function') refreshIde64View();
+    } else {
+      var info = parseCurrentDir(currentBuffer);
+      renderDisk(info);
+    }
+    updateMenuState();
+    updateEntryMenuState();
+  }
+});
+
+document.getElementById('opt-redo').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  if (popRedo()) {
+    if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+      if (typeof refreshIde64View === 'function') refreshIde64View();
+    } else {
+      var info = parseCurrentDir(currentBuffer);
+      renderDisk(info);
+    }
     updateMenuState();
     updateEntryMenuState();
   }

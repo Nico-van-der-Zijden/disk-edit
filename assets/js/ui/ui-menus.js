@@ -399,11 +399,44 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
+  // Ctrl+Shift+Z: redo. Tested before Ctrl+Z so the shift modifier
+  // doesn't fall through to the undo branch.
+  if (e.ctrlKey && e.shiftKey && (e.key === 'Z' || e.key === 'z') && currentBuffer) {
+    e.preventDefault();
+    if (popRedo()) {
+      if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+        if (typeof refreshIde64View === 'function') refreshIde64View();
+      } else {
+        var info = parseCurrentDir(currentBuffer);
+        renderDisk(info);
+      }
+      updateMenuState();
+      updateEntryMenuState();
+    }
+    return;
+  }
+
   // Ctrl+Z: undo. CFS branch re-renders via refreshIde64View since
   // parseCurrentDir is CBM-DOS-only.
-  if (e.ctrlKey && e.key === 'z' && currentBuffer) {
+  if (e.ctrlKey && !e.shiftKey && e.key === 'z' && currentBuffer) {
     e.preventDefault();
     if (popUndo()) {
+      if (cfsPartitionIdx >= 0 && cfsDirEntries) {
+        if (typeof refreshIde64View === 'function') refreshIde64View();
+      } else {
+        var info = parseCurrentDir(currentBuffer);
+        renderDisk(info);
+      }
+      updateMenuState();
+      updateEntryMenuState();
+    }
+    return;
+  }
+
+  // Ctrl+Y: redo (Windows convention).
+  if (e.ctrlKey && !e.shiftKey && e.key === 'y' && currentBuffer) {
+    e.preventDefault();
+    if (popRedo()) {
       if (cfsPartitionIdx >= 0 && cfsDirEntries) {
         if (typeof refreshIde64View === 'function') refreshIde64View();
       } else {

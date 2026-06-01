@@ -334,6 +334,7 @@ function extractLnxToNewD64(buffer) {
   selectedEntryIndex = -1;
   parseDisk(currentBuffer);
   undoStack = [];
+  redoStack = [];
   cleanStackLength = 0;
   tabDirty = false;
 
@@ -402,6 +403,7 @@ function extractLnxToNewD64(buffer) {
   // Fresh-tab state: clear undo and dirty flag so the new D64 opens clean
   // (user can Save As to keep it).
   undoStack = [];
+  redoStack = [];
   cleanStackLength = 0;
   tabDirty = false;
 

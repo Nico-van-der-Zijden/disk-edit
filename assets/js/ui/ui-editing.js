@@ -253,6 +253,7 @@ function updateMenuState() {
   document.getElementById('opt-file-chains').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
   document.getElementById('opt-unzip').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
+  document.getElementById('opt-redo').classList.toggle('disabled', redoStack.length === 0 || tape);
   document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
   document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
   // Resize Image only safe on a stand-alone DNP. Inside a CMD container

@@ -215,6 +215,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Ctrl + Alt + E', 'Export selected file(s)'],
       ['Ctrl + Shift + D', 'Add directory (D81/DNP)'],
       ['Ctrl + Z', 'Undo last change'],
+      ['Ctrl + Y / Ctrl + Shift + Z', 'Redo'],
       ['Ctrl + Alt + O', 'Open disk'],
       ['Ctrl + Alt + S', 'Save disk'],
       ['Ctrl + Shift + S', 'Save as'],
@@ -301,6 +302,9 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.11', title: 'Redo', items: [
+      'Edit → Redo (Ctrl+Y or Ctrl+Shift+Z) reapplies an undone action. Same 20-step history as Undo; making a new edit drops the redo trail',
+    ]},
     { ver: '1.4.10', title: 'User Manual', items: [
       'New Help → User Manual menu item opens the full user manual in a new browser tab — a per-format reference covering every disk type, every menu, keyboard shortcuts, and the gotchas worth knowing',
     ]},

@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 4, build: 10 };
+var APP_VERSION = { major: 1, minor: 4, build: 11 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -226,6 +226,7 @@ function withDiskCtx(ctx, fn) {
 // cleanStackLength = -1 means "clean state no longer reachable" (an older entry
 // fell off the end when we hit MAX_UNDO).
 var undoStack = [];
+var redoStack = [];
 var MAX_UNDO = 20;
 var tabDirty = false;
 var cleanStackLength = 0;
@@ -246,6 +247,8 @@ function pushUndo(snapshot) {
     if (cleanStackLength > 0) cleanStackLength--;
     else if (cleanStackLength === 0) cleanStackLength = -1;
   }
+  // Any new edit invalidates the redo history.
+  if (redoStack.length) redoStack = [];
   if (!tabDirty) {
     tabDirty = true;
     if (typeof renderTabs === 'function') renderTabs();
@@ -254,6 +257,8 @@ function pushUndo(snapshot) {
 
 function popUndo() {
   if (undoStack.length === 0 || !currentBuffer) return false;
+  redoStack.push(currentBuffer.slice(0));
+  if (redoStack.length > MAX_UNDO) redoStack.shift();
   currentBuffer = undoStack.pop();
   var tab = getActiveTab();
   if (tab) tab.buffer = currentBuffer;
@@ -265,7 +270,26 @@ function popUndo() {
   return true;
 }
 
-function clearUndo() { undoStack = []; cleanStackLength = 0; }
+function popRedo() {
+  if (redoStack.length === 0 || !currentBuffer) return false;
+  undoStack.push(currentBuffer.slice(0));
+  if (undoStack.length > MAX_UNDO) {
+    undoStack.shift();
+    if (cleanStackLength > 0) cleanStackLength--;
+    else if (cleanStackLength === 0) cleanStackLength = -1;
+  }
+  currentBuffer = redoStack.pop();
+  var tab = getActiveTab();
+  if (tab) tab.buffer = currentBuffer;
+  var shouldBeDirty = (undoStack.length !== cleanStackLength);
+  if (tabDirty !== shouldBeDirty) {
+    tabDirty = shouldBeDirty;
+    if (typeof renderTabs === 'function') renderTabs();
+  }
+  return true;
+}
+
+function clearUndo() { undoStack = []; redoStack = []; cleanStackLength = 0; }
 
 function markClean() {
   cleanStackLength = undoStack.length;
@@ -289,6 +313,7 @@ function createTab(name, buffer, fileName) {
     partition: null,
     selectedEntry: -1,
     undoStack: [],
+    redoStack: [],
     cleanStackLength: 0,
     dirty: false,
     cmdFdBuffer: null,
@@ -325,6 +350,7 @@ function saveActiveTab() {
   tab.partition = currentPartition;
   tab.selectedEntry = selectedEntryIndex;
   tab.undoStack = undoStack;
+  tab.redoStack = redoStack;
   tab.cleanStackLength = cleanStackLength;
   tab.dirty = tabDirty;
   tab.tapeEntries = parsedT64Entries;
@@ -354,6 +380,7 @@ function loadTab(tab) {
   currentPartition = tab.partition;
   selectedEntryIndex = tab.selectedEntry;
   undoStack = tab.undoStack || [];
+  redoStack = tab.redoStack || [];
   cleanStackLength = tab.cleanStackLength || 0;
   tabDirty = tab.dirty || false;
   parsedT64Entries = tab.tapeEntries || null;
