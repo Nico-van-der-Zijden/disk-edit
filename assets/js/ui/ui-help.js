@@ -302,6 +302,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.14', title: 'Ctrl+Alt+E and Ctrl+Shift+D extended to partition lists', items: [
+      'Ctrl+Alt+E now also exports the selected partition when you\'re on a CMD container partition list (DHD / RAMLink / FD)',
+      'Ctrl+Shift+D now also creates a new partition on partition list views, matching its Add-Directory role on a regular directory',
+    ]},
     { ver: '1.4.13', title: 'Selection shortcuts work on every view', items: [
       'F2 starts inline rename on the selected entry — the Windows Explorer / VS Code muscle-memory key. Enter still works too',
       'Arrow keys, Shift+Arrow, Ctrl+A, Ctrl+click, Shift+click and Delete now behave the same on every list — CBM-DOS directories, the dir view inside an IDE64 partition, CMD container partition lists, and .hdd partition lists',

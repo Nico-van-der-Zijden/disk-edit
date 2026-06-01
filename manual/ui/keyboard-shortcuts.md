@@ -27,8 +27,8 @@ Grouped by what you'd be doing when you'd reach for the shortcut. **Ctrl** here 
 | **Enter** / **F2** | Start renaming the selected entry |
 | **Escape** | Cancel an active rename / close a modal |
 | **Ctrl+Shift+I** | Insert file |
-| **Ctrl+Alt+E** | Export selected file(s) |
-| **Ctrl+Shift+D** | Add directory (D81 / DNP / IDE64 / DHD / RAMLink) |
+| **Ctrl+Alt+E** | Export selected file(s) — on a CMD container partition list, exports the selected partition |
+| **Ctrl+Shift+D** | Add directory inside a dir view; new partition on a partition list view |
 | **Ctrl+Shift+H** | Edit disk name |
 | **Ctrl+Alt+I** | Edit disk ID |
 
@@ -58,12 +58,12 @@ Grouped by what you'd be doing when you'd reach for the shortcut. **Ctrl** here 
 
 | Shortcut | Action |
 |---|---|
-| **Ctrl+Shift+L** | Lock toggle (`<` suffix) |
-| **Ctrl+Shift+U** | Unlock toggle |
-| **Ctrl+Shift+T** | Type change dropdown |
-| **Ctrl+Alt+L** / **R** / **C** / **J** / **E** | Align Left / Right / Centre / Justify / Expand |
-| **Ctrl+<** | Lock toggle (alt binding) |
-| **Ctrl+\*** | Splat toggle |
+| **Ctrl+Shift+L** | Name to lowercase |
+| **Ctrl+Shift+U** | Name to UPPERCASE |
+| **Ctrl+Shift+T** | Toggle name case |
+| **Ctrl+Alt+L** / **R** / **C** / **J** | Align Left / Right / Centre / Justify |
+| **Ctrl+<** | Lock / unlock toggle |
+| **Ctrl+\*** | Splat / unsplat toggle |
 
 ## Viewers
 

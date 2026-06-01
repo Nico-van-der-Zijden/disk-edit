@@ -619,12 +619,23 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Ctrl+Alt+E: export (Ctrl+E conflicts with browser search bar)
-  if (e.ctrlKey && e.altKey && e.code === 'KeyE' && selectedEntryIndex >= 0) {
-    e.preventDefault();
-    var exportEl = document.getElementById('opt-export');
-    if (!exportEl.classList.contains('disabled')) exportEl.click();
-    return;
+  // Ctrl+Alt+E: export (Ctrl+E conflicts with browser search bar).
+  // On a CMD container partition list it routes to Export Partition so
+  // the same key serves "export the selected thing" everywhere it's
+  // available.
+  if (e.ctrlKey && e.altKey && e.code === 'KeyE') {
+    if (isCmdContainerListView()) {
+      e.preventDefault();
+      var expPartEl = document.getElementById('opt-cmdc-export-partition');
+      if (!expPartEl.classList.contains('disabled')) expPartEl.click();
+      return;
+    }
+    if (selectedEntryIndex >= 0) {
+      e.preventDefault();
+      var exportEl = document.getElementById('opt-export');
+      if (!exportEl.classList.contains('disabled')) exportEl.click();
+      return;
+    }
   }
 
   // Ctrl+Shift+L: name to lowercase (Ctrl+L conflicts with browser address bar)
@@ -645,8 +656,18 @@ document.addEventListener('keydown', (e) => {
     document.getElementById('opt-case-toggle').click();
     return;
   }
-  // Ctrl+Shift+D: add directory (Ctrl+D conflicts with browser bookmark)
+  // Ctrl+Shift+D: add directory inside a dir view; new partition on a
+  // partition list view. Same key serves "add a new container at this
+  // level" in both contexts. (Ctrl+D conflicts with browser bookmark.)
   if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyD') {
+    var partListView = isCmdContainerListView() ||
+      (typeof isIde64ContainerView === 'function' && isIde64ContainerView() && cfsPartitionIdx < 0);
+    if (partListView) {
+      e.preventDefault();
+      var newPartEl = document.getElementById('opt-cmdc-new-partition');
+      if (!newPartEl.classList.contains('disabled')) newPartEl.click();
+      return;
+    }
     e.preventDefault();
     var addDirEl = document.getElementById('opt-add-partition');
     if (!addDirEl.classList.contains('disabled')) addDirEl.click();
