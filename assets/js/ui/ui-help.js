@@ -185,6 +185,16 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
   document.getElementById('modal-overlay').classList.add('open');
 });
 
+// User Manual — opens the online manual in a new tab. The URL points at
+// the manual/ folder on GitHub for now (GitHub renders the markdown);
+// switch this to the dedicated hosting URL once published.
+var MANUAL_URL = 'https://github.com/Nico-van-der-Zijden/disk-edit/blob/main/manual/README.md';
+document.getElementById('opt-manual').addEventListener('click', function(e) {
+  e.stopPropagation();
+  closeMenus();
+  window.open(MANUAL_URL, '_blank', 'noopener');
+});
+
 document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
@@ -291,6 +301,9 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.10', title: 'User Manual', items: [
+      'New Help → User Manual menu item opens the full user manual in a new browser tab — a per-format reference covering every disk type, every menu, keyboard shortcuts, and the gotchas worth knowing',
+    ]},
     { ver: '1.4.9', title: 'Plain text inputs follow the C64 charset mode', items: [
       'Name input fields (Import, Add Directory, Disk Label, CFS file rename modal) now render in the current charset case. Type "i" in uppercase mode, see "I" — matching what the file name will look like in the directory. Flip the charset (Ctrl+Shift or Options menu) and the inputs follow',
     ]},
