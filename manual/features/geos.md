@@ -96,8 +96,8 @@ Font files (type `$04`) show the bitmap glyphs in the GEOS font format. Glyph si
 
 ## Known limitations
 
-- **GEOS VLIR write** isn't built yet. Copy/paste skips VLIR files with a warning. Use CVT export → import to move them.
-- **REL record length** isn't preserved through cross-family pastes.
+- **GEOS files into CFS / .hdd** — copy/paste into a CFS partition is blocked. CFS reserves a GEOS partition type but the on-disk layout isn't documented; we'd rather refuse than silently corrupt. CBM-DOS-to-CBM-DOS VLIR paste does work (single-file and tree). Use CVT export → import to move GEOS files onto an IDE64 .hdd.
+- **REL record length on CFS interop** — isn't preserved when pasting REL files between CBM-DOS and CFS. CFS has no per-file record-length field.
 - **Font substitutions** — most geoWrite docs use Roma; BSW-only fonts (Berkelium 64, etc.) aren't rendered with their actual glyphs, just substituted.
 
 ## CVT plus GEOS in archives

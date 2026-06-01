@@ -2207,10 +2207,10 @@ function cbmCollectDirTree(diskCtx, sourceNameBytes) {
           fileEntry.geosInfoBlock = geosInfoBlock;
         }
         if (isVlir) {
-          // Mark as VLIR without reading the payload — the index sector
-          // bytes alone aren't a valid file body, and unpacking the
-          // record chains here would duplicate ui-viewer-vlir's logic.
-          fileEntry.vlirRecords = { skipped: true };
+          // Read VLIR records into the format writeVlirFileToDisk
+          // expects (end marker / empty slot / populated record), so
+          // tree-paste can re-create the VLIR file on the destination.
+          fileEntry.vlirRecords = readVLIRRecordsForCopy(ctx.buffer, entryOff, ctx);
           fileEntry.payload = new Uint8Array(0);
         } else {
           var rd = readFileData(ctx.buffer, entryOff, ctx);
@@ -2919,15 +2919,10 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
 
   for (var i = 0; i < tree.files.length; i++) {
     var file = tree.files[i];
-    if (!file.payload) continue;
-    // GEOS VLIR files don't roundtrip cleanly through writeFileToDisk
-    // (their payload is the index sector + record chains, not a flat
-    // byte stream). Skip with a warning rather than corrupting the
-    // destination disk.
-    if (file.vlirRecords) {
-      skippedLnks.push('(GEOS VLIR file skipped — not yet supported by CBM-DOS writer)');
-      continue;
-    }
+    // VLIR files have payload = empty Uint8Array (truthy) but their
+    // real content is in vlirRecords. Plain files need a payload to
+    // copy. Skip files with no payload data of either kind.
+    if (!file.vlirRecords && (!file.payload || file.payload.length === 0)) continue;
     var typeIdx = resolveFileCbmTypeIdx(file);
     // Conflict check on the file name. We may rewrite writeNameBytes for
     // rename mode without mutating the caller's tree.
@@ -2966,9 +2961,20 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
         geosInfoBlock: file.geosInfoBlock || null,
       };
     }
-    var ok = writeFileToDisk(typeIdx, writeNameBytes, file.payload, geosData, true, diskCtx);
+    var ok;
+    if (file.vlirRecords && Array.isArray(file.vlirRecords)) {
+      // GEOS VLIR file: writeVlirFileToDisk handles the index sector +
+      // record chain layout. typeByte = 0x80 | typeIdx (Closed + type).
+      // diskCtx routes the writes into the target partition.
+      ok = writeVlirFileToDisk(0x80 | typeIdx, writeNameBytes, file.vlirRecords,
+        geosData ? geosData.geosBytes : null,
+        geosData ? geosData.geosInfoBlock : null,
+        true, diskCtx);
+    } else {
+      ok = writeFileToDisk(typeIdx, writeNameBytes, file.payload, geosData, true, diskCtx);
+    }
     if (!ok) {
-      return { ok: false, error: 'writeFileToDisk failed for a file' };
+      return { ok: false, error: (file.vlirRecords ? 'writeVlirFileToDisk' : 'writeFileToDisk') + ' failed for a file' };
     }
     copiedFiles++;
   }

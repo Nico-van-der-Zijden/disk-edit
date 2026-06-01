@@ -302,6 +302,10 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.4.16', title: 'Copy GEOS VLIR files when copying directories', items: [
+      'Copying a sub-directory that contains GEOS VLIR files (geoWrite documents, fonts, desk accessories) now writes them onto the destination CBM-DOS disk with their INFO block + every record\'s sector chain intact. Single-file VLIR paste already worked; the tree-copy path was skipping them with a warning',
+      'Pasting GEOS files into an IDE64 .hdd (CFS) partition is still blocked — CFS reserves a GEOS partition type but its on-disk layout isn\'t documented in the specs we have, so the paste refuses with a clear "not yet supported" reason instead of silently corrupting the destination. Use Export as CVT → Import on a CBM-DOS disk to move GEOS files',
+    ]},
     { ver: '1.4.15', title: 'Copy directory art (DEL entries), G64 read fix', items: [
       'DEL entries used for directory art now copy and paste like regular files. Name, lock and block count (often deliberately set to a year or version number) come through exactly as on the source disk',
       'Works across formats: art entries copy from a D64 into an .hdd (shown there as separators) and back',

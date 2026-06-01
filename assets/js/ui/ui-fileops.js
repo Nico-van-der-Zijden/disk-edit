@@ -1479,11 +1479,12 @@ function importCvtFileCore(cvt, silent) {
   return { error: 'Failed to write "' + displayName + '" (disk or directory full).' };
 }
 
-function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock, silent) {
+function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock, silent, diskCtx) {
+  diskCtx = diskCtx || getCurrentCtx();
   if (!silent) pushUndo();
-  var snapshot = currentBuffer.slice(0);
-  var data = new Uint8Array(currentBuffer);
-  var allocated = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
+  var buffer = diskCtx.buffer;
+  var data = new Uint8Array(buffer);
+  var allocated = buildTrueAllocationMap(buffer, diskCtx);
 
   // Count total sectors needed: 1 info block + 1 VLIR index + data sectors
   var totalSectors = 2; // info + index
@@ -1499,16 +1500,14 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock,
     totalSectors += numBlocks;
   }
 
-  var sectorList = allocateSectors(allocated, totalSectors, getCurrentCtx());
+  var sectorList = allocateSectors(allocated, totalSectors, diskCtx);
   if (sectorList.length < totalSectors) {
-    currentBuffer = snapshot;
     if (!silent) showModal('Write Error', ['Not enough free sectors. Need ' + totalSectors + ', have ' + sectorList.length + '.']);
     return false;
   }
 
-  var entryOff = findFreeDirEntry(currentBuffer, allocated, getCurrentCtx());
+  var entryOff = findFreeDirEntry(buffer, allocated, diskCtx);
   if (entryOff < 0) {
-    currentBuffer = snapshot;
     if (!silent) showModal('Write Error', ['No free directory entry available.']);
     return false;
   }
@@ -1517,13 +1516,13 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock,
 
   // Write info block
   var infoSec = sectorList[secIdx++];
-  var infoOff = sectorOffset(infoSec.track, infoSec.sector, getCurrentCtx());
+  var infoOff = sectorOffset(infoSec.track, infoSec.sector, diskCtx);
   for (var ib2 = 0; ib2 < 256; ib2++) data[infoOff + ib2] = infoBlock[ib2];
   data[infoOff] = 0x00; data[infoOff + 1] = 0xFF;
 
   // Write VLIR index sector
   var vlirSec = sectorList[secIdx++];
-  var vlirOff = sectorOffset(vlirSec.track, vlirSec.sector, getCurrentCtx());
+  var vlirOff = sectorOffset(vlirSec.track, vlirSec.sector, diskCtx);
   for (var vi = 0; vi < 256; vi++) data[vlirOff + vi] = 0x00;
   data[vlirOff] = 0x00; data[vlirOff + 1] = 0xFF;
 
@@ -1556,7 +1555,7 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock,
     var recPos = 0;
     for (var rsi = 0; rsi < recSectors.length; rsi++) {
       var sec = recSectors[rsi];
-      var soff = sectorOffset(sec.track, sec.sector, getCurrentCtx());
+      var soff = sectorOffset(sec.track, sec.sector, diskCtx);
 
       if (rsi < recSectors.length - 1) {
         var nextSec = recSectors[rsi + 1];
@@ -1598,18 +1597,23 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock,
   data[entryOff + 31] = (totalSectors >> 8) & 0xFF;
 
   // Update BAM
-  var ctx = getDirContext();
-  var bamOff = ctx.bamOff;
+  var dirCtxLocal = getDirContext(diskCtx);
+  var bamOff = dirCtxLocal.bamOff;
   for (var ai = 0; ai < sectorList.length; ai++) {
-    bamMarkSectorUsed(data, sectorList[ai].track, sectorList[ai].sector, bamOff, getCurrentCtx());
+    bamMarkSectorUsed(data, sectorList[ai].track, sectorList[ai].sector, bamOff, diskCtx);
   }
 
   // Ensure GEOS disk signature is present
-  if (!hasGeosSignature(currentBuffer, getCurrentCtx())) {
-    writeGeosSignature(currentBuffer, getCurrentCtx());
+  if (!hasGeosSignature(buffer, diskCtx)) {
+    writeGeosSignature(buffer, diskCtx);
   }
 
-  selectedEntryIndex = entryOff;
+  // selectedEntryIndex tracks the UI focus and only makes sense when
+  // writing into the active partition. Skip for cross-ctx writes (e.g.
+  // tree-paste into a new sub-partition).
+  if (!diskCtx.partition || diskCtx.partition === currentPartition) {
+    selectedEntryIndex = entryOff;
+  }
   return true;
 }
 

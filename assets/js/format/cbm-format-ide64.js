@@ -2420,6 +2420,15 @@ function cfsPasteDirTree(buffer, partitionStart, partitionEndLba, destDirLba, tr
         if (fb === 0xA0 || fb === 0x00) break;
         fName += String.fromCharCode(fb);
       }
+      // GEOS files (VLIR or sequential with info block) can't go onto
+      // CFS until we have a documented GEOS-partition layout to write
+      // against. IDEDOS reserves a partition type for GEOS but the
+      // on-disk structure isn't documented in the specs we have.
+      // Refusing here beats silently corrupting the destination.
+      if (f.vlirRecords || f.geosInfoBlock) {
+        stats.skippedLnks.push(fName + ' (GEOS file — CFS GEOS partition layout not yet supported)');
+        continue;
+      }
       if (mode === 'overwrite') {
         var conflict = _cfsFindDirEntryByNameBytes(buffer, dstDirLba, f.nameBytes);
         if (conflict && conflict.ftype !== CFS_FTYPE.DIR) {

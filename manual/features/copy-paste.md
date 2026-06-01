@@ -28,9 +28,10 @@ Pasting between different disk families translates file types where they differ:
 | CFS NORMAL | CBM-DOS | PRG/SEQ/USR based on the type suffix bytes |
 | CFS DIR | CBM-DOS | DIR (becomes sub-partition on D81, linked subdir on DNP) |
 | CFS LNK | any | Skipped with a warning (no LNK on CBM-DOS) |
-| GEOS VLIR | CBM-DOS / CFS | Skipped with a warning (writer not built yet — round-trip via CVT) |
+| GEOS VLIR | CBM-DOS | Full round-trip — INFO block, record index, and every record's chain are recreated on the destination |
+| GEOS VLIR / GEOS sequential | CFS / IDE64 .hdd | Skipped with a warning. CFS reserves a GEOS partition type but the on-disk layout isn't documented in the specs we have; routing GEOS files onto CFS without that documentation would silently corrupt them. Use **Export as CVT** → **Import File** on a CBM-DOS disk to move GEOS files instead |
 
-LNK and GEOS VLIR are captured into the clipboard but skipped on paste. You get a summary modal at the end listing what was skipped and why.
+LNK entries are captured into the clipboard but skipped on paste (no LNK concept on CBM-DOS / non-CFS formats). GEOS VLIR files paste cleanly into CBM-DOS destinations; they're skipped into CFS / .hdd destinations with a clear "GEOS partition layout not yet supported" reason. You get a summary modal at the end listing what was skipped and why.
 
 ## Directory-level copy / paste
 
@@ -106,6 +107,6 @@ Conflict prompts skip DEL entries — dir art duplicates name bytes by design.
 
 ## Limitations
 
-- **GEOS VLIR write** isn't implemented yet — VLIR files (geoWrite docs, fonts) round-trip via CVT (export to .cvt, import to other disk).
+- **GEOS files (VLIR or sequential)** can't be pasted into an IDE64 .hdd / CFS partition yet. CFS reserves a GEOS partition type but its on-disk layout isn't documented in the specs we have, so we'd rather refuse the paste than silently corrupt the destination. Use the CVT round-trip (Export as CVT → Import on a CBM-DOS disk).
 - **REL record length** isn't preserved through cross-family pastes (CFS doesn't have a per-file record-length field). Treat REL files as opaque for now.
 - **Reversed-byte filenames** round-trip correctly. The `$00-$1F` bytes survive the paste.
