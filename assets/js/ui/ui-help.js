@@ -156,7 +156,7 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '<br>' +
       '<b>Technical references:</b><br>' +
       '&bull; <a href="https://vice-emu.sourceforge.io/vice_17.html" target="_blank" class="link">VICE Manual</a> — disk image format documentation<br>' +
-      '&bull; <a href="https://ist.uwaterloo.ca/~schepers/formats.html" target="_blank" class="link">Peter Schepers</a> — D64, D71, D81, D80, D82, D2M-DNP, GEOS, and C128 auto-boot format specifications<br>' +
+      '&bull; <a href="https://ist.uwaterloo.ca/~schepers/formats.html" target="_blank" class="link">Peter Schepers</a> — D64, D71, D81, D80, D82, D2M-DNP, GEOS, C128 auto-boot, ZipCode (DiskPacked, SixPack, FilePacked) and LHA/LZH format specifications<br>' +
       '&bull; <a href="https://www.oxyron.de/html/opcodes02.html" target="_blank" class="link">Oxyron 6502 Opcode Table</a> — illegal opcode reference<br>' +
       '&bull; <a href="https://c64-wiki.com/" target="_blank" class="link">C64-Wiki</a> — Commodore 64 technical reference<br>' +
       '&bull; <a href="https://sta.c64.org/" target="_blank" class="link">STA\'s C64 pages</a> — disk format details<br>' +
@@ -168,6 +168,9 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '&bull; <a href="https://github.com/markusC64/nibtools" target="_blank" class="link">nibtools</a> by Pete Rittwage and contributors — NIB file format reference for the .nib reader<br>' +
       '&bull; LZ77 compressor/decompressor by Marcus Geelnard (2003-2006, BSD-3) — distributed inside <a href="https://github.com/markusC64/nibtools/blob/upstream/lz.c" target="_blank" class="link">nibtools/lz.c</a>; algorithm ported to JS for the .nbz reader<br>' +
       '&bull; <a href="https://simonomi.dev/blog/color-code-your-bytes/" target="_blank" class="link">Color-code your bytes</a> by simonomi — schemes (hexyl, xcd-rgb, nybble) for the optional Hex Coloring picker<br>' +
+      '&bull; LHA / LZH by Haruyasu Yoshizaki — the -lh5- sliding-dictionary + Huffman method decoded by the .lha / .lzh reader<br>' +
+      '&bull; Joe Forster/STA — the 5-file 40-track extension to DiskPacked ZipCode<br>' +
+      '&bull; Paul David Doherty and Wolfgang Moser — contributors to the ZipCode format documentation used for the SixPack and FilePacked readers<br>' +
       '<br>' +
       '<b>Browser emulator:</b><br>' +
       '&bull; <a href="https://emulatorjs.org/" target="_blank" class="link">EmulatorJS</a> + the libretro <a href="https://github.com/libretro/vice-libretro" target="_blank" class="link">vice_x64sc</a> core — actual VICE running in the browser; hosted at <a href="https://c64.sannic.nl/" target="_blank" class="link">c64.sannic.nl</a> for the Run / Open in Emulator handoff<br>' +
@@ -302,6 +305,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.5.0', title: 'ZipCode, tar and LHA archives', items: [
+      'Open ZipCode sets — all three kinds. Drop the parts and they rebuild into a disk in a new tab: the usual 1!NAME through 4!NAME (5!NAME for a 40-track disk), the two-bang SixPack 1!!NAME through 6!!NAME, or the letter-named FilePacked a!NAME plus its x!NAME directory. Sets sitting on a disk you already have open work too, from Disk → Disk Tools → Decompress ZipCode',
+      'SixPack sets keep the read errors from the original disk, so a copy-protected or damaged disk opens with its error information intact rather than as a clean disk it never was. A set split across two disks — normal, since a 40-track SixPack doesn\'t fit on one — is put back together from whichever disks you have open, and the confirmation tells you which ones it used',
+      '.tar, .tgz, .tar.gz, .lha and .lzh archives now open the way .zip does. When an archive holds only one thing worth opening you get no dialog at all; otherwise you pick from a list, where a ZipCode set counts as a single item instead of loose files you could half-select',
+      'Smaller polish: dropping something the editor doesn\'t recognise now says so instead of doing nothing, and exported ZipCode parts keep their exact name so you can drop them straight back in',
+    ]},
     { ver: '1.4.16', title: 'Copy GEOS VLIR files when copying directories', items: [
       'Copying a sub-directory that contains GEOS VLIR files (geoWrite documents, fonts, desk accessories) now writes them onto the destination CBM-DOS disk with their INFO block + every record\'s sector chain intact. Single-file VLIR paste already worked; the tree-copy path was skipping them with a warning',
       'Pasting GEOS files into an IDE64 .hdd (CFS) partition is still blocked — CFS reserves a GEOS partition type but its on-disk layout isn\'t documented in the specs we have, so the paste refuses with a clear "not yet supported" reason instead of silently corrupting the destination. Use Export as CVT → Import on a CBM-DOS disk to move GEOS files',

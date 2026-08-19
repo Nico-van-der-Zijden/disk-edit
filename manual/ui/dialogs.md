@@ -95,6 +95,17 @@ Some viewers have multiple tabs in one modal:
 
 Tabs are along the top of the modal body. Click to switch.
 
+## Archive member picker
+
+Shown when you drop a `.zip`, `.tar`, `.tgz`, `.lha` or `.lzh` that holds more than one openable thing. Titled `Archive: <name>`, with tickable sections:
+
+- **Disk images** — each opens as its own tab
+- **ZipCode sets** — one row per *set*, not per file. Ticking a row takes all 4-6 parts, since selecting half a set is never useful
+- **Files** — importable into the active disk; disabled with a note when no disk is open
+- **Incomplete ZipCode set / Other / Could not be extracted** — shown greyed with a reason, so a member is never dropped in silence
+
+**If there is nothing to choose, no dialog appears.** One lone disk image, or one lone complete ZipCode set, opens straight away. Importable files, a second set, or leftover parts all bring the picker back, because those are real choices.
+
 ## Floating windows
 
 Not strictly modals — these stay open *over* the editor and let you keep interacting with the page:

@@ -124,6 +124,10 @@ function showFileInfo(entryOff) {
     }
   }
 
-  showModal('File Info \u2014 "' + name + '"', lines);
+  // Render the info lines into the detail pane (read-only, no footer needed).
+  var infoHtml = '<ul class="fileinfo-list">' +
+    lines.map(function(l) { return '<li>' + escHtml(l) + '</li>'; }).join('') +
+    '</ul>';
+  showViewerModal('File Info \u2014 "' + name + '"', infoHtml);
 }
 

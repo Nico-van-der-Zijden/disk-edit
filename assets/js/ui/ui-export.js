@@ -142,176 +142,255 @@ document.getElementById('opt-compact-dir').addEventListener('click', function(e)
 });
 
 // ── Decompress ZipCode ───────────────────────────────────────────────
+// Decoding lives in the cbm-format-*.js modules. These helpers are shared by
+// the on-disk handler (refs are dir entry offsets) and the drop path in
+// ui-init.js (refs are loaded buffers). `readRef` returns one file's bytes.
+function zipCodeDecodeSets(sets, readRef) {
+  var results = [], failures = [];
+  for (var si = 0; si < sets.length; si++) {
+    var set = sets[si];
+    var files = [], readErr = null;
+    for (var fi = 0; fi < set.refs.length; fi++) {
+      var data = readRef(set.refs[fi], fi, set);
+      if (!data || data.length < 3) {
+        readErr = 'could not read ' + (fi + 1) + '!' + set.name;
+        break;
+      }
+      files.push(data);
+    }
+    if (readErr) { failures.push('"' + set.name + '": ' + readErr); continue; }
+
+    var res = decompressZipCode(files);
+    if (res.error) { failures.push('"' + set.name + '": ' + res.error); continue; }
+    results.push({ name: set.name, res: res });
+  }
+  return { results: results, failures: failures };
+}
+
+// SixPack counterpart, same { results, failures } shape. `res.buffer` is the
+// image to open — a "+Errors" D64 when the set carries read errors.
+function sixPackDecodeSets(sets, readRef) {
+  var results = [], failures = [];
+  for (var si = 0; si < sets.length; si++) {
+    var set = sets[si];
+    var files = [], readErr = null;
+    for (var fi = 0; fi < set.refs.length; fi++) {
+      var data = readRef(set.refs[fi], fi, set);
+      if (!data || data.length < 4) {
+        readErr = 'could not read ' + (fi + 1) + '!!' + set.name;
+        break;
+      }
+      files.push(data);
+    }
+    if (readErr) { failures.push('"' + set.name + '": ' + readErr); continue; }
+
+    var res = decompressSixPack(files);
+    if (res.error) { failures.push('"' + set.name + '": ' + res.error); continue; }
+    res.buffer = sixPackToImage(res);
+    results.push({ name: set.name, res: res });
+  }
+  return { results: results, failures: failures };
+}
+
+// Call only after every set is decoded: opening a tab repoints currentBuffer
+// and would break any remaining reads.
+function zipCodeOpenTabs(results) {
+  if (results.length === 0) return;
+  saveActiveTab();
+  var firstTabId = null;
+  for (var ri = 0; ri < results.length; ri++) {
+    // CBM names can hold characters illegal in host filenames ("HACK
+    // CD1/TRIAD" is real), so the tab keeps the original and Save gets a
+    // sanitized one.
+    var title = results[ri].name + '.d64';
+    var safeBase = results[ri].name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'zipcode';
+    var name = safeBase + '.d64';
+    currentBuffer = results[ri].res.buffer;
+    currentFileName = name;
+    currentPartition = null;
+    selectedEntryIndex = -1;
+    clearCmdContainerState();
+    parseDisk(currentBuffer);
+    var tab = createTab(title, currentBuffer, name);
+    activeTabId = tab.id;
+    clearUndo();
+    // Memory-only, so start dirty. cleanStackLength = -1 survives an
+    // edit-then-undo (undoStack.length can never be -1) until a real save.
+    cleanStackLength = -1;
+    tabDirty = true;
+    if (firstTabId === null) firstTabId = tab.id;
+    // Persist this tab's state before the next iteration overwrites the
+    // globals it was built from.
+    saveActiveTab();
+  }
+  if (activeTabId !== firstTabId) {
+    switchToTab(firstTabId);
+  } else {
+    renderDisk(parseCurrentDir(currentBuffer));
+    renderTabs();
+    updateMenuState();
+  }
+}
+
+// Summary modal: per-set track counts, zero-filled gaps, then failures.
+// `extraLines` is appended last (partial sets, unsupported SixPack, ...).
+function zipCodeReport(results, failures, extraLines) {
+  var lines = [];
+  for (var li = 0; li < results.length; li++) {
+    var r = results[li];
+    var line = '"' + r.name + '" → ' + r.res.tracks + ' tracks';
+    if (r.res.missing > 0) {
+      line += ' (' + r.res.missing + ' sector(s) absent from the set, zero-filled)';
+    }
+    // SixPack only: a set carrying read errors opens as a "+Errors" image.
+    if (r.res.errorCount > 0) {
+      line += ' — ' + r.res.errorCount + ' sector(s) with read errors, kept in an +Errors image';
+    }
+    lines.push(line);
+  }
+  if (results.length > 0) {
+    lines.unshift(results.length === 1
+      ? 'Decompressed 1 set into a new tab:'
+      : 'Decompressed ' + results.length + ' sets into new tabs:');
+  }
+  if (failures.length > 0) {
+    if (lines.length > 0) lines.push('');
+    lines.push(failures.length === 1 ? 'One set failed:' : failures.length + ' sets failed:');
+    for (var fj = 0; fj < failures.length; fj++) lines.push(failures[fj]);
+  }
+  if (extraLines && extraLines.length) {
+    if (lines.length > 0) lines.push('');
+    for (var ej = 0; ej < extraLines.length; ej++) lines.push(extraLines[ej]);
+  }
+  if (lines.length === 0) return;
+  showModal(failures.length > 0 && results.length === 0 ? 'Decompress Error' : 'Decompress ZipCode', lines);
+}
+
+// Lines describing sets that couldn't be used, shared by both entry points.
+function zipCodePartialLines(partial) {
+  var out = [];
+  for (var pi = 0; pi < partial.length; pi++) {
+    var part = partial[pi];
+    var got = part.found.map(function(d) { return d + '!'; }).join(', ');
+    out.push('"' + part.name + '": found ' + got + ' (need 1!, 2!, 3!, 4!)');
+  }
+  if (out.length) out.unshift(out.length === 1 ? 'Incomplete set:' : 'Incomplete sets:');
+  return out;
+}
+
 document.getElementById('opt-unzip').addEventListener('click', async function(e) {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
 
-  var data = new Uint8Array(currentBuffer);
-  var info = parseCurrentDir(currentBuffer);
+  var items = zipCodeGatherItems();
+  var found = findZipCodeSets(items);
+  var foundSix = findSixPackSets(items);
+  var foundFile = findFilePackSets(items);
+  // Tag each candidate so the picker can label it and the decode can route
+  // to the right reader — DiskPacked and SixPack share nothing but the name.
+  var candidates = found.complete.map(function(s) { return { set: s, kind: 'zipcode' }; })
+    .concat(foundSix.complete.map(function(s) { return { set: s, kind: 'sixpack' }; }))
+    .concat(foundFile.complete.map(function(s) { return { set: s, kind: 'filepack' }; }));
 
-  // Find ZipCode sets: look for files starting with "1!" and matching 2!/3!/4!
-  var sets = {};
-  for (var i = 0; i < info.entries.length; i++) {
-    var en = info.entries[i];
-    if (en.deleted) continue;
-    var name = petsciiToReadable(en.name || '').trim();
-    if (name.length < 3) continue;
-    var prefix = name.substring(0, 2);
-    if (prefix === '1!' || prefix === '2!' || prefix === '3!' || prefix === '4!') {
-      var baseName = name.substring(2);
-      if (!sets[baseName]) sets[baseName] = {};
-      sets[baseName][prefix[0]] = en.entryOff;
+  if (candidates.length === 0) {
+    var none = zipCodePartialLines(found.partial);
+    for (var pj = 0; pj < foundSix.partial.length; pj++) {
+      var spp = foundSix.partial[pj];
+      none.push('Incomplete SixPack set "' + spp.name + '": found ' +
+        spp.found.map(function(d) { return d + '!!'; }).join(', ') + ' (need 1!! through 6!!)');
     }
+    for (var pk = 0; pk < foundFile.partial.length; pk++) {
+      var fpp = foundFile.partial[pk];
+      none.push('Incomplete FilePacked set "' + fpp.name + '": found ' +
+        fpp.found.map(function(L) { return L + '!'; }).join(', ') +
+        (fpp.hasDir ? '' : ' — the x! directory file is missing'));
+    }
+    if (none.length === 0) {
+      none = [
+        'No ZipCode files found on this disk.',
+        'DiskPacked sets are named 1!NAME through 4!NAME (plus 5!NAME for 40 tracks); ' +
+        'SixPack sets are 1!!NAME through 6!!NAME.'
+      ];
+    }
+    showModal('Decompress ZipCode', none);
+    return;
   }
 
-  // Find complete sets (all 4 files present)
-  var completeSets = [];
-  Object.keys(sets).forEach(function(sn) {
-    if (sets[sn]['1'] && sets[sn]['2'] && sets[sn]['3'] && sets[sn]['4']) {
-      completeSets.push({ name: sn, offsets: sets[sn] });
-    }
+  // One set needs no picker; several get the multi-select.
+  var picks;
+  if (candidates.length === 1) {
+    picks = candidates;
+  } else {
+    picks = await showZipCodeSetPicker(candidates.map(function(c) {
+      return {
+        name: c.set.name,
+        tracks: c.kind === 'sixpack' ? 0 : c.set.tracks,
+        refs: c.set.refs,
+        kind: c.kind,
+      };
+    }));
+    if (picks.length === 0) return;
+    // Map the picker's rows back to the tagged candidates.
+    picks = picks.map(function(p) {
+      return candidates.filter(function(c) { return c.set.name === p.name && c.kind === p.kind; })[0];
+    }).filter(Boolean);
+  }
+
+  // Read every pick before any tab is opened. Each ref knows which disk it
+  // came from, so a set spanning several tabs reads from each in turn.
+  var readEntry = function(ref) {
+    var r = readFileData(ref.ctx.buffer, ref.entryOff, ref.ctx);
+    return (r.error || !r.data) ? null : r.data;
+  };
+  var zcPicks = picks.filter(function(p) { return p.kind === 'zipcode'; }).map(function(p) { return p.set; });
+  var spPicks = picks.filter(function(p) { return p.kind === 'sixpack'; }).map(function(p) { return p.set; });
+  var fpPicks = picks.filter(function(p) { return p.kind === 'filepack'; }).map(function(p) { return p.set; });
+
+  // FilePacked sets have to be read before any tab is opened too, since the
+  // extraction repoints currentBuffer at the fresh D64 it builds.
+  var fpLoaded = fpPicks.map(function(s) {
+    return {
+      name: s.name,
+      parts: s.refs.map(readEntry),
+      dir: readEntry(s.dirRef),
+    };
   });
 
-  if (completeSets.length === 0) {
-    // Show what we found
-    var partial = Object.keys(sets);
-    if (partial.length > 0) {
-      var msgs = ['Incomplete ZipCode set(s) found:'];
-      for (var pk = 0; pk < partial.length; pk++) {
-        var found = Object.keys(sets[partial[pk]]).sort().map(function(n) { return n + '!'; }).join(', ');
-        msgs.push('"' + partial[pk] + '": found ' + found + ' (need 1!, 2!, 3!, 4!)');
-      }
-      showModal('Decompress ZipCode', msgs);
-    } else {
-      showModal('Decompress ZipCode', ['No ZipCode files found on this disk.', 'ZipCode files are named 1!NAME, 2!NAME, 3!NAME, 4!NAME.']);
+  var zcDec = zipCodeDecodeSets(zcPicks, readEntry);
+  var spDec = sixPackDecodeSets(spPicks, readEntry);
+  var results = zcDec.results.concat(spDec.results);
+  var failures = zcDec.failures.concat(spDec.failures);
+  zipCodeOpenTabs(results);
+
+  // Note any set that was assembled from more than one open disk, so it's
+  // obvious where the parts came from rather than looking like magic.
+  var extra = [];
+  for (var ci = 0; ci < picks.length; ci++) {
+    var pset = picks[ci].set;
+    var refs = pset.refs.concat(pset.dirRef ? [pset.dirRef] : []);
+    var tabNames = [];
+    for (var ri2 = 0; ri2 < refs.length; ri2++) {
+      var tn = refs[ri2] && refs[ri2].tab;
+      if (tn && tabNames.indexOf(tn) < 0) tabNames.push(tn);
     }
-    return;
-  }
-
-  var set = completeSets[0];
-  if (completeSets.length > 1) {
-    var buttons = completeSets.map(function(s) { return { label: s.name, value: s.name }; });
-    buttons.push({ label: 'Cancel', value: null, secondary: true });
-    var pick = await showChoiceModal('Decompress ZipCode',
-      completeSets.length + ' ZipCode sets found. Pick one:', buttons);
-    if (!pick) return;
-    set = completeSets.find(function(s) { return s.name === pick; }) || completeSets[0];
-  }
-
-  // Read all 4 files
-  var files = [];
-  for (var fi = 1; fi <= 4; fi++) {
-    var result = readFileData(currentBuffer, set.offsets[String(fi)], getCurrentCtx());
-    if (result.error || result.data.length < 3) {
-      showModal('Decompress Error', ['Failed to read file ' + fi + '!' + set.name + ': ' + (result.error || 'too small')]);
-      return;
+    if (tabNames.length > 1) {
+      extra.push('"' + pset.name + '" was assembled from ' + tabNames.length +
+        ' open disks: ' + tabNames.join(', '));
     }
-    files.push(result.data);
   }
 
-  // Decompress into a D64
-  var d64 = decompressZipCode(files);
-  if (!d64) {
-    showModal('Decompress Error', ['ZipCode decompression failed — data may be corrupt.']);
-    return;
+  for (var fl = 0; fl < fpLoaded.length; fl++) {
+    var L = fpLoaded[fl];
+    if (!L.dir || L.parts.some(function(p) { return !p; })) {
+      extra.push('"' + L.name + '": could not read every part off the disk.');
+      continue;
+    }
+    var fpRes = openFilePackSetAsTab(L.parts, L.dir, L.name, /*silent*/ true);
+    if (fpRes && fpRes.lines) extra = extra.concat(fpRes.lines);
   }
-
-  // Open as new tab
-  saveActiveTab();
-  currentBuffer = d64;
-  currentFileName = set.name + '.d64';
-  currentPartition = null;
-  selectedEntryIndex = -1;
-  parseDisk(currentBuffer);
-  var tab = createTab(set.name + '.d64', currentBuffer, set.name + '.d64');
-  activeTabId = tab.id;
-  var newInfo = parseCurrentDir(currentBuffer);
-  renderDisk(newInfo);
-  renderTabs();
-  updateMenuState();
-  showModal('Decompress ZipCode', ['"' + set.name + '" decompressed successfully.', 'Opened as new tab.']);
+  zipCodeReport(results, failures, extra);
 });
-
-function decompressZipCode(files) {
-  // Standard D64: 35 tracks, 174848 bytes
-  var spt = function(t) {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
-
-  var d64 = new Uint8Array(174848);
-  var tracksPerFile = [8, 8, 9, 10];
-  var track = 1;
-
-  for (var fi = 0; fi < 4; fi++) {
-    var fileData = files[fi];
-    var pos = 2; // skip PRG load address
-
-    for (var ti = 0; ti < tracksPerFile[fi]; ti++) {
-      var sectors = spt(track);
-
-      for (var si = 0; si < sectors; si++) {
-        if (pos >= fileData.length) return null;
-
-        var packByte = fileData[pos++];
-        var method = (packByte >> 6) & 0x03;
-        var sectorNum = packByte & 0x3F;
-
-        // Calculate D64 offset for this sector
-        var d64Off = 0;
-        for (var ct = 1; ct < track; ct++) d64Off += spt(ct) * 256;
-        d64Off += sectorNum * 256;
-
-        if (d64Off + 256 > d64.length) return null;
-
-        if (method === 0) {
-          // Store: raw 256 bytes
-          if (pos + 256 > fileData.length) return null;
-          for (var bi = 0; bi < 256; bi++) d64[d64Off + bi] = fileData[pos++];
-
-        } else if (method === 1) {
-          // Fill: single byte repeated 256 times
-          if (pos >= fileData.length) return null;
-          var fillVal = fileData[pos++];
-          for (var bi2 = 0; bi2 < 256; bi2++) d64[d64Off + bi2] = fillVal;
-
-        } else if (method === 2) {
-          // RLE compressed
-          if (pos >= fileData.length) return null;
-          var rleEscape = fileData[pos++];
-          var decoded = 0;
-
-          while (decoded < 256) {
-            if (pos >= fileData.length) return null;
-            var b = fileData[pos++];
-
-            if (b === rleEscape) {
-              if (pos + 1 >= fileData.length) return null;
-              var count = fileData[pos++];
-              var fill = fileData[pos++];
-              if (count === 0) count = 256;
-              for (var ri = 0; ri < count && decoded < 256; ri++) {
-                d64[d64Off + decoded++] = fill;
-              }
-            } else {
-              d64[d64Off + decoded++] = b;
-            }
-          }
-
-        } else {
-          // Method 3: invalid
-          return null;
-        }
-      }
-      track++;
-    }
-  }
-
-  return d64.buffer;
-}
 
 // ── LNX (Lynx) archive extraction ────────────────────────────────────
 // Parse the archive and write every file onto a fresh D64. Globals
@@ -408,6 +487,90 @@ function extractLnxToNewD64(buffer) {
   tabDirty = false;
 
   return { buffer: currentBuffer, imported: imported, skipped: skipped, comment: parsed.comment };
+}
+
+// ── FilePacked ZipCode → new D64 ─────────────────────────────────────
+// Holds files, not a disk image, so it extracts onto a fresh D64 like LNX.
+// Globals point at the new disk so writeFileToDisk works normally.
+function extractFilePackToNewD64(dataFiles, dirFile) {
+  var parsed = decompressFilePack(dataFiles, dirFile);
+  if (parsed.error) return { error: parsed.error };
+
+  saveActiveTab();
+  var d64 = createEmptyDisk('d64', 35);
+  currentBuffer = d64;
+  currentFormat = DISK_FORMATS.d64;
+  currentTracks = 35;
+  currentPartition = null;
+  selectedEntryIndex = -1;
+  clearCmdContainerState();
+  parseDisk(currentBuffer);
+
+  var imported = 0;
+  var skipped = parsed.skipped.slice();
+  for (var i = 0; i < parsed.files.length; i++) {
+    var f = parsed.files[i];
+    var display = petsciiToReadable(f.name).trim() || '<file ' + (i + 1) + '>';
+    // x! records the type as the letter OR'd with $80, so only P/S/U can
+    // appear — no REL, and no splat/lock bits.
+    var typeIdx = f.typeChar === 'S' ? FILE_TYPE.SEQ
+      : f.typeChar === 'U' ? FILE_TYPE.USR
+      : f.typeChar === 'P' ? FILE_TYPE.PRG : -1;
+    if (typeIdx < 0) {
+      skipped.push({ name: display, reason: 'unsupported type "' + f.typeChar + '"' });
+      continue;
+    }
+    if (writeFileToDisk(typeIdx, f.nameBytes, f.data, null, true, getCurrentCtx())) {
+      imported++;
+    } else {
+      skipped.push({ name: display, reason: 'disk or directory full' });
+    }
+  }
+
+  undoStack = [];
+  redoStack = [];
+  cleanStackLength = 0;
+  tabDirty = false;
+
+  return { buffer: currentBuffer, imported: imported, skipped: skipped };
+}
+
+// Open a FilePacked set as a new D64 tab. `dataFiles` are the a!/b!/... byte
+// arrays in letter order, `dirFile` the x! one.
+// With `silent`, returns { lines } instead of popping a modal, so a caller
+// handling several sets can compose one report — the app has a single shared
+// modal, and a second showModal would overwrite the first.
+function openFilePackSetAsTab(dataFiles, dirFile, setName, silent) {
+  var result = extractFilePackToNewD64(dataFiles, dirFile);
+  if (result.error) {
+    if (silent) return { lines: ['"' + setName + '": ' + result.error], error: result.error };
+    showModal('Decompress Error', ['"' + setName + '": ' + result.error]);
+    return null;
+  }
+  var tabName = setName + '.d64';
+  var tab = createTab(tabName, currentBuffer, null);
+  activeTabId = tab.id;
+
+  var info = parseCurrentDir(currentBuffer);
+  renderDisk(info);
+  renderTabs();
+  updateMenuState();
+
+  var lines = ['"' + setName + '": extracted ' + result.imported + ' file(s) to a new D64.'];
+  if (result.skipped.length > 0) {
+    lines.push('');
+    lines.push(result.skipped.length + ' file(s) skipped:');
+    var cap = Math.min(20, result.skipped.length);
+    for (var si = 0; si < cap; si++) {
+      lines.push('  ' + result.skipped[si].name + ' — ' + result.skipped[si].reason);
+    }
+    if (result.skipped.length > cap) {
+      lines.push('  … and ' + (result.skipped.length - cap) + ' more');
+    }
+  }
+  if (silent) return { tab: tab, lines: lines };
+  showModal('Decompress ZipCode', lines);
+  return tab;
 }
 
 // Open an LNX archive as a new D64 tab. Called from drag-drop and file-picker.
@@ -717,7 +880,7 @@ document.getElementById('opt-export-all').addEventListener('click', function(e) 
       var cName = petsciiToReadable(ce.name).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
       if (!cName) cName = 'file' + ci;
       var ext = '.' + (ce.typeSuffix || 'prg').toLowerCase();
-      files.push({ name: cName + ext, data: cRes.data });
+      files.push({ name: cName + exportExtFor(cName, ext), data: cRes.data });
     }
     var part = hddPartitions && hddPartitions[cfsPartitionIdx];
     diskName = (part && part.name ? petsciiToReadable(part.name) : 'partition')
@@ -740,7 +903,7 @@ document.getElementById('opt-export-all').addEventListener('click', function(e) 
       if (result.error || result.data.length === 0) continue;
       var name = petsciiToReadable(en.name || '').trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
       if (!name) name = 'file' + i;
-      files.push({ name: name + (extMap[typeIdx] || '.prg'), data: result.data });
+      files.push({ name: name + exportExtFor(name, extMap[typeIdx] || '.prg'), data: result.data });
     }
     diskName = petsciiToReadable(info.diskName || '').trim().replace(/[<>:"/\\|?*]/g, '_') || 'disk';
   }

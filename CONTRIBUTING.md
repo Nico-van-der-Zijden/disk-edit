@@ -56,7 +56,12 @@ Key files (paths relative to `assets/js/`):
 | `ui/ui-directory.js` | Directory manipulation, block counting, file addresses |
 | `ui/ui-directory-separators.js` | Insert Separator feature: default + custom patterns, editor modal, floating palette |
 | `ui/ui-search.js` | Search, Go to Sector, recalculate free blocks |
-| `ui/ui-export.js` | Bulk export (ZIP, CSV, HTML, PNG), ZipCode, file chains |
+| `ui/ui-export.js` | Bulk export (ZIP, CSV, HTML, PNG), file chains |
+| `format/cbm-format-zipcode.js` | DiskPacked ZipCode (1!–5!): set finder + decoder, spec `disks/FORMATS/ZIP_DISK.TXT` |
+| `format/cbm-format-tar.js` | tar reader; no compression, so pure header walking |
+| `format/cbm-format-lha.js` | LHA/LZH reader: header levels 0/1, `-lh0-`/`-lh5-`, CRC-16 verified, spec `disks/FORMATS/LHA.TXT` |
+| `format/cbm-format-sixpack.js` | SixPack ZipCode (1!!–6!!): GCR decode + CBM error codes, spec `disks/FORMATS/ZIP_SIX.TXT` |
+| `format/cbm-format-filepack.js` | FilePacked ZipCode (a!–w! + x!): file-level packing, spec `disks/FORMATS/ZIP_FILE.TXT` |
 | `ui/ui-init.js` | Drag and drop, theme toggle, initialization |
 | `ui/disk/ui-cmd.js` | CMD container UI (RAMLink, FD2000/4000, CMD HD partition table, partition import/export) |
 | `ui/disk/ui-ide64.js` | IDE64 .hdd container UI: partition list, CFS directory view, file ops, validate, sort, scan-for-lost-files |

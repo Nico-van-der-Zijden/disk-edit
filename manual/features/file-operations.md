@@ -19,6 +19,28 @@ Drop a file onto the page. The editor inspects the extension:
 - `.txt` — converted from ASCII to PETSCII and imported as SEQ
 - `.lnx` — extracts all files into a fresh D64 (opens as new tab)
 - `.d64 .d71 .d81 .dnp .hdd ...` — opened as a new tab
+- ZipCode sets — these have no extension, so they are matched by name. Drop a
+  whole set and it becomes a D64 in a new tab; drop several at once and each
+  gets its own tab. An incomplete set is reported rather than ignored. All
+  three variants are handled:
+  - **DiskPacked** `1!NAME`…`4!NAME`, plus `5!NAME` for a 40-track disk. The
+    common one — a compressed sector copy of a whole disk.
+  - **SixPack** `1!!NAME`…`6!!NAME` (note the two `!`). Stores raw GCR, so it
+    can carry error-protected and fastloader disks; sectors that were
+    unreadable on the original are preserved as CBM error codes, and such a
+    set opens as a `+Errors` image.
+  - **FilePacked** `a!NAME`…`w!NAME` plus the `x!NAME` directory file. Packs
+    individual files rather than a disk, so it extracts onto a fresh D64 the
+    way a LYNX archive does.
+- `.zip .tar .tgz .tar.gz .gz .lha .lzh` — opened as containers. Their
+  contents are classified by the same rules, so a disk image inside a tarball
+  opens as a tab and a ZipCode set inside a zip is reassembled. When a
+  container holds exactly one openable thing you get no dialog at all;
+  otherwise you pick from a list. LHA supports the `-lh0-` (stored) and
+  `-lh5-` methods and verifies every member against its stored CRC.
+
+Anything the editor doesn't recognise is reported — a drop that does nothing
+will tell you why.
 
 ### Filename handling
 
@@ -38,6 +60,8 @@ Write a file *out of* the active disk to your OS.
 
 Selected file is downloaded as raw bytes with the file's name + the appropriate extension (`.prg`, `.seq`, `.usr`, `.rel`, `.cvt` for GEOS).
 
+**Exception: ZipCode parts** (`1!NAME`, `1!!NAME`, `a!NAME`, `x!NAME`) export with **no** extension appended, keeping the exact name that was on the disk. That matters because ZipCode parts are recognised by name, not by extension — an exported `1!!NAME.prg` would be treated as a file to import when dropped back in, instead of being reassembled. This applies to drag-out and bulk ZIP export too.
+
 ### Via drag-out
 
 Drag a directory row out of the browser onto your desktop. Same result.
@@ -48,9 +72,9 @@ GEOS files (any structure: VLIR, sequential) right-click → **Export as CVT** p
 
 ### Bulk export
 
-**File → Export Disk → As ZIP** writes every file in the disk to a zip archive plus a Text / CSV / HTML directory listing. The HTML listing is browsable as a stand-alone web page with file links.
+**Disk → Export Disk → As ZIP** writes every file in the disk to a zip archive plus a Text / CSV / HTML directory listing. The HTML listing is browsable as a stand-alone web page with file links.
 
-**File → Export Disk → As Base64 Data URI** produces a `data:` URI for the whole disk that you can paste into a forum post or git issue (useful for small disks).
+**Disk → Export Disk → As Base64 Data URI** produces a `data:` URI for the whole disk that you can paste into a forum post or git issue (useful for small disks).
 
 ## Rename
 

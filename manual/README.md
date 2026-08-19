@@ -49,6 +49,11 @@ The editor reads every Commodore disk format in widespread use. Most are full re
 
 - [CVT](formats/cvt.md) — GEOS ConVerT (one GEOS file with its INFO block + records)
 - [LNX](formats/lnx.md) — Lynx archive (extracts to a new D64)
+- [ZipCode](formats/zipcode.md) — DiskPacked (`1!`–`5!`), SixPack (`1!!`–`6!!`, keeps read errors) and FilePacked (`a!`–`x!`), including sets split across disks
+
+### Host archives
+
+Dropped `.zip`, `.gz`, `.tar` / `.tgz` / `.tar.gz`, `.lha` / `.lzh` and `.nbz` files are unpacked automatically and their contents classified by the same rules — see [File operations](features/file-operations.md).
 
 ## Features
 

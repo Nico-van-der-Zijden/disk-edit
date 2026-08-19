@@ -24,6 +24,7 @@ The HTML listing has clickable file links — clicking one downloads that file a
 - Filename + format-appropriate extension
 - File type → extension: PRG → `.prg`, SEQ → `.seq`, USR → `.usr`, REL → `.rel`
 - GEOS files → `.cvt` (CVT container with INFO block + records)
+- **ZipCode parts** (`1!NAME`, `1!!NAME`, `a!NAME`, `x!NAME`) → **no extension**, keeping the exact name from the disk. They're recognised by name, so an exported `1!!NAME.prg` would be treated as a file to import when dropped back in rather than reassembled. Applies to drag-out and bulk ZIP export too.
 
 You can also **drag** a row out of the editor onto your OS — same result.
 

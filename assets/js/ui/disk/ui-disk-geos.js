@@ -85,13 +85,12 @@ document.getElementById('opt-view-geos').addEventListener('click', function(e) {
   }
   html += '</table>';
 
-  showModal('GEOS File Info', []);
-  var body = document.getElementById('modal-body');
-  body.innerHTML = html;
+  // Read-only info — render in the detail pane (no footer).
+  var body = showViewerModal('GEOS File Info', html);
 
   // Insert icon canvas into the name row
   if (iconCanvas) {
-    var nameRow = document.getElementById('geos-icon-row');
+    var nameRow = (body || document).querySelector('#geos-icon-row') || document.getElementById('geos-icon-row');
     if (nameRow) {
       iconCanvas.className = 'geos-icon';
       nameRow.insertBefore(iconCanvas, nameRow.firstChild);
@@ -190,7 +189,6 @@ document.getElementById('opt-view-border').addEventListener('click', function(e)
       '</tr>';
   }
   html += '</table>';
-  showModal('GEOS Border Sector', []);
-  document.getElementById('modal-body').innerHTML = html;
+  showViewerModal('GEOS Border Sector', html);
 });
 

@@ -101,7 +101,8 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 - Compact Directory (remove deleted slots)
 - File Chains view (sector chain for every file)
 - Fill free sectors
-- ZipCode decompression (1!–4! file sets)
+- ZipCode, all three variants — DiskPacked (1!–4!, plus 5! for 40 tracks), SixPack (1!!–6!!, raw GCR, preserves read errors) and FilePacked (a!–w! + x!) — from a disk or by dropping the loose files
+- Container formats: ZIP, gzip, tar (.tar/.tgz/.tar.gz), LHA/LZH (-lh0-/-lh5-, CRC-checked), LNX, NBZ
 - Resize Image (DNP only — grow/shrink the track count, auto-compacts files on shrink)
 - Convert to GEOS Format (adds the GEOS signature to a regular disk)
 - Compare with… side-by-side disk diff (file list + Directory + sector hex)
@@ -173,6 +174,7 @@ assets/
     directory.css       Disk panel, header, directory listing
     petscii.css         PETSCII character picker
     modal.css           Modal dialogs
+    workspace.css       App shell, docked detail pane, splitter
     editors.css         Hex editor, geoWrite, REL, search results
     utilities.css       Utility classes, form elements, code tags
     bam.css             BAM viewer, compact bars, canvas map
@@ -188,6 +190,11 @@ assets/
       cbm-format-geos.js          GEOS file types, VLIR records, info block, bitmap decompress
       cbm-sector-allocator.js     Real-drive sector allocation (buildTrueAllocationMap, allocateSectors)
       cbm-format-lnx.js           Lynx (.lnx) archive reader
+      cbm-format-zipcode.js       DiskPacked ZipCode (1!–5!) set finder + decoder
+      cbm-format-tar.js           tar reader (USTAR + GNU long names)
+      cbm-format-lha.js           LHA/LZH reader (-lh0-, -lh5-, CRC-16 verify)
+      cbm-format-sixpack.js       SixPack ZipCode (1!!–6!!), GCR + error codes
+      cbm-format-filepack.js      FilePacked ZipCode (a!–w! + x! directory)
       cbm-format-tape.js          T64 tape directory reader
       cbm-tape.js                 TAP tape parser (CBM ROM, Turbotape 250, Novaload, Cyberload)
       cbm-archive.js              gzip + ZIP archive readers
@@ -196,7 +203,8 @@ assets/
     ui/                           UI infrastructure and app shell
       cbm-petscii.js              On-screen PETSCII keyboard picker
       ui-modals.js                Modal dialogs and input prompts
-      ui-archive-picker.js        Archive content picker
+      ui-archive-picker.js        Archive member picker (ZIP / tar / LHA), ZipCode set grouping
+      ui-detail-pane.js           Docked side pane for read-only viewers
       ui-render.js                Directory rendering, partition navigation
       ui-menus.js                 Context menu, selection, keyboard shortcuts
       ui-editing.js               Inline editing, save helpers, menu bar, tabs
@@ -207,7 +215,7 @@ assets/
       ui-directory-separators.js  Insert Separator: default + custom patterns, editor, floating palette
       ui-fileops.js               File import, copy/paste, raw + CVT export, scratch/unscratch
       ui-export-geowrite.js       geoWrite export to RTF, PDF, plain text
-      ui-export.js                Bulk export (ZIP, CSV, HTML, PNG), ZipCode, name case
+      ui-export.js                Bulk export (ZIP, CSV, HTML, PNG), name case
       ui-recent.js                Recent-files list
       ui-init.js                  Drag and drop, theme toggle, initialization
       ui-help.js                  About, credits, keyboard shortcuts, changelog

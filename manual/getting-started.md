@@ -7,7 +7,7 @@ CBM Disk Editor is a single HTML page hosted at <https://d64.sannic.nl>. There i
 Three ways to load a disk:
 
 1. **Disk → Open** — opens your OS file picker. Pick a disk image (`.d64`, `.d71`, `.d81`, `.hdd`, etc.) and the editor will detect the format from the file size + magic bytes.
-2. **Drag and drop** — drop one or more files onto the page. Disks open as tabs; files (`.prg`, `.cvt`, etc.) get imported into the *currently active* disk tab; archives (`.lnx`) extract to a new D64; CMD-container files (`.dhd`, `.rml`) open as partition lists.
+2. **Drag and drop** — drop one or more files onto the page. Disks open as tabs; files (`.prg`, `.cvt`, etc.) get imported into the *currently active* disk tab; archives (`.lnx`) extract to a new D64; ZipCode sets (`1!NAME`…`4!NAME`) are reassembled into a D64; CMD-container files (`.dhd`, `.rml`) open as partition lists.
 3. **Disk → Recent** — your last opened disks (stored in browser localStorage; nothing leaves your computer).
 
 If you don't have a disk image to try, **Disk → New** creates a freshly-formatted blank disk in any supported format.

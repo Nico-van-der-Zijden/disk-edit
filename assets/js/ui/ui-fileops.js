@@ -61,7 +61,7 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
     var blob = new Blob([result.data], { type: 'application/octet-stream' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = name + ext;
+    a.download = name + exportExtFor(name, ext);
     a.click();
     URL.revokeObjectURL(a.href);
   }

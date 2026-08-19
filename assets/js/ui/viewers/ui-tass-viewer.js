@@ -1107,7 +1107,7 @@ function showFileTassViewer(entryOff, preloaded) {
   // Re-render on charset toggle.
   modalCharsetRedraw = function() {
     var rebuilt = buildTassHtml();
-    var body = document.getElementById('modal-body');
+    var body = getViewerBody();
     if (body) body.innerHTML = rebuilt.html;
   };
 }

@@ -959,7 +959,9 @@ function showCfsFileHexViewer(entry) {
   }
   html += '</div>';
 
-  var body = showViewerModal('Hex — ' + readableName, html, 'large');
+  // forceModal: this CFS viewer owns a footer (View as / Rename / Attrs /
+  // Download / Close), so it stays a modal until the pane grows a footer.
+  var body = showViewerModal('Hex — ' + readableName, html, 'lg', true);
 
   // Footer: View as / Rename / Attrs / Download / Close
   var footer = document.querySelector('#modal-overlay .modal-footer');

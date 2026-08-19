@@ -44,7 +44,17 @@ document.addEventListener('drop', async function(e) {
   const cmdcExts = ['.rml', '.rl', '.d1m', '.d2m', '.d4m', '.dhd'];
   const ide64Exts = ['.hdd'];
   var diskEntries = [], importEntries = [], archiveEntries = [], cmdcEntries = [], ide64Entries = [];
+  var unknownNames = [];
+
+  // Claimed before extension routing, since an exported part is named
+  // "1!!NAME.prg" and would otherwise be swallowed as a file to import.
+  var zcClaim = classifyDroppedZipCodeSets(entries);
+  var zipcodeEntries = zcClaim.zipcode;
+  var sixpackEntries = zcClaim.sixpack;
+  var filepackEntries = zcClaim.filepack;
+
   for (var i = 0; i < entries.length; i++) {
+    if (zcClaim.claimed.indexOf(entries[i]) >= 0) continue;
     var lname = entries[i].name.toLowerCase();
     var ext = lname.substring(lname.lastIndexOf('.'));
     if (cmdcExts.indexOf(ext) >= 0) cmdcEntries.push(entries[i]);
@@ -52,6 +62,11 @@ document.addEventListener('drop', async function(e) {
     else if (diskExts.indexOf(ext) >= 0) diskEntries.push(entries[i]);
     else if (archiveExts.indexOf(ext) >= 0) archiveEntries.push(entries[i]);
     else if (fileExts.indexOf(ext) >= 0) importEntries.push(entries[i]);
+    // Matched no bucket at all — report rather than discard.
+    else {
+      unknownNames.push(entries[i].name.substring(
+        Math.max(entries[i].name.lastIndexOf('/'), entries[i].name.lastIndexOf('\\')) + 1));
+    }
   }
 
   // Open disk images in new tabs
@@ -119,6 +134,59 @@ document.addEventListener('drop', async function(e) {
     }
   }
 
+  // FilePacked holds files, so it takes the LNX route rather than rebuilding
+  // sectors.
+  if (filepackEntries.length > 0) {
+    var fpFound = findFilePackSets(filepackEntries.map(function(en) {
+      return { name: en.name, ref: en };
+    }));
+    var fpLines = [];
+    for (var fpi = 0; fpi < fpFound.complete.length; fpi++) {
+      var fpSet = fpFound.complete[fpi];
+      try {
+        var fpRes = openFilePackSetAsTab(
+          fpSet.refs.map(function(r) { return new Uint8Array(r.buffer); }),
+          new Uint8Array(fpSet.dirRef.buffer),
+          fpSet.name, /*silent*/ true);
+        if (fpRes && fpRes.lines) fpLines = fpLines.concat(fpRes.lines);
+      } catch (err) {
+        fpLines.push('"' + fpSet.name + '": ' + (err && err.message ? err.message : err));
+      }
+    }
+    for (var fpp = 0; fpp < fpFound.partial.length; fpp++) {
+      var pp = fpFound.partial[fpp];
+      fpLines.push('Incomplete FilePacked set "' + pp.name + '": found ' +
+        pp.found.map(function(L) { return L + '!'; }).join(', ') +
+        (pp.hasDir ? '' : ' — the x! directory file is missing'));
+    }
+    if (fpLines.length > 0) showModal('Decompress ZipCode', fpLines);
+  }
+
+  // Each complete set becomes its own tab; refs are the dropped entries, so
+  // the reader just hands back their already-loaded bytes.
+  if (zipcodeEntries.length > 0 || sixpackEntries.length > 0) {
+    var readDropped = function(ref) { return new Uint8Array(ref.buffer); };
+    var zcFound = findZipCodeSets(zipcodeEntries.map(function(en) {
+      return { name: en.name, ref: en };
+    }));
+    var spFound = findSixPackSets(sixpackEntries.map(function(en) {
+      return { name: en.name, ref: en };
+    }));
+    var zcDecoded = zipCodeDecodeSets(zcFound.complete, readDropped);
+    var spDecoded = sixPackDecodeSets(spFound.complete, readDropped);
+    var allResults = zcDecoded.results.concat(spDecoded.results);
+    var allFailures = zcDecoded.failures.concat(spDecoded.failures);
+    zipCodeOpenTabs(allResults);
+
+    var zcExtra = zipCodePartialLines(zcFound.partial);
+    for (var sp = 0; sp < spFound.partial.length; sp++) {
+      var spp = spFound.partial[sp];
+      zcExtra.push('Incomplete SixPack set "' + spp.name + '": found ' +
+        spp.found.map(function(d) { return d + '!!'; }).join(', ') + ' (need 1!! through 6!!)');
+    }
+    zipCodeReport(allResults, allFailures, zcExtra);
+  }
+
   // Import PRG/SEQ/USR/REL/CVT files into current disk
   if (importEntries.length > 0 && currentBuffer) {
     var imported = 0, failed = 0;
@@ -170,6 +238,27 @@ document.addEventListener('drop', async function(e) {
   } else if (importEntries.length > 0 && !currentBuffer) {
     showModal('Drop Error', ['No disk open to import files into. Open or create a disk first.']);
   }
+
+  // Say so when a drop did nothing. Only when nothing else happened: there is
+  // one shared modal, so a second showModal would overwrite the success one.
+  var handledSomething = diskEntries.length || cmdcEntries.length || ide64Entries.length ||
+    archiveEntries.length || importEntries.length || zipcodeEntries.length ||
+    sixpackEntries.length || filepackEntries.length;
+  if (unknownNames.length > 0 && !handledSomething) {
+    var shown = unknownNames.slice(0, 10);
+    var lines = [unknownNames.length === 1
+      ? 'Don’t know how to open this file:'
+      : 'Don’t know how to open any of these ' + unknownNames.length + ' files:'];
+    for (var un = 0; un < shown.length; un++) lines.push('  ' + shown[un]);
+    if (unknownNames.length > shown.length) {
+      lines.push('  … and ' + (unknownNames.length - shown.length) + ' more');
+    }
+    lines.push('');
+    lines.push('Supported: disk images (.d64 .d71 .d81 .d80 .d82 .t64 .tap .x64 .g64 .dnp .nib .nb2), ' +
+      'containers (.hdd .rml .rl .d1m .d2m .d4m .dhd), archives (.zip .gz .tar .tgz .lha .lzh .lnx .nbz), ' +
+      'ZipCode sets (1!NAME…5!NAME) and files to import (.prg .seq .usr .rel .p00 .cvt .txt).');
+    showModal('Unsupported files', lines);
+  }
 });
 
 // Make dir entries draggable to OS (export on drag)
@@ -192,7 +281,7 @@ document.addEventListener('dragstart', function(e) {
       var cName = petsciiToReadable(ce.name).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
       return {
         name: cName || 'export',
-        ext: '.' + (ce.typeSuffix || 'PRG').toLowerCase(),
+        ext: exportExtFor(cName, '.' + (ce.typeSuffix || 'PRG').toLowerCase()),
         data: cRes.data,
       };
     }
@@ -209,7 +298,7 @@ document.addEventListener('dragstart', function(e) {
       var rName = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
       return {
         name: rName || 'export',
-        ext: extMap[typeIdx] || '.prg',
+        ext: exportExtFor(rName, extMap[typeIdx] || '.prg'),
         data: result.data,
       };
     }

@@ -286,8 +286,11 @@ function showFileHexViewer(entryOff, preloaded) {
   var titleText = 'Hex View \u2014 "' + name + '" (' + totalBytes + ' bytes' + (isPrg ? ', load $' + baseAddr.toString(16).toUpperCase().padStart(4, '0') : '') + ')';
   if (result.error) titleText += ' \u2014 ' + result.error;
   showViewerModal(titleText, buildHtml());
+  // Re-render the PETSCII column on Ctrl+Shift charset toggle, writing into
+  // whichever surface the viewer is on (detail pane or modal fallback).
   modalCharsetRedraw = function() {
-    document.getElementById('modal-body').innerHTML = buildHtml();
+    var b = getViewerBody();
+    if (b) b.innerHTML = buildHtml();
   };
 }
 
@@ -332,14 +335,7 @@ function showFileDisasmViewer(entryOff, preloaded) {
   var titleText = 'Disassembly \u2014 "' + name + '" (load: $' + hex16(loadAddr) + ', ' + codeData.length + ' bytes)';
   if (sysTarget) titleText += ', SYS ' + sysTarget;
   if (result.error) titleText += ' \u2014 ' + result.error;
-  document.getElementById('modal-title').textContent = titleText;
-  document.getElementById('modal-body').innerHTML = html;
-  var footer = document.querySelector('#modal-overlay .modal-footer');
-  footer.innerHTML = '<button id="modal-close">OK</button>';
-  document.getElementById('modal-close').addEventListener('click', function() {
-    document.getElementById('modal-overlay').classList.remove('open');
-  });
-  document.getElementById('modal-overlay').classList.add('open');
+  showViewerModal(titleText, html);
 
   // Scroll to SYS entry point
   var sysEl = document.getElementById('dasm-sys-target');

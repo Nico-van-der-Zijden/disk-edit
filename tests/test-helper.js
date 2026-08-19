@@ -21,8 +21,12 @@ var noopEl = {
   appendChild: () => {},
   removeChild: () => {},
   closest: () => null,
+  insertAdjacentHTML: () => {},
   dataset: {}
 };
+// Some UI files walk up from an element at load time (e.g. to append a menu
+// item next to an existing one), so the stub has to have a parent.
+noopEl.parentElement = noopEl;
 global.document = {
   addEventListener: () => {},
   getElementById: () => noopEl,
@@ -54,7 +58,13 @@ loadScript('assets/js/format/cbm-format-geos.js');
 loadScript('assets/js/format/cbm-sector-allocator.js');
 loadScript('assets/js/format/cbm-format-tape.js');
 loadScript('assets/js/format/cbm-format-lnx.js');
+loadScript('assets/js/format/cbm-format-zipcode.js');
+loadScript('assets/js/format/cbm-format-tar.js');
+loadScript('assets/js/format/cbm-format-lha.js');
+loadScript('assets/js/format/cbm-format-sixpack.js');
+loadScript('assets/js/format/cbm-format-filepack.js');
 loadScript('assets/js/format/cbm-editor.js');
+loadScript('assets/js/ui/ui-archive-picker.js');
 loadScript('assets/js/ui/ui-directory.js');
 loadScript('assets/js/ui/ui-fileops.js');
 loadScript('assets/js/ui/viewers/ui-viewer-fileinfo.js');

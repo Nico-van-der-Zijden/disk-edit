@@ -52,6 +52,7 @@
 <link rel="stylesheet" href="assets/css/base.css">
 <link rel="stylesheet" href="assets/css/menus.css">
 <link rel="stylesheet" href="assets/css/layout.css">
+<link rel="stylesheet" href="assets/css/workspace.css">
 <link rel="stylesheet" href="assets/css/directory.css">
 <link rel="stylesheet" href="assets/css/petscii.css">
 <link rel="stylesheet" href="assets/css/modal.css">
@@ -75,7 +76,7 @@
       <li>Full BAM viewer with integrity checking, per-file fragmentation, track usage and a radial Disk Map</li>
       <li>Viewers for hex, BASIC (V2 / V3.5 / V7 / Simons' / Final Cartridge III), PETSCII, 6502 / 6510 disassembly, graphics (24+ formats including Koala, Art Studio, FLI, IFLI, sprites and charsets), REL records, SEQ files</li>
       <li>GEOS tooling: geoPaint, Photo Scrap / Album, geoWrite (with RTF / PDF export), font viewer, C64 charset export (.prg), CVT import / export</li>
-      <li>Archive extraction: LYNX (.lnx) and ZipCode (1!–4!)</li>
+      <li>Archive extraction: LYNX (.lnx), ZIP, gzip, tar (.tar/.tgz), LHA/LZH, and all three ZipCode variants — DiskPacked (1!–5!), SixPack (1!!–6!!) and FilePacked (a!–x!)</li>
       <li>CMD Native: nested subdirectories, DNP track resize with auto-compaction, byte-exact VICE compatibility</li>
       <li>Drag-and-drop open, multi-tab interface, recent-files list, disk comparison and hashing (CRC32, SHA-256)</li>
     </ul>
@@ -420,7 +421,21 @@
   </button>
 </div>
 
-<div class="content" id="content"></div>
+<div class="workspace" id="workspace">
+  <div class="content" id="content"></div>
+  <div class="pane-splitter" id="pane-splitter" aria-hidden="true"></div>
+  <aside class="detail-pane" id="detail-pane" aria-hidden="true">
+    <div class="detail-pane-header">
+      <span class="detail-pane-title" id="detail-pane-title"></span>
+      <div class="detail-pane-actions">
+        <button class="detail-pane-btn" id="detail-pane-flip" type="button" title="Move panel to the other side"><i class="fa-solid fa-left-right"></i></button>
+        <button class="detail-pane-btn" id="detail-pane-close" type="button" title="Close panel (Esc)"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+    </div>
+    <div class="detail-pane-body" id="detail-pane-body"></div>
+    <div class="modal-footer" id="detail-pane-footer"></div>
+  </aside>
+</div>
 
 <div class="petscii-picker" id="petscii-picker"></div>
 
@@ -460,6 +475,11 @@
 <script src="assets/js/format/cbm-sector-allocator.js"></script>
 <script src="assets/js/format/cbm-format-tape.js"></script>
 <script src="assets/js/format/cbm-format-lnx.js"></script>
+<script src="assets/js/format/cbm-format-zipcode.js"></script>
+<script src="assets/js/format/cbm-format-tar.js"></script>
+<script src="assets/js/format/cbm-format-lha.js"></script>
+<script src="assets/js/format/cbm-format-sixpack.js"></script>
+<script src="assets/js/format/cbm-format-filepack.js"></script>
 <script src="assets/js/format/cbm-format-ide64.js"></script>
 <script src="assets/js/format/cbm-tape.js"></script>
 <script src="assets/js/format/cbm-archive.js"></script>
@@ -468,6 +488,7 @@
 <!-- UI infrastructure -->
 <script src="assets/js/ui/cbm-petscii.js"></script>
 <script src="assets/js/ui/ui-modals.js"></script>
+<script src="assets/js/ui/ui-detail-pane.js"></script>
 <script src="assets/js/ui/ui-archive-picker.js"></script>
 <script src="assets/js/ui/ui-render.js"></script>
 <script src="assets/js/ui/ui-menus.js"></script>

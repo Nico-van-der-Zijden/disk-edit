@@ -55,13 +55,17 @@
      — this keeps any controls above the listing (e.g. the BASIC dialect
      selector) in view as the user scrolls through the source. */
   .modal-body:has(.basic-listing),
-  .modal-body:has(.hex-editor) {
+  .modal-body:has(.hex-editor),
+  .detail-pane-body:has(.basic-listing),
+  .detail-pane-body:has(.hex-editor) {
     display: flex;
     flex-direction: column;
     overflow: hidden;
   }
   .modal-body .basic-listing,
-  .modal-body .hex-editor {
+  .modal-body .hex-editor,
+  .detail-pane-body .basic-listing,
+  .detail-pane-body .hex-editor {
     flex: 1;
     min-height: 0;
     overflow-y: auto;

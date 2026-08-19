@@ -70,7 +70,9 @@ function showIde64BamModal() {
 
   var title = 'Disk Map — ' + (boot.label || 'IDE64 .hdd');
   // 'lg' (720px fixed) — modal frame stays the same width across tab switches.
-  var body = showViewerModal(title, bodyHtml, 'lg');
+  // forceModal: this viewer owns its footer (Density/Ownership toggle + Close)
+  // and tab controls, so it stays a modal rather than moving to the pane.
+  var body = showViewerModal(title, bodyHtml, 'lg', true);
 
   function activateTab(name) {
     body.querySelectorAll('.bam-tab').forEach(function(t) {

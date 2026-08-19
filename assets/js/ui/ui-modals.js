@@ -7,15 +7,82 @@ var modalZCounter = 200;
 // below) so the wrong modal's render isn't called after a close+reopen.
 var modalCharsetRedraw = null;
 
+// The container a read-only viewer is currently rendered into: the docked
+// detail pane when it's open (and no modal sits on top), otherwise the shared
+// modal body. Viewers and the charset-redraw handler write through this so the
+// same code paints into whichever surface is live.
+function getViewerBody() {
+  if (document.querySelector('#modal-overlay.open')) return document.getElementById('modal-body');
+  if (document.body.classList.contains('pane-open')) return document.getElementById('detail-pane-body');
+  return document.getElementById('modal-body');
+}
+
+// Footer for the active viewer surface — pane footer when the pane is the live
+// surface, otherwise the shared modal footer. Lets footer-building viewers
+// (graphics, CFS hex, File Info) work in either place. The pane footer carries
+// the .modal-footer class so the same styling/sub-layout classes apply.
+function getViewerFooter() {
+  if (document.querySelector('#modal-overlay.open')) return document.querySelector('#modal-overlay .modal-footer');
+  if (document.body.classList.contains('pane-open')) return document.getElementById('detail-pane-footer');
+  return document.querySelector('#modal-overlay .modal-footer');
+}
+
+// Close whichever viewer surface is live. Viewers that used to call
+// `document.getElementById('modal-overlay').classList.remove('open')` route
+// here so the same Close button works in the pane.
+function closeViewer() {
+  if (document.querySelector('#modal-overlay.open')) {
+    document.getElementById('modal-overlay').classList.remove('open');
+  } else if (typeof closeDetailPane === 'function' && document.body.classList.contains('pane-open')) {
+    closeDetailPane();
+  } else {
+    document.getElementById('modal-overlay').classList.remove('open');
+  }
+}
+
+// Set the title of the active viewer surface (pane header or modal title).
+// For viewers like graphics that rewrite their title on each internal
+// re-render (format switch) rather than once at open time.
+function setViewerTitle(text) {
+  if (document.querySelector('#modal-overlay.open')) {
+    document.getElementById('modal-title').textContent = text;
+  } else if (document.body.classList.contains('pane-open')) {
+    var t = document.getElementById('detail-pane-title');
+    if (t) t.textContent = text;
+  } else {
+    document.getElementById('modal-title').textContent = text;
+  }
+}
+
+// Open an empty viewer surface and return its body, for viewers that build
+// their body incrementally (and re-render in place) rather than handing a
+// finished HTML string to showViewerModal. Routes to the detail pane unless
+// forceModal. After this, getViewerBody/getViewerFooter/setViewerTitle all
+// resolve to this surface.
+function openViewerSurface(title, forceModal) {
+  if (!forceModal && typeof openDetailPane === 'function') {
+    return openDetailPane(title, '');
+  }
+  setModalSize(null);
+  document.getElementById('modal-title').textContent = title || '';
+  var body = document.getElementById('modal-body');
+  body.innerHTML = '';
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.className = 'modal-footer';
+  footer.innerHTML = '';
+  document.getElementById('modal-overlay').classList.add('open');
+  return body;
+}
+
 document.addEventListener('cbm-charsetchange', function() {
   if (typeof modalCharsetRedraw !== 'function') return;
-  // Preserve scroll across the redraw — viewers typically rebuild
-  // modal-body innerHTML wholesale, which resets scrollTop. The TASS
-  // and hex viewers scroll on an inner element (`.basic-listing` /
-  // `.hex-editor`, see editors.css `:has` rules); other viewers scroll
-  // on modal-body itself. Find whichever element currently shows scroll
-  // before the redraw, then restore on the matching post-redraw node.
-  var body = document.getElementById('modal-body');
+  // Preserve scroll across the redraw — viewers typically rebuild the
+  // body innerHTML wholesale, which resets scrollTop. The TASS and hex
+  // viewers scroll on an inner element (`.basic-listing` / `.hex-editor`,
+  // see editors.css `:has` rules); other viewers scroll on the body itself.
+  // Find whichever element currently shows scroll before the redraw, then
+  // restore on the matching post-redraw node.
+  var body = getViewerBody();
   function findScroller(root) {
     if (!root) return null;
     var inner = root.querySelector('.basic-listing, .hex-editor');
@@ -118,7 +185,17 @@ document.getElementById('modal-close').addEventListener('click', () => {
 //                after this returns).
 //   size:        optional modal size class (passed through to setModalSize).
 // Returns the modal-body element.
-function showViewerModal(title, bodyContent, size) {
+function showViewerModal(title, bodyContent, size, forceModal) {
+  // Read-only per-file viewers render into the docked detail pane (desktop) /
+  // its full-screen overlay (mobile) rather than a modal. openDetailPane
+  // returns the pane body, so callers that capture and append/query the body
+  // still work unchanged. The `size` hint is irrelevant in the pane (its width
+  // is user-controlled) and is ignored. Pass forceModal=true for viewers that
+  // need the modal's footer/controls (e.g. the tabbed Disk Map). Falls back to
+  // the legacy modal if the pane controller isn't present.
+  if (!forceModal && typeof openDetailPane === 'function') {
+    return openDetailPane(title, bodyContent);
+  }
   if (size !== undefined) setModalSize(size);
   document.getElementById('modal-title').textContent = title;
   var body = document.getElementById('modal-body');

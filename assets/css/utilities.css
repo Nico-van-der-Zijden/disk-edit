@@ -307,7 +307,8 @@
   /* Graphics viewer layout — modal-body becomes a flex column so the
      canvas wrapper takes the remaining height and scrolls inside itself
      when the zoomed image overflows. The modal frame never scrolls. */
-  .modal-body:has(.gfx-controls) {
+  .modal-body:has(.gfx-controls),
+  .detail-pane-body:has(.gfx-controls) {
     overflow: hidden;
     display: flex;
     flex-direction: column;

@@ -35,7 +35,7 @@ Disk-image level operations.
 | **Scan for Lost Files** | Recovers files from deleted-but-not-overwritten dir entries (Quick / Deep prompt) |
 | **Compact Directory** | Removes empty dir slots so used entries are contiguous |
 | **File Chains** | T:S chain map for every file (CBM-DOS only) |
-| **Decompress ZipCode** | Reassembles a `1!disk` / `2!disk` / `3!disk` / `4!disk` set into a D64 |
+| **Decompress ZipCode** | Reassembles a ZipCode set held on the open disk. DiskPacked (`1!`–`4!`, plus `5!` for 40 tracks) and SixPack (`1!!`–`6!!`) rebuild a disk image; FilePacked (`a!`–`w!` + `x!`) extracts its files onto a new D64. Several sets on one disk give a multi-select |
 | **Fill Free Sectors** | Writes a fill byte into every unallocated sector |
 | **Optimize Disk...** | Packs files toward the start of the disk |
 | **Resize Image...** | (DNP) grow / shrink the partition. Disabled inside CMD containers — the slot has a fixed allocation |

@@ -1641,3 +1641,115 @@ document.getElementById('opt-recalc-size').addEventListener('click', (e) => {
   renderDisk(info);
 });
 
+// Directory entries from every open disk tab, since sets are routinely split
+// across disks (a 40-track SixPack doesn't fit on one). Active tab first, so
+// its entries win the finders' first-occurrence rule; each ref carries its
+// own ctx so the reader knows which disk to read from.
+function zipCodeGatherItems() {
+  var items = [];
+
+  function collect(ctx, tabName) {
+    var entries;
+    try {
+      entries = withDiskCtx(ctx, function() { return parseCurrentDir(ctx.buffer); }).entries;
+    } catch (err) {
+      return;                       // not a plain CBM-DOS directory; skip it
+    }
+    for (var i = 0; i < entries.length; i++) {
+      var en = entries[i];
+      if (en.deleted || en.entryOff === undefined) continue;
+      items.push({
+        name: petsciiToReadable(en.name || ''),
+        ref: { ctx: ctx, entryOff: en.entryOff, tab: tabName },
+      });
+    }
+  }
+
+  var activeCtx = getCurrentCtx();
+  var activeTab = typeof getActiveTab === 'function' ? getActiveTab() : null;
+  collect(activeCtx, activeTab ? activeTab.name : null);
+
+  if (typeof tabs !== 'undefined' && tabs.length > 1) {
+    for (var t = 0; t < tabs.length; t++) {
+      var tab = tabs[t];
+      if (tab.id === activeTabId || !tab.buffer || !tab.format) continue;
+      // Tape and container-list tabs have no CBM-DOS directory to scan.
+      if (typeof isTapeFormat === 'function' && isTapeFormat({ format: tab.format })) continue;
+      collect({
+        buffer: tab.buffer,
+        partition: tab.partition || null,
+        format: tab.format,
+        tracks: tab.tracks,
+        dirInterleave: dirInterleave,
+        fileInterleave: fileInterleave,
+      }, tab.name);
+    }
+  }
+  return items;
+}
+
+// Sort dropped files into ZipCode / SixPack / FilePacked buckets. Parts may
+// arrive with a CBM type appended (Export writes "1!!NAME.prg"), so names are
+// also matched with that stripped. Returns { zipcode, sixpack, filepack,
+// claimed }; `claimed` holds the original entries for the caller to skip.
+var ZIPCODE_EXPORT_EXT_RE = /\.(prg|seq|usr|rel|p00|s00|u00|r00)$/i;
+
+function classifyDroppedZipCodeSets(entries) {
+  var cand = [];
+  for (var i = 0; i < entries.length; i++) {
+    var full = entries[i].name || '';
+    var base = full.substring(Math.max(full.lastIndexOf('/'), full.lastIndexOf('\\')) + 1);
+    // Strip an export artifact, but never a real name ending like
+    // "1!gfx.muz" or "1!GFXMUS.Z64".
+    var hasExportExt = ZIPCODE_EXPORT_EXT_RE.test(base);
+    var stripped = base.replace(ZIPCODE_EXPORT_EXT_RE, '');
+    var name = null, needsSet = false;
+    if (!hasExportExt) {
+      if (isAnyZipCodePartName(base)) name = base;
+    } else if (isAnyZipCodePartName(stripped)) {
+      // Claim only once it completes a set, so a plain "1!GAME.prg" imports.
+      name = stripped;
+      needsSet = true;
+    }
+    if (name) cand.push({ entry: entries[i], name: name, needsSet: needsSet });
+  }
+  if (cand.length === 0) return { zipcode: [], sixpack: [], filepack: [], claimed: [] };
+
+  var zc = cand.filter(function(c) { return isZipCodeFileName(c.name); });
+  var sp = cand.filter(function(c) { return isSixPackFileName(c.name); });
+  var fp = cand.filter(function(c) { return isFilePackFileName(c.name) || isFilePackDirName(c.name); });
+
+  // Which candidates end up inside a complete set?
+  var inComplete = [];
+  var ref = function(c) { return c; };
+  findZipCodeSets(zc.map(function(c) { return { name: c.name, ref: ref(c) }; }))
+    .complete.forEach(function(s) { inComplete = inComplete.concat(s.refs); });
+  findSixPackSets(sp.map(function(c) { return { name: c.name, ref: ref(c) }; }))
+    .complete.forEach(function(s) { inComplete = inComplete.concat(s.refs); });
+  findFilePackSets(fp.map(function(c) { return { name: c.name, ref: ref(c) }; }))
+    .complete.forEach(function(s) { inComplete = inComplete.concat(s.refs.concat([s.dirRef])); });
+
+  var keep = cand.filter(function(c) { return !c.needsSet || inComplete.indexOf(c) >= 0; });
+  var pick = function(fn) {
+    return keep.filter(fn).map(function(c) {
+      return { name: c.name, buffer: c.entry.buffer, entry: c.entry };
+    });
+  };
+  return {
+    zipcode: pick(function(c) { return isZipCodeFileName(c.name); }),
+    sixpack: pick(function(c) { return isSixPackFileName(c.name); }),
+    filepack: pick(function(c) { return isFilePackFileName(c.name) || isFilePackDirName(c.name); }),
+    claimed: keep.map(function(c) { return c.entry; }),
+  };
+}
+
+function isAnyZipCodePartName(n) {
+  return isZipCodeFileName(n) || isSixPackFileName(n) ||
+    isFilePackFileName(n) || isFilePackDirName(n);
+}
+
+// ZipCode parts are recognised by name, so appending the CBM type would stop
+// an exported part being reassembled when dropped back in. Export them bare.
+function exportExtFor(name, ext) {
+  return isAnyZipCodePartName(name) ? '' : ext;
+}

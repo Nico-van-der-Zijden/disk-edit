@@ -1,0 +1,217 @@
+  /* ── App shell ────────────────────────────────────────────────────────
+     Turns the page from document-flow (chrome scrolls away, content capped
+     at a centered column) into a real desktop shell: fixed menubar /
+     toolbar / tab-bar, and a workspace that fills the rest of the viewport.
+
+     The directory list is a FIXED-WIDTH block (var --dir-width, 700px) — it
+     never stretches to fill nor shrinks to make room. The detail pane docks
+     to one side and resizes freely. When the pane grows enough to reach the
+     directory, the directory doesn't compress: it slides toward the far
+     screen edge (and partly off it), keeping the columns nearest the pane in
+     view. All horizontal placement of .content is computed in
+     ui-detail-pane.js (repositionDirectory); the rules here are the
+     pre-script fallback and the phone overrides. */
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh; /* track the dynamic mobile viewport where supported */
+    overflow: hidden;
+  }
+
+  .menubar,
+  .toolbar,
+  .tab-bar-wrap {
+    flex: 0 0 auto;
+  }
+
+  .workspace {
+    flex: 1 1 auto;
+    position: relative; /* positioning context for the absolute children */
+    min-height: 0;
+    overflow: hidden;    /* clip the directory when it slides off-screen */
+  }
+
+  /* Directory list pane — fixed width, JS-positioned. The list inside
+     (.disk-panel > .dir-listing) manages its own scroll and pins the disk
+     header/footer, so .content must NOT scroll too — otherwise a long
+     listing shows a second, redundant scrollbar. We clip here and let the
+     panel fill the available height (overriding directory.css's legacy
+     `max-height: calc(100vh - 110px)`, which was tuned for the old
+     page-flow layout and overshoots inside the fixed-height shell). */
+  .content {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    box-sizing: border-box;
+    width: min(var(--dir-width, 700px), 100%);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  /* The panel flexes to fill the shell height exactly (dropping the legacy
+     `max-height: calc(100vh - 110px)` and `min-height: 200px` floors that
+     assumed page-flow). The inner .dir-listing keeps its own scroll, so the
+     disk header/footer stay pinned and no outer scrollbar appears. */
+  .content > .disk-panel {
+    flex: 0 1 auto; /* size to content; shrink (not grow) to fit the shell */
+    min-height: 0;
+    max-height: none;
+  }
+  .content > .disk-panel .dir-listing {
+    min-height: 0;
+  }
+
+  /* ── Detail pane ──────────────────────────────────────────────────────
+     Hidden until a viewer opens it (body.pane-open). Docks right by default;
+     body.pane-left flips it to the left. Sits above the directory so the two
+     never visually collide. */
+  .detail-pane {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: var(--detail-pane-width, 480px);
+    display: none;
+    flex-direction: column;
+    background: var(--bg);
+    border-left: 1px solid var(--border);
+    overflow: hidden;
+    z-index: 5;
+  }
+  body.pane-open .detail-pane {
+    display: flex;
+  }
+  body.pane-left .detail-pane {
+    right: auto;
+    left: 0;
+    border-left: none;
+    border-right: 1px solid var(--border);
+  }
+
+  .detail-pane-header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px 6px 12px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .detail-pane-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--selected-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .detail-pane-actions {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 2px;
+  }
+  .detail-pane-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 0;
+  }
+  .detail-pane-btn:hover {
+    color: var(--text);
+    background: var(--hover);
+  }
+  .detail-pane-body {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 12px;
+  }
+
+  /* Pane footer reuses .modal-footer styling (set on the element) so viewers
+     that build footer buttons/nav work identically here. Collapses when a
+     viewer leaves it empty (e.g. hex), so footerless viewers show no bar. */
+  #detail-pane-footer:empty {
+    display: none;
+  }
+
+  /* File Info list (moved from a showModal bullet list into the pane). */
+  .fileinfo-list {
+    margin: 0;
+    padding-left: 18px;
+    line-height: 1.7;
+  }
+
+  /* Splitter sits at the pane's inner edge. Only present while open. */
+  .pane-splitter {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: var(--detail-pane-width, 480px);
+    width: 6px;
+    cursor: col-resize;
+    background: var(--border);
+    display: none;
+    z-index: 6;
+  }
+  .pane-splitter::after {
+    content: '';
+    position: absolute;
+    inset: 0 -4px; /* widen the hit target without widening the bar */
+  }
+  .pane-splitter:hover,
+  .pane-splitter.dragging {
+    background: var(--accent);
+  }
+  body.pane-open .pane-splitter {
+    display: block;
+  }
+  body.pane-left .pane-splitter {
+    right: auto;
+    left: var(--detail-pane-width, 480px);
+  }
+  /* While dragging, kill selection and force the resize cursor everywhere so
+     a fast drag that outruns the splitter still feels right. */
+  body.pane-resizing {
+    cursor: col-resize;
+    user-select: none;
+  }
+  body.pane-resizing .content,
+  body.pane-resizing .detail-pane {
+    pointer-events: none;
+  }
+
+  /* ── Phones ───────────────────────────────────────────────────────────
+     Below 700px the side-by-side split would crush both panes, so the
+     detail pane becomes a full-screen overlay over the list (matching the
+     previous modal behaviour) and the directory reverts to full width. */
+  @media (max-width: 700px) {
+    .content {
+      left: 0 !important;
+      width: auto !important;
+      right: 0;
+    }
+    body.pane-open .detail-pane {
+      position: fixed;
+      inset: 0;
+      z-index: 150;
+      width: auto;
+      border: none;
+    }
+    .pane-splitter,
+    body.pane-open .pane-splitter {
+      display: none;
+    }
+    #detail-pane-flip {
+      display: none;
+    }
+  }

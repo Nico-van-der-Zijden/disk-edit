@@ -1365,8 +1365,8 @@ function showFileGfxViewer(entryOff, preloaded) {
 
   function render() {
     var eff = getEffectiveFmt();
-    document.getElementById('modal-title').textContent = eff.name + ' \u2014 "' + name + '" (' + (fileData.length - 2) + ' bytes)';
-    var body = document.getElementById('modal-body');
+    setViewerTitle(eff.name + ' \u2014 "' + name + '" (' + (fileData.length - 2) + ' bytes)');
+    var body = getViewerBody();
     body.innerHTML = '';
 
     // Format selector + MC toggle
@@ -1489,15 +1489,18 @@ function showFileGfxViewer(entryOff, preloaded) {
     body.appendChild(controls);
   }
 
+  // Open the viewer surface (detail pane / modal) first, so render() and the
+  // footer code below resolve to it via getViewerBody()/getViewerFooter().
+  openViewerSurface('Graphics — "' + name + '"');
   render();
 
-  var footer = document.querySelector('#modal-overlay .modal-footer');
+  var footer = getViewerFooter();
   footer.className = 'modal-footer modal-footer-split';
 
   var safeName = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'image';
 
   function getCanvas() {
-    return document.querySelector('#modal-body .gfx-canvas');
+    return getViewerBody().querySelector('.gfx-canvas');
   }
 
   function downloadBlob(blob, filename) {
@@ -1741,12 +1744,10 @@ function showFileGfxViewer(entryOff, preloaded) {
   okBtn.textContent = 'OK';
   okBtn.addEventListener('click', function() {
     footer.className = 'modal-footer';
-    document.getElementById('modal-overlay').classList.remove('open');
+    closeViewer();
   });
   navDiv.appendChild(okBtn);
   footer.appendChild(navDiv);
-
-  setModalSize('xl');
-  document.getElementById('modal-overlay').classList.add('open');
+  // Surface was opened (and sized, for the modal fallback) at the top.
 }
 

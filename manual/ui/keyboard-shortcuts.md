@@ -114,6 +114,10 @@ When you start an inline rename (double-click or Enter on selection):
 | **Drop a disk file onto the page** | Opens as a new tab |
 | **Drop a `.prg` etc. onto the page** | Imports into the active disk |
 | **Drop an `.lnx`** | Extracts to a new D64 |
+| **Drop a ZipCode set (`1!`…`4!`)** | Reassembles it into a new D64 tab |
+| **Drop a SixPack set (`1!!`…`6!!`)** | Rebuilds the disk from GCR, keeping read errors |
+| **Drop a FilePacked set (`a!`…`x!`)** | Extracts its files onto a new D64 |
+| **Drop a `.tar` / `.tgz` / `.lha` / `.lzh`** | Opens the container and picks members |
 | **Drop a `.dhd` / `.rml`** | Opens as partition list |
 | **Drag a file out of the editor** | Saves to your OS |
 | **Drag a row within the directory** | Reorders |
