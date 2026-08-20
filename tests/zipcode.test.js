@@ -692,3 +692,172 @@ describe('ZIP members carrying export extensions', () => {
     assert.strictEqual(pickAutoOpen(mk(six.concat(['bonus.d64']))), null, 'a real choice needs the picker');
   });
 });
+
+describe('compressZipCode (creating a set)', () => {
+  function makeDisk(tracks, seed) {
+    const spt = DISK_FORMATS.d64.sectorsPerTrack;
+    let n = 0;
+    for (let t = 1; t <= tracks; t++) n += spt(t) * 256;
+    const buf = new Uint8Array(n);
+    let s = seed || 1;
+    for (let off = 0; off < n; off += 256) {
+      const kind = (off / 256) % 3;
+      s = (s * 1103515245 + 12345) & 0x7FFFFFFF;
+      if (kind === 0) buf.fill((s >> 8) & 0xFF, off, off + 256);
+      else if (kind === 1) { for (let i = 0; i < 40; i++) buf[off + i] = (s >> i) & 0xFF; buf.fill(0xAA, off + 40, off + 256); }
+      else for (let i = 0; i < 256; i++) { s = (s * 1103515245 + 12345) & 0x7FFFFFFF; buf[off + i] = (s >> 8) & 0xFF; }
+    }
+    return buf;
+  }
+
+  it('round-trips a 35-track disk through its own decoder', () => {
+    const src = makeDisk(35, 5);
+    const enc = compressZipCode(src.buffer, 'GAME');
+    assert.ok(!enc.error, enc.error);
+    assert.strictEqual(enc.parts.length, 4);
+    assert.strictEqual(enc.tracks, 35);
+    const back = decompressZipCode(enc.parts.map(p => p.data));
+    assert.ok(!back.error, back.error);
+    assert.strictEqual(back.missing, 0);
+    assert.ok(Buffer.from(new Uint8Array(back.buffer)).equals(Buffer.from(src)));
+  });
+
+  it('round-trips a 40-track disk as a 5-part set', () => {
+    const src = makeDisk(40, 9);
+    const enc = compressZipCode(src.buffer, 'BIG');
+    assert.strictEqual(enc.parts.length, 5);
+    assert.strictEqual(enc.tracks, 40);
+    const back = decompressZipCode(enc.parts.map(p => p.data));
+    assert.strictEqual(back.tracks, 40);
+    assert.ok(Buffer.from(new Uint8Array(back.buffer)).equals(Buffer.from(src)));
+  });
+
+  it('names parts 1!NAME .. N!NAME and caps the base at 14 characters', () => {
+    const enc = compressZipCode(makeDisk(35, 3).buffer, 'a-very-long-set-name');
+    assert.deepStrictEqual(enc.parts.map(p => p.name),
+      ['1!A-VERY-LONG-SE', '2!A-VERY-LONG-SE', '3!A-VERY-LONG-SE', '4!A-VERY-LONG-SE']);
+    assert.ok(enc.parts.every(p => p.name.length <= 16), 'fits a CBM filename');
+  });
+
+  it('writes the disk ID into part 1 only, as real sets do', () => {
+    const src = makeDisk(35, 11);
+    const spt = DISK_FORMATS.d64.sectorsPerTrack;
+    const hdr = calcD64Offset(18, 0, spt);
+    src[hdr + 0xA2] = 0x36; src[hdr + 0xA3] = 0x34;      // "64"
+    const enc = compressZipCode(src.buffer, 'IDTEST');
+    assert.deepStrictEqual(Array.from(enc.parts[0].data.subarray(0, 4)), [0xFE, 0x03, 0x36, 0x34]);
+    for (let i = 1; i < 4; i++) {
+      assert.deepStrictEqual(Array.from(enc.parts[i].data.subarray(0, 2)), [0x00, 0x04], 'part ' + (i + 1));
+    }
+  });
+
+  it('compresses — a blank disk packs to a fraction of its size', () => {
+    const blank = new Uint8Array(174848);
+    const enc = compressZipCode(blank.buffer, 'BLANK');
+    const packed = enc.parts.reduce((a, p) => a + p.data.length, 0);
+    assert.ok(packed < 174848 / 10, 'packed ' + packed + ' bytes');
+    const back = decompressZipCode(enc.parts.map(p => p.data));
+    assert.ok(Buffer.from(new Uint8Array(back.buffer)).equals(Buffer.from(blank)));
+  });
+
+  it('reports error bytes as dropped rather than silently losing them', () => {
+    const withErrors = new Uint8Array(175531);
+    const enc = compressZipCode(withErrors.buffer, 'ERRS');
+    assert.strictEqual(enc.tracks, 35);
+    assert.strictEqual(enc.droppedErrors, 683);
+  });
+
+  it('refuses a disk that is not a 35/40-track D64', () => {
+    assert.ok(compressZipCode(new Uint8Array(819200).buffer, 'D81').error);
+    assert.ok(compressZipCode(new Uint8Array(1000).buffer, 'TINY').error);
+  });
+
+  it('refuses an empty set name', () => {
+    assert.ok(compressZipCode(new Uint8Array(174848).buffer, '   ').error);
+  });
+});
+
+describe('planZipCodeDisks', () => {
+  const part = n => ({ data: new Uint8Array(n * 254) });
+
+  it('keeps a set that fits on one disk together', () => {
+    const plan = planZipCodeDisks([part(155), part(154), part(144), part(165)]);
+    assert.strictEqual(plan.length, 1);
+    assert.deepStrictEqual(plan[0].parts, [0, 1, 2, 3]);
+    assert.strictEqual(plan[0].blocks, 618);
+  });
+
+  it('splits a six-part SixPack 123 / 456, matching real sets', () => {
+    const plan = planZipCodeDisks([part(168), part(168), part(166), part(177), part(167), part(161)]);
+    assert.strictEqual(plan.length, 2);
+    assert.deepStrictEqual(plan[0].parts, [0, 1, 2]);
+    assert.deepStrictEqual(plan[1].parts, [3, 4, 5]);
+  });
+
+  it('never leaves a disk empty, even for an oversized part', () => {
+    const plan = planZipCodeDisks([part(700), part(10)]);
+    assert.strictEqual(plan.length, 2);
+    assert.deepStrictEqual(plan[0].parts, [0]);
+  });
+
+  it('fills to the 664-block limit before starting a new disk', () => {
+    const plan = planZipCodeDisks([part(664), part(1)]);
+    assert.deepStrictEqual(plan[0].parts, [0]);
+    assert.deepStrictEqual(plan[1].parts, [1]);
+  });
+});
+
+describe('Create ZipCode set name', () => {
+  // Typing is destructive here: the pane re-renders on every keystroke and
+  // writes the cleaned value back into the box. Trimming at that point ate
+  // any space the moment it was typed, so "MY DISK" became "MYDISK".
+  const type = (text, max) => {
+    var box = '';
+    for (const ch of text) box = _mkzipClean(box + ch, max || 14);
+    return box;
+  };
+
+  it('keeps a space typed mid-name', () => {
+    assert.strictEqual(type('MY DISK'), 'MY DISK');
+    assert.strictEqual(type('A B C'), 'A B C');
+  });
+
+  it('keeps a trailing space while it is still being typed', () => {
+    assert.strictEqual(type('MY '), 'MY ');
+  });
+
+  it('uppercases as you type', () => {
+    assert.strictEqual(type('my disk'), 'MY DISK');
+  });
+
+  it('drops characters a CBM name cannot carry', () => {
+    assert.strictEqual(type('AB_CD'), 'ABCD');
+    assert.strictEqual(type('A/B:C'), 'ABC');
+  });
+
+  it('keeps the punctuation real set names use', () => {
+    assert.strictEqual(type('TAS-2.0'), 'TAS-2.0');
+    assert.strictEqual(type('C11B(B)'), 'C11B(B)');
+    assert.strictEqual(type('GFX+MUZ'), 'GFX+MUZ');
+  });
+
+  it('stops at the variant length cap', () => {
+    assert.strictEqual(type('ABCDEFGHIJKLMNOP', 14).length, 14);
+    assert.strictEqual(type('ABCDEFGHIJKLMNOP', 13).length, 13);
+  });
+
+  it('trims only for the committed name', () => {
+    assert.strictEqual(_mkzipSanitize('MY DISK ', 14), 'MY DISK');
+    assert.strictEqual(_mkzipSanitize('  MY DISK', 14), 'MY DISK');
+    // The inner space survives; only the ends go.
+    assert.strictEqual(_mkzipSanitize(' A B ', 14), 'A B');
+  });
+
+  it('a spaced name still fits a CBM filename with its prefix', () => {
+    const base = _mkzipSanitize('MY GAME 2', 14);
+    const nb = asciiToNameBytes('1!' + base);
+    assert.strictEqual(petsciiToReadable(readPetsciiString(nb, 0, 16)), '1!MY GAME 2');
+    assert.strictEqual(nb[4], 0x20, 'space stored as $20');
+    assert.strictEqual(nb[13], 0xA0, 'padded with $A0');
+  });
+});

@@ -311,3 +311,167 @@ describe('FilePacked name classifiers', () => {
     assert.ok(!isFilePackFileName('z!G'));
   });
 });
+
+describe('compressFilePack (creating a set)', () => {
+  const mkFile = (name, type, len, seed) => {
+    const d = new Uint8Array(len);
+    let s = seed || 1;
+    for (let i = 0; i < len; i++) { s = (s * 1103515245 + 12345) & 0x7FFFFFFF; d[i] = (s >> 8) & 0xFF; }
+    return { nameBytes: nameBytes(name), typeChar: type, data: d };
+  };
+
+  it('round-trips files byte-for-byte', () => {
+    const files = [mkFile('ONE', 'P', 700, 1), mkFile('TWO', 'S', 254, 2), mkFile('THREE', 'U', 1500, 3)];
+    const enc = compressFilePack(files, 'SET');
+    assert.ok(!enc.error, enc.error);
+    const back = decompressFilePack(enc.parts.map(p => p.data), enc.dir.data);
+    assert.ok(!back.error, back.error);
+    assert.strictEqual(back.files.length, 3);
+    files.forEach((w, i) => {
+      assert.ok(Buffer.from(back.files[i].data).equals(Buffer.from(w.data)), 'file ' + i);
+    });
+  });
+
+  it('keeps names and types', () => {
+    const files = [mkFile('PROG', 'P', 300, 1), mkFile('TEXT', 'S', 300, 2), mkFile('USER', 'U', 300, 3)];
+    const back = decompressFilePack(
+      compressFilePack(files, 'SET').parts.map(p => p.data),
+      compressFilePack(files, 'SET').dir.data);
+    assert.deepStrictEqual(back.files.map(f => petsciiToReadable(f.name).trim()), ['PROG', 'TEXT', 'USER']);
+    assert.deepStrictEqual(back.files.map(f => f.typeChar), ['P', 'S', 'U']);
+  });
+
+  it('names parts a!NAME.. and the directory x!NAME', () => {
+    const enc = compressFilePack([mkFile('A', 'P', 100, 1)], 'MYSET');
+    assert.strictEqual(enc.parts[0].name, 'a!MYSET');
+    assert.strictEqual(enc.dir.name, 'x!MYSET');
+  });
+
+  it('splits past 166 sectors into a second data file', () => {
+    // 200 sectors of content forces b! to appear.
+    const enc = compressFilePack([mkFile('BIG', 'P', 200 * 254, 7)], 'SPLIT');
+    assert.strictEqual(enc.parts.length, 2);
+    assert.deepStrictEqual(enc.parts.map(p => p.name), ['a!SPLIT', 'b!SPLIT']);
+    assert.strictEqual(enc.parts[0].data[2], 166);
+    const back = decompressFilePack(enc.parts.map(p => p.data), enc.dir.data);
+    assert.strictEqual(back.files.length, 1);
+    assert.strictEqual(back.files[0].data.length, 200 * 254);
+  });
+
+  it('records the data-file count the reader checks', () => {
+    const enc = compressFilePack([mkFile('BIG', 'P', 200 * 254, 7)], 'SPLIT');
+    assert.strictEqual(enc.dir.data[0x1FF], 2);
+    assert.strictEqual(enc.dir.data[0x200], 1);
+  });
+
+  it('handles a file that is an exact multiple of the sector size', () => {
+    const enc = compressFilePack([mkFile('EXACT', 'P', 254 * 3, 9)], 'X');
+    const back = decompressFilePack(enc.parts.map(p => p.data), enc.dir.data);
+    assert.strictEqual(back.files[0].data.length, 254 * 3);
+  });
+
+  it('compresses uniform content', () => {
+    const flat = { nameBytes: nameBytes('FLAT'), typeChar: 'P', data: new Uint8Array(254 * 20).fill(0xEE) };
+    const enc = compressFilePack([flat], 'FILL');
+    assert.ok(enc.parts[0].data.length < 254 * 20 / 4, 'packed ' + enc.parts[0].data.length);
+    const back = decompressFilePack(enc.parts.map(p => p.data), enc.dir.data);
+    assert.ok(Buffer.from(back.files[0].data).equals(Buffer.from(flat.data)));
+  });
+
+  it('refuses an empty file list', () => {
+    assert.ok(compressFilePack([], 'X').error);
+  });
+});
+
+describe('x! BASIC lister', () => {
+  const mkFile = (name, type, len, fill) => ({
+    nameBytes: nameBytes(name), typeChar: type,
+    data: new Uint8Array(len).fill(fill === undefined ? 0x41 : fill),
+  });
+
+  it('tokenizes to a program our own detokenizer reads back', () => {
+    const prog = buildBasicProgram(FILEPACK_LISTER, 0x0801);
+    assert.ok(prog, 'program built');
+    const file = new Uint8Array(2 + prog.length);
+    file[0] = 0x01; file[1] = 0x08;
+    file.set(prog, 2);
+    const back = detokenizeBasic(file, 'V2');
+    assert.strictEqual(back.loadAddr, 0x0801);
+    assert.strictEqual(back.lines.length, FILEPACK_LISTER.length);
+    back.lines.forEach((l, i) => {
+      assert.strictEqual(l.lineNum, FILEPACK_LISTER[i][0]);
+      const text = petsciiToReadable(l.parts.map(p => p.text).join(''));
+      // $93 (clear screen) lists as a reverse-video "S" on a C64.
+      const want = FILEPACK_LISTER[i][1].replace('\x93', 'S');
+      assert.strictEqual(text, want, 'line ' + l.lineNum);
+    });
+  });
+
+  it('fits below the data-file count byte at $01FF', () => {
+    const prog = buildBasicProgram(FILEPACK_LISTER, 0x0801);
+    assert.ok(2 + prog.length <= 0x1FF, 'lister is ' + prog.length + ' bytes');
+  });
+
+  it('is written into a generated x! without disturbing the counts', () => {
+    const enc = compressFilePack([mkFile('ONE', 'P', 300), mkFile('TWO', 'S', 300)], 'SET');
+    const x = enc.dir.data;
+    assert.strictEqual(x[0] | (x[1] << 8), 0x0801, 'load address');
+    assert.strictEqual(x[0x1FF], enc.parts.length, 'data-file count intact');
+    assert.strictEqual(x[0x200], 2, 'file count intact');
+    assert.strictEqual(detokenizeBasic(x, 'V2').lines.length, FILEPACK_LISTER.length);
+  });
+
+  it('leaves the set decodable', () => {
+    const files = [mkFile('ONE', 'P', 700), mkFile('TWO', 'S', 254)];
+    const enc = compressFilePack(files, 'SET');
+    const back = decompressFilePack(enc.parts.map(p => p.data), enc.dir.data);
+    assert.ok(!back.error, back.error);
+    assert.strictEqual(back.files.length, 2);
+  });
+
+  // The program PEEKs absolute addresses. Since the file loads at $0801, a
+  // PEEK of M reads file offset M - $07FF; if that drifted, the lister would
+  // print garbage on real hardware.
+  it('PEEKs the addresses the counts and entries actually land on', () => {
+    const enc = compressFilePack([mkFile('AAA', 'P', 300), mkFile('BBB', 'U', 300)], 'SET');
+    const x = enc.dir.data;
+    const PEEK = M => x[M - 0x07FF];
+    assert.strictEqual(PEEK(2559), 2, 'PEEK(2559) is the file count');
+    assert.strictEqual(PEEK(2558), enc.parts.length, 'PEEK(2558) is the part count');
+
+    // Entry 0 at 2560, entry 1 twenty-one bytes later, as line 5 computes.
+    const name0 = [];
+    for (let J = 0; J <= 15; J++) {
+      const C = PEEK(2560 + J);
+      if (C !== 160) name0.push(String.fromCharCode(C));
+    }
+    assert.strictEqual(name0.join(''), 'AAA');
+    assert.strictEqual(String.fromCharCode(PEEK(2560 + 16) & 127), 'P');
+    assert.strictEqual(PEEK(2560 + 17) + PEEK(2560 + 18) * 256, 2, 'blocks for a 300-byte file');
+
+    const name1 = [];
+    for (let J = 0; J <= 15; J++) {
+      const C = PEEK(2560 + 21 + J);
+      if (C !== 160) name1.push(String.fromCharCode(C));
+    }
+    assert.strictEqual(name1.join(''), 'BBB');
+    assert.strictEqual(String.fromCharCode(PEEK(2560 + 21 + 16) & 127), 'U');
+  });
+
+  it('tokenizes keywords rather than leaving them as text', () => {
+    const prog = buildBasicProgram([[10, 'PRINTPEEK(2559)']], 0x0801);
+    // link(2) + lineno(2) + PRINT + PEEK + "(2559)" + terminator
+    assert.strictEqual(prog[4], 0x99, 'PRINT token');
+    assert.strictEqual(prog[5], 0xC2, 'PEEK token');
+  });
+
+  it('leaves quoted text alone', () => {
+    const prog = buildBasicProgram([[10, 'PRINT"TO PRINT"']], 0x0801);
+    const bytes = Array.from(prog.subarray(4));
+    assert.strictEqual(bytes[0], 0x99, 'PRINT is tokenized');
+    assert.strictEqual(bytes[1], 0x22, 'opening quote');
+    // "TO" and "PRINT" inside the string must survive as characters.
+    assert.deepStrictEqual(bytes.slice(2, 10).map(b => String.fromCharCode(b)),
+      ['T', 'O', ' ', 'P', 'R', 'I', 'N', 'T']);
+  });
+});

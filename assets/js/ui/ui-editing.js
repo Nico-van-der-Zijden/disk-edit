@@ -252,6 +252,11 @@ function updateMenuState() {
   // CBM-DOS T:S chain — CFS uses B-tree addressing instead.
   document.getElementById('opt-file-chains').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
   document.getElementById('opt-unzip').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
+  // DiskPacked encodes a whole 35/40-track D64, so it needs exactly that.
+  var d64Sizes = [174848, 175531, 196608, 197376];
+  var canMakeZip = hasDisk && !noEdit && !hddCtx && !currentPartition &&
+    d64Sizes.indexOf(currentBuffer.byteLength) >= 0;
+  document.getElementById('opt-mkzip').classList.toggle('disabled', !canMakeZip);
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
   document.getElementById('opt-redo').classList.toggle('disabled', redoStack.length === 0 || tape);
   document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);

@@ -32,6 +32,8 @@ Letters instead of digits, plus an `x!` file holding the directory. It packs ind
 
 The `x!` directory records names, types and sizes, but its sector counts are advisory — real sets disagree with them. File boundaries come from markers in the data stream instead.
 
+Ahead of that directory, `x!` opens with a small BASIC program. `LOAD"X!NAME",8` then `RUN` on a real C64 and it prints what the set holds — file names, block counts and types — without unpacking anything. Sets this editor creates carry their own lister, written in BASIC.
+
 ## Opening a set
 
 Three routes, all of which end in a new tab:
@@ -54,11 +56,28 @@ Parts export with **no extension appended**, keeping the exact name from the dis
 
 Parts that arrive from elsewhere carrying a `.prg` suffix are still recognised, provided they form a complete set.
 
+## Creating a set
+
+**Disk → Disk Tools → Create ZipCode…** opens a side pane that packs the disk you have open into any of the three variants. The pane shows exactly what you'll get before anything is written: each part's name and size, and the total against the size of the source disk. Choose D64 output and it also lists the disk image(s) the parts land on.
+
+Name the set — up to 14 characters for DiskPacked and FilePacked, 13 for SixPack, so the prefix plus the name still fits a 16-character CBM filename. Letters, digits, spaces and `. + - ( )` are accepted; anything else is dropped as you type, since a CBM filename can't carry it. The preview re-labels as you type.
+
+Pick the **Format** and the **Deliver as** option:
+
+- **ZIP** (the default) or **tar.gz** — a single file holding every part, downloaded directly. Dropping it back in reassembles the disk with no dialog.
+- **D64 image(s)** — each opens as a tab, mirroring what Decompress ZipCode does in the other direction; Save As writes it out. A set too big for one disk splits in part order — the convention real sets use, which is why a six-part SixPack lands as `NAME-123` and `NAME-456`. A 4-pack usually fits on one disk, though a dense, poorly-compressing source can come close to the 664-block limit.
+
+If the disk carries read errors the pane starts on SixPack, since that's the only variant that can keep them, and warns you if you switch away.
+
+For SixPack, **tar.gz is far smaller than ZIP** — the parts are uncompressed GCR and the ZIP writer stores without compression, so gzip does all the work.
+
+The menu item is enabled only for a 35- or 40-track D64, which is what these formats encode.
+
 ## Limits
 
-- No **writing** — the editor reads all three variants but cannot create a set.
+- Sets cannot be **edited** — create a new one from the disk instead.
+- FilePacked carries only PRG, SEQ and USR — REL files and lock/splat bits are dropped, as the format requires.
 - SixPack is validated against the spec and against real sets, but a disk using a non-standard low-level encoding (Vorpal, Warp25) decodes to error codes rather than data, as noted above.
-- FilePacked type support is limited to what the format allows: `P`, `S` and `U` only, with no REL and no lock/splat bits.
 
 ## See also
 

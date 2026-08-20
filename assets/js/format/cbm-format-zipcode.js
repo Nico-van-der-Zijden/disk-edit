@@ -154,3 +154,101 @@ function isZipCodeFileName(name) {
 function isSixPackFileName(name) {
   return SIXPACK_NAME_RE.test(String(name || '').trim());
 }
+
+// ── Encoding ─────────────────────────────────────────────────────────
+
+// RLE one sector, or null when it can't help. REP must be a byte value the
+// sector doesn't use; runs shorter than 4 aren't worth the 3-byte triple.
+function _zipCodeRle(sec) {
+  var used = new Uint8Array(256);
+  for (var i = 0; i < 256; i++) used[sec[i]] = 1;
+  var rep = -1;
+  for (var c = 0; c < 256; c++) if (!used[c]) { rep = c; break; }
+  if (rep < 0) return null;
+
+  var p = [];
+  for (var j = 0; j < 256;) {
+    var run = 1;
+    while (j + run < 256 && sec[j + run] === sec[j] && run < 255) run++;
+    if (run >= 4) { p.push(rep, run, sec[j]); j += run; }
+    else { for (var k = 0; k < run; k++) p.push(sec[j]); j += run; }
+  }
+  return p.length > 255 ? null : { rep: rep, payload: p };
+}
+
+// Encode a D64 into DiskPacked parts. Returns { parts, tracks, droppedErrors }
+// or { error }. Parts are { name, data } in 1!..N! order; a set from a disk
+// carrying error bytes loses them, since DiskPacked has nowhere to put them.
+function compressZipCode(buffer, baseName) {
+  var all = new Uint8Array(buffer);
+  var tracks = 0, droppedErrors = 0;
+  if (all.length === 174848) tracks = 35;
+  else if (all.length === 175531) { tracks = 35; droppedErrors = 683; }
+  else if (all.length === 196608) tracks = 40;
+  else if (all.length === 197376) { tracks = 40; droppedErrors = 768; }
+  else return { error: 'DiskPacked needs a 35- or 40-track D64.' };
+
+  var base = String(baseName || 'DISK').trim().toUpperCase().slice(0, 14);
+  if (!base) return { error: 'Give the set a name.' };
+
+  var spt = DISK_FORMATS.d64.sectorsPerTrack;
+  var ranges = tracks === 40 ? ZIPCODE_RANGES_40 : ZIPCODE_RANGES_35;
+  var hdr = calcD64Offset(18, 0, spt);
+  var id1 = all[hdr + 0xA2], id2 = all[hdr + 0xA3];
+
+  var parts = [];
+  for (var fi = 0; fi < ranges.length; fi++) {
+    // Only part 1 carries the disk ID, which is what every real set does.
+    var out = fi === 0 ? [0xFE, 0x03, id1, id2] : [0x00, 0x04];
+
+    for (var t = ranges[fi][0]; t <= ranges[fi][1]; t++) {
+      for (var s = 0; s < spt(t); s++) {
+        var off = calcD64Offset(t, s, spt);
+        var sec = all.subarray(off, off + 256);
+
+        var uniform = true;
+        for (var u = 1; u < 256 && uniform; u++) if (sec[u] !== sec[0]) uniform = false;
+        if (uniform) { out.push((1 << 6) | t, s, sec[0]); continue; }
+
+        var rle = _zipCodeRle(sec);
+        if (rle && rle.payload.length + 2 < 256) {
+          out.push((2 << 6) | t, s, rle.payload.length, rle.rep);
+          for (var r = 0; r < rle.payload.length; r++) out.push(rle.payload[r]);
+        } else {
+          out.push((0 << 6) | t, s);
+          for (var b = 0; b < 256; b++) out.push(sec[b]);
+        }
+      }
+    }
+    parts.push({ prefix: (fi + 1) + '!', name: (fi + 1) + '!' + base, data: Uint8Array.from(out) });
+  }
+  return { parts: parts, tracks: tracks, droppedErrors: droppedErrors };
+}
+
+// Plan how a set's parts fall across D64 images, without writing anything.
+// Greedy fill in part order, which is what the scene did: a 6-part SixPack
+// lands 1-3 on the first disk and 4-6 on the second, matching the "-123" /
+// "-456" naming convention. Returns [{ parts: [index...], blocks }].
+var ZIPCODE_D64_FREE_BLOCKS = 664;
+
+function planZipCodeDisks(parts) {
+  var disks = [{ parts: [], blocks: 0 }];
+  for (var i = 0; i < parts.length; i++) {
+    var need = Math.ceil(parts[i].data.length / 254) || 1;
+    var cur = disks[disks.length - 1];
+    if (cur.parts.length > 0 && cur.blocks + need > ZIPCODE_D64_FREE_BLOCKS) {
+      cur = { parts: [], blocks: 0 };
+      disks.push(cur);
+    }
+    cur.parts.push(i);
+    cur.blocks += need;
+  }
+  return disks;
+}
+
+// Suffix naming each image by the parts it carries: "GAME-1234.d64", or
+// "GAME-123.d64" / "GAME-456.d64" for a set that needs two disks.
+function _zipCodeDiskName(base, disk, single) {
+  if (single) return base + '.d64';
+  return base + '-' + disk.parts.map(function(i) { return i + 1; }).join('') + '.d64';
+}

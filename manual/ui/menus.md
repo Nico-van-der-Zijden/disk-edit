@@ -36,6 +36,7 @@ Disk-image level operations.
 | **Compact Directory** | Removes empty dir slots so used entries are contiguous |
 | **File Chains** | T:S chain map for every file (CBM-DOS only) |
 | **Decompress ZipCode** | Reassembles a ZipCode set held on the open disk. DiskPacked (`1!`–`4!`, plus `5!` for 40 tracks) and SixPack (`1!!`–`6!!`) rebuild a disk image; FilePacked (`a!`–`w!` + `x!`) extracts its files onto a new D64. Several sets on one disk give a multi-select |
+| **Create ZipCode…** | Packs the open disk as DiskPacked, SixPack or FilePacked. Opens a side pane with a live preview; deliver as a ZIP, a tar.gz, or D64 image(s) (auto-split). 35/40-track D64 only |
 | **Fill Free Sectors** | Writes a fill byte into every unallocated sector |
 | **Optimize Disk...** | Packs files toward the start of the disk |
 | **Resize Image...** | (DNP) grow / shrink the partition. Disabled inside CMD containers — the slot has a fixed allocation |

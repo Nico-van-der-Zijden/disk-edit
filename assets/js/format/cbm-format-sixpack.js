@@ -102,6 +102,28 @@ function _sixpackDecodeHeader(desc, idx) {
   };
 }
 
+// Walk the file holding track 18 and decode its first sector header, which
+// carries the disk ID every other track is checked against.
+function _sixpackMasterId(files, ranges, spt) {
+  for (var fi = 0; fi < ranges.length; fi++) {
+    if (18 < ranges[fi][0] || 18 > ranges[fi][1]) continue;
+    var data = files[fi];
+    var pos = 3;
+    for (var t = ranges[fi][0]; t <= ranges[fi][1]; t++) {
+      if (pos + SIXPACK_DESCRIPTOR > data.length) return null;
+      var desc = data.subarray(pos, pos + SIXPACK_DESCRIPTOR);
+      var count = desc[0xFF];
+      if (t === 18) {
+        if (count === 0) return null;
+        var h = _sixpackDecodeHeader(desc, 0);
+        return h ? { id1: h.id1, id2: h.id2 } : null;
+      }
+      pos += SIXPACK_DESCRIPTOR + Math.min(count, spt(t)) * SIXPACK_SECTOR_GCR;
+    }
+  }
+  return null;
+}
+
 // `files` is six Uint8Arrays in 1!!..6!! order. Returns { buffer, tracks,
 // errors, errorCount, missing } or { error }; `errors` is one CBM error
 // code per sector (1 = OK), for writing a "+Errors" D64.
@@ -133,8 +155,12 @@ function decompressSixPack(files) {
   var errors = new Uint8Array(totalSectors).fill(SIXPACK_ERR_OK);
   var seen = new Uint8Array(totalSectors);
 
-  // Taken from the first track-18 header; mismatches elsewhere are error 29.
-  var masterId1 = -1, masterId2 = -1;
+  // The master ID lives on track 18, which sits in the third file — so find
+  // it before decoding. Discovering it mid-stream would leave tracks 1-17
+  // unable to report a mismatch, since they are decoded first.
+  var master = _sixpackMasterId(files, ranges, spt);
+  var masterId1 = master ? master.id1 : -1;
+  var masterId2 = master ? master.id2 : -1;
 
   for (var fi = 0; fi < 6; fi++) {
     var data = files[fi];
@@ -179,8 +205,6 @@ function decompressSixPack(files) {
 
         var sector = h.sector;
         if (h.track !== track || sector >= trackSectors) continue;   // bogus header
-
-        if (masterId1 < 0 && track === 18) { masterId1 = h.id1; masterId2 = h.id2; }
 
         var idx = _sixpackSectorIndex(track, sector, spt);
         var err = SIXPACK_ERR_OK;
@@ -230,4 +254,122 @@ function sixPackToImage(res) {
   out.set(d64, 0);
   out.set(res.errors, d64.length);
   return out.buffer;
+}
+
+// ── Encoding ─────────────────────────────────────────────────────────
+
+// 4 plain bytes -> 5 GCR bytes, the inverse of decodeGCR5.
+function _sixpackEnc4(b0, b1, b2, b3) {
+  var n = [(b0 >> 4) & 15, b0 & 15, (b1 >> 4) & 15, b1 & 15,
+           (b2 >> 4) & 15, b2 & 15, (b3 >> 4) & 15, b3 & 15];
+  for (var i = 0; i < 8; i++) n[i] = GCR_ENCODE[n[i]];
+  return [
+    (n[0] << 3) | (n[1] >> 2),
+    ((n[1] & 3) << 6) | (n[2] << 1) | (n[3] >> 4),
+    ((n[3] & 15) << 4) | (n[4] >> 1),
+    ((n[4] & 1) << 7) | (n[5] << 2) | (n[6] >> 3),
+    ((n[6] & 7) << 5) | n[7],
+  ];
+}
+
+// Build the 326 stored bytes for one sector. Because we control the GCR, the
+// data-side error codes are expressible: 22 by spoiling the $07 marker, 23 by
+// writing a checksum that doesn't match.
+function _sixpackEncodeSector(payload, err) {
+  var raw = new Uint8Array(260);
+  raw[0] = err === SIXPACK_ERR_NO_DATA ? 0x00 : 0x07;
+  raw.set(payload, 1);
+  var csum = 0;
+  for (var i = 0; i < 256; i++) csum ^= payload[i];
+  raw[257] = err === SIXPACK_ERR_DATA_CSUM ? (csum ^ 0xFF) : csum;
+
+  var gcr = new Uint8Array(SIXPACK_SECTOR_GCR);
+  for (var g = 0; g < 65; g++) {
+    var q = _sixpackEnc4(raw[g * 4], raw[g * 4 + 1], raw[g * 4 + 2], raw[g * 4 + 3]);
+    for (var k = 0; k < 5; k++) gcr[g * 5 + k] = q[k];
+  }
+  gcr[325] = 0x55;                       // the byte the reader drops
+
+  // Stored form: final 70 GCR bytes first, then the leading 256.
+  var out = new Uint8Array(SIXPACK_SECTOR_GCR);
+  out.set(gcr.subarray(256, SIXPACK_SECTOR_GCR), 0);
+  out.set(gcr.subarray(0, 256), 70);
+  return out;
+}
+
+// Encode a D64 into SixPack parts. `errors` is an optional per-sector CBM
+// error table (as decompressSixPack returns); every code it can express is
+// written back, so a set round-trips its errors.
+// Returns { parts, tracks } or { error }.
+function compressSixPack(buffer, baseName, errors) {
+  var all = new Uint8Array(buffer);
+  var tracks = 0;
+  if (all.length === 174848 || all.length === 175531) tracks = 35;
+  else if (all.length === 196608 || all.length === 197376) tracks = 40;
+  else return { error: 'SixPack needs a 35- or 40-track D64.' };
+
+  // A +Errors image carries its table after the sector data.
+  var spt = DISK_FORMATS.d64.sectorsPerTrack;
+  var totalSectors = 0;
+  for (var t0 = 1; t0 <= tracks; t0++) totalSectors += spt(t0);
+  if (!errors && all.length > totalSectors * 256) {
+    errors = all.subarray(totalSectors * 256, totalSectors * 256 + totalSectors);
+  }
+
+  var base = String(baseName || 'DISK').trim().toUpperCase().slice(0, 13);
+  if (!base) return { error: 'Give the set a name.' };
+
+  var hdr = calcD64Offset(18, 0, spt);
+  var id1 = all[hdr + 0xA2], id2 = all[hdr + 0xA3];
+  var ranges = tracks === 40 ? SIXPACK_RANGES_40 : SIXPACK_RANGES_35;
+  var errAt = function(track, sector) {
+    return errors ? (errors[_sixpackSectorIndex(track, sector, spt)] || SIXPACK_ERR_OK) : SIXPACK_ERR_OK;
+  };
+
+  var parts = [];
+  for (var fi = 0; fi < 6; fi++) {
+    var chunks = [Uint8Array.from([0xFF, 0x03, tracks === 40 ? 0x29 : 0x24])];
+
+    for (var track = ranges[fi][0]; track <= ranges[fi][1]; track++) {
+      var n = spt(track);
+
+      // A track whose sectors are all "no sync" is stored as count 0 with no
+      // sector data at all — that is how the format says error 21.
+      var allNoSync = true;
+      for (var s0 = 0; s0 < n && allNoSync; s0++) {
+        if (errAt(track, s0) !== SIXPACK_ERR_NO_SYNC) allNoSync = false;
+      }
+
+      var desc = new Uint8Array(256);
+      if (allNoSync) { chunks.push(desc); continue; }   // count byte stays 0
+
+      for (var g = 0; g < n; g++) {
+        var e = errAt(track, g);
+        var hId1 = e === SIXPACK_ERR_ID_MISMATCH ? (id1 ^ 0xFF) : id1;
+        var hId2 = e === SIXPACK_ERR_ID_MISMATCH ? (id2 ^ 0xFF) : id2;
+        var chk = g ^ track ^ hId2 ^ hId1;
+        if (e === SIXPACK_ERR_HEADER_CSUM) chk ^= 0xFF;
+        var a = _sixpackEnc4(e === SIXPACK_ERR_NO_HEADER ? 0x00 : 0x08, chk, g, track);
+        var b = _sixpackEnc4(hId2, hId1, 0x0F, 0x0F);
+        desc.set(a.concat(b), g * 10);
+      }
+      desc[0xFF] = n;
+      chunks.push(desc);
+
+      var order = _sixpackInterleave(track);
+      for (var k = 0; k < n; k++) {
+        var sec = order[k];
+        var off = calcD64Offset(track, sec, spt);
+        chunks.push(_sixpackEncodeSector(all.subarray(off, off + 256), errAt(track, sec)));
+      }
+    }
+
+    var total = 0;
+    for (var c = 0; c < chunks.length; c++) total += chunks[c].length;
+    var out = new Uint8Array(total);
+    var o = 0;
+    for (var d = 0; d < chunks.length; d++) { out.set(chunks[d], o); o += chunks[d].length; }
+    parts.push({ prefix: (fi + 1) + '!!', name: (fi + 1) + '!!' + base, data: out });
+  }
+  return { parts: parts, tracks: tracks };
 }

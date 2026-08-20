@@ -137,6 +137,14 @@
     padding: 12px;
   }
 
+  /* Radios/checkboxes in the pane would otherwise draw in the browser's own
+     blue, which sits oddly against the app palette. Same approach as
+     .gfx-zoom-slider. Text inputs use .modal-input for the rest. */
+  .detail-pane-body input[type="radio"],
+  .detail-pane-body input[type="checkbox"] {
+    accent-color: var(--accent);
+  }
+
   /* Pane footer reuses .modal-footer styling (set on the element) so viewers
      that build footer buttons/nav work identically here. Collapses when a
      viewer leaves it empty (e.g. hex), so footerless viewers show no bar. */

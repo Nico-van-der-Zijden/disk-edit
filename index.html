@@ -42,7 +42,7 @@
     "CVT (ConVerT) import and export for GEOS VLIR and Sequential files",
     "LYNX (.lnx) archive extraction",
     "CMD Native (DNP) track resize",
-    "ZipCode decompression",
+    "ZipCode: read and create DiskPacked, SixPack and FilePacked sets",
     "Export GEOS fonts as native C64 charsets"
   ]
 }
@@ -77,6 +77,7 @@
       <li>Viewers for hex, BASIC (V2 / V3.5 / V7 / Simons' / Final Cartridge III), PETSCII, 6502 / 6510 disassembly, graphics (24+ formats including Koala, Art Studio, FLI, IFLI, sprites and charsets), REL records, SEQ files</li>
       <li>GEOS tooling: geoPaint, Photo Scrap / Album, geoWrite (with RTF / PDF export), font viewer, C64 charset export (.prg), CVT import / export</li>
       <li>Archive extraction: LYNX (.lnx), ZIP, gzip, tar (.tar/.tgz), LHA/LZH, and all three ZipCode variants — DiskPacked (1!–5!), SixPack (1!!–6!!) and FilePacked (a!–x!)</li>
+      <li>Create ZipCode sets from any 1541 disk — SixPack keeps the original read errors — delivered as a ZIP, a tar.gz, or D64 images</li>
       <li>CMD Native: nested subdirectories, DNP track resize with auto-compaction, byte-exact VICE compatibility</li>
       <li>Drag-and-drop open, multi-tab interface, recent-files list, disk comparison and hashing (CRC32, SHA-256)</li>
     </ul>
@@ -178,6 +179,7 @@
           <div class="option disabled" id="opt-compact-dir">Compact Directory</div>
           <div class="option disabled" id="opt-file-chains">File Chains</div>
           <div class="option disabled" id="opt-unzip">Decompress ZipCode</div>
+          <div class="option disabled" id="opt-mkzip">Create ZipCode&hellip;</div>
           <div class="separator"></div>
           <div class="option disabled" id="opt-fill-free">Fill Free Sectors</div>
           <div class="option disabled" id="opt-optimize">Optimize Disk...</div>
@@ -489,6 +491,7 @@
 <script src="assets/js/ui/cbm-petscii.js"></script>
 <script src="assets/js/ui/ui-modals.js"></script>
 <script src="assets/js/ui/ui-detail-pane.js"></script>
+<script src="assets/js/ui/ui-zipcode-create.js"></script>
 <script src="assets/js/ui/ui-archive-picker.js"></script>
 <script src="assets/js/ui/ui-render.js"></script>
 <script src="assets/js/ui/ui-menus.js"></script>

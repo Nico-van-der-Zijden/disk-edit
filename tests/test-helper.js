@@ -39,7 +39,9 @@ global.document = {
 global.window = {};
 global.getComputedStyle = () => ({ getPropertyValue: () => '' });
 global.URL = { createObjectURL: () => '', revokeObjectURL: () => {} };
-global.Blob = function() {};
+// Node has a real Blob/CompressionStream; stubbing them would hide the
+// gzip path from tests.
+if (typeof Blob === 'undefined') global.Blob = function() {};
 
 // Load JS files into global scope via vm.runInThisContext
 function loadScript(relPath) {
@@ -57,6 +59,7 @@ loadScript('assets/js/format/cbm-format-ide64.js');
 loadScript('assets/js/format/cbm-format-geos.js');
 loadScript('assets/js/format/cbm-sector-allocator.js');
 loadScript('assets/js/format/cbm-format-tape.js');
+loadScript('assets/js/format/cbm-archive.js');
 loadScript('assets/js/format/cbm-format-lnx.js');
 loadScript('assets/js/format/cbm-format-zipcode.js');
 loadScript('assets/js/format/cbm-format-tar.js');
@@ -65,6 +68,7 @@ loadScript('assets/js/format/cbm-format-sixpack.js');
 loadScript('assets/js/format/cbm-format-filepack.js');
 loadScript('assets/js/format/cbm-editor.js');
 loadScript('assets/js/ui/ui-archive-picker.js');
+loadScript('assets/js/ui/ui-zipcode-create.js');
 loadScript('assets/js/ui/ui-directory.js');
 loadScript('assets/js/ui/ui-fileops.js');
 loadScript('assets/js/ui/viewers/ui-viewer-fileinfo.js');

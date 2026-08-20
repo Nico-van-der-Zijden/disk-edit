@@ -224,3 +224,189 @@ function decompressFilePack(dataFiles, x) {
   if (out.length === 0) return { error: 'No complete files found in the set.' };
   return { files: out, skipped: skipped };
 }
+
+// ── Encoding ─────────────────────────────────────────────────────────
+
+function _filePackRle(sec) {
+  var used = new Uint8Array(256);
+  for (var i = 0; i < sec.length; i++) used[sec[i]] = 1;
+  var rep = -1;
+  for (var c = 0; c < 256; c++) if (!used[c]) { rep = c; break; }
+  if (rep < 0) return null;
+  var p = [];
+  for (var j = 0; j < FILEPACK_SECTOR_DATA;) {
+    var run = 1;
+    while (j + run < FILEPACK_SECTOR_DATA && sec[j + run] === sec[j] && run < 255) run++;
+    if (run >= 4) { p.push(rep, run, sec[j]); j += run; }
+    else { for (var k = 0; k < run; k++) p.push(sec[j]); j += run; }
+  }
+  return p.length > 255 ? null : { rep: rep, payload: p };
+}
+
+// One sector entry. `track`/`sector` are the original disk position, which is
+// informational except for the TRACK $00 marker on a file's last block.
+function _filePackEntry(out, track, sector, sec) {
+  var uniform = true;
+  for (var u = 1; u < FILEPACK_SECTOR_DATA && uniform; u++) if (sec[u] !== sec[0]) uniform = false;
+  if (uniform) { out.push((1 << 6) | track, sector, sec[0]); return; }
+
+  var rle = _filePackRle(sec);
+  if (rle && rle.payload.length + 2 < FILEPACK_SECTOR_DATA) {
+    out.push((2 << 6) | track, sector, rle.payload.length, rle.rep);
+    for (var r = 0; r < rle.payload.length; r++) out.push(rle.payload[r]);
+  } else {
+    out.push((0 << 6) | track, sector);
+    for (var b = 0; b < FILEPACK_SECTOR_DATA; b++) out.push(sec[b]);
+  }
+}
+
+// Encode files into a FilePacked set. `files` is
+// [{ nameBytes(16), typeChar('P'|'S'|'U'), data }]. Returns { parts, dir } —
+// parts are the a!/b!/... data files and dir is the x! file — or { error }.
+//
+// The x! BASIC lister area is left zeroed: any decoder ignores it (ours reads
+// from $01FF on), but the archive won't self-list on a real C64.
+function compressFilePack(files, baseName) {
+  if (!files || files.length === 0) return { error: 'No files to pack.' };
+  var base = String(baseName || 'DISK').trim().toUpperCase().slice(0, 14);
+  if (!base) return { error: 'Give the set a name.' };
+
+  // Flatten every file into sector entries, marking each file's last block.
+  var entries = [];
+  var meta = [];
+  for (var f = 0; f < files.length; f++) {
+    var d = files[f].data;
+    var blocks = Math.max(1, Math.ceil(d.length / FILEPACK_SECTOR_DATA));
+    for (var b = 0; b < blocks; b++) {
+      var sec = new Uint8Array(FILEPACK_SECTOR_DATA);
+      sec.set(d.subarray(b * FILEPACK_SECTOR_DATA,
+        Math.min(d.length, (b + 1) * FILEPACK_SECTOR_DATA)), 0);
+      var last = b === blocks - 1;
+      var used = last ? (d.length - b * FILEPACK_SECTOR_DATA) : FILEPACK_SECTOR_DATA;
+      entries.push({
+        track: last ? 0 : (1 + (b % 35)),
+        sector: last ? (used & 0xFF) : (b % 17),
+        data: sec,
+      });
+    }
+    meta.push({ nameBytes: files[f].nameBytes, typeChar: files[f].typeChar || 'P', blocks: blocks });
+  }
+
+  // 166 sectors per data file is the format's maximum.
+  var parts = [];
+  for (var i = 0; i < entries.length; i += 166) {
+    var slice = entries.slice(i, i + 166);
+    var out = [0xFF, 0x03, slice.length];
+    for (var s = 0; s < slice.length; s++) {
+      _filePackEntry(out, slice[s].track, slice[s].sector, slice[s].data);
+    }
+    parts.push({
+      prefix: FILEPACK_LETTERS.charAt(parts.length) + '!',
+      name: FILEPACK_LETTERS.charAt(parts.length) + '!' + base,
+      data: Uint8Array.from(out),
+    });
+    if (parts.length >= FILEPACK_LETTERS.length) return { error: 'Too many files for one set.' };
+  }
+
+  var dir = new Uint8Array(FILEPACK_DIR_START + files.length * FILEPACK_DIR_ENTRY);
+  // $0801 load address, then the lister. It has to end before $01FF, which
+  // is the data-file count.
+  dir[0] = 0x01;
+  dir[1] = 0x08;
+  var lister = buildBasicProgram(FILEPACK_LISTER, 0x0801);
+  if (lister && 2 + lister.length <= 0x1FF) dir.set(lister, 2);
+
+  dir[0x1FF] = parts.length;
+  dir[0x200] = files.length;
+  for (var m = 0; m < meta.length; m++) {
+    var o = FILEPACK_DIR_START + m * FILEPACK_DIR_ENTRY;
+    dir.set(meta[m].nameBytes.subarray(0, 16), o);
+    dir[o + 0x10] = meta[m].typeChar.charCodeAt(0) | 0x80;
+    dir[o + 0x11] = meta[m].blocks & 0xFF;
+    dir[o + 0x12] = (meta[m].blocks >> 8) & 0xFF;
+    dir[o + 0x13] = 17;
+    dir[o + 0x14] = 0;
+  }
+
+  return { parts: parts, dir: { prefix: 'x!', name: 'x!' + base, data: dir } };
+}
+
+// ── x! BASIC lister ──────────────────────────────────────────────────
+// The x! file opens with a BASIC program that lists the archive on a real
+// C64. This one is written fresh rather than lifted from the original
+// packer, whose machine-language routine is someone else's code.
+//
+// Pure BASIC is enough because of where the data lands: the file loads at
+// $0801, so file offset $01FF..$0201 becomes $09FE..$0A00, and LOAD leaves
+// VARTAB above the whole file — variables never reach the directory, so the
+// program can just PEEK it. (The original's ML confirms the mapping: it
+// compares a counter against $09FF, the file count.)
+var FILEPACK_LISTER = [
+  [0, 'PRINT"\x93ZIPCODE ARCHIVE"'],
+  [1, 'F=PEEK(2559):D=PEEK(2558)'],
+  [2, 'PRINTF;"FILE(S) IN";D;"PART(S)"'],
+  [3, 'PRINT'],
+  [4, 'FORI=0TOF-1'],
+  [5, 'A=2560+I*21:N$=""'],
+  [6, 'FORJ=0TO15:C=PEEK(A+J)'],
+  [7, 'IFC<>160THENN$=N$+CHR$(C)'],
+  [8, 'NEXTJ'],
+  [9, 'PRINTN$;TAB(18);PEEK(A+17)+PEEK(A+18)*256;CHR$(PEEK(A+16)AND127)'],
+  [10, 'NEXTI'],
+];
+
+// Keyword list built from the viewer's own token table, so the encoder and
+// the detokenizer can never disagree. Longest first for correct matching
+// ("PRINT#" before "PRINT", "TAB(" before "TO").
+function _basicKeywords() {
+  if (typeof BASIC_V2_TOKENS === 'undefined') return null;
+  var kws = [];
+  for (var i = 0; i < BASIC_V2_TOKENS.length; i++) {
+    kws.push([BASIC_V2_TOKENS[i], 0x80 + i]);
+  }
+  kws.sort(function(a, b) { return b[0].length - a[0].length; });
+  return kws;
+}
+
+function _basicTokenizeLine(text, kws) {
+  var out = [];
+  var quoted = false;
+  var i = 0;
+  while (i < text.length) {
+    if (text.charAt(i) === '"') { quoted = !quoted; out.push(0x22); i++; continue; }
+    if (quoted) { out.push(text.charCodeAt(i) & 0xFF); i++; continue; }
+    var hit = null;
+    for (var k = 0; k < kws.length; k++) {
+      if (text.substr(i, kws[k][0].length) === kws[k][0]) { hit = kws[k]; break; }
+    }
+    if (hit) { out.push(hit[1]); i += hit[0].length; continue; }
+    out.push(text.charCodeAt(i) & 0xFF);
+    i++;
+  }
+  return out;
+}
+
+// Tokenize `lines` into a runnable BASIC program at `startAddr`, including
+// the per-line link pointers and the trailing end-of-program marker.
+function buildBasicProgram(lines, startAddr) {
+  var kws = _basicKeywords();
+  if (!kws) return null;
+
+  var enc = lines.map(function(l) {
+    return { num: l[0], toks: _basicTokenizeLine(l[1], kws) };
+  });
+  var addr = startAddr;
+  for (var i = 0; i < enc.length; i++) {
+    addr += 4 + enc[i].toks.length + 1;
+    enc[i].next = addr;
+  }
+  var out = [];
+  for (var j = 0; j < enc.length; j++) {
+    out.push(enc[j].next & 0xFF, (enc[j].next >> 8) & 0xFF);
+    out.push(enc[j].num & 0xFF, (enc[j].num >> 8) & 0xFF);
+    for (var t = 0; t < enc[j].toks.length; t++) out.push(enc[j].toks[t]);
+    out.push(0x00);
+  }
+  out.push(0x00, 0x00);
+  return Uint8Array.from(out);
+}

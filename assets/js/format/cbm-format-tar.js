@@ -95,3 +95,60 @@ function parseTar(arrayBuffer) {
   }
   return { entries: entries, skipped: skipped };
 }
+
+// ── Writing ──────────────────────────────────────────────────────────
+
+/** One 512-byte USTAR header. Checksum is computed with its own field blanked. */
+function _tarBuildHeader(name, size) {
+  var h = new Uint8Array(TAR_BLOCK);
+  var put = function(off, str) {
+    for (var i = 0; i < str.length; i++) h[off + i] = str.charCodeAt(i);
+  };
+  put(0, String(name).slice(0, 100));
+  put(0x64, '000644 ');
+  put(0x6C, '000000 ');
+  put(0x74, '000000 ');
+  put(0x7C, size.toString(8).padStart(11, '0'));
+  put(0x88, '00000000000');
+  h[0x9C] = 0x30;                       // type '0': regular file
+  put(0x101, 'ustar');
+  put(0x107, '00');
+
+  for (var i = 0x94; i < 0x9C; i++) h[i] = 0x20;
+  var sum = 0;
+  for (var j = 0; j < TAR_BLOCK; j++) sum += h[j];
+  put(0x94, sum.toString(8).padStart(6, '0'));
+  h[0x9A] = 0x00;
+  h[0x9B] = 0x20;
+  return h;
+}
+
+/** Build a tar from [{ name, data }]. Returns a Uint8Array. */
+function buildTar(members) {
+  var blocks = [];
+  for (var i = 0; i < members.length; i++) {
+    var d = members[i].data;
+    blocks.push(_tarBuildHeader(members[i].name, d.length));
+    var padded = new Uint8Array(Math.ceil(d.length / TAR_BLOCK) * TAR_BLOCK);
+    padded.set(d, 0);
+    blocks.push(padded);
+  }
+  blocks.push(new Uint8Array(TAR_BLOCK));      // two zero blocks end the archive
+  blocks.push(new Uint8Array(TAR_BLOCK));
+
+  var total = 0;
+  for (var b = 0; b < blocks.length; b++) total += blocks[b].length;
+  var out = new Uint8Array(total);
+  var pos = 0;
+  for (var k = 0; k < blocks.length; k++) { out.set(blocks[k], pos); pos += blocks[k].length; }
+  return out;
+}
+
+/** gzip a byte array using the browser's own compressor. */
+async function gzipBytes(bytes) {
+  if (typeof CompressionStream === 'undefined') {
+    throw new Error('This browser cannot gzip (CompressionStream unavailable).');
+  }
+  var stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}

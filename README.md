@@ -103,6 +103,7 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 - Fill free sectors
 - ZipCode, all three variants — DiskPacked (1!–4!, plus 5! for 40 tracks), SixPack (1!!–6!!, raw GCR, preserves read errors) and FilePacked (a!–w! + x!) — from a disk or by dropping the loose files
 - Container formats: ZIP, gzip, tar (.tar/.tgz/.tar.gz), LHA/LZH (-lh0-/-lh5-, CRC-checked), LNX, NBZ
+- Create ZipCode — pack the open disk as DiskPacked, SixPack (keeps read errors) or FilePacked, delivered as a ZIP, a tar.gz, or D64 image(s) (auto-split when a set needs two disks)
 - Resize Image (DNP only — grow/shrink the track count, auto-compacts files on shrink)
 - Convert to GEOS Format (adds the GEOS signature to a regular disk)
 - Compare with… side-by-side disk diff (file list + Directory + sector hex)
@@ -194,7 +195,7 @@ assets/
       cbm-format-tar.js           tar reader (USTAR + GNU long names)
       cbm-format-lha.js           LHA/LZH reader (-lh0-, -lh5-, CRC-16 verify)
       cbm-format-sixpack.js       SixPack ZipCode (1!!–6!!), GCR + error codes
-      cbm-format-filepack.js      FilePacked ZipCode (a!–w! + x! directory)
+      cbm-format-filepack.js      FilePacked ZipCode (a!–w! + x!), incl. BASIC lister writer
       cbm-format-tape.js          T64 tape directory reader
       cbm-tape.js                 TAP tape parser (CBM ROM, Turbotape 250, Novaload, Cyberload)
       cbm-archive.js              gzip + ZIP archive readers
@@ -205,6 +206,7 @@ assets/
       ui-modals.js                Modal dialogs and input prompts
       ui-archive-picker.js        Archive member picker (ZIP / tar / LHA), ZipCode set grouping
       ui-detail-pane.js           Docked side pane for read-only viewers
+      ui-zipcode-create.js        Create ZipCode pane: live preview, D64 / ZIP / tar.gz output
       ui-render.js                Directory rendering, partition navigation
       ui-menus.js                 Context menu, selection, keyboard shortcuts
       ui-editing.js               Inline editing, save helpers, menu bar, tabs

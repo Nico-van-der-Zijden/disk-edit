@@ -305,6 +305,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.5.1', title: 'Create ZipCode sets', items: [
+      'New Disk → Disk Tools → Create ZipCode… packs the disk you have open into a ZipCode set. Pick DiskPacked, SixPack or FilePacked and a side pane shows exactly what you will get — every part, its size, and how much of the disk it saves — before anything is written',
+      'Choose how it arrives: a single ZIP or tar.gz download, or D64 image(s) that open as tabs. A set too big for one disk splits the way real sets do, so a six-part SixPack comes out as NAME-123 and NAME-456',
+      'SixPack keeps the read errors of the source disk, so a protected or damaged disk survives the round trip. If the open disk has errors the pane starts on SixPack and warns you if you pick a format that would drop them',
+      'A FilePacked set you create can list itself: LOAD its x! part on a real C64, RUN it, and it prints the file names, sizes and types the set holds',
+    ]},
     { ver: '1.5.0', title: 'ZipCode, tar and LHA archives', items: [
       'Open ZipCode sets — all three kinds. Drop the parts and they rebuild into a disk in a new tab: the usual 1!NAME through 4!NAME (5!NAME for a 40-track disk), the two-bang SixPack 1!!NAME through 6!!NAME, or the letter-named FilePacked a!NAME plus its x!NAME directory. Sets sitting on a disk you already have open work too, from Disk → Disk Tools → Decompress ZipCode',
       'SixPack sets keep the read errors from the original disk, so a copy-protected or damaged disk opens with its error information intact rather than as a clean disk it never was. A set split across two disks — normal, since a 40-track SixPack doesn\'t fit on one — is put back together from whichever disks you have open, and the confirmation tells you which ones it used',

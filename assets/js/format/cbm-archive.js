@@ -164,3 +164,57 @@ async function parseZip(arrayBuffer) {
   }
   return entries;
 }
+
+// Minimal ZIP builder (store-only, no compression)
+function buildZip(files) {
+  var localHeaders = [], centralHeaders = [], offset = 0;
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    var nameBytes = new TextEncoder().encode(f.name);
+    // Local file header (30 + name + data)
+    var lh = new Uint8Array(30 + nameBytes.length + f.data.length);
+    var v = new DataView(lh.buffer);
+    v.setUint32(0, 0x04034b50, true); // signature
+    v.setUint16(4, 20, true); // version needed
+    v.setUint16(8, 0, true); // method: store
+    v.setUint32(18, f.data.length, true); // compressed size
+    v.setUint32(22, f.data.length, true); // uncompressed size
+    v.setUint16(26, nameBytes.length, true); // name length
+    lh.set(nameBytes, 30);
+    lh.set(f.data, 30 + nameBytes.length);
+    localHeaders.push(lh);
+    // Central directory header (46 + name)
+    var ch = new Uint8Array(46 + nameBytes.length);
+    var cv = new DataView(ch.buffer);
+    cv.setUint32(0, 0x02014b50, true); // signature
+    cv.setUint16(4, 20, true); // version made by
+    cv.setUint16(6, 20, true); // version needed
+    cv.setUint16(10, 0, true); // method: store
+    cv.setUint32(20, f.data.length, true); // compressed
+    cv.setUint32(24, f.data.length, true); // uncompressed
+    cv.setUint16(28, nameBytes.length, true); // name length
+    cv.setUint32(42, offset, true); // local header offset
+    ch.set(nameBytes, 46);
+    centralHeaders.push(ch);
+    offset += lh.length;
+  }
+  var centralStart = offset;
+  var centralSize = 0;
+  for (var ci = 0; ci < centralHeaders.length; ci++) centralSize += centralHeaders[ci].length;
+  // End of central directory (22 bytes)
+  var eocd = new Uint8Array(22);
+  var ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, files.length, true); // entries on disk
+  ev.setUint16(10, files.length, true); // total entries
+  ev.setUint32(12, centralSize, true);
+  ev.setUint32(16, centralStart, true);
+  // Combine
+  var total = offset + centralSize + 22;
+  var zip = new Uint8Array(total);
+  var pos = 0;
+  for (var li = 0; li < localHeaders.length; li++) { zip.set(localHeaders[li], pos); pos += localHeaders[li].length; }
+  for (var di = 0; di < centralHeaders.length; di++) { zip.set(centralHeaders[di], pos); pos += centralHeaders[di].length; }
+  zip.set(eocd, pos);
+  return zip;
+}

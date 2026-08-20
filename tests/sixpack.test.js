@@ -312,3 +312,98 @@ describe('findSixPackSets', () => {
     assert.strictEqual(r.complete.length, 2);
   });
 });
+
+describe('compressSixPack (creating a set)', () => {
+  it('round-trips a 35-track disk', () => {
+    const disk = makeDisk(35, 41);
+    const enc = compressSixPack(disk.buffer, 'OUT');
+    assert.ok(!enc.error, enc.error);
+    assert.strictEqual(enc.parts.length, 6);
+    assert.strictEqual(enc.tracks, 35);
+    const back = decompressSixPack(enc.parts.map(p => p.data));
+    assert.ok(!back.error, back.error);
+    assert.strictEqual(back.missing, 0);
+    assert.strictEqual(back.errorCount, 0);
+    assert.ok(Buffer.from(new Uint8Array(back.buffer)).equals(Buffer.from(disk)));
+  });
+
+  it('round-trips a 40-track disk', () => {
+    const disk = makeDisk(40, 43);
+    const enc = compressSixPack(disk.buffer, 'BIG');
+    const back = decompressSixPack(enc.parts.map(p => p.data));
+    assert.strictEqual(back.tracks, 40);
+    assert.ok(Buffer.from(new Uint8Array(back.buffer)).equals(Buffer.from(disk)));
+  });
+
+  it('names parts 1!!NAME .. 6!!NAME, capped at 13 characters', () => {
+    const enc = compressSixPack(makeDisk(35, 3).buffer, 'a-really-long-name');
+    assert.deepStrictEqual(enc.parts.map(p => p.name),
+      ['1!!A-REALLY-LONG', '2!!A-REALLY-LONG', '3!!A-REALLY-LONG',
+       '4!!A-REALLY-LONG', '5!!A-REALLY-LONG', '6!!A-REALLY-LONG']);
+    assert.ok(enc.parts.every(p => p.name.length <= 16));
+  });
+
+  it('writes the signature and track-count byte', () => {
+    const a = compressSixPack(makeDisk(35, 5).buffer, 'A');
+    assert.deepStrictEqual(Array.from(a.parts[0].data.subarray(0, 3)), [0xFF, 0x03, 0x24]);
+    const b = compressSixPack(makeDisk(40, 5).buffer, 'B');
+    assert.deepStrictEqual(Array.from(b.parts[0].data.subarray(0, 3)), [0xFF, 0x03, 0x29]);
+  });
+
+  it('preserves every error code it can express', () => {
+    const disk = makeDisk(35, 47);
+    const spt = DISK_FORMATS.d64.sectorsPerTrack;
+    let total = 0;
+    for (let t = 1; t <= 35; t++) total += spt(t);
+    const errors = new Uint8Array(total).fill(1);
+    const idx = (t, s) => { let n = 0; for (let k = 1; k < t; k++) n += spt(k); return n + s; };
+
+    errors[idx(2, 0)] = 20;                       // header descriptor missing
+    errors[idx(3, 1)] = 27;                       // header checksum
+    errors[idx(4, 2)] = 22;                       // data descriptor missing
+    errors[idx(5, 3)] = 23;                       // data checksum
+    errors[idx(6, 4)] = 29;                       // disk ID mismatch
+    for (let s = 0; s < spt(9); s++) errors[idx(9, s)] = 21;   // whole track unreadable
+
+    const enc = compressSixPack(disk.buffer, 'ERRS', errors);
+    const back = decompressSixPack(enc.parts.map(p => p.data));
+    assert.ok(!back.error, back.error);
+    assert.strictEqual(back.errors[idx(2, 0)], 20);
+    assert.strictEqual(back.errors[idx(3, 1)], 27);
+    assert.strictEqual(back.errors[idx(4, 2)], 22);
+    assert.strictEqual(back.errors[idx(5, 3)], 23);
+    assert.strictEqual(back.errors[idx(6, 4)], 29);
+    for (let s = 0; s < spt(9); s++) assert.strictEqual(back.errors[idx(9, s)], 21, 'track 9 sector ' + s);
+  });
+
+  it('reads the error table out of a +Errors image automatically', () => {
+    const spt = DISK_FORMATS.d64.sectorsPerTrack;
+    let total = 0;
+    for (let t = 1; t <= 35; t++) total += spt(t);
+    const img = new Uint8Array(174848 + total);
+    img.fill(1, 174848);                          // all sectors OK
+    img[174848 + total - 1] = 23;                 // last sector: data checksum
+    const enc = compressSixPack(img.buffer, 'AUTO');
+    const back = decompressSixPack(enc.parts.map(p => p.data));
+    assert.strictEqual(back.errors[total - 1], 23);
+    assert.strictEqual(back.errorCount, 1);
+  });
+
+  it('an unreadable track stores no sector data, shrinking the part', () => {
+    const disk = makeDisk(35, 51);
+    const spt = DISK_FORMATS.d64.sectorsPerTrack;
+    let total = 0;
+    for (let t = 1; t <= 35; t++) total += spt(t);
+    const errors = new Uint8Array(total).fill(1);
+    for (let s = 0; s < spt(1); s++) errors[s] = 21;          // track 1 dead
+    const plain = compressSixPack(disk.buffer, 'A');
+    const dead = compressSixPack(disk.buffer, 'A', errors);
+    assert.ok(dead.parts[0].data.length < plain.parts[0].data.length,
+      'part 1 should shrink by a track of sectors');
+    assert.strictEqual(plain.parts[0].data.length - dead.parts[0].data.length, spt(1) * 326);
+  });
+
+  it('refuses a disk that is not a 35/40-track D64', () => {
+    assert.ok(compressSixPack(new Uint8Array(819200).buffer, 'X').error);
+  });
+});
