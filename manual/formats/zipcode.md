@@ -7,7 +7,7 @@ Specs live in `disks/FORMATS/`: `ZIP_DISK.TXT`, `ZIP_SIX.TXT`, `ZIP_FILE.TXT`.
 | Variant | Names | What it holds | Result |
 |---|---|---|---|
 | **DiskPacked** | `1!NAME` … `4!NAME`, plus `5!NAME` | compressed sector copy of a whole disk | plain D64, 35 or 40 tracks |
-| **SixPack** | `1!!NAME` … `6!!NAME` (two `!`) | raw GCR, per sector | D64, `+Errors` when the original had bad sectors |
+| **SixPack** | `1!!NAME` … `6!!NAME` (two `!`) | raw GCR, per sector | D64 (`+Errors` if the original had bad sectors), or G64 when a sector holds non-standard GCR |
 | **FilePacked** | `a!NAME` … `w!NAME` plus `x!NAME` | individual files, not a disk | files written onto a fresh D64 |
 
 ## DiskPacked (the common one)
@@ -22,7 +22,13 @@ Six files, and nothing like DiskPacked: no compression, and no track/sector refe
 
 Because of that it preserves read errors. Sectors that were unreadable on the original come back as CBM error codes (21 no sync, 20/27 header problems, 22/23 data problems, 29 ID mismatch), and a set carrying any of them opens as a **`+Errors` image** (175,531 or 197,376 bytes) rather than a plain D64.
 
-It sits between D64 and G64: GCR-encoded, but still sector-structured, so it cannot represent the arbitrary track layouts that G64 can. For a disk using an unusual low-level encoding (Vorpal, Warp25) the GCR is preserved in the SixPack file but will not decode into standard sectors.
+It sits between D64 and G64: GCR-encoded, but still sector-structured, so it cannot represent the arbitrary track layouts that G64 can.
+
+**A SixPack set normally opens as a D64**, which is lossless for it and far easier to work with. But if any sector's GCR can't be decoded into a standard data block — the Vorpal / Warp25 case the format exists for — a D64 has nowhere to put those bytes, so the set **opens as a G64 instead** and the raw GCR is carried through untouched. The confirmation says which you got and why.
+
+What the G64 cannot recover is the framing: SixPack stores no sync marks, gaps or track lengths, so those are synthesised. The sector data is faithful; the spaces between sectors are a plausible reconstruction. A track the drive couldn't read at all is left out of the G64 entirely, rather than filled with fabricated empty sectors.
+
+Once open, that GCR stays with the tab. **Save As `.g64`** writes it back, and **Create ZipCode → SixPack** carries it into the new set — so a set can be imported and re-exported without losing the non-standard sectors, and they still read back as undecodable afterwards rather than looking clean. DiskPacked and FilePacked have nowhere to store raw GCR, so the pane starts on SixPack for such a disk and warns if you pick another format.
 
 A 40-track SixPack does not fit on one 1541 disk, so sets are routinely **split across two disks** — see below.
 
@@ -77,7 +83,7 @@ The menu item is enabled only for a 35- or 40-track D64, which is what these for
 
 - Sets cannot be **edited** — create a new one from the disk instead.
 - FilePacked carries only PRG, SEQ and USR — REL files and lock/splat bits are dropped, as the format requires.
-- SixPack is validated against the spec and against real sets, but a disk using a non-standard low-level encoding (Vorpal, Warp25) decodes to error codes rather than data, as noted above.
+- A SixPack from a disk with non-standard low-level encoding keeps its GCR via the G64 route, but the synthesised gaps mean it is not a byte-exact capture of the original surface. No such set was available to test against — the G64 path is verified against the spec, against `s2g.c`, and by round-tripping through this editor's own G64 reader.
 
 ## See also
 

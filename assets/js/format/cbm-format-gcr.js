@@ -213,10 +213,13 @@ function walkGCRTrack(trackData, track, expectedSpt) {
           payload = new Uint8Array(bytes);
         }
       }
-      if (payload) {
-        // Record data block start within the original (un-doubled)
-        // track buffer. dataPos is into the wrapped buffer; if it
-        // exceeded trackLen we wrapped — fold back.
+      // Record the data block start within the original (un-doubled) track
+      // buffer. dataPos is into the wrapped buffer; if it exceeded trackLen
+      // we wrapped — fold back. Recorded even when the block didn't decode:
+      // the position is still where the data lives, which is what lets a
+      // caller lift non-standard GCR back out verbatim. buildG64ForSave
+      // skips unreadable sectors before consulting this, so it is unaffected.
+      if (dataPos + 325 <= wrapped.length) {
         sectorDataStart[hdrSector] = dataPos % trackLen;
       }
     }

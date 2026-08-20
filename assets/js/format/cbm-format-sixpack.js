@@ -127,7 +127,9 @@ function _sixpackMasterId(files, ranges, spt) {
 // `files` is six Uint8Arrays in 1!!..6!! order. Returns { buffer, tracks,
 // errors, errorCount, missing } or { error }; `errors` is one CBM error
 // code per sector (1 = OK), for writing a "+Errors" D64.
-function decompressSixPack(files) {
+// Validate the six parts and read the track count. Shared by the D64 and G64
+// paths so they can't disagree on what a valid set looks like.
+function _sixpackHeader(files) {
   if (!files || files.length !== 6) {
     return { error: 'A SixPack set needs all six files (1!! through 6!!).' };
   }
@@ -139,12 +141,16 @@ function decompressSixPack(files) {
       return { error: (f + 1) + '!! does not start with the SixPack signature $FF $03.' };
     }
   }
-
   var sizeByte = files[0][2];
-  var tracks;
-  if (sizeByte === 0x24) tracks = 35;
-  else if (sizeByte === 0x29) tracks = 40;
-  else return { error: '1!! has track-count byte $' + hex8(sizeByte) + ' (expected $24 or $29).' };
+  if (sizeByte === 0x24) return { tracks: 35 };
+  if (sizeByte === 0x29) return { tracks: 40 };
+  return { error: '1!! has track-count byte $' + hex8(sizeByte) + ' (expected $24 or $29).' };
+}
+
+function decompressSixPack(files) {
+  var head = _sixpackHeader(files);
+  if (head.error) return { error: head.error };
+  var tracks = head.tracks;
 
   var spt = DISK_FORMATS.d64.sectorsPerTrack;
   var ranges = tracks === 40 ? SIXPACK_RANGES_40 : SIXPACK_RANGES_35;
@@ -297,11 +303,38 @@ function _sixpackEncodeSector(payload, err) {
   return out;
 }
 
+// Read `n` bytes from a raw GCR track, wrapping at the end — a track is a
+// closed loop, so a sector's data block can straddle the join.
+function _sixpackReadCircular(raw, pos, n) {
+  var out = new Uint8Array(n);
+  for (var i = 0; i < n; i++) out[i] = raw[(pos + i) % raw.length];
+  return out;
+}
+
+// Natural GCR order -> SixPack's stored order: [last 70][first 256].
+function _sixpackStoreOrder(natural) {
+  var out = new Uint8Array(SIXPACK_SECTOR_GCR);
+  out.set(natural.subarray(256, SIXPACK_SECTOR_GCR), 0);
+  out.set(natural.subarray(0, 256), 70);
+  return out;
+}
+
+// Index a G64/NIB layout by whole track, so the encoder can pull original GCR
+// back out for sectors that never decoded.
+function _sixpackLayoutByTrack(layout) {
+  if (!layout || !layout.length) return null;
+  var byTrack = {};
+  for (var i = 0; i < layout.length; i++) {
+    if (!layout[i].halfTrack) byTrack[layout[i].track] = layout[i];
+  }
+  return byTrack;
+}
+
 // Encode a D64 into SixPack parts. `errors` is an optional per-sector CBM
 // error table (as decompressSixPack returns); every code it can express is
 // written back, so a set round-trips its errors.
 // Returns { parts, tracks } or { error }.
-function compressSixPack(buffer, baseName, errors) {
+function compressSixPack(buffer, baseName, errors, layout) {
   var all = new Uint8Array(buffer);
   var tracks = 0;
   if (all.length === 174848 || all.length === 175531) tracks = 35;
@@ -326,6 +359,12 @@ function compressSixPack(buffer, baseName, errors) {
     return errors ? (errors[_sixpackSectorIndex(track, sector, spt)] || SIXPACK_ERR_OK) : SIXPACK_ERR_OK;
   };
 
+  // A tab opened from a G64 or NIB still holds the raw GCR. Use it: a sector
+  // whose GCR never decoded has no bytes in the D64, so re-encoding from the
+  // D64 alone would quietly replace it with zeros.
+  var byTrack = _sixpackLayoutByTrack(layout);
+  var rawKept = 0, rawLost = 0;
+
   var parts = [];
   for (var fi = 0; fi < 6; fi++) {
     var chunks = [Uint8Array.from([0xFF, 0x03, tracks === 40 ? 0x29 : 0x24])];
@@ -334,10 +373,13 @@ function compressSixPack(buffer, baseName, errors) {
       var n = spt(track);
 
       // A track whose sectors are all "no sync" is stored as count 0 with no
-      // sector data at all — that is how the format says error 21.
-      var allNoSync = true;
-      for (var s0 = 0; s0 < n && allNoSync; s0++) {
-        if (errAt(track, s0) !== SIXPACK_ERR_NO_SYNC) allNoSync = false;
+      // sector data at all — that is how the format says error 21. A track the
+      // G64 left out says the same thing, so honour that too.
+      var lt = byTrack ? byTrack[track] : null;
+      var allNoSync = !!(byTrack && !lt);
+      for (var s0 = 0; s0 < n && !allNoSync; s0++) {
+        if (errAt(track, s0) !== SIXPACK_ERR_NO_SYNC) break;
+        if (s0 === n - 1) allNoSync = true;
       }
 
       var desc = new Uint8Array(256);
@@ -359,6 +401,23 @@ function compressSixPack(buffer, baseName, errors) {
       var order = _sixpackInterleave(track);
       for (var k = 0; k < n; k++) {
         var sec = order[k];
+
+        // Sector the G64 could not decode: its bytes exist only in the raw
+        // GCR, so copy that block through rather than encoding the blank D64
+        // payload over the top of it.
+        var kept = null;
+        if (lt && lt.unreadableSectors && lt.unreadableSectors.indexOf(sec) >= 0) {
+          var dp = lt.sectorDataStart ? lt.sectorDataStart[sec] : undefined;
+          if (typeof dp === 'number' && lt.rawGCR && lt.rawGCR.length) {
+            kept = _sixpackStoreOrder(
+              _sixpackReadCircular(lt.rawGCR, dp, SIXPACK_SECTOR_GCR));
+            rawKept++;
+          } else {
+            rawLost++;      // header never decoded either, so it can't be found
+          }
+        }
+        if (kept) { chunks.push(kept); continue; }
+
         var off = calcD64Offset(track, sec, spt);
         chunks.push(_sixpackEncodeSector(all.subarray(off, off + 256), errAt(track, sec)));
       }
@@ -371,5 +430,125 @@ function compressSixPack(buffer, baseName, errors) {
     for (var d = 0; d < chunks.length; d++) { out.set(chunks[d], o); o += chunks[d].length; }
     parts.push({ prefix: (fi + 1) + '!!', name: (fi + 1) + '!!' + base, data: out });
   }
-  return { parts: parts, tracks: tracks };
+  return { parts: parts, tracks: tracks, rawKept: rawKept, rawLost: rawLost };
+}
+
+// ── G64 output ───────────────────────────────────────────────────────
+// SixPack holds GCR, so a G64 can carry it through untouched — the only way a
+// sector with non-standard encoding (Vorpal, Warp25) survives at all. What
+// SixPack does *not* store is the framing: sync marks, gaps, track lengths.
+// Those are synthesised, so the result is faithful sector data inside
+// plausible framing, not a capture of the original surface.
+//
+// Framing constants follow s2g.c 0.14 by Markus Brenner (GPL), itself based
+// on d64tog64.c by Andreas Boose.
+
+var SIXPACK_G64_SYNC = 0xFF;
+var SIXPACK_G64_GAP = 0x55;
+var SIXPACK_G64_STRIDE = 360;                            // 5+10+9+5+326+5
+var SIXPACK_G64_TRACK_LEN = [6250, 6666, 7142, 7692];    // by density zone
+
+function _sixpackDensity(track) {
+  if (track <= 17) return 3;
+  if (track <= 24) return 2;
+  if (track <= 30) return 1;
+  return 0;
+}
+
+// Walk the six parts, handing each track's descriptor and raw sector blocks to
+// `cb(track, desc, blocks, count)`. Returns an error string or null.
+function _sixpackWalkTracks(files, tracks, cb) {
+  var spt = DISK_FORMATS.d64.sectorsPerTrack;
+  var ranges = tracks === 40 ? SIXPACK_RANGES_40 : SIXPACK_RANGES_35;
+  for (var fi = 0; fi < 6; fi++) {
+    var data = files[fi];
+    var pos = 3;                                   // past the signature
+    for (var track = ranges[fi][0]; track <= ranges[fi][1]; track++) {
+      if (pos + SIXPACK_DESCRIPTOR > data.length) {
+        return (fi + 1) + '!! ends before the descriptor for track ' + track + '.';
+      }
+      var desc = data.subarray(pos, pos + SIXPACK_DESCRIPTOR);
+      pos += SIXPACK_DESCRIPTOR;
+      var count = desc[0xFF];
+      if (count > spt(track)) count = spt(track);
+      var blocks = [];
+      for (var k = 0; k < count; k++) {
+        if (pos + SIXPACK_SECTOR_GCR > data.length) {
+          return (fi + 1) + '!! ends mid-sector on track ' + track + '.';
+        }
+        blocks.push(data.subarray(pos, pos + SIXPACK_SECTOR_GCR));
+        pos += SIXPACK_SECTOR_GCR;
+      }
+      cb(track, desc, blocks, count);
+    }
+  }
+  return null;
+}
+
+// Build a G64 from a SixPack set. Returns
+// { buffer, tracks, deadTracks, missingSectors } or { error }.
+function sixPackToG64(files) {
+  var head = _sixpackHeader(files);
+  if (head.error) return { error: head.error };
+  var spt = DISK_FORMATS.d64.sectorsPerTrack;
+
+  var layout = [];
+  var deadTracks = 0, missingSectors = 0;
+
+  var err = _sixpackWalkTracks(files, head.tracks, function(track, desc, blocks, count) {
+    // No sectors stored means the drive found no SYNC. A G64 expresses that by
+    // leaving the track out — encodeG64FromLayout writes offset 0 — which is
+    // truer than laying empty sectors onto a track that could not be read.
+    if (count === 0) { deadTracks++; return; }
+
+    var n = spt(track);
+    var order = _sixpackInterleave(track);
+    var len = SIXPACK_G64_TRACK_LEN[_sixpackDensity(track)];
+    var raw = new Uint8Array(len).fill(SIXPACK_G64_GAP);
+
+    // Headers are linear in the descriptor but need not start at sector 0, so
+    // match on the sector each header declares rather than assuming group
+    // index == sector number.
+    var groupOf = {};
+    for (var g = 0; g < count; g++) {
+      var h = _sixpackDecodeHeader(desc, g);
+      if (h && h.track === track && h.sector < n && !(h.sector in groupOf)) {
+        groupOf[h.sector] = g;
+      }
+    }
+
+    for (var sector = 0; sector < n; sector++) {
+      var group = (sector in groupOf) ? groupOf[sector] : -1;
+      var slot = group >= 0 ? order.indexOf(group) : -1;
+      if (group < 0 || slot < 0 || slot >= blocks.length) {
+        missingSectors++;              // slot stays gap: no sync, no header
+        continue;
+      }
+      var block = blocks[slot];
+      var p = sector * SIXPACK_G64_STRIDE;
+      if (p + SIXPACK_G64_STRIDE > len) break;
+
+      var i;
+      for (i = 0; i < 5; i++) raw[p++] = SIXPACK_G64_SYNC;
+      for (i = 0; i < 10; i++) raw[p++] = desc[group * 10 + i];
+      for (i = 0; i < 9; i++) raw[p++] = SIXPACK_G64_GAP;
+      for (i = 0; i < 5; i++) raw[p++] = SIXPACK_G64_SYNC;
+      // Stored form is [last 70][first 256]; write it back in disk order.
+      for (i = 70; i < SIXPACK_SECTOR_GCR; i++) raw[p++] = block[i];
+      for (i = 0; i < 70; i++) raw[p++] = block[i];
+      // Tail gap. Brenner flags this as approximated; a SixPack records
+      // nothing about the real inter-sector gap length.
+      for (i = 0; i < 5; i++) raw[p++] = SIXPACK_G64_GAP;
+    }
+
+    layout.push({ track: track, halfTrack: false, rawGCR: raw });
+  });
+  if (err) return { error: err };
+
+  return {
+    buffer: encodeG64FromLayout(layout),
+    tracks: head.tracks,
+    deadTracks: deadTracks,
+    missingSectors: missingSectors,
+  };
 }

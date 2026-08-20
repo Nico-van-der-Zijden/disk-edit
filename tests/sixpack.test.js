@@ -82,8 +82,10 @@ function buildTrack(track, d64, diskId, opts) {
   var parts = [desc];
   if (desc[0xFF] === 0) return desc;        // unreadable track: no data follows
 
+  // Only `count` blocks are stored — the count byte is what sets the stride to
+  // the next track, so writing more would desync a reader.
   var order = interleaveFor(track);
-  for (var k = 0; k < n; k++) {
+  for (var k = 0; k < desc[0xFF]; k++) {
     var sec2 = sectorAt(order[k]);
     var payload = d64.subarray(sectorOff(track, sec2), sectorOff(track, sec2) + 256);
     var gcr;
@@ -405,5 +407,200 @@ describe('compressSixPack (creating a set)', () => {
 
   it('refuses a disk that is not a 35/40-track D64', () => {
     assert.ok(compressSixPack(new Uint8Array(819200).buffer, 'X').error);
+  });
+});
+
+describe('sixPackToG64', () => {
+  const eq = (a, b) => Buffer.from(a).equals(Buffer.from(b));
+
+  it('round-trips through our own G64 reader', () => {
+    const disk = makeDisk(35, 61);
+    const g = sixPackToG64(buildSixPack(disk, 35));
+    assert.ok(!g.error, g.error);
+    const back = decodeG64toD64(new Uint8Array(g.buffer));
+    assert.ok(eq(new Uint8Array(back.d64), disk), 'recovered disk matches');
+  });
+
+  it('round-trips a 40-track set', () => {
+    const disk = makeDisk(40, 63);
+    const g = sixPackToG64(buildSixPack(disk, 40));
+    assert.strictEqual(g.tracks, 40);
+    const back = decodeG64toD64(new Uint8Array(g.buffer));
+    assert.ok(eq(new Uint8Array(back.d64).subarray(0, disk.length), disk));
+  });
+
+  it('writes a valid G64 header', () => {
+    const g = sixPackToG64(buildSixPack(makeDisk(35, 3), 35));
+    const b = new Uint8Array(g.buffer);
+    assert.strictEqual(String.fromCharCode.apply(null, Array.from(b.subarray(0, 8))), 'GCR-1541');
+    assert.strictEqual(b[8], 0, 'version');
+    assert.strictEqual(b[9], 84, 'half-track count');
+  });
+
+  it('gives each density zone its nominal track length', () => {
+    const g = sixPackToG64(buildSixPack(makeDisk(40, 5), 40));
+    const dv = new DataView(g.buffer);
+    const lenOf = t => {
+      const off = dv.getUint32(12 + (t - 1) * 2 * 4, true);
+      return off ? dv.getUint16(off, true) : 0;
+    };
+    assert.strictEqual(lenOf(1), 7692, 'track 1, density 3');
+    assert.strictEqual(lenOf(20), 7142, 'track 20, density 2');
+    assert.strictEqual(lenOf(27), 6666, 'track 27, density 1');
+    assert.strictEqual(lenOf(35), 6250, 'track 35, density 0');
+  });
+
+  it('leaves an unreadable track out rather than faking sectors', () => {
+    // Sector count 0 means the drive found no SYNC at all.
+    const g = sixPackToG64(buildSixPack(makeDisk(35, 7), 35, { 5: { count: 0 } }));
+    assert.strictEqual(g.deadTracks, 1);
+    const dv = new DataView(g.buffer);
+    assert.strictEqual(dv.getUint32(12 + (5 - 1) * 2 * 4, true), 0, 'track 5 absent');
+    assert.notStrictEqual(dv.getUint32(12 + (4 - 1) * 2 * 4, true), 0, 'track 4 present');
+  });
+
+  it('passes the raw GCR through instead of re-encoding it', () => {
+    const files = buildSixPack(makeDisk(35, 11), 35);
+    const g = sixPackToG64(files);
+    const dv = new DataView(g.buffer);
+    const off = dv.getUint32(12, true);
+    const track = new Uint8Array(g.buffer, off + 2, dv.getUint16(off, true));
+
+    const desc = files[0].subarray(3, 3 + 256);
+    const block0 = files[0].subarray(3 + 256, 3 + 256 + 326);
+
+    // Sector 0: 5 sync, 10 header, 9 gap, 5 sync, 326 data, 5 gap.
+    assert.ok(Array.from(track.subarray(0, 5)).every(b => b === 0xFF), 'sync');
+    assert.ok(eq(track.subarray(5, 15), desc.subarray(0, 10)), 'header GCR verbatim');
+    assert.ok(Array.from(track.subarray(15, 24)).every(b => b === 0x55), 'header gap');
+    assert.ok(Array.from(track.subarray(24, 29)).every(b => b === 0xFF), 'second sync');
+    // Stored as [last 70][first 256]; the G64 holds it in disk order.
+    const want = new Uint8Array(326);
+    want.set(block0.subarray(70), 0);
+    want.set(block0.subarray(0, 70), 256);
+    assert.ok(eq(track.subarray(29, 29 + 326), want), 'data GCR verbatim');
+    assert.ok(Array.from(track.subarray(355, 360)).every(b => b === 0x55), 'tail gap');
+  });
+
+  // The whole reason this path exists: GCR that doesn't decode has no bytes to
+  // put in a D64, but survives intact in a G64.
+  it('preserves a sector whose GCR cannot be decoded', () => {
+    const files = buildSixPack(makeDisk(35, 13), 35);
+    // Zero the stored block for track 1 slot 0. $00 is not a legal GCR
+    // 5-bit group, so it cannot decode.
+    const blockAt = 3 + 256;
+    const corrupt = new Uint8Array(326);
+    files[0].set(corrupt, blockAt);
+
+    const d = decompressSixPack(files);
+    assert.ok(!d.error, d.error);
+    const bad = Array.from(d.errors).filter(e => e === SIXPACK_ERR_NO_DATA).length;
+    assert.strictEqual(bad, 1, 'one sector reports "no data"');
+    // Its D64 sector is blank — the bytes are gone.
+    const order = SIXPACK_INTERLEAVE.find(x => x.order.length === 21).order;
+    const sector = order[0];
+    const off = sector * 256;
+    assert.ok(new Uint8Array(d.buffer).subarray(off, off + 256).every(b => b === 0),
+      'D64 loses it');
+
+    // The G64 keeps the actual bytes.
+    const g = sixPackToG64(files);
+    assert.ok(!g.error, g.error);
+    const dv = new DataView(g.buffer);
+    const toff = dv.getUint32(12, true);
+    const track = new Uint8Array(g.buffer, toff + 2, dv.getUint16(toff, true));
+    const p = sector * 360 + 29;
+    assert.ok(Array.from(track.subarray(p, p + 326)).every(b => b === 0),
+      'G64 carries the undecodable GCR verbatim');
+  });
+
+  it('omits sectors the set never stored, without disturbing the rest', () => {
+    // A short count means the track holds fewer sectors than the geometry
+    // allows. Those slots get no sync and no header, and every other track
+    // must still decode — the count byte also sets the stride to the next
+    // track, so an off-by-one here would corrupt everything after it.
+    const disk = makeDisk(35, 17);
+    const g = sixPackToG64(buildSixPack(disk, 35, { 1: { count: 5 } }));
+    assert.ok(!g.error, g.error);
+    assert.ok(g.missingSectors > 0, 'reports the gap');
+    assert.strictEqual(g.deadTracks, 0, 'the track still exists');
+
+    const back = decodeG64toD64(new Uint8Array(g.buffer));
+    const got = new Uint8Array(back.d64);
+    // Track 2 onward is untouched, which only holds if the walk stayed in step.
+    const from = 21 * 256;
+    assert.ok(Buffer.from(got.subarray(from, disk.length)).equals(
+      Buffer.from(disk.subarray(from))), 'tracks 2+ recovered intact');
+  });
+
+  it('rejects the same bad input the decoder rejects', () => {
+    assert.ok(sixPackToG64([]).error);
+    const files = buildSixPack(makeDisk(35, 3), 35);
+    files[0][0] = 0x00;
+    assert.ok(sixPackToG64(files).error);
+  });
+});
+
+describe('non-standard GCR survives the whole loop', () => {
+  // Import a SixPack whose GCR won't decode, then write it back out. The raw
+  // bytes live only in the G64 layout, so both save paths have to consult it.
+  const MARK = (() => {
+    const m = new Uint8Array(326);
+    for (let i = 0; i < 326; i++) m[i] = (i % 2) ? 0x00 : 0x01;   // illegal GCR
+    return m;
+  })();
+  const has = buf => {
+    const b = new Uint8Array(buf);
+    outer: for (let i = 0; i + 326 <= b.length; i++) {
+      for (let k = 0; k < 326; k++) if (b[i + k] !== MARK[k]) continue outer;
+      return true;
+    }
+    return false;
+  };
+  const build = () => {
+    const files = buildSixPack(makeDisk(35, 77), 35);
+    files[0].set(MARK, 3 + 256);            // track 1, storage slot 0
+    return files;
+  };
+
+  it('the decoder reports it and the D64 loses it', () => {
+    const d = decompressSixPack(build());
+    assert.strictEqual(Array.from(d.errors).filter(e => e === SIXPACK_ERR_NO_DATA).length, 1);
+  });
+
+  it('the G64 carries it, and our reader flags the sector unreadable', () => {
+    const g = sixPackToG64(build());
+    assert.ok(has(g.buffer), 'G64 holds the GCR');
+    const opened = decodeG64toD64(new Uint8Array(g.buffer));
+    const t1 = opened.layout.find(t => t.track === 1);
+    const victim = SIXPACK_INTERLEAVE.find(x => x.order.length === 21).order[0];
+    assert.ok(t1.unreadableSectors.indexOf(victim) >= 0, 'sector flagged');
+    // Its position must be recorded even though it never decoded, or the
+    // bytes can't be lifted back out.
+    assert.strictEqual(typeof t1.sectorDataStart[victim], 'number');
+  });
+
+  it('survives Save as .g64', () => {
+    const opened = decodeG64toD64(new Uint8Array(sixPackToG64(build()).buffer));
+    assert.ok(has(buildG64ForSave(opened.d64, opened.layout)));
+  });
+
+  it('survives re-export as SixPack, given the layout', () => {
+    const opened = decodeG64toD64(new Uint8Array(sixPackToG64(build()).buffer));
+    const re = compressSixPack(opened.d64, 'X', null, opened.layout);
+    assert.ok(!re.error, re.error);
+    assert.strictEqual(re.rawKept, 1, 'one block copied through');
+    assert.ok(re.parts.some(p => has(p.data)), 'GCR present in the new set');
+    // And it is still undecodable, so the flaw stays visible.
+    const again = decompressSixPack(re.parts.map(p => p.data));
+    assert.strictEqual(
+      Array.from(again.errors).filter(e => e === SIXPACK_ERR_NO_DATA).length, 1);
+  });
+
+  it('is lost without the layout — which is why the pane passes it', () => {
+    const opened = decodeG64toD64(new Uint8Array(sixPackToG64(build()).buffer));
+    const re = compressSixPack(opened.d64, 'X');
+    assert.ok(!re.parts.some(p => has(p.data)));
+    assert.strictEqual(re.rawKept, 0);
   });
 });

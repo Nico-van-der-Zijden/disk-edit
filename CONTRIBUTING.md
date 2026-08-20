@@ -247,7 +247,7 @@ Test fixtures live in `tests/fixtures/` (gitignored — keep your own local copi
 4. Run `npm test` and confirm the suite stays green; add tests for new helpers
 5. Update `APP_VERSION` in `assets/js/format/cbm-editor.js` (bump the build number)
 6. Add a user-facing changelog entry in `assets/js/ui/ui-help.js` (the `changes` array near the top of the changelog handler) — keep it short and plain English; technical detail goes in the commit message
-7. Update Credits & Thanks in `assets/js/ui/ui-help.js` if you used new external references
+7. Update Credits & Thanks in `assets/js/ui/ui-help.js` **and the Credits section of `README.md`** if you used new external references — both lists exist and drift apart easily
 8. Update `README.md` if features or supported formats changed
 9. Commit and open a pull request
 

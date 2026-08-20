@@ -101,7 +101,7 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 - Compact Directory (remove deleted slots)
 - File Chains view (sector chain for every file)
 - Fill free sectors
-- ZipCode, all three variants — DiskPacked (1!–4!, plus 5! for 40 tracks), SixPack (1!!–6!!, raw GCR, preserves read errors) and FilePacked (a!–w! + x!) — from a disk or by dropping the loose files
+- ZipCode, all three variants — DiskPacked (1!–4!, plus 5! for 40 tracks), SixPack (1!!–6!!, raw GCR, preserves read errors, converts to G64 when a sector holds non-standard GCR) and FilePacked (a!–w! + x!) — from a disk or by dropping the loose files
 - Container formats: ZIP, gzip, tar (.tar/.tgz/.tar.gz), LHA/LZH (-lh0-/-lh5-, CRC-checked), LNX, NBZ
 - Create ZipCode — pack the open disk as DiskPacked, SixPack (keeps read errors) or FilePacked, delivered as a ZIP, a tar.gz, or D64 image(s) (auto-split when a set needs two disks)
 - Resize Image (DNP only — grow/shrink the track count, auto-compacts files on shrink)
@@ -282,7 +282,11 @@ Covers sector geometry, BAM operations, PETSCII conversion, GEOS VLIR helpers, D
 ### Technical References
 
 - [VICE Manual](https://vice-emu.sourceforge.io/vice_17.html) — Disk image format documentation
-- [Peter Schepers](https://ist.uwaterloo.ca/~schepers/formats.html) — D64, D71, D81, D80, D82, D2M-DNP format specifications
+- [Peter Schepers](https://ist.uwaterloo.ca/~schepers/formats.html) — D64, D71, D81, D80, D82, D2M-DNP, GEOS, C128 auto-boot, ZipCode (DiskPacked, SixPack, FilePacked) and LHA/LZH format specifications
+- Joe Forster/STA — the 5-file 40-track extension to DiskPacked ZipCode, and contributor to the FilePacked ZipCode and LHA/LZH format documents
+- Paul David Doherty (DiskPacked, SixPack) and Wolfgang Moser (SixPack) — contributors to the ZipCode format documents
+- LHA / LZH by Haruyasu Yoshizaki — the -lh5- sliding-dictionary + Huffman method decoded by the .lha / .lzh reader
+- s2g by Markus Brenner (GPL), based on d64tog64 by Andreas Boose — GCR track framing used when a SixPack set is converted to G64
 - [libcbmimage](https://github.com/OpenCBM/libcbmimage) — CBM disk image library (CMD FD/HD reference)
 - [Inside geoWrite](https://www.pagetable.com/?p=1471) by Michael Steil — geoWrite file format documentation
 - [geowrite2rtf](https://github.com/mist64/geowrite2rtf) by Michael Steil — CVT/geoWrite parsing reference

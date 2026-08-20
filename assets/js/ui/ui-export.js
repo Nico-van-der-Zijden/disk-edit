@@ -186,6 +186,29 @@ function sixPackDecodeSets(sets, readRef) {
 
     var res = decompressSixPack(files);
     if (res.error) { failures.push('"' + set.name + '": ' + res.error); continue; }
+
+    // A sector whose GCR wouldn't decode (error 22) has no bytes to put in a
+    // D64 — that's the non-standard encoding SixPack exists to carry. Hand
+    // those sets over as a G64, which keeps the raw GCR. Everything else is
+    // lossless as a D64, and a D64 is far easier to work with.
+    var undecodable = 0;
+    for (var e = 0; e < res.errors.length; e++) {
+      if (res.errors[e] === SIXPACK_ERR_NO_DATA) undecodable++;
+    }
+    if (undecodable > 0) {
+      var g64 = sixPackToG64(files);
+      if (!g64.error) {
+        res.buffer = g64.buffer;
+        res.ext = '.g64';
+        res.undecodable = undecodable;
+        res.deadTracks = g64.deadTracks;
+        results.push({ name: set.name, res: res });
+        continue;
+      }
+      // Fall through to the D64 and say what it costs.
+      res.g64Failed = g64.error;
+      res.undecodable = undecodable;
+    }
     res.buffer = sixPackToImage(res);
     results.push({ name: set.name, res: res });
   }
@@ -202,14 +225,20 @@ function zipCodeOpenTabs(results) {
     // CBM names can hold characters illegal in host filenames ("HACK
     // CD1/TRIAD" is real), so the tab keeps the original and Save gets a
     // sanitized one.
-    var title = results[ri].name + '.d64';
+    // A SixPack carrying non-standard GCR arrives as a .g64; everything else
+    // is a .d64.
+    var ext = results[ri].res.ext || '.d64';
+    var title = results[ri].name + ext;
     var safeBase = results[ri].name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'zipcode';
-    var name = safeBase + '.d64';
+    var name = safeBase + ext;
     currentBuffer = results[ri].res.buffer;
     currentFileName = name;
     currentPartition = null;
     selectedEntryIndex = -1;
     clearCmdContainerState();
+    // parseDisk detects the GCR-1541 magic, swaps currentBuffer for the
+    // decoded D64 and records the layout so a later save writes real GCR.
+    currentG64Layout = null;
     parseDisk(currentBuffer);
     var tab = createTab(title, currentBuffer, name);
     activeTabId = tab.id;
@@ -242,8 +271,15 @@ function zipCodeReport(results, failures, extraLines) {
     if (r.res.missing > 0) {
       line += ' (' + r.res.missing + ' sector(s) absent from the set, zero-filled)';
     }
-    // SixPack only: a set carrying read errors opens as a "+Errors" image.
-    if (r.res.errorCount > 0) {
+    // SixPack only: how the read errors were carried across.
+    if (r.res.ext === '.g64') {
+      line += ' — opened as a G64: ' + r.res.undecodable +
+        ' sector(s) hold non-standard GCR that a D64 cannot store, so the raw ' +
+        'GCR was kept instead';
+    } else if (r.res.g64Failed) {
+      line += ' — ' + r.res.undecodable + ' sector(s) could not be decoded and a ' +
+        'G64 could not be built (' + r.res.g64Failed + '), so those sectors are blank';
+    } else if (r.res.errorCount > 0) {
       line += ' — ' + r.res.errorCount + ' sector(s) with read errors, kept in an +Errors image';
     }
     lines.push(line);

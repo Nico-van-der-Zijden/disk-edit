@@ -52,7 +52,9 @@ function _mkzipEncoded(id) {
   var s = _mkzipState;
   if (s.cache[id]) return s.cache[id];
   var res;
-  if (id === 'sixpack') res = compressSixPack(s.buffer, 'X', s.errors);
+  // Pass the G64/NIB layout along: only SixPack can carry raw GCR, and only
+  // with the layout can it recover sectors the D64 never decoded.
+  if (id === 'sixpack') res = compressSixPack(s.buffer, 'X', s.errors, s.layout);
   else if (id === 'filepacked') res = _mkzipPackFiles(s.buffer);
   else res = compressZipCode(s.buffer, 'X');
   // FilePacked returns its directory file separately; the pane treats it as
@@ -155,6 +157,15 @@ function _mkzipRender() {
       (s.variant === 'sixpack' ? 'SixPack keeps them.' : 'DiskPacked drops them — use SixPack to keep them.') +
       '</div>';
   }
+  if (s.rawGcrSectors) {
+    h += '<div class="text-sm text-muted mb-md">' + s.rawGcrSectors +
+      ' sector(s) hold non-standard GCR from the original disk. ' +
+      (s.variant === 'sixpack'
+        ? 'SixPack carries that GCR through untouched' +
+          (enc.rawKept !== undefined ? ' — ' + enc.rawKept + ' recovered' : '') + '.'
+        : 'Only SixPack can carry it; this format would replace those sectors with blanks.') +
+      '</div>';
+  }
 
   body.innerHTML = h;
 
@@ -218,9 +229,23 @@ document.getElementById('opt-mkzip').addEventListener('click', function(e) {
     for (var i = 0; i < errors.length; i++) if (errors[i] !== 1) errorCount++;
   }
 
+  // A tab opened from a G64 or NIB still holds raw GCR for sectors that never
+  // decoded. SixPack is the only variant that can carry those.
+  var layout = (typeof currentG64Layout !== 'undefined' && currentG64Layout) ? currentG64Layout : null;
+  var rawGcrSectors = 0;
+  if (layout) {
+    for (var li = 0; li < layout.length; li++) {
+      if (!layout[li].halfTrack && layout[li].unreadableSectors) {
+        rawGcrSectors += layout[li].unreadableSectors.length;
+      }
+    }
+  }
+
   _mkzipState = {
     name: _mkzipDefaultName(),
-    variant: errorCount > 0 ? 'sixpack' : 'diskpacked',
+    variant: (errorCount > 0 || rawGcrSectors > 0) ? 'sixpack' : 'diskpacked',
+    layout: layout,
+    rawGcrSectors: rawGcrSectors,
     buffer: currentBuffer,
     errors: errors,
     errorCount: errorCount,

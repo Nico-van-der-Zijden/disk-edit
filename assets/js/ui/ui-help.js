@@ -169,8 +169,9 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '&bull; LZ77 compressor/decompressor by Marcus Geelnard (2003-2006, BSD-3) — distributed inside <a href="https://github.com/markusC64/nibtools/blob/upstream/lz.c" target="_blank" class="link">nibtools/lz.c</a>; algorithm ported to JS for the .nbz reader<br>' +
       '&bull; <a href="https://simonomi.dev/blog/color-code-your-bytes/" target="_blank" class="link">Color-code your bytes</a> by simonomi — schemes (hexyl, xcd-rgb, nybble) for the optional Hex Coloring picker<br>' +
       '&bull; LHA / LZH by Haruyasu Yoshizaki — the -lh5- sliding-dictionary + Huffman method decoded by the .lha / .lzh reader<br>' +
-      '&bull; Joe Forster/STA — the 5-file 40-track extension to DiskPacked ZipCode<br>' +
-      '&bull; Paul David Doherty and Wolfgang Moser — contributors to the ZipCode format documentation used for the SixPack and FilePacked readers<br>' +
+      '&bull; Joe Forster/STA — the 5-file 40-track extension to DiskPacked ZipCode, and contributor to the FilePacked ZipCode and LHA/LZH format documents<br>' +
+      '&bull; s2g by Markus Brenner (GPL), based on d64tog64 by Andreas Boose — GCR track framing (sync marks, header and inter-sector gaps, per-density track lengths) used when a SixPack set is converted to G64<br>' +
+      '&bull; Paul David Doherty — contributor to the DiskPacked and SixPack ZipCode format documents; Wolfgang Moser — contributor to the SixPack document<br>' +
       '<br>' +
       '<b>Browser emulator:</b><br>' +
       '&bull; <a href="https://emulatorjs.org/" target="_blank" class="link">EmulatorJS</a> + the libretro <a href="https://github.com/libretro/vice-libretro" target="_blank" class="link">vice_x64sc</a> core — actual VICE running in the browser; hosted at <a href="https://c64.sannic.nl/" target="_blank" class="link">c64.sannic.nl</a> for the Run / Open in Emulator handoff<br>' +
