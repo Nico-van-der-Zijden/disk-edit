@@ -71,15 +71,18 @@ $html = [regex]::Replace($html, '<link rel="stylesheet" href="(assets/css/[^"]+)
     }
 })
 
-# 3. Inline C64 Pro Mono font (woff2 and ttf) in the @font-face declarations
-$html = [regex]::Replace($html, "url\('assets/webfonts/([^']+)'\)", {
+# 3. Inline C64 Pro Mono font (woff2 and ttf) in the @font-face declarations.
+#    Both spellings occur: base.css (inlined in step 2) uses ../webfonts/,
+#    index.html uses assets/webfonts/.
+$html = [regex]::Replace($html, "url\((['""]?)(?:\.\./|assets/)webfonts/([^'"")]+)\1\)", {
     param($m)
-    $fontFile = Join-Path $srcDir "assets/webfonts/$($m.Groups[1].Value)"
+    $quote = $m.Groups[1].Value
+    $fontFile = Join-Path $srcDir "assets/webfonts/$($m.Groups[2].Value)"
     if (Test-Path $fontFile) {
         $ext = [System.IO.Path]::GetExtension($fontFile).ToLower()
         $mime = if ($ext -eq '.woff2') { 'font/woff2' } else { 'font/ttf' }
         $uri = FileToDataUri $fontFile $mime
-        return "url('$uri')"
+        return "url($quote$uri$quote)"
     }
     return $m.Value
 })

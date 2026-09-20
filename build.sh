@@ -3,6 +3,10 @@
 # Inlines all JS, CSS, and fonts as base64 data URIs
 # Usage: ./build.sh
 # Works on macOS, Linux, and WSL
+#
+# All text substitution is done by the embedded Perl program below. Passing the
+# inlined content (FontAwesome CSS + ~1 MB of base64 fonts) as a sed/awk command
+# line argument blows past ARG_MAX on macOS: "Argument list too long".
 
 set -e
 
@@ -13,116 +17,108 @@ OUTFILE="$DISTDIR/index.html"
 
 mkdir -p "$DISTDIR"
 
-# Detect base64 flags (macOS vs Linux)
-if base64 --wrap=0 /dev/null 2>/dev/null; then
-  B64="base64 --wrap=0"
-else
-  B64="base64"
-fi
+# Read version from cbm-editor.js (perl: BSD grep has no -P, BSD sed no \s)
+FULLVERSION=$(perl -ne 'if (/major:\s*(\d+)\s*,\s*minor:\s*(\d+)\s*,\s*build:\s*(\d+)/) { print "$1.$2.$3"; exit }' "$SRCDIR/assets/js/format/cbm-editor.js")
+[ -n "$FULLVERSION" ] || FULLVERSION="0.0.0"
+printf '\033[36mBuilding CBM Disk Editor v%s...\033[0m\n' "$FULLVERSION"
 
-# Helper: convert file to base64 data URI
-file_to_data_uri() {
-  local file="$1" mime="$2"
-  local b64=$($B64 < "$file")
-  echo "data:$mime;base64,$b64"
+perl - "$SRCDIR" "$SRCFILE" "$OUTFILE" <<'PERL_BUILD'
+use strict;
+use warnings;
+use MIME::Base64 qw(encode_base64);
+
+my ($srcdir, $srcfile, $outfile) = @ARGV;
+
+sub slurp {
+    my ($path) = @_;
+    open(my $fh, '<:raw', $path) or die "Cannot read $path: $!\n";
+    local $/;
+    my $data = <$fh>;
+    close $fh;
+    return defined $data ? $data : '';
 }
 
-# Helper: get MIME type for font file
-font_mime() {
-  case "$1" in
-    *.woff2) echo "font/woff2" ;;
-    *.ttf)   echo "font/ttf" ;;
-    *.woff)  echo "font/woff" ;;
-    *)       echo "application/octet-stream" ;;
-  esac
+sub note { printf "  \033[90m%s\033[0m\n", $_[0]; }
+sub warn_note { printf "  \033[33m%s\033[0m\n", $_[0]; }
+
+sub data_uri {
+    my ($path) = @_;
+    my $mime = $path =~ /\.woff2$/i ? 'font/woff2'
+             : $path =~ /\.woff$/i  ? 'font/woff'
+             : $path =~ /\.ttf$/i   ? 'font/ttf'
+             :                        'application/octet-stream';
+    return "data:$mime;base64," . encode_base64(slurp($path), '');
 }
 
-# Read version from cbm-editor.js
-VERSION=$(grep -oP 'major:\s*\K\d+' "$SRCDIR/assets/js/format/cbm-editor.js" 2>/dev/null || echo "0")
-MINOR=$(grep -oP 'minor:\s*\K\d+' "$SRCDIR/assets/js/format/cbm-editor.js" 2>/dev/null || echo "0")
-BUILD=$(grep -oP 'build:\s*\K\d+' "$SRCDIR/assets/js/format/cbm-editor.js" 2>/dev/null || echo "0")
-# Fallback for macOS (no -P flag in grep)
-if [ "$VERSION" = "0" ] && [ "$MINOR" = "0" ]; then
-  VERSION=$(sed -n 's/.*major:\s*\([0-9]*\).*/\1/p' "$SRCDIR/assets/js/format/cbm-editor.js" | head -1)
-  MINOR=$(sed -n 's/.*minor:\s*\([0-9]*\).*/\1/p' "$SRCDIR/assets/js/format/cbm-editor.js" | head -1)
-  BUILD=$(sed -n 's/.*build:\s*\([0-9]*\).*/\1/p' "$SRCDIR/assets/js/format/cbm-editor.js" | head -1)
-fi
-FULLVERSION="$VERSION.$MINOR.$BUILD"
-echo -e "\033[36mBuilding CBM Disk Editor v$FULLVERSION...\033[0m"
+# Replace url(../webfonts/x) / url('assets/webfonts/x') with base64 data URIs.
+# Both spellings occur: FontAwesome and base.css use ../webfonts/, index.html
+# uses assets/webfonts/.
+sub inline_fonts {
+    my ($css) = @_;
+    $css =~ s{url\((['"]?)(?:\.\./|assets/)webfonts/([^'")]+)\1\)}{
+        my ($q, $name) = ($1, $2);
+        my $font = "$srcdir/assets/webfonts/$name";
+        -f $font ? "url($q" . data_uri($font) . "$q)" : $&;
+    }ge;
+    return $css;
+}
 
-html=$(cat "$SRCFILE")
+my $html = slurp($srcfile);
 
-# 0. Strip SEO-only blocks (meta tags, JSON-LD, noscript content) — those
+# 0. Strip SEO-only blocks (meta tags, JSON-LD, noscript content) - those
 #    are for search engines on the hosted site, not for the standalone.
-html=$(echo "$html" | perl -0777 -pe 's/<!-- SEO:BEGIN[^>]*-->.*?<!-- SEO:END -->\s*//gs')
-echo -e "  \033[90mStripped SEO blocks\033[0m"
+$html =~ s/<!-- SEO:BEGIN[^>]*-->.*?<!-- SEO:END -->\s*//gs;
+note('Stripped SEO blocks');
 
 # 1. Inline FontAwesome CSS with embedded font files
-FA_CSS="$SRCDIR/assets/fontawesome/all.min.css"
-if [ -f "$FA_CSS" ]; then
-  fa_content=$(cat "$FA_CSS")
-  # Replace font URLs with base64 data URIs
-  while IFS= read -r fontref; do
-    fontfile=$(echo "$fontref" | sed 's/.*url(\.\.\///' | sed 's/).*//')
-    fontpath="$SRCDIR/assets/$fontfile"
-    if [ -f "$fontpath" ]; then
-      mime=$(font_mime "$fontpath")
-      uri=$(file_to_data_uri "$fontpath" "$mime")
-      fa_content=$(echo "$fa_content" | sed "s|url(\.\./webfonts/$(basename "$fontpath"))|url($uri)|g")
-    fi
-  done < <(grep -o 'url(\.\./webfonts/[^)]*)' "$FA_CSS")
-  html=$(echo "$html" | sed '/<link rel="stylesheet" href="assets\/fontawesome\/all\.min\.css">/c\<style>\n'"$(echo "$fa_content" | sed 's/[&/\]/\\&/g')"'\n</style>')
-  echo -e "  \033[90mInlined FontAwesome CSS + fonts\033[0m"
-fi
+my $fa_css = "$srcdir/assets/fontawesome/all.min.css";
+if (-f $fa_css) {
+    my $fa = inline_fonts(slurp($fa_css));
+    $html =~ s{<link rel="stylesheet" href="assets/fontawesome/all\.min\.css">}{"<style>\n$fa\n</style>"}e;
+    note('Inlined FontAwesome CSS + fonts');
+}
 
-# 2. Inline app CSS files
-for csslink in $(echo "$html" | grep -o 'href="assets/css/[^"]*"' | sed 's/href="//;s/"//'); do
-  csspath="$SRCDIR/$csslink"
-  if [ -f "$csspath" ]; then
-    css_content=$(cat "$csspath")
-    # Escape for sed replacement
-    css_escaped=$(echo "$css_content" | sed ':a;N;$!ba;s/\n/\\n/g;s/[&/\]/\\&/g')
-    html=$(echo "$html" | sed "s|<link rel=\"stylesheet\" href=\"$csslink\">|<style>\n$css_escaped\n</style>|")
-    echo -e "  \033[90mInlined $csslink\033[0m"
-  fi
-done
+# 2. Inline app CSS files (assets/css/*.css)
+$html =~ s{<link rel="stylesheet" href="(assets/css/[^"]+)">}{
+    my $rel = $1;
+    my $path = "$srcdir/$rel";
+    if (-f $path) {
+        note("Inlined $rel");
+        "<style>\n" . slurp($path) . "\n</style>";
+    } else {
+        warn_note("CSS file not found: $path");
+        $&;
+    }
+}ge;
 
-# 3. Inline C64 Pro Mono fonts in @font-face declarations
-for fontref in $(echo "$html" | grep -o "url('assets/webfonts/[^']*')" | sed "s/url('//;s/')//"); do
-  fontpath="$SRCDIR/$fontref"
-  if [ -f "$fontpath" ]; then
-    mime=$(font_mime "$fontpath")
-    uri=$(file_to_data_uri "$fontpath" "$mime")
-    html=$(echo "$html" | sed "s|url('$fontref')|url('$uri')|g")
-  fi
-done
-echo -e "  \033[90mInlined C64 Pro Mono fonts\033[0m"
+# 3. Inline the C64 Pro Mono @font-face sources (now that base.css is inlined)
+$html = inline_fonts($html);
+note('Inlined C64 Pro Mono fonts');
 
 # 4. Inline JS files (skip matomo.js)
-while IFS= read -r scriptline; do
-  jsfile=$(echo "$scriptline" | sed 's/.*src="//;s/".*//')
-  if echo "$jsfile" | grep -q "matomo"; then
-    html=$(echo "$html" | sed "s|$scriptline|<!-- Matomo excluded from dist build -->|")
-    echo -e "  \033[33mSkipped $jsfile (analytics)\033[0m"
-    continue
-  fi
-  jspath="$SRCDIR/$jsfile"
-  if [ -f "$jspath" ]; then
-    js_content=$(cat "$jspath")
-    js_escaped=$(echo "$js_content" | sed ':a;N;$!ba;s/\n/\\n/g;s/[&/\]/\\&/g')
-    escaped_line=$(echo "$scriptline" | sed 's/[[\.*^$()+?{|]/\\&/g')
-    html=$(echo "$html" | sed "s|$escaped_line|<script>\n$js_escaped\n</script>|")
-    echo -e "  \033[90mInlined $jsfile\033[0m"
-  fi
-done < <(echo "$html" | grep -o '<script src="[^"]*"></script>')
+$html =~ s{(?:<!-- Matomo[^>]*-->\s*)?<script src="([^"]+)"></script>}{
+    my $rel = $1;
+    my $path = "$srcdir/$rel";
+    if ($rel =~ /matomo/) {
+        warn_note("Skipped $rel (analytics)");
+        '<!-- Matomo excluded from dist build -->';
+    } elsif (-f $path) {
+        note("Inlined $rel");
+        "<script>\n" . slurp($path) . "\n</script>";
+    } else {
+        warn_note("File not found: $path");
+        $&;
+    }
+}ge;
 
-# Write output
-echo "$html" > "$OUTFILE"
+open(my $out, '>:raw', $outfile) or die "Cannot write $outfile: $!\n";
+print $out $html;
+close $out;
+PERL_BUILD
 
 SIZE=$(wc -c < "$OUTFILE" | tr -d ' ')
-SIZE_KB=$((SIZE / 1024))
-SIZE_MB=$(echo "scale=1; $SIZE / 1048576" | bc)
-echo -e "  \033[32mBuilt dist/index.html ($SIZE_KB KB / $SIZE_MB MB)\033[0m"
+printf '  \033[32mBuilt dist/index.html (%s KB / %s MB)\033[0m\n' \
+  "$((SIZE / 1024))" "$(awk -v s="$SIZE" 'BEGIN { printf "%.1f", s / 1048576 }')"
 
 # 5. Create ZIP
 ZIPNAME="CBM Disk Editor $FULLVERSION.zip"
@@ -130,6 +126,6 @@ ZIPFILE="$DISTDIR/$ZIPNAME"
 rm -f "$ZIPFILE"
 (cd "$DISTDIR" && zip -q -9 "$ZIPNAME" index.html)
 ZIPSIZE=$(( $(wc -c < "$ZIPFILE" | tr -d ' ') / 1024 ))
-echo -e "  \033[32mBuilt dist/$ZIPNAME ($ZIPSIZE KB)\033[0m"
+printf '  \033[32mBuilt dist/%s (%s KB)\033[0m\n' "$ZIPNAME" "$ZIPSIZE"
 
-echo -e "\033[36mDone! Single file, no dependencies.\033[0m"
+printf '\033[36mDone! Single file, no dependencies.\033[0m\n'
