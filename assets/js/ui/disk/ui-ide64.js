@@ -1932,16 +1932,16 @@ async function showCfsNewSubdirDialog() {
   refreshIde64View();
 }
 
-// ── CFS import single-sector file (Phase 4b) ──────────────────────────
-// Pops a native file picker. On selection: if the file is ≤ 512 bytes,
-// allocates a tree + data sector and creates a dir entry. Larger files
-// are refused with a "Phase 5" placeholder.
+// ── CFS import (Phase 4b) ─────────────────────────────────────────────
+// Pops a native file picker (multi-select) and hands the files to
+// importFilesToCurrentDisk, which routes each one to importFileToCfs
+// while a CFS partition is shown.
 function showCfsImportPicker() {
   if (cfsPartitionIdx < 0 || !hddPartitions) return;
-  var part = hddPartitions[cfsPartitionIdx];
-  if (!part) return;
+  if (!hddPartitions[cfsPartitionIdx]) return;
   var input = document.createElement('input');
   input.type = 'file';
+  input.multiple = true;
   // Same default filter as the CBM-DOS importer in ui-fileops.js. CFS
   // accepts any 3-char typeSuffix, but defaulting the file dialog to
   // the recognised filetypes saves the user from accidentally dropping
@@ -1949,44 +1949,50 @@ function showCfsImportPicker() {
   input.accept = '.prg,.seq,.usr,.rel,.p00,.s00,.u00,.r00,.cvt,.txt';
   input.style.display = 'none';
   document.body.appendChild(input);
-  input.addEventListener('change', function() {
-    var file = input.files && input.files[0];
+  input.addEventListener('change', async function() {
+    var entries = await readPickedFiles(input.files);
     document.body.removeChild(input);
-    if (!file) return;
-    var importCap = 4 * 1024 * 1024;
-    if (file.size > importCap) {
-      showModal('Import not supported', [
-        '"' + file.name + '" is ' + file.size + ' bytes.',
-        'The UI caps imports at 4 MiB. Larger files would need depth-3+ trees; the format handles them but the partition would have to be huge.',
-      ]);
-      return;
-    }
-    file.arrayBuffer().then(async function(buf) {
-      var payload = new Uint8Array(buf);
-      // Reuse CBM-DOS's asciiToNameBytes (via _cfsImportNameBytesPrompted)
-      // so dropped files get the same byte layout in CFS as on a D64,
-      // and prompts when the OS name exceeds 16 chars.
-      var baseName = await _cfsImportNameBytesPrompted(file.name);
-      if (baseName == null) return; // user cancelled
-      // Type suffix from extension (if present and 1-3 chars)
-      var ext = (file.name.match(/\.([^.]+)$/) || [])[1] || 'PRG';
-      ext = ext.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'PRG';
-
-      pushUndo();
-      var res = cfsImportFile(hddBuffer, part.startLba, part.endLba, cfsDirLba, baseName, payload, {
-        ftype: CFS_FTYPE.NORMAL,
-        typeSuffix: ext,
-      });
-      if (!res.ok) {
-        showModal('Import failed', [res.error || 'Unknown error.']);
-        // Undo to roll back any partial allocation
-        if (typeof popUndo === 'function') popUndo();
-        return;
-      }
-      refreshIde64View();
-    });
+    importFilesToCurrentDisk(entries);
   });
   input.click();
+}
+
+// Writes one file into the current CFS directory. Plain file write — no
+// GEOS .cvt handling. batch: part of a multi-file import, so no per-file
+// modal or refresh. Returns { ok }, { error } or { skipped }.
+async function importFileToCfs(fileName, payload, part, batch) {
+  var importCap = 4 * 1024 * 1024;
+  if (payload.length > importCap) {
+    if (!batch) {
+      showModal('Import not supported', [
+        '"' + fileName + '" is ' + payload.length + ' bytes.',
+        'The UI caps imports at 4 MiB. Larger files would need depth-3+ trees; the format handles them but the partition would have to be huge.',
+      ]);
+    }
+    return { error: 'Over the 4 MiB import cap.' };
+  }
+  // Reuse CBM-DOS's asciiToNameBytes (via _cfsImportNameBytesPrompted)
+  // so imported files get the same byte layout in CFS as on a D64,
+  // and prompts when the OS name exceeds 16 chars.
+  var baseName = await _cfsImportNameBytesPrompted(fileName);
+  if (baseName == null) return { skipped: true }; // user cancelled
+  // Type suffix from extension (if present and 1-3 chars)
+  var ext = (fileName.match(/\.([^.]+)$/) || [])[1] || 'PRG';
+  ext = ext.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'PRG';
+
+  pushUndo();
+  var res = cfsImportFile(hddBuffer, part.startLba, part.endLba, cfsDirLba, baseName, payload, {
+    ftype: CFS_FTYPE.NORMAL,
+    typeSuffix: ext,
+  });
+  if (!res.ok) {
+    // Undo to roll back any partial allocation
+    if (typeof popUndo === 'function') popUndo();
+    if (!batch) showModal('Import failed', [res.error || 'Unknown error.']);
+    return { error: res.error || 'Unknown error.' };
+  }
+  if (!batch) refreshIde64View();
+  return { ok: true };
 }
 
 // ── CFS delete (Phase 4b) ─────────────────────────────────────────────

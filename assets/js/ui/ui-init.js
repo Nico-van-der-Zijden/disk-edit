@@ -188,53 +188,9 @@ document.addEventListener('drop', async function(e) {
   }
 
   // Import PRG/SEQ/USR/REL/CVT files into current disk
+  // Same path as File → Import File (CFS view routes to cfsImportFile).
   if (importEntries.length > 0 && currentBuffer) {
-    var imported = 0, failed = 0;
-    // CFS view: route each file through cfsImportFile (no GEOS .cvt
-    // handling — CFS imports are plain file writes). Same dispatch
-    // criteria as opt-import / the View Separators float.
-    var inCfsImport = typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0;
-    var cfsImportPart = inCfsImport && hddPartitions ? hddPartitions[cfsPartitionIdx] : null;
-    for (var ii = 0; ii < importEntries.length; ii++) {
-      try {
-        var ent = importEntries[ii];
-        var iext = ent.name.substring(ent.name.lastIndexOf('.')).toLowerCase();
-        if (inCfsImport && cfsImportPart) {
-          // Reuse CBM-DOS's asciiToNameBytes via _cfsImportNameBytesPrompted
-          // so dropped files name the same way as on a D64 (only "/" is
-          // stripped — CFS treats it as the path separator). The prompted
-          // variant pops a "name too long" modal when the OS file name
-          // exceeds 16 chars.
-          var baseName = await _cfsImportNameBytesPrompted(ent.name);
-          if (baseName == null) { failed++; continue; } // user cancelled
-          var extM = (ent.name.match(/\.([^.]+)$/) || [])[1] || 'PRG';
-          extM = extM.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'PRG';
-          pushUndo();
-          var cres = cfsImportFile(hddBuffer, cfsImportPart.startLba, cfsImportPart.endLba, cfsDirLba, baseName, new Uint8Array(ent.buffer), {
-            ftype: CFS_FTYPE.NORMAL,
-            typeSuffix: extM,
-          });
-          if (cres.ok) imported++;
-          else { failed++; if (typeof popUndo === 'function') popUndo(); }
-        } else if (iext === '.cvt') {
-          await importCvtFile(ent.name, new Uint8Array(ent.buffer));
-        } else {
-          await importFileToDisk(ent.name, new Uint8Array(ent.buffer));
-          imported++;
-        }
-      } catch (err) {
-        failed++;
-      }
-    }
-    if (imported > 0) {
-      if (inCfsImport) {
-        refreshIde64View();
-      } else {
-        var info2 = parseCurrentDir(currentBuffer);
-        renderDisk(info2);
-      }
-      showModal('Import Complete', [imported + ' file(s) imported.' + (failed > 0 ? ' ' + failed + ' failed.' : '')]);
-    }
+    await importFilesToCurrentDisk(importEntries);
   } else if (importEntries.length > 0 && !currentBuffer) {
     showModal('Drop Error', ['No disk open to import files into. Open or create a disk first.']);
   }

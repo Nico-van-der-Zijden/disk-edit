@@ -1051,6 +1051,7 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
 var importFileInput = document.createElement('input');
 importFileInput.type = 'file';
 importFileInput.accept = '.prg,.seq,.usr,.rel,.p00,.s00,.u00,.r00,.cvt,.txt';
+importFileInput.multiple = true;
 importFileInput.style.display = 'none';
 document.body.appendChild(importFileInput);
 
@@ -1069,16 +1070,61 @@ document.getElementById('opt-import').addEventListener('click', (e) => {
   importFileInput.click();
 });
 
-importFileInput.addEventListener('change', () => {
-  var file = importFileInput.files[0];
-  if (!file) return;
+importFileInput.addEventListener('change', async () => {
+  var entries = await readPickedFiles(importFileInput.files);
   importFileInput.value = '';
-  var reader = new FileReader();
-  reader.onload = () => {
-    importFileToDisk(file.name, new Uint8Array(reader.result));
-  };
-  reader.readAsArrayBuffer(file);
+  importFilesToCurrentDisk(entries);
 });
+
+// FileList → [{ name, buffer }], the shape expandArchives hands the drop
+// handler, so picked and dropped files share importFilesToCurrentDisk.
+async function readPickedFiles(fileList) {
+  var files = Array.from(fileList || []);
+  return Promise.all(files.map(async function(f) {
+    return { name: f.name, buffer: await f.arrayBuffer() };
+  }));
+}
+
+// Imports [{ name, buffer }] into the open disk, or into the current
+// directory when an IDE64 CFS partition is shown. Shared by File → Import
+// File and drag-and-drop. One file keeps the per-file result modal;
+// several get a single summary at the end.
+async function importFilesToCurrentDisk(entries) {
+  if (!entries || entries.length === 0) return;
+  var inCfs = typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0;
+  var cfsPart = inCfs && hddPartitions ? hddPartitions[cfsPartitionIdx] : null;
+  if (inCfs ? !cfsPart : !currentBuffer) return;
+  var batch = entries.length > 1;
+  var imported = 0, skipped = 0, errors = [];
+  for (var i = 0; i < entries.length; i++) {
+    var ent = entries[i];
+    var res;
+    try {
+      res = inCfs
+        ? await importFileToCfs(ent.name, new Uint8Array(ent.buffer), cfsPart, batch)
+        : await importFileToDisk(ent.name, new Uint8Array(ent.buffer), batch);
+    } catch (err) {
+      res = { error: err && err.message ? err.message : String(err) };
+    }
+    if (res && res.ok) imported++;
+    else if (res && res.error) errors.push(ent.name + ': ' + res.error);
+    else skipped++;
+  }
+  if (!batch) return;
+  if (imported > 0) {
+    if (inCfs) refreshIde64View();
+    else renderDisk(parseCurrentDir(currentBuffer));
+  }
+  if (imported === 0 && errors.length === 0) return; // every name prompt cancelled
+  var lines = [imported + ' of ' + entries.length + ' file(s) imported.'];
+  if (skipped > 0) lines.push(skipped + ' skipped.');
+  if (errors.length > 0) {
+    lines.push('');
+    lines.push('Failed:');
+    for (var e = 0; e < errors.length; e++) lines.push('  ' + errors[e]);
+  }
+  showModal(errors.length > 0 ? 'Import Finished With Errors' : 'Import Complete', lines);
+}
 
 // Core write: writes file data to disk with sector chain, directory entry, BAM update, and verification.
 // nameBytes = 16-byte Uint8Array of PETSCII filename (already padded with $A0)
@@ -1249,15 +1295,14 @@ function asciiToNameBytes(name) {
   return bytes;
 }
 
-async function importFileToDisk(fileName, fileData) {
+// batch: part of a multi-file import — no per-file modals or re-render;
+// the caller summarises. Returns { ok }, { error } or { skipped }.
+async function importFileToDisk(fileName, fileData, batch) {
   var dotIdx = fileName.lastIndexOf('.');
   var ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1).toLowerCase() : '';
 
   // CVT import: GEOS ConVerT format
-  if (ext === 'cvt') {
-    importCvtFile(fileName, fileData);
-    return;
-  }
+  if (ext === 'cvt') return importCvtFile(fileName, fileData, batch);
 
   // TXT import: convert ASCII to PETSCII and import as SEQ
   if (ext === 'txt') {
@@ -1281,8 +1326,8 @@ async function importFileToDisk(fileName, fileData) {
   var typeMap = { prg: 2, seq: 1, usr: 3, rel: 4, p00: 2, s00: 1, u00: 3, r00: 4 };
   var typeIdx = typeMap[ext];
   if (typeIdx === undefined) {
-    showModal('Import Error', ['Unsupported file type: .' + ext]);
-    return;
+    if (!batch) showModal('Import Error', ['Unsupported file type: .' + ext]);
+    return { error: 'Unsupported file type: .' + ext };
   }
 
   var baseName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
@@ -1290,7 +1335,7 @@ async function importFileToDisk(fileName, fileData) {
   // suggestion; OK is gated on length 1..16. PC64-format names are
   // re-read from the file header further down and override this.
   var chosen = await promptShortenImportName(baseName, fileName);
-  if (chosen == null) return;
+  if (chosen == null) return { skipped: true };
   baseName = chosen;
   var nameBytes = asciiToNameBytes(baseName);
 
@@ -1305,12 +1350,20 @@ async function importFileToDisk(fileName, fileData) {
     }
   }
 
-  if (writeFileToDisk(typeIdx, nameBytes, fileData, getCurrentCtx())) {
+  // Batch writes run silent (no modal, no undo push) and roll themselves
+  // back on failure, so only a successful write gets an undo entry.
+  var snap = batch ? currentBuffer.slice(0) : null;
+  if (!writeFileToDisk(typeIdx, nameBytes, fileData, null, batch, getCurrentCtx())) {
+    return { error: 'Disk or directory full.' };
+  }
+  if (batch) pushUndo(snap);
+  else {
     var info = parseCurrentDir(currentBuffer);
     renderDisk(info);
     var numSectors = fileData.length === 0 ? 1 : Math.ceil(fileData.length / 254);
     showModal('Import Successful', ['"' + baseName.toUpperCase() + '" imported successfully.', numSectors + ' block(s) written.']);
   }
+  return { ok: true };
 }
 
 // ── CVT Import ─────────────────────────────────────────────────────
@@ -1368,27 +1421,33 @@ function isCvtFile(bytes) {
   return s.indexOf('formatted GEOS file') >= 0;
 }
 
-async function importCvtFile(fileName, cvt) {
+// batch: same contract as importFileToDisk.
+async function importCvtFile(fileName, cvt, batch) {
   if (cvt.length < 762) {
-    showModal('Import Error', ['CVT file too small.']);
-    return;
+    if (!batch) showModal('Import Error', ['CVT file too small.']);
+    return { error: 'CVT file too small.' };
   }
 
   // Warn if disk will be converted to GEOS format
   if (!hasGeosSignature(currentBuffer, getCurrentCtx())) {
     var ok = await showConfirmModal('Import CVT',
       'This disk does not have a GEOS signature. Importing a CVT file will convert it to a GEOS disk. Continue?');
-    if (!ok) return;
+    if (!ok) return { skipped: true };
   }
 
-  var result = importCvtFileCore(cvt, /*silent*/ false);
+  var snap = batch ? currentBuffer.slice(0) : null;
+  var result = importCvtFileCore(cvt, /*silent*/ !!batch);
   if (result.error) {
-    showModal('Import Error', [result.error]);
-    return;
+    if (!batch) showModal('Import Error', [result.error]);
+    return { error: result.error };
   }
-  var info = parseCurrentDir(currentBuffer);
-  renderDisk(info);
-  showModal('CVT Import Successful', ['"' + result.name + '" imported successfully.']);
+  if (batch) pushUndo(snap);
+  else {
+    var info = parseCurrentDir(currentBuffer);
+    renderDisk(info);
+    showModal('CVT Import Successful', ['"' + result.name + '" imported successfully.']);
+  }
+  return { ok: true };
 }
 
 // Core CVT import: parse the CVT structure and write the file to the current

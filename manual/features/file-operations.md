@@ -8,7 +8,7 @@ Bring an external file *into* the active disk.
 
 ### Via File picker
 
-**File → Import File…** opens your OS file picker (filtered to `.prg .seq .usr .rel .p00 .s00 .u00 .r00 .cvt .txt`). After picking, the file is read and written to the current dir.
+**File → Import File…** opens your OS file picker (filtered to `.prg .seq .usr .rel .p00 .s00 .u00 .r00 .cvt .txt`). You can pick several files at once; they are written to the current dir in order. Picking several shows one summary at the end listing any that failed, and each successful file is its own undo step.
 
 ### Via drag-drop
 

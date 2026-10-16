@@ -54,7 +54,7 @@ Operations on the selected directory entry, plus import / export of individual f
 | Item | Action |
 |---|---|
 | **Rename** | Inline rename of the selected entry |
-| **Insert File** | OS file picker — imports a `.prg` / `.seq` / `.usr` / `.rel` / `.p00..r00` / `.cvt` / `.txt` etc. into the current disk |
+| **Insert File** | Inserts a new empty directory entry after the selected one (no data written). In an IDE64 directory it asks for a name first |
 | **Separator** ▸ | Insert ▸ (pick from saved separators) / Save Current as New / Edit List… |
 | **Copy** | Copies selected file(s) or directory to the clipboard |
 | **Paste** | Pastes clipboard contents into the current dir. Cross-family translation handles type differences |
@@ -81,7 +81,7 @@ Operations on the selected directory entry, plus import / export of individual f
 | **View As** ▸ | Hex / Disassembly / PETSCII / BASIC / Graphics / geoWrite / VLIR Layout / REL Records / Turbo Assembler |
 | **Run in Emulator** | Sends the selected PRG to <https://c64.sannic.nl> |
 | **Export** ▸ | Export File / Export as CVT / Export as RTF / Export as PDF / Export as Text (geoWrite) |
-| **Import File** | (single-file import; same as **File → Insert File** above) |
+| **Import File** | OS file picker — imports one or more `.prg` / `.seq` / `.usr` / `.rel` / `.p00..r00` / `.cvt` / `.txt` files into the current disk or IDE64 directory |
 
 ## Edit
 
