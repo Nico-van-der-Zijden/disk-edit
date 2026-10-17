@@ -35,7 +35,7 @@ The codebase is organized as global functions across multiple JS files loaded in
 assets/js/
   format/    Disk format parsers and decoders (cbm-format*, cbm-format-ide64, cbm-tape, cbm-archive, cbm-editor, restore64-scanners)
   ui/        UI infrastructure and app shell (modals, menus, directory, fileops, screen, search, export, …)
-  ui/disk/   Disk-level operations (CMD container UI, IDE64 .hdd UI, BAM viewer, CFS BAM viewer, compare, GEOS info, lost-files/optimize/MD5/…)
+  ui/disk/   Disk-level operations (CMD container UI, IDE64 .hdd UI, BAM viewer, CFS BAM viewer, compare, GEOS info, lost-files/optimize/disk hash/…)
   ui/viewers/ Per-file-type viewers (graphics, BASIC, geoWrite, REL, VLIR, fileinfo, TASS)
 ```
 
@@ -68,7 +68,7 @@ Key files (paths relative to `assets/js/`):
 | `ui/disk/ui-ide64-disk-map.js` | IDE64 .hdd BAM modal: tabbed view with the partition disk-map strip and the CFS bitmap heat map (64×64, Density / Ownership) — opened from View BAM on any .hdd context |
 | `ui/disk/ui-disk-bam.js` | BAM viewer modal, error byte viewer |
 | `ui/disk/ui-disk-compare.js` | Compare with… (sector-diff modal) |
-| `ui/disk/ui-disk-tools.js` | Lost files, fill free, optimize, resize DNP, MD5, interleave |
+| `ui/disk/ui-disk-tools.js` | Lost files, fill free, optimize, resize DNP, disk hash, interleave |
 | `ui/viewers/ui-viewer-graphics.js` | C64/GEOS graphics renderers (24+ formats) |
 | `ui/viewers/ui-viewer-basic.js` | BASIC detokenizer + viewer |
 | `ui/viewers/ui-viewer-geowrite.js` | geoWrite document viewer |

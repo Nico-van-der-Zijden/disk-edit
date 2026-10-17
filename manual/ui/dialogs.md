@@ -65,25 +65,20 @@ Cancel / OK with a multi-line message. Used by:
 
 Shows progress for long operations (bulk paste, sort, large export). No buttons — closes automatically when the task finishes.
 
-## Viewer modal
+## Viewer side pane
 
-Most file viewers (Hex, BASIC, PETSCII, TASS, Graphics, GEOS) open in a viewer modal:
+Read-only file viewers (Hex, Disassembly, PETSCII, BASIC, Turbo Assembler, Graphics, geoWrite, VLIR Layout, REL Records, file / GEOS info) don't open as a modal: they open in a **side pane** docked next to the directory listing, so the listing stays usable.
 
-```
-┌─ View as Hex: filename ── ✕ ┐
-│ ┌──────────────────────────┐ │
-│ │ 00: A2 41 8E ...         │ │
-│ │ 10: ...                  │ │ ← scrollable body
-│ │ ...                      │ │
-│ └──────────────────────────┘ │
-├──────────────────────────────┤
-│ Color: [None ▾] [Save GFX]   │
-└──────────────────────────────┘
-```
+- **Escape** closes the pane (unless a modal or the context menu is open — Escape closes that first).
+- The pane can be resized by dragging its splitter; the width is remembered.
+- Arrow keys keep driving the directory list; scroll the pane with mouse or touchpad.
+- Toggling charset (Ctrl+Shift) re-renders the content in the new case mode.
 
-- The body scrolls with **Arrow keys**, **PageUp/Down**, **Home/End**.
-- Toggling charset (Ctrl+Shift) re-renders the body in the new case mode while keeping scroll position.
-- Footer holds viewer-specific controls (colour picker, save / export buttons).
+Inside a real modal (e.g. a dialog with a long list), **Arrow keys**, **PageUp/Down** and **Home/End** scroll the modal body.
+
+## Find / Go to Sector
+
+**Enter** in the Find field runs the search and keeps the dialog open so you can click a result. **Enter** in Go to Sector jumps once both values are valid.
 
 ## Tabbed modal
 
@@ -91,7 +86,7 @@ Some viewers have multiple tabs in one modal:
 
 - **View BAM** on `.hdd` — Partitions / per-partition heat map
 - **G64 Layout** — Layout / Raw Tracks
-- **Graphics viewer** — multiple format variants (hires, multicolor, koala, etc.)
+- **Compare with...** — Files / Directory / Sectors
 
 Tabs are along the top of the modal body. Click to switch.
 

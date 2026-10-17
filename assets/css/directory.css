@@ -524,7 +524,7 @@
     border-radius: 4px;
     padding: 4px 0;
     min-width: 80px;
-    z-index: 200;
+    z-index: var(--z-overlay);
     box-shadow: 0 4px 16px rgba(0,0,0,.25);
   }
 
@@ -648,7 +648,7 @@
     width: 2px;
     background: var(--text);   /* high-contrast against either theme's bg */
     pointer-events: none;
-    z-index: 9999;
+    z-index: var(--z-top);
     animation: pe-caret-blink 1.06s steps(2, jump-none) infinite;
   }
   @keyframes pe-caret-blink {

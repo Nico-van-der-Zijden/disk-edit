@@ -79,13 +79,13 @@ Splat removal and BAM rebuild mark the tab dirty (you need to **Save** to commit
 
 Picks Quick or Deep through an in-modal prompt rather than a submenu split.
 
-When you scratch a file, the dir entry's "closed" bit clears but the data sectors stay. As long as nothing has been written to the disk since, the file content is recoverable.
+When you scratch a file, the dir entry's type byte becomes `$00` but its track/sector link and the data sectors stay. As long as nothing has been written to the disk since, the file content is recoverable.
 
 Two modes:
 
 ### Quick
 
-Walks the directory looking for entries with the closed-bit clear (i.e., scratched but not overwritten dir entries). For each found, reports the original filename and offers Export / Restore.
+Walks the directory looking for scratched entries that still have a track/sector link. For each found, reports the original filename and offers Export / Restore.
 
 ### Deep
 

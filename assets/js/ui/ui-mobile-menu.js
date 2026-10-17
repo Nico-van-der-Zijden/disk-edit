@@ -1,20 +1,10 @@
-// ──────────────────────────────────────────────────────────────────────
-// ui-mobile-menu.js — touch-first drill-down menu for narrow screens
-// ──────────────────────────────────────────────────────────────────────
-//
-// At ≤ 900px the desktop menubar's items are hidden via CSS; tapping
-// the hamburger button opens this component instead. Each level of the
-// menu is rendered as a flat list — taps on a row either drill into a
-// submenu or fire the original desktop option's click handler. The
-// drill-down model avoids the accordion's tap-precision problems where
-// a tap meant for the "Help" header lands on a "Changelog" row that
-// happened to be rendered inline below it.
-//
-// Single source of truth: this module never duplicates the menu data.
-// It walks the existing desktop menubar DOM (.menubar .menu-item, their
-// .menu-dropdown / .submenu children) and triggers .click() on the
-// original element when the user activates a leaf row. All existing
-// option click handlers continue to work unchanged.
+// ── Mobile menu ───────────────────────────────────────────────────────
+// Drill-down menu shown instead of the desktop menubar on narrow screens.
+// It renders from the live desktop menu DOM and activates a leaf by
+// clicking the original element, so it never duplicates menu data.
+
+// Keep in sync with the @media (max-width: 900px) block in menus.css.
+var MOBILE_MENU_BREAKPOINT = 900;
 
 (function() {
   var menubarEl = document.querySelector('.menubar');
@@ -22,12 +12,8 @@
   if (!menubarEl || !hamburger) return;
 
   var mmRoot = null, mmTitleEl = null, mmListEl = null, mmBackBtn = null;
-  // Stack of { label, parentEl, scrollTop } describing the navigation
-  // path. parentEl is the desktop element whose children we're showing
-  // (a top-level .menu-item, or any .has-submenu/.option that contains
-  // a .menu-dropdown / .submenu).
+  // Navigation path: [{ label, parentEl (desktop element), scrollTop }]
   var pathStack = [];
-  // Used to look up the original DOM element from a clicked mm-item.
   var nextRef = 1;
   var refToEl = new Map();
 
@@ -40,15 +26,7 @@
     return ref;
   }
 
-  function escHtml(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
-
-  // The label text of an option / menu-item without the contents of any
-  // nested .menu-dropdown / .submenu / .check span. We clone-and-strip
-  // because the real elements have a lot of nested HTML for desktop.
+  // Own label text, without nested dropdowns / submenus / check marks.
   function labelOf(el) {
     var clone = el.cloneNode(true);
     clone.querySelectorAll('.menu-dropdown, .submenu, .check').forEach(function(n) {
@@ -90,29 +68,28 @@
     mmListEl.addEventListener('click', onListClick);
   }
 
-  // Walk the children of a desktop container and emit mm-item HTML for
-  // each .option (or .menu-item at the top level). Separators become
-  // visual dividers; .has-submenu rows get a chevron and are tagged
-  // .mm-has-submenu.
+  // mm-item HTML for the visible options of one desktop container. Items the
+  // desktop menu hides (style.display = 'none') are skipped, and separators
+  // are collapsed so none lead, trail or double up.
   function renderChildren(container) {
     var html = '';
     var anyCheck = false;
-    var children = Array.from(container.children);
-    // Detect whether any sibling has a .check span so we can keep the
-    // label column aligned across rows.
+    var pendingSep = false, emittedItem = false;
+    var children = Array.from(container.children).filter(function(child) {
+      return child.style.display !== 'none';
+    });
+    // Keep the label column aligned when any row has a check mark.
     children.forEach(function(child) {
       if (child.querySelector(':scope > .check')) anyCheck = true;
     });
     children.forEach(function(child) {
       if (child.classList.contains('separator')) {
-        html += '<div class="mm-separator"></div>';
+        if (emittedItem) pendingSep = true;
         return;
       }
       var isOption = child.classList.contains('option');
       var isMenuItem = child.classList.contains('menu-item');
       if (!isOption && !isMenuItem) return;
-      // Skip anything internal that shouldn't appear (parent-row,
-      // header-row, etc. shouldn't be inside menu containers anyway).
       var isHasSubmenu = child.classList.contains('has-submenu');
       var hasNestedDropdown = !!child.querySelector(':scope > .menu-dropdown, :scope > .submenu');
       var disabled = child.classList.contains('disabled');
@@ -126,8 +103,11 @@
       var chev = (isHasSubmenu || hasNestedDropdown)
         ? '<i class="fa-solid fa-chevron-right mm-chevron"></i>'
         : '';
+      if (pendingSep) html += '<div class="mm-separator"></div>';
+      pendingSep = false;
+      emittedItem = true;
       html +=
-        '<button type="button"' +
+        '<button type="button" role="menuitem"' +
           ' class="mm-item' +
             ((isHasSubmenu || hasNestedDropdown) ? ' mm-has-submenu' : '') +
             (disabled ? ' mm-disabled' : '') +
@@ -147,8 +127,6 @@
   function render() {
     ensureRoot();
     if (pathStack.length === 0) {
-      // Top level: list each .menu-item in the menubar (always
-      // navigable since menu-items always have a dropdown).
       mmTitleEl.textContent = 'Menu';
       mmBackBtn.hidden = true;
       var html = '';
@@ -157,7 +135,7 @@
         if (!label) return;
         var ref = refFor(menuItem);
         html +=
-          '<button type="button" class="mm-item mm-has-submenu" data-mm-ref="' + ref + '">' +
+          '<button type="button" role="menuitem" class="mm-item mm-has-submenu" data-mm-ref="' + ref + '">' +
             '<span class="mm-label">' + escHtml(label) + '</span>' +
             '<i class="fa-solid fa-chevron-right mm-chevron"></i>' +
           '</button>';
@@ -201,13 +179,9 @@
       navigateInto(orig);
       return;
     }
-    // Leaf option: close the mobile menu first so any modal/dialog the
-    // option opens isn't covered by us, then dispatch a click on the
-    // original desktop element. Closing first also frees up any focus
-    // states that the action might want.
+    // Close first (and click on the next tick) so a dialog the option opens
+    // isn't covered by the menu.
     close();
-    // Dispatch the click asynchronously so the close paint happens
-    // first — avoids visible overlap on slower devices.
     setTimeout(function() { orig.click(); }, 0);
   }
 
@@ -234,22 +208,20 @@
     }
   });
 
-  // ESC key — when the menu is open, prefer "back" over "close" so the
-  // user can step out one level at a time on a hardware keyboard.
+  // Esc steps back one level, then closes. Captured and stopped here so the
+  // modal / detail-pane Esc handlers never see it.
   document.addEventListener('keydown', function(e) {
     if (!mmRoot || !mmRoot.classList.contains('mm-open')) return;
     if (e.key === 'Escape') {
+      e.preventDefault();
       e.stopPropagation();
       if (pathStack.length > 0) navigateBack();
       else close();
     }
-  });
+  }, true);
 
-  // If the viewport widens past the breakpoint while the menu is open,
-  // close it so we don't leave a stale overlay in front of the desktop
-  // menubar.
   window.addEventListener('resize', function() {
-    if (mmRoot && mmRoot.classList.contains('mm-open') && window.innerWidth > 900) {
+    if (mmRoot && mmRoot.classList.contains('mm-open') && window.innerWidth > MOBILE_MENU_BREAKPOINT) {
       close();
     }
   });

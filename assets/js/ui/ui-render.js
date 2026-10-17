@@ -159,7 +159,7 @@ function buildEntryIconsHtml(e, data, dirTrack) {
   }
   let icons = '';
   const ft = data[e.entryOff + 2] & 0x07;
-  if (ft === 5 || ft === 6) icons += '<span class="dir-icon-partition" data-offset="' + e.entryOff + '" title="Directory \u2014 double-click to open"><i class="fa-solid fa-folder"></i></span>';
+  if (currentFormat.supportsSubdirs && ft === currentFormat.subdirType) icons += '<span class="dir-icon-partition" data-offset="' + e.entryOff + '" title="Directory \u2014 double-click to open"><i class="fa-solid fa-folder"></i></span>';
   if (ft >= 1 && ft <= 4 && data[e.entryOff + 3] > 0) icons += '<span class="dir-icon-info" data-offset="' + e.entryOff + '" title="File info"><i class="fa-solid fa-circle-info"></i></span>';
   if (data[e.entryOff + 0x18] > 0) icons += '<span class="dir-icon-geos" data-offset="' + e.entryOff + '" title="GEOS file \u2014 click for info"><i class="fa-solid fa-globe"></i></span>';
   return icons;
@@ -193,8 +193,6 @@ function renderDisk(info) {
   const dirListing = content.querySelector('.dir-listing');
   const prevScroll = dirListing ? dirListing.scrollTop : 0;
 
-  // Wrap the buffer once; the entry loop below reads bytes per row and used
-  // to rewrap 4x per entry (nameHtml, tsHtml, icons-deleted, icons-regular).
   const isTape = isTapeFormat(getCurrentCtx());
   const data = (currentBuffer && !isTape) ? new Uint8Array(currentBuffer) : null;
   const bufByteLen = data ? data.byteLength : 0;
@@ -340,9 +338,7 @@ function renderDisk(info) {
   const newDirListing = content.querySelector('.dir-listing');
   if (newDirListing) newDirListing.scrollTop = prevScroll;
 
-  // Restore selection after re-render. Build an offset -> element map once
-  // instead of doing one querySelector per selected entry (O(n) on multi-select
-  // of n rows used to do n full document scans).
+  // Restore selection after re-render.
   if (prevSelected >= 0) {
     const entryByOffset = {};
     content.querySelectorAll('.dir-entry[data-offset]').forEach(function(el) {
@@ -783,6 +779,9 @@ function bindDirSelection() {
 }
 
 // ── Partition navigation ──────────────────────────────────────────────
+// 1581 CBM partition minimum: 3 tracks of 40 sectors.
+var D81_PARTITION_MIN_SECTORS = 120;
+
 function enterPartition(entryOff) {
   if (!currentBuffer) return;
   var data = new Uint8Array(currentBuffer);
@@ -829,7 +828,7 @@ function enterPartition(entryOff) {
     showModal('Partition Error', ['Partition does not start at sector 0.']);
     return;
   }
-  if (partSize < 120 || partSize % currentFormat.partitionSpt !== 0) {
+  if (partSize < D81_PARTITION_MIN_SECTORS || partSize % currentFormat.partitionSpt !== 0) {
     showModal('Partition Error', ['Invalid partition size (' + partSize + ' sectors).']);
     return;
   }

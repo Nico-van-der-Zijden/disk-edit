@@ -4,45 +4,33 @@
 // E100-E1FF = lowercase/uppercase mode
 var charsetMode = localStorage.getItem('cbm-charsetMode') === 'lowercase' ? 'lowercase' : 'uppercase';
 
+// PETSCII control-code ranges; shown as reversed glyphs of the $40/$C0 rows.
+var PETSCII_CTRL_LO_START = 0x00, PETSCII_CTRL_LO_END = 0x1F;
+var PETSCII_CTRL_HI_START = 0x80, PETSCII_CTRL_HI_END = 0x9F;
+
+function isPetsciiControlCode(b) {
+  return (b >= PETSCII_CTRL_LO_START && b <= PETSCII_CTRL_LO_END) ||
+         (b >= PETSCII_CTRL_HI_START && b <= PETSCII_CTRL_HI_END);
+}
+
 function buildPetsciiMap(mode) {
   var m = new Array(256).fill('\u00B7');
   var base = mode === 'lowercase' ? 0xE100 : 0xE000;
 
-  // $00-$1F: reversed chars — use $40-$5F glyphs from the chosen charset
-  for (var i = 0x00; i <= 0x1F; i++) m[i] = String.fromCharCode(base + 0x40 + i);
-
-  // $20-$7F: displayable characters
-  for (i = 0x20; i <= 0x7F; i++) m[i] = String.fromCharCode(base + i);
-
-  // $80-$9F: reversed chars — use $C0-$DF glyphs from the chosen charset
-  for (i = 0x80; i <= 0x9F; i++) m[i] = String.fromCharCode(base + 0xC0 + (i - 0x80));
-
-  // $A0-$FF: displayable characters
-  for (i = 0xA0; i <= 0xFF; i++) m[i] = String.fromCharCode(base + i);
-
+  for (var i = 0; i < 256; i++) {
+    if (i <= PETSCII_CTRL_LO_END) m[i] = String.fromCharCode(base + 0x40 + i);
+    else if (i >= PETSCII_CTRL_HI_START && i <= PETSCII_CTRL_HI_END) m[i] = String.fromCharCode(base + 0xC0 + (i - 0x80));
+    else m[i] = String.fromCharCode(base + i);
+  }
   return m;
 }
 
 var PETSCII_MAP = buildPetsciiMap(charsetMode);
 
-// Screen-code map for monitor/hex-dump style display.
-// On a real C64 a memory dump prints each byte as the glyph at that
-// screen-code position in the character ROM. Screen codes $00-$7F address
-// the 128 normal glyphs; $80-$FF are the same glyphs drawn reversed.
-//
-// Screen codes do NOT line up 1:1 with PETSCII byte values, and the
-// C64 Pro Mono PUA only populates PETSCII positions ($E020-$E07F /
-// $E0A0-$E0FF). So screen code N maps to its PETSCII equivalent first,
-// then to the PUA glyph at that PETSCII code:
-//
-//   sc $00-$1F  letters / brackets  → PETSCII $40-$5F  (sc + $40)
-//   sc $20-$3F  punctuation/digits  → PETSCII $20-$3F  (identity)
-//   sc $40-$5F  graphics block A    → PETSCII $60-$7F  (sc + $20)
-//   sc $60-$7F  graphics block B    → PETSCII $A0-$BF  (sc + $40)
-//
-// Each entry: { char: <PUA glyph>, reversed: <bool> } so the renderer can
-// wrap the reversed half in `.petscii-rev` for the inverse-color box —
-// the same trick the directory listing uses for filenames.
+// Screen code → { char, reversed } for monitor-style dumps; $80-$FF are
+// $00-$7F reversed. The PUA font is indexed by PETSCII, so each screen
+// code goes via its PETSCII row: $00-$1F → $40-$5F, $20-$3F → same,
+// $40-$7F → $C0-$FF.
 function buildScreencodeMap(mode) {
   var base = mode === 'lowercase' ? 0xE100 : 0xE000;
   var m = new Array(256);
@@ -59,10 +47,8 @@ function buildScreencodeMap(mode) {
 }
 var SCREENCODE_MAP = buildScreencodeMap(charsetMode);
 
-// PETSCII byte → screen-code conversion (the mapping the C64 KERNAL applies
-// when PRINTing). Used by the TASS source viewer to render `.text` strings
-// the way TASS does — control codes ($00-$1F, $80-$9F) appear as reversed
-// letters/brackets, regular printables look like themselves.
+// PETSCII → screen code as the KERNAL PRINTs it; control codes come out
+// as reversed letters/brackets (TASS viewer `.text` rendering).
 function petsciiToScreencode(b) {
   if (b <= 0x1F) return b + 0x80;
   if (b <= 0x3F) return b;
@@ -70,6 +56,7 @@ function petsciiToScreencode(b) {
   if (b <= 0x7F) return b - 0x20;
   if (b <= 0x9F) return b;
   if (b <= 0xBF) return b - 0x40;
+  if (b === 0xFF) return 0x5E; // pi: the KERNAL prints $FF as $DE's glyph
   return b - 0x80;
 }
 
@@ -79,21 +66,15 @@ function setCharsetMode(mode) {
   PETSCII_MAP = buildPetsciiMap(mode);
   SCREENCODE_MAP = buildScreencodeMap(mode);
   applyCharsetBodyAttr();
-  // Tell anyone showing PETSCII glyphs (modals, viewers, the picker) to
-  // re-render with the new map. The directory listing is refreshed by
-  // the menu/click handler that triggered this change; modal content
-  // listens via the slot in ui-modals.js (modalCharsetRedraw).
+  // Modals, viewers and the picker re-render on this; the dir listing is
+  // refreshed by the handler that changed the mode.
   if (typeof document !== 'undefined' && typeof document.dispatchEvent === 'function' &&
       typeof CustomEvent === 'function') {
     document.dispatchEvent(new CustomEvent('cbm-charsetchange', { detail: { mode: mode } }));
   }
 }
 
-// Mirror the current charset mode onto <body data-charset="..."> so CSS
-// can render plain <input> filename fields with text-transform matching
-// the C64's case (typing 'i' shows as 'I' in uppercase mode etc.).
-// asciiToNameBytes still uppercases on commit either way, so this is
-// purely visual.
+// <body data-charset> lets CSS show plain filename inputs in the C64's case.
 function applyCharsetBodyAttr() {
   if (typeof document === 'undefined' || !document.body) return;
   document.body.setAttribute('data-charset', charsetMode);
@@ -109,32 +90,28 @@ function petsciiToAscii(byte) {
 function readPetsciiString(data, offset, len, stopAtPadding) {
   let contentLen = len;
   if (stopAtPadding !== false) {
-    for (let i = 0; i < len; i++) {
-      // Stop on either $A0 (PETSCII hard-space / CBM-DOS name padding)
-      // or $00 (NUL / CFS name padding — also used by some cfsfdisk
-      // images and IDE64 partition tables). Without the $00 check, a
-      // CFS file name like "SUBDIR" + $00 * 10 would render as
-      // "SUBDIR@@@@@@@@@@" because PETSCII $00 decodes to the '@'
-      // glyph in the C64 character set.
-      var b = data[offset + i];
-      if (b === 0xA0 || b === 0x00) { contentLen = i; break; }
-    }
+    contentLen = _petsciiPaddedLength(data, offset, len);
   }
   let s = '';
   for (let i = 0; i < contentLen; i++) s += petsciiToAscii(data[offset + i]);
   return s;
 }
 
-function readPetsciiRich(data, offset, len) {
-  let contentLen = len;
-  for (let i = 0; i < len; i++) {
-    if (data[offset + i] === 0xA0) { contentLen = i; break; }
+// Name length up to the first $A0 (CBM-DOS) or $00 (CFS / IDE64) padding byte.
+function _petsciiPaddedLength(data, offset, len) {
+  for (var i = 0; i < len; i++) {
+    var b = data[offset + i];
+    if (b === 0xA0 || b === 0x00) return i;
   }
+  return len;
+}
+
+function readPetsciiRich(data, offset, len) {
+  const contentLen = _petsciiPaddedLength(data, offset, len);
   const chars = [];
   for (let i = 0; i < contentLen; i++) {
     const b = data[offset + i];
-    const reversed = (b >= 0x00 && b <= 0x1F) || (b >= 0x80 && b <= 0x9F);
-    chars.push({ char: petsciiToAscii(b), reversed });
+    chars.push({ char: petsciiToAscii(b), reversed: isPetsciiControlCode(b) });
   }
   return chars;
 }

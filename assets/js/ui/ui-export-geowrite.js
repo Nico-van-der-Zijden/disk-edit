@@ -1,119 +1,27 @@
 // ── geoWrite RTF/PDF/TXT Export ───────────────────────────────────────
-// Map GEOS font IDs to RTF font names
-var GEOS_RTF_FONTS = {
-  0:'Courier New', 1:'Helvetica', 2:'Helvetica', 3:'Times New Roman',
-  4:'Times New Roman', 5:'Helvetica', 6:'Courier New', 7:'Palatino Linotype',
-  8:'Times New Roman', 9:'Helvetica', 10:'Symbol', 11:'Times New Roman'
-};
-
-// Parse geoWrite VLIR records into a structured document
+// Parse geoWrite VLIR records into { pages: [elements], images }. The page
+// parser and font table are shared with the viewer (ui-viewer-geowrite.js).
+// References to images that don't exist are dropped here.
 function parseGeoWriteDoc(entryOff) {
   var records = readVLIRRecords(currentBuffer, entryOff, getCurrentCtx());
   if (records.length === 0) return null;
 
-  // Pre-render inline images as PNG data URLs
-  var images = {};
-  for (var ri = 64; ri < records.length && ri <= 126; ri++) {
-    if (!records[ri] || records[ri].length < 4) continue;
-    var wCards = records[ri][0];
-    var imgH = records[ri][1] | (records[ri][2] << 8);
-    if (wCards === 0 || imgH === 0 || imgH > 4096) continue;
-    var tmpC = document.createElement('canvas');
-    tmpC.width = wCards * 8; tmpC.height = imgH;
-    renderScrapData(tmpC.getContext('2d'), records[ri], 0);
-    // Get raw PNG bytes
-    var dataUrl = tmpC.toDataURL('image/png');
-    images[ri] = { w: wCards * 8, h: imgH, dataUrl: dataUrl,
-      base64: dataUrl.substring(dataUrl.indexOf(',') + 1) };
+  var images = renderGeoWriteImageCanvases(records);
+  for (var ri in images) {
+    var dataUrl = images[ri].canvas.toDataURL('image/png');
+    images[ri].base64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
   }
 
-  // Parse text pages
   var pages = [];
   for (var pi = 0; pi <= 60 && pi < records.length; pi++) {
     var rec = records[pi];
     if (!rec || rec.length === 0) continue;
-    pages.push(parseGeoWritePageStructured(rec, images));
+    pages.push(parseGeoWritePage(rec, images).filter(function(el) {
+      return !(el.type === 'image' && el.missing);
+    }));
   }
 
   return { pages: pages, images: images };
-}
-
-// Parse a single geoWrite page into structured elements
-function parseGeoWritePageStructured(rec, images) {
-  var elements = []; // array of { type, ... }
-  var pos = 0, len = rec.length;
-
-  var fontId = 0, fontSize = 12;
-  var bold = false, italic = false, underline = false, outline = false;
-  var superscript = false, subscript = false;
-  var align = 0, spacing = 0; // 0=left,1=center,2=right,3=justified; 0=single,1=1.5,2=double
-
-  var currentText = '';
-
-  function flushText() {
-    if (currentText.length > 0) {
-      elements.push({ type: 'text', text: currentText,
-        fontId: fontId, fontSize: fontSize,
-        bold: bold, italic: italic, underline: underline, outline: outline,
-        superscript: superscript, subscript: subscript });
-      currentText = '';
-    }
-  }
-
-  while (pos < len) {
-    var b = rec[pos];
-    if (b === 0x00) break;
-    else if (b === 0x11) { // ruler
-      if (pos + 27 > len) break;
-      flushText();
-      var justByte = rec[pos + 23];
-      align = justByte & 0x03;
-      spacing = (justByte >> 2) & 0x03;
-      elements.push({ type: 'ruler', align: align, spacing: spacing });
-      pos += 27;
-    } else if (b === 0x17) { // font/style change
-      if (pos + 4 > len) break;
-      flushText();
-      var fontWord = rec[pos + 1] | (rec[pos + 2] << 8);
-      var styleByte = rec[pos + 3];
-      fontId = fontWord >> 5;
-      fontSize = fontWord & 0x1F;
-      if (fontSize === 0) fontSize = 12;
-      bold = (styleByte & 0x40) !== 0;
-      italic = (styleByte & 0x10) !== 0;
-      underline = (styleByte & 0x80) !== 0;
-      outline = (styleByte & 0x08) !== 0;
-      superscript = (styleByte & 0x04) !== 0;
-      subscript = (styleByte & 0x02) !== 0;
-      pos += 4;
-    } else if (b === 0x10) { // inline image
-      if (pos + 5 > len) break;
-      flushText();
-      var imgRec = rec[pos + 4];
-      var img = images[imgRec];
-      if (img) elements.push({ type: 'image', record: imgRec, w: img.w, h: img.h });
-      pos += 5;
-    } else if (b === 0x0D) { // CR
-      flushText();
-      elements.push({ type: 'cr' });
-      pos++;
-    } else if (b === 0x09) { // tab
-      flushText();
-      elements.push({ type: 'tab' });
-      pos++;
-    } else if (b === 0x0C) { // page break
-      flushText();
-      elements.push({ type: 'pagebreak' });
-      pos++;
-    } else if (b >= 0x20 && b <= 0x7E) {
-      currentText += String.fromCharCode(b);
-      pos++;
-    } else if (b === 0x08 || b === 0x18) { pos += 20; }
-    else if (b === 0xF5) { pos += 11; }
-    else pos++;
-  }
-  flushText();
-  return elements;
 }
 
 // ── RTF Export ───────────────────────────────────────────────────────
@@ -135,7 +43,7 @@ function geoWriteToRtf(entryOff) {
   var fontTable = '{\\fonttbl';
   for (var fi = 0; fi < fontIds.length; fi++) {
     fontMap[fontIds[fi]] = fi;
-    var fname = GEOS_RTF_FONTS[fontIds[fi]] || 'Times New Roman';
+    var fname = geosFontInfo(fontIds[fi]).rtf;
     var fFamily = (fname === 'Courier New') ? 'fmodern' :
       (fname === 'Helvetica') ? 'fswiss' : 'froman';
     fontTable += '{\\f' + fi + '\\' + fFamily + ' ' + fname + ';}';
@@ -220,12 +128,12 @@ function geoWriteToRtf(entryOff) {
         openPara();
         var img2 = doc.images[el2.record];
         if (img2) {
-          // Embed as PNG in RTF using \pngblip
+          // \picw/\pich are pixels for bitmap blips; the *goal sizes are twips
           var hex = atob(img2.base64).split('').map(function(c) {
             return ('0' + c.charCodeAt(0).toString(16)).slice(-2);
           }).join('');
-          rtf += '{\\pict\\pngblip\\picw' + (el2.w * 15) +
-            '\\pich' + (el2.h * 15) +
+          rtf += '{\\pict\\pngblip\\picw' + el2.w +
+            '\\pich' + el2.h +
             '\\picwgoal' + (el2.w * 15) +
             '\\pichgoal' + (el2.h * 15) + '\n';
           // Line-wrap hex at 80 chars
@@ -248,20 +156,15 @@ document.getElementById('opt-export-rtf').addEventListener('click', function(e) 
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
 
-  var data = new Uint8Array(currentBuffer);
-  var name = petsciiToReadable(readPetsciiString(data, selectedEntryIndex + 5, 16)).trim();
-  name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'document';
-
   var rtf = geoWriteToRtf(selectedEntryIndex);
   if (!rtf) { showModal('Export Error', ['No geoWrite data found.']); return; }
-
-  var blob = new Blob([rtf], { type: 'application/rtf' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name + '.rtf';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(new Blob([rtf], { type: 'application/rtf' }), geoWriteExportName(selectedEntryIndex) + '.rtf');
 });
+
+function geoWriteExportName(entryOff) {
+  var data = new Uint8Array(currentBuffer);
+  return safeHostFileName(petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim(), 'document');
+}
 
 // ── PDF Export ───────────────────────────────────────────────────────
 // Minimal PDF generator (no external library)
@@ -289,17 +192,9 @@ function geoWriteToPdf(entryOff) {
     return objects.length; // 1-based ID
   }
 
-  // PDF font mapping: use the 14 standard PDF fonts
-  function pdfFontName(geosId) {
-    var isSerif = [3, 4, 7, 8, 11].indexOf(geosId) >= 0;
-    var isMono = (geosId === 0 || geosId === 6);
-    if (isMono) return 'Courier';
-    if (isSerif) return 'Times-Roman';
-    return 'Helvetica';
-  }
-
+  // Base-14 PDF font for a GEOS font + style
   function pdfFontNameStyled(geosId, bold, italic) {
-    var base = pdfFontName(geosId);
+    var base = geosFontInfo(geosId).pdf;
     if (base === 'Courier') {
       if (bold && italic) return 'Courier-BoldOblique';
       if (bold) return 'Courier-Bold';
@@ -330,7 +225,8 @@ function geoWriteToPdf(entryOff) {
       }
     }
   }
-  if (Object.keys(fontVariants).length === 0) fontVariants['Helvetica'] = true;
+  // Every page starts its text object in Helvetica, so it must be a resource
+  fontVariants['Helvetica'] = true;
 
   // Assign font resource names
   var fontResNames = {};
@@ -350,14 +246,7 @@ function geoWriteToPdf(entryOff) {
   // Create image XObjects
   Object.keys(doc.images).forEach(function(imgRec) {
     var img = doc.images[imgRec];
-    // Decode PNG to raw pixels for PDF (use canvas)
-    var tmpC = document.createElement('canvas');
-    tmpC.width = img.w; tmpC.height = img.h;
-    var tmpCtx = tmpC.getContext('2d');
-    var tmpImg = new Image();
-    tmpImg.src = img.dataUrl;
-    tmpCtx.drawImage(tmpImg, 0, 0);
-    var imgData = tmpCtx.getImageData(0, 0, img.w, img.h);
+    var imgData = img.canvas.getContext('2d').getImageData(0, 0, img.w, img.h);
 
     // Convert to grayscale (GEOS images are monochrome)
     var grayData = new Uint8Array(img.w * img.h);
@@ -369,12 +258,12 @@ function geoWriteToPdf(entryOff) {
     for (var gi = 0; gi < grayData.length; gi++) {
       imgHexArr[gi] = ('0' + grayData[gi].toString(16)).slice(-2);
     }
-    var imgStream = imgHexArr.join('');
+    var imgStream = imgHexArr.join('') + '>'; // ASCIIHex EOD marker counts toward /Length
 
     var imgObjId = addObj('<< /Type /XObject /Subtype /Image /Width ' + img.w +
       ' /Height ' + img.h + ' /ColorSpace /DeviceGray /BitsPerComponent 8 ' +
       '/Length ' + imgStream.length + ' /Filter /ASCIIHexDecode >>\nstream\n' +
-      imgStream + '>\nendstream');
+      imgStream + '\nendstream');
     imgObjIds[imgRec] = imgObjId;
   });
 
@@ -428,6 +317,7 @@ function geoWriteToPdf(entryOff) {
     var curFontName = 'Helvetica';
     var curFontSize = 12;
     var lineHeight = 14;
+    var spacingFactor = 1.2; // from the ruler; survives font changes
     var curAlign = 0;
 
     stream += 'BT\n';
@@ -470,9 +360,8 @@ function geoWriteToPdf(entryOff) {
 
       if (el2.type === 'ruler') {
         curAlign = el2.align;
-        if (el2.spacing === 1) lineHeight = curFontSize * 1.5;
-        else if (el2.spacing === 2) lineHeight = curFontSize * 2;
-        else lineHeight = curFontSize * 1.2;
+        spacingFactor = el2.spacing === 1 ? 1.5 : el2.spacing === 2 ? 2 : 1.2;
+        lineHeight = curFontSize * spacingFactor;
       } else if (el2.type === 'text') {
         var fn2 = pdfFontNameStyled(el2.fontId, el2.bold, el2.italic);
         var sz2 = Math.max(10, el2.fontSize);
@@ -480,7 +369,7 @@ function geoWriteToPdf(entryOff) {
           flushLine();
           curFontName = fn2;
           curFontSize = sz2;
-          lineHeight = sz2 * 1.2;
+          lineHeight = sz2 * spacingFactor;
           stream += '/' + fontResNames[curFontName] + ' ' + curFontSize + ' Tf\n';
         }
         lineText += el2.text;
@@ -579,19 +468,9 @@ document.getElementById('opt-export-pdf').addEventListener('click', function(e) 
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
 
-  var data = new Uint8Array(currentBuffer);
-  var name = petsciiToReadable(readPetsciiString(data, selectedEntryIndex + 5, 16)).trim();
-  name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'document';
-
   var pdf = geoWriteToPdf(selectedEntryIndex);
   if (!pdf) { showModal('Export Error', ['No geoWrite data found.']); return; }
-
-  var blob = new Blob([pdf], { type: 'application/pdf' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name + '.pdf';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(new Blob([pdf], { type: 'application/pdf' }), geoWriteExportName(selectedEntryIndex) + '.pdf');
 });
 
 // ── geoWrite Plain Text Export ────────────────────────────────────────
@@ -620,14 +499,5 @@ document.getElementById('opt-export-txt-gw').addEventListener('click', function(
     if (pi < doc.pages.length - 1) text += '\n';
   }
 
-  var data = new Uint8Array(currentBuffer);
-  var name = petsciiToReadable(readPetsciiString(data, selectedEntryIndex + 5, 16)).trim();
-  name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'document';
-
-  var blob = new Blob([text], { type: 'text/plain' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name + '.txt';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(new Blob([text], { type: 'text/plain' }), geoWriteExportName(selectedEntryIndex) + '.txt');
 });

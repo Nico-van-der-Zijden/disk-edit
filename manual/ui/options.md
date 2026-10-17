@@ -34,11 +34,11 @@ Switching schemes recolours every open hex modal instantly.
 
 ### Show Toolbar
 
-The toolbar under the menubar. On by default; off on phones (toggle to enable on mobile).
+The toolbar under the menubar. On by default. Always hidden on narrow screens (720px and below), where the hamburger menu takes over.
 
 ### Show Addresses
 
-(In the **View** menu.) When you hover a directory entry / cell, show its byte / track-sector position in the footer. Useful for low-level debugging.
+(In the **View** menu.) Adds a load / end address column (`$0801-$xxxx`) to the directory listing.
 
 ### Partition Sizes in MiB
 

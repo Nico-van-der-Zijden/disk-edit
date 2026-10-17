@@ -3,7 +3,7 @@ function showRelViewer(entryOff) {
   if (!currentBuffer) return;
   var data = new Uint8Array(currentBuffer);
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim();
-  var recordLen = data[entryOff + 0x1C]; // record length from dir entry
+  var recordLen = data[entryOff + 0x17];
   if (recordLen === 0) recordLen = 254;
 
   // Read file data (follows the data chain)
@@ -32,8 +32,7 @@ function showRelViewer(entryOff) {
     for (var bi = recStart; bi < recEnd; bi++) {
       var b = fileData[bi];
       hexStr += b.toString(16).toUpperCase().padStart(2, '0') + ' ';
-      asciiStr += (b >= 0x20 && b <= 0x7E) ? String.fromCharCode(b) :
-        (b >= 0xC1 && b <= 0xDA) ? String.fromCharCode(b - 0x80) : '\u00B7';
+      asciiStr += petsciiToReadable(String.fromCharCode(0xE000 + b));
     }
 
     html += '<span class="rel-record-hex">' + escHtml(hexStr.trim()) + '</span>';

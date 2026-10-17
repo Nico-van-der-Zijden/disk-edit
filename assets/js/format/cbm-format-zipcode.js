@@ -181,17 +181,16 @@ function _zipCodeRle(sec) {
 // carrying error bytes loses them, since DiskPacked has nowhere to put them.
 function compressZipCode(buffer, baseName) {
   var all = new Uint8Array(buffer);
-  var tracks = 0, droppedErrors = 0;
-  if (all.length === 174848) tracks = 35;
-  else if (all.length === 175531) { tracks = 35; droppedErrors = 683; }
-  else if (all.length === 196608) tracks = 40;
-  else if (all.length === 197376) { tracks = 40; droppedErrors = 768; }
-  else return { error: 'DiskPacked needs a 35- or 40-track D64.' };
+  var tracks = d64TracksForSize(all.length);
+  if (tracks !== 35 && tracks !== 40) return { error: 'DiskPacked needs a 35- or 40-track D64.' };
 
   var base = String(baseName || 'DISK').trim().toUpperCase().slice(0, 14);
   if (!base) return { error: 'Give the set a name.' };
 
   var spt = DISK_FORMATS.d64.sectorsPerTrack;
+  var totalSectors = 0;
+  for (var t0 = 1; t0 <= tracks; t0++) totalSectors += spt(t0);
+  var droppedErrors = all.length - totalSectors * 256;   // one error byte per sector
   var ranges = tracks === 40 ? ZIPCODE_RANGES_40 : ZIPCODE_RANGES_35;
   var hdr = calcD64Offset(18, 0, spt);
   var id1 = all[hdr + 0xA2], id2 = all[hdr + 0xA3];

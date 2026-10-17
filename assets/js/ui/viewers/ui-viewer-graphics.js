@@ -46,7 +46,8 @@ var GFX_FORMATS = [
 var GFX_PARSERS = {
   koala: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002), col: d.subarray(9002, Math.min(d.length, 10002)), bg: d.length > 10002 ? d[10002] & 0x0F : 0 }; },
   drp: function(d) { return { col: d.subarray(2, 1002), bg: d[1002], bm: d.subarray(1026, 9026), scr: d.subarray(9026, 10026), rowBg: d.subarray(10026, 10051) }; },
-  vidcom: function(d) { return { scr: d.subarray(2, 1002), bm: d.subarray(1026, 9026), col: d.subarray(9026, 10026), bg: d[10050] }; },
+  // BITMAP.TXT: colour $5800, screen $5C00, bg $5FE8, bitmap $6000
+  vidcom: function(d) { return { col: d.subarray(2, 1002), scr: d.subarray(1026, 2026), bg: (d[2026] || 0) & 0x0F, bm: d.subarray(2050, 10050) }; },
   aas: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002), col: d.subarray(9018, 10018), bg: d[9003] & 0x0F }; },
   saracen: function(d) { return { bm: d.subarray(20, 8020), scr: d.subarray(8020, 9020), col: d.subarray(9020, 10020), bg: d[10020] & 0x0F }; },
   bmscr: function(d) { return { bm: d.subarray(2, 8002), scr: d.subarray(8002, 9002) }; },
@@ -301,30 +302,44 @@ function renderGeoScrap(ctx, entryOff) {
   return renderScrapData(ctx, scrapData, 0) > 0;
 }
 
-// Render GEOS Photo Album (VLIR, each record is a photo scrap)
-function renderGeoAlbum(ctx, entryOff) {
-  var records = readVLIRRecords(currentBuffer, entryOff, getCurrentCtx());
-  if (records.length === 0) return false;
-
-  // First pass: measure total height and max width
-  var totalH = 0, maxW = 0, gap = 4;
+// Photo-scrap records in [first, last] with a sane header: { rec, data, w, h }.
+function collectScrapRecords(records, first, last) {
   var scraps = [];
-  for (var ri = 0; ri < records.length; ri++) {
-    if (!records[ri] || records[ri].length < 4) continue;
-    var wCards = records[ri][0];
-    var h = records[ri][1] | (records[ri][2] << 8);
+  for (var ri = first; ri < records.length && ri <= last; ri++) {
+    var r = records[ri];
+    if (!r || r.length < 4) continue;
+    var wCards = r[0];
+    var h = r[1] | (r[2] << 8);
     if (wCards === 0 || h === 0 || h > 4096) continue;
-    var w = wCards * 8;
-    if (w > maxW) maxW = w;
-    scraps.push({ data: records[ri], h: h });
-    totalH += h + gap;
+    scraps.push({ rec: ri, data: r, w: wCards * 8, h: h });
   }
-  if (scraps.length === 0) return false;
-  totalH -= gap;
+  return scraps;
+}
 
+// geoWrite inline images (records 64-126) rendered to one canvas each,
+// keyed by record number.
+var GEOWRITE_IMAGE_FIRST_REC = 64, GEOWRITE_IMAGE_LAST_REC = 126;
+function renderGeoWriteImageCanvases(records) {
+  var out = {};
+  collectScrapRecords(records, GEOWRITE_IMAGE_FIRST_REC, GEOWRITE_IMAGE_LAST_REC).forEach(function(s) {
+    var c = document.createElement('canvas');
+    c.width = s.w; c.height = s.h;
+    renderScrapData(c.getContext('2d'), s.data, 0);
+    out[s.rec] = { canvas: c, w: s.w, h: s.h };
+  });
+  return out;
+}
+
+// Stack scraps vertically on a white canvas with a 4px gap.
+function renderScrapStack(ctx, scraps) {
+  if (scraps.length === 0) return false;
+  var gap = 4, maxW = 0, totalH = -gap;
+  for (var i = 0; i < scraps.length; i++) {
+    if (scraps[i].w > maxW) maxW = scraps[i].w;
+    totalH += scraps[i].h + gap;
+  }
   ctx.canvas.width = maxW;
   ctx.canvas.height = totalH;
-  // Fill white
   var bgImg = ctx.createImageData(maxW, totalH);
   for (var fi = 0; fi < bgImg.data.length; fi++) bgImg.data[fi] = 255;
   ctx.putImageData(bgImg, 0, 0);
@@ -337,39 +352,16 @@ function renderGeoAlbum(ctx, entryOff) {
   return true;
 }
 
+// Render GEOS Photo Album (VLIR, each record is a photo scrap)
+function renderGeoAlbum(ctx, entryOff) {
+  var records = readVLIRRecords(currentBuffer, entryOff, getCurrentCtx());
+  return renderScrapStack(ctx, collectScrapRecords(records, 0, records.length - 1));
+}
+
 // Render geoWrite embedded images (VLIR records 64-126, each in Photo Scrap format)
 function renderGeoWrite(ctx, entryOff) {
   var records = readVLIRRecords(currentBuffer, entryOff, getCurrentCtx());
-  if (records.length <= 64) return false;
-
-  // Collect valid image records (indices 64-126)
-  var totalH = 0, maxW = 0, gap = 4;
-  var scraps = [];
-  for (var ri = 64; ri < records.length && ri <= 126; ri++) {
-    if (!records[ri] || records[ri].length < 4) continue;
-    var wCards = records[ri][0];
-    var h = records[ri][1] | (records[ri][2] << 8);
-    if (wCards === 0 || h === 0 || h > 4096) continue;
-    var w = wCards * 8;
-    if (w > maxW) maxW = w;
-    scraps.push({ data: records[ri], h: h });
-    totalH += h + gap;
-  }
-  if (scraps.length === 0) return false;
-  totalH -= gap;
-
-  ctx.canvas.width = maxW;
-  ctx.canvas.height = totalH;
-  var bgImg = ctx.createImageData(maxW, totalH);
-  for (var fi = 0; fi < bgImg.data.length; fi++) bgImg.data[fi] = 255;
-  ctx.putImageData(bgImg, 0, 0);
-
-  var yPos = 0;
-  for (var si = 0; si < scraps.length; si++) {
-    renderScrapData(ctx, scraps[si].data, yPos);
-    yPos += scraps[si].h + gap;
-  }
-  return true;
+  return renderScrapStack(ctx, collectScrapRecords(records, GEOWRITE_IMAGE_FIRST_REC, GEOWRITE_IMAGE_LAST_REC));
 }
 
 // Parse a GEOS font's VLIR records into a list of { pt, rec, ascent, rowLen,
@@ -435,7 +427,7 @@ function showGeosFontCharsetExport(entryOff) {
     var info = readGeosInfoBlock(currentBuffer, infoT, infoS, getCurrentCtx());
     if (info && info.className) className = info.className.trim();
   }
-  var safeName = (className || fileName).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/\s+/g, '_') || 'font';
+  var safeName = safeHostFileName(className || fileName, 'font').replace(/\s+/g, '_');
 
   var title = 'Export ' + (className || fileName) + ' as C64 Charset';
   document.getElementById('modal-title').textContent = title;
@@ -472,19 +464,11 @@ function showGeosFontCharsetExport(entryOff) {
         dl.textContent = 'Download';
         dl.addEventListener('click', function() {
           var bin = geosFontToC64Charset(f, fit.cols, fit.rows);
-          // PRG: 2-byte little-endian load address ($3000) + charset bytes.
-          // $3000 is a conventional custom-charset location (free zone, safe
-          // from BASIC + ROM).
           var prg = new Uint8Array(bin.length + 2);
           prg[0] = 0x00; prg[1] = 0x30;
           prg.set(bin, 2);
           var fname = safeName + '_' + f.pt + 'pt_' + fit.cols + 'x' + fit.rows + '.prg';
-          var blob = new Blob([prg], { type: 'application/octet-stream' });
-          var a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = fname;
-          a.click();
-          URL.revokeObjectURL(a.href);
+          downloadBlob(new Blob([prg], { type: 'application/octet-stream' }), fname);
         });
         row.appendChild(dl);
       }
@@ -519,15 +503,8 @@ function geosAsciiToScreenCode(c) {
   return -1;
 }
 
-// Compute the output size (in bytes) of a C64 charset for the given tile
-// config. Layout uses fixed $200-byte ($40-char) quadrants. Each group of
-// `cols*rows` consecutive quadrants holds 64 logical glyphs — one group
-// for 1×1 holds up to 64 glyphs, one group for 2×2 also holds 64 glyphs
-// (but uses 4 quadrants = $800). Extra groups are stacked until either the
-// glyph range is covered or the $800 bank limit is hit.
-//   1×1 → $400 (2 groups × 1 quadrant × $200)
-//   2×1 / 1×2 → $800 (2 groups × 2 quadrants × $200)
-//   2×2 → $800 (1 group × 4 quadrants × $200; uppercase glyphs dropped)
+// Charset size for a tile config: groups of cols*rows $40-char quadrants,
+// one group per 64 screen codes, capped at $800 (2×2 drops uppercase).
 function geosFontCharsetOutputBytes(cols, rows) {
   var tilesPerChar = cols * rows;
   var CPQ = 64;                                      // chars per quadrant
@@ -537,17 +514,8 @@ function geosFontCharsetOutputBytes(cols, rows) {
   return groups * tilesPerChar * 0x200;
 }
 
-// Render a GEOS font as a C64-native charset. The charset is organised as
-// `groups` blocks, each block containing `tilesPerChar` adjacent $40-char
-// quadrants. A logical glyph at screen-code S sits at:
-//   groupIdx = S >> 6          // which block it lives in
-//   slot     = S & $3F         // slot within that block (0-$3F)
-//   groupBase = groupIdx * tilesPerChar * 64  (chars)
-// Each tile (tr, tc) of the glyph goes to char groupBase + tileIdx * 64 + slot,
-// where tileIdx = tr*cols + tc (TL, TR, BL, BR order for 2×2).
-// For 2×2 this places @ (screen $00) at chars $00/$40/$80/$C0. For 1×2 $800,
-// 'A' (screen $41) lands at chars $81 (top) and $C1 (bottom).
-// Screen codes beyond the supported group range are dropped.
+// Render a GEOS font as a C64 charset. Tile (tr,tc) of screen code S lands
+// at char (S>>6)*tilesPerChar*64 + (tr*cols+tc)*64 + (S&$3F).
 function geosFontToC64Charset(f, cols, rows) {
   var tileBytes = 8;
   var tilesPerChar = cols * rows;
@@ -604,11 +572,6 @@ function renderGeosFont(ctx, entryOff) {
   var fonts = parseGeosFontRecords(records);
   if (fonts.length === 0) return false;
 
-  // Pixel-set test for a given font/char/x/y (returns 1 if the bit is on).
-  function glyphBit(f, charIdx, x, y) {
-    return geosFontGlyphBit(f, charIdx, x, y);
-  }
-
   // Rasterise a piece of text in the font. Returns total width in pixels;
   // if `px` is given, also writes the glyph pixels into that ImageData buffer.
   function drawSampleText(f, text, px, canvasW, canvasH, startX, startY, color) {
@@ -621,7 +584,7 @@ function renderGeosFont(ctx, entryOff) {
       if (w > 0 && px) {
         for (var gy = 0; gy < f.height; gy++) {
           for (var gx = 0; gx < w; gx++) {
-            if (glyphBit(f, idx, gx, gy)) {
+            if (geosFontGlyphBit(f, idx, gx, gy)) {
               var dx = x + gx, dy = startY + gy;
               if (dx >= 0 && dx < canvasW && dy >= 0 && dy < canvasH) {
                 var off = (dy * canvasW + dx) * 4;
@@ -676,14 +639,13 @@ function renderGeosFont(ctx, entryOff) {
   ctx.canvas.width = canvasW;
   ctx.canvas.height = totalH;
 
-  // Dark background so the white glyphs read clearly.
-  ctx.fillStyle = '#1e1e1e';
-  ctx.fillRect(0, 0, canvasW, totalH);
-
-  // Draw glyphs into an ImageData in one pass, then blit.
+  // Glyphs go into an opaque dark ImageData, then one blit (putImageData
+  // replaces pixels, so the background has to live in the data itself).
   var img = ctx.createImageData(canvasW, totalH);
   var data = img.data;
-  for (var ti = 3; ti < data.length; ti += 4) data[ti] = 0; // start transparent
+  for (var ti = 0; ti < data.length; ti += 4) {
+    data[ti] = 0x1E; data[ti + 1] = 0x1E; data[ti + 2] = 0x1E; data[ti + 3] = 255;
+  }
 
   var glyphWhite = [255, 255, 255];
 
@@ -711,7 +673,7 @@ function renderGeosFont(ctx, entryOff) {
         var glyphX = cellX + cellPadX + Math.floor((blk.maxGlyphW - glyphW) / 2);
         for (var yy = 0; yy < f2.height; yy++) {
           for (var gx = 0; gx < glyphW; gx++) {
-            if (glyphBit(f2, gi, gx, yy)) {
+            if (geosFontGlyphBit(f2, gi, gx, yy)) {
               var dx = glyphX + gx;
               var dy = cellY + yy;
               if (dx >= 0 && dx < canvasW && dy >= 0 && dy < totalH) {
@@ -789,39 +751,9 @@ function renderC64Multicolor(ctx, gfx) {
   ctx.canvas.width = 320; ctx.canvas.height = 200;
   var img = ctx.createImageData(320, 200);
   var px = img.data;
-  var bg = C64_RGB[gfx.bg & 0x0F];
 
   for (var cellRow = 0; cellRow < 25; cellRow++) {
-    for (var cellCol = 0; cellCol < 40; cellCol++) {
-      var cellIdx = cellRow * 40 + cellCol;
-      var scrHi = (gfx.scr[cellIdx] >> 4) & 0x0F;
-      var scrLo = gfx.scr[cellIdx] & 0x0F;
-      var colLo = gfx.col[cellIdx] & 0x0F;
-      var colors = [bg, C64_RGB[scrHi], C64_RGB[scrLo], C64_RGB[colLo]];
-
-      for (var line = 0; line < 8; line++) {
-        var byt = gfx.bm[cellIdx * 8 + line];
-        var y = cellRow * 8 + line;
-        for (var px2 = 0; px2 < 4; px2++) {
-          var bits = (byt >> (6 - px2 * 2)) & 3;
-          var rgb = colors[bits];
-          var x = cellCol * 8 + px2 * 2;
-          var off = (y * 320 + x) * 4;
-          px[off] = rgb[0]; px[off+1] = rgb[1]; px[off+2] = rgb[2]; px[off+3] = 255;
-          px[off+4] = rgb[0]; px[off+5] = rgb[1]; px[off+6] = rgb[2]; px[off+7] = 255;
-        }
-      }
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-}
-
-function renderC64MulticolorDrp(ctx, gfx) {
-  ctx.canvas.width = 320; ctx.canvas.height = 200;
-  var img = ctx.createImageData(320, 200);
-  var px = img.data;
-
-  for (var cellRow = 0; cellRow < 25; cellRow++) {
+    // Drazpaint/Drazlace carry a per-row background table
     var rowBg = gfx.rowBg ? C64_RGB[gfx.rowBg[cellRow] & 0x0F] : C64_RGB[gfx.bg & 0x0F];
     for (var cellCol = 0; cellCol < 40; cellCol++) {
       var cellIdx = cellRow * 40 + cellCol;
@@ -1060,6 +992,7 @@ function renderC64Charset(ctx, gfx, tileW, tileH, colors, multicolor) {
   var fgRgb = C64_RGB[colors.fg];
   var mc1Rgb = C64_RGB[colors.mc1];
   var mc2Rgb = C64_RGB[colors.mc2];
+  var fgMcRgb = C64_RGB[colors.fg & 0x07];
   // Fill with the background colour so unmapped areas (e.g. sample text
   // characters that aren't present in short charsets) stay consistent.
   for (var fi = 0; fi < pxBuf.length; fi += 4) {
@@ -1075,7 +1008,8 @@ function renderC64Charset(ctx, gfx, tileW, tileH, colors, multicolor) {
       if (multicolor) {
         for (var p2 = 0; p2 < 4; p2++) {
           var bits = (byt >> (6 - p2 * 2)) & 3;
-          var rgb = bits === 0 ? bgRgb : bits === 1 ? mc1Rgb : bits === 2 ? fgRgb : mc2Rgb;
+          // VIC MC char mode: 01=$D022, 10=$D023, 11=colour RAM bits 0-2
+          var rgb = bits === 0 ? bgRgb : bits === 1 ? mc1Rgb : bits === 2 ? mc2Rgb : fgMcRgb;
           var y = oy + line;
           for (var dx = 0; dx < 2; dx++) {
             var x = ox + p2 * 2 + dx;
@@ -1174,8 +1108,9 @@ function renderGfxToCanvas(ctx, fmt, fileData, colors) {
   if (!parser) return;
   var gfx = parser(fileData);
 
-  // Apply background color override for bitmap modes
-  if (colors && colors.bg !== undefined && (fmt.mode === 'mc' || fmt.layout === 'drp' || fmt.layout === 'drazlace')) {
+  // Background override only once the user picks a colour other than the
+  // file's own, so Drazpaint's per-row table survives the default render.
+  if (colors && colors.bg !== undefined && fmt.mode === 'mc' && colors.bg !== ((gfx.bg || 0) & 0x0F)) {
     gfx.bg = colors.bg;
     if (gfx.rowBg) {
       gfx.rowBg = new Uint8Array(gfx.rowBg.length);
@@ -1196,8 +1131,6 @@ function renderGfxToCanvas(ctx, fmt, fileData, colors) {
     renderC64Charset(ctx, gfx, tileW, tileH, colors, isMC);
   } else if (fmt.mode === 'printshop') {
     renderC64PrintShop(ctx, gfx);
-  } else if (fmt.layout === 'drp' || fmt.layout === 'drazlace') {
-    renderC64MulticolorDrp(ctx, gfx);
   } else if (fmt.mode === 'mc') {
     renderC64Multicolor(ctx, gfx);
   } else if (fmt.mode === 'hires') {
@@ -1208,6 +1141,8 @@ function renderGfxToCanvas(ctx, fmt, fileData, colors) {
     renderC64AFLI(ctx, gfx);
   }
 }
+
+var gfxSaveMenuDocClick = null;
 
 function showFileGfxViewer(entryOff, preloaded) {
   // preloaded = { data, name } for CFS callers. GEOS detection only runs
@@ -1357,10 +1292,13 @@ function showFileGfxViewer(entryOff, preloaded) {
     }
     parent.appendChild(row);
 
-    // Close popups when clicking elsewhere in the modal
-    body.addEventListener('click', function() {
+    // Close popups when clicking elsewhere. The body is shared and outlives
+    // this render, so keep exactly one handler on it.
+    if (body._gfxPopupClose) body.removeEventListener('click', body._gfxPopupClose);
+    body._gfxPopupClose = function() {
       body.querySelectorAll('.color-dropdown-popup.open').forEach(function(p) { p.classList.remove('open'); });
-    });
+    };
+    body.addEventListener('click', body._gfxPopupClose);
   }
 
   function render() {
@@ -1497,18 +1435,10 @@ function showFileGfxViewer(entryOff, preloaded) {
   var footer = getViewerFooter();
   footer.className = 'modal-footer modal-footer-split';
 
-  var safeName = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'image';
+  var safeName = safeHostFileName(name, 'image');
 
   function getCanvas() {
     return getViewerBody().querySelector('.gfx-canvas');
-  }
-
-  function downloadBlob(blob, filename) {
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(a.href);
   }
 
   function savePng() {
@@ -1716,9 +1646,18 @@ function showFileGfxViewer(entryOff, preloaded) {
     ev.stopPropagation();
     menu.classList.toggle('open');
   });
-  document.addEventListener('click', function() {
+  // One document handler across viewer opens; it also drops itself once the
+  // footer is gone so the closure (and fileData) can be collected.
+  if (gfxSaveMenuDocClick) document.removeEventListener('click', gfxSaveMenuDocClick);
+  gfxSaveMenuDocClick = function() {
+    if (!menu.isConnected) {
+      document.removeEventListener('click', gfxSaveMenuDocClick);
+      gfxSaveMenuDocClick = null;
+      return;
+    }
     menu.classList.remove('open');
-  });
+  };
+  document.addEventListener('click', gfxSaveMenuDocClick);
 
   footer.innerHTML = '';
   var actionsDiv = document.createElement('div');

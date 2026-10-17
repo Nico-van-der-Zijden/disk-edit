@@ -40,37 +40,33 @@ function refreshCmdContainerView() {
   updateEntryMenuState();
 }
 
-// Per partition-type metadata for free-blocks computation: format key,
-// the offset + expected value of the DOS-version byte that screens out
-// not-actually-filesystem partitions, and the theoretical max free
-// (used as a second-line sanity cap because the DOS byte alone can be
-// matched by chance in raw-code partitions).
+// Per partition type: format key, offset of the BAM sector, minimum
+// partition size, and the theoretical max free count (sanity cap).
 var CMDC_FREE_BLOCKS_META = {
-  0x01: { fmtKey: 'dnp', dosVerOff: 0x202,   dosVerByte: 0x48, maxFree: null },     // DNP — variable
-  0x02: { fmtKey: 'd64', dosVerOff: 0x16502, dosVerByte: 0x41, maxFree: 664 },
-  0x03: { fmtKey: 'd71', dosVerOff: 0x16502, dosVerByte: 0x41, maxFree: 1328 },
-  0x04: { fmtKey: 'd81', dosVerOff: 0x61802, dosVerByte: 0x44, maxFree: 3160 },
+  0x01: { fmtKey: 'dnp', bamOff: 0x200,   minBytes: 65536,  maxFree: null },     // DNP — variable
+  0x02: { fmtKey: 'd64', bamOff: 0x16500, minBytes: 174848, maxFree: 664 },
+  0x03: { fmtKey: 'd71', bamOff: 0x16500, minBytes: 349696, maxFree: 1328 },
+  0x04: { fmtKey: 'd81', bamOff: 0x61900, minBytes: 819200, maxFree: 3160 },
 };
 
-// Free blocks for one partition by walking its BAM — matches the
-// `BLOCKS FREE` footer the user sees after entering the partition.
-// Returns null for SYSTEM, empty/truncated slots, or partitions whose
-// header byte doesn't match the expected DOS version (e.g. partitions
-// that hold raw code instead of filesystem data).
-//
-// Briefly swaps currentFormat / currentTracks because readTrackFree
-// reaches through sectorOffset → currentFormat.sectorsPerTrack; both
-// are restored before return.
+// Free blocks for one partition by walking its BAM (the footer count the
+// user sees inside it). Null for SYSTEM, truncated or undersized slots,
+// an all-zero BAM sector, or a count above the format's maximum — the
+// signs of a slot that holds raw data instead of a filesystem. Swaps
+// currentFormat / currentTracks for readTrackFree and restores them.
 function computePartitionFreeBlocks(containerBuf, partition) {
   if (!containerBuf || !partition) return null;
   var meta = CMDC_FREE_BLOCKS_META[partition.type];
   if (!meta) return null;
   if (partition.startByte + partition.sizeBytes > containerBuf.byteLength) return null;
+  if (partition.sizeBytes < meta.minBytes) return null;
 
   var fmt = DISK_FORMATS[meta.fmtKey];
   if (!fmt || !fmt.readTrackFree) return null;
   var partBytes = new Uint8Array(containerBuf, partition.startByte, partition.sizeBytes);
-  if (meta.dosVerOff >= partBytes.length || partBytes[meta.dosVerOff] !== meta.dosVerByte) return null;
+  var bamHasData = false;
+  for (var bi = 0; bi < 256 && !bamHasData; bi++) bamHasData = partBytes[meta.bamOff + bi] !== 0;
+  if (!bamHasData) return null;
 
   var savedFmt = currentFormat, savedTracks = currentTracks;
   currentFormat = fmt;
@@ -84,7 +80,11 @@ function computePartitionFreeBlocks(containerBuf, partition) {
   }
   currentTracks = maxTrack;
   var total = 0;
-  for (var t = 1; t <= maxTrack; t++) total += fmt.readTrackFree(partBytes, 0, t);
+  var skipDirTrack = !fmt.isSectorFree; // as parseDisk's footer count
+  for (var t = 1; t <= maxTrack; t++) {
+    if (skipDirTrack && t === fmt.dirTrack) continue;
+    total += fmt.readTrackFree(partBytes, meta.bamOff, t);
+  }
   currentFormat = savedFmt;
   currentTracks = savedTracks;
 
@@ -191,14 +191,7 @@ function renderCmdContainerPartitionList() {
   var ct = cmdcContainerKey ? CMD_CONTAINERS[cmdcContainerKey] : null;
   var layout = (ct && cmdcBuffer) ? ct.getTableLayout(cmdcBuffer) : null;
   function entryAbsForSlot(slotIdx) {
-    if (!layout) return 0;
-    var cumulative = 0;
-    for (var li = 0; li < layout.length; li++) {
-      var sec = layout[li];
-      if (slotIdx < cumulative + sec.slots) return sec.off + (slotIdx - cumulative) * 32;
-      cumulative += sec.slots;
-    }
-    return 0;
+    return layout ? Math.max(0, _cmdContainerSlotOffset(layout, slotIdx)) : 0;
   }
 
   var containerLabel = ct ? ct.name : 'Container';
@@ -246,13 +239,13 @@ function renderCmdContainerPartitionList() {
   var openCount = 0;
   for (var i = 0; i < cmdcPartitions.length; i++) {
     var p = cmdcPartitions[i];
-    var canOpen = p.type !== 0xFF; // SYSTEM is shown but not enterable
+    var canOpen = !isCmdSystemPartition(p); // SYSTEM is shown but not enterable
     if (canOpen) openCount++;
     var startHex = '$' + p.startByte.toString(16).toUpperCase().padStart(8, '0');
     var entryAbs = entryAbsForSlot(p.index);
     var extraCls = canOpen ? '' : ' deleted';
     var rowTitle = null;
-    if (dhdDosState && p.type === 0xFF) {
+    if (dhdDosState && isCmdSystemPartition(p)) {
       extraCls += ' ' + dhdDosState.cls;
       rowTitle = dhdDosState.title;
     }
@@ -296,7 +289,7 @@ function renderCmdContainerPartitionList() {
   content.querySelectorAll('.dir-entry[data-cmdc-part]').forEach(function(row) {
     var idx = parseInt(row.dataset.cmdcPart, 10);
     var part = cmdcPartitions[idx];
-    var canOpen = part.type !== 0xFF;
+    var canOpen = !isCmdSystemPartition(part);
     row.addEventListener('click', function(ev) {
       // Click resets the Shift+Arrow extend anchors; ctrl-click toggles
       // individual rows; shift-click selects the range from the last
@@ -337,7 +330,7 @@ function renderCmdContainerPartitionList() {
 function enterCmdContainerPartition(idx) {
   if (!cmdcBuffer || !cmdcPartitions) return;
   var part = cmdcPartitions[idx];
-  if (!part || part.type === 0xFF) return;
+  if (!part || isCmdSystemPartition(part)) return;
 
   var slice = extractCmdContainerPartition(cmdcBuffer, part);
   if (!slice) {
@@ -354,7 +347,7 @@ function enterCmdContainerPartition(idx) {
   // container's nativeFormatKey (DNP for RAMLink, parent FD format
   // otherwise); 1541/1571/1581 use the shared type→format table.
   var ct = CMD_CONTAINERS[cmdcContainerKey];
-  var hint = part.type === 0x01 ? (ct && ct.nativeFormatKey) : CMD_PART_TYPE_FORMAT[part.type];
+  var hint = part.type === CMD_PART_TYPE_NATIVE ? (ct && ct.nativeFormatKey) : CMD_PART_TYPE_FORMAT[part.type];
   parseDisk(currentBuffer, hint || null);
   // Reset undo so the partition's edit history is local to that view.
   clearUndo();
@@ -376,12 +369,11 @@ function leaveCmdContainerPartition() {
   refreshCmdContainerView();
 }
 
-// ── New / Delete partition (File menu) ────────────────────────────────
-// Only meaningful on the partition-list view. New allocates a 32-byte
-// slot, finds free byte space, writes an empty filesystem of the chosen
-// type into that range. Delete just zeros the slot — it does NOT zero
-// the partition data, so an "undelete" is just re-adding an entry with
-// the same start/size if you remember them.
+// ── New / Delete partition (File menu, partition-list view) ───────────
+// New writes an empty filesystem into the next free byte range. Delete
+// compacts the partitions above it down and zero-fills the freed tail
+// (see clearCmdContainerPartitionEntry), so it can't be undone except
+// via Undo.
 function canAddCmdContainerPartition() {
   if (!isCmdContainerListView()) return false;
   return findCmdContainerEmptySlot(cmdcBuffer, cmdcContainerKey) >= 0;
@@ -671,7 +663,7 @@ function _cmdcUserSlotCount() {
 // the buffer if needed, then write its table entry. Used by both the
 // "New Partition" picker path and the .dnp/.d64/.d71/.d81 import path.
 function _cmdcInsertPartition(slot, typeCode, name, partBytes, start, sizeBlocks) {
-  var sizeBytes = sizeBlocks * 256;
+  var sizeBytes = cmdContainerPartitionBytes(cmdcContainerKey, typeCode, sizeBlocks);
   pushUndo();
   if (start + sizeBytes > cmdcBuffer.byteLength) {
     cmdcBuffer = growCmdContainer(cmdcBuffer, start + sizeBytes);
@@ -699,7 +691,8 @@ async function addCmdContainerPartition() {
   var picked = await showNewPartitionPicker();
   if (!picked) return;
 
-  var sizeBytes = picked.size * 256;
+  var recipe = CMDC_BUILD_RECIPES[picked.type] || CMDC_BUILD_RECIPES['nat'];
+  var sizeBytes = cmdContainerPartitionBytes(cmdcContainerKey, recipe.typeCode, picked.size);
   var free = findCmdContainerFreeSpace(cmdcBuffer, cmdcContainerKey, cmdcPartitions);
   if (sizeBytes > free.size) {
     showModal('New Partition', [
@@ -727,7 +720,7 @@ function renameCmdContainerPartition() {
   }
   var idx = parseInt(listSelEl.dataset.cmdcPart, 10);
   var part = cmdcPartitions[idx];
-  if (!part || part.type === 0xFF) {
+  if (!part || isCmdSystemPartition(part)) {
     showModal('Container', ['The SYSTEM partition can\'t be renamed.']);
     return;
   }
@@ -741,7 +734,7 @@ async function deleteCmdContainerPartition() {
     showModal('Container', ['Select a partition first.']);
     return;
   }
-  // SYSTEM partition (type 0xFF) is never deletable; silently skip it in
+  // SYSTEM partition is never deletable; silently skip it in
   // a multi-select batch instead of refusing the whole operation.
   var targets = [];
   var skippedSystem = false;
@@ -749,7 +742,7 @@ async function deleteCmdContainerPartition() {
     var ti = parseInt(selRows[i].dataset.cmdcPart, 10);
     var tp = cmdcPartitions[ti];
     if (!tp) continue;
-    if (tp.type === 0xFF) { skippedSystem = true; continue; }
+    if (isCmdSystemPartition(tp)) { skippedSystem = true; continue; }
     targets.push(tp);
   }
   if (targets.length === 0) {
@@ -918,6 +911,14 @@ function exportCmdContainerPartition() {
     showModal('Export Partition', ['Failed to extract partition data.']);
     return;
   }
+  // Drop the cluster filler sector(s) so the file has a standard image size.
+  if (meta.sizes) {
+    var fit = 0;
+    for (var si = 0; si < meta.sizes.length; si++) {
+      if (meta.sizes[si] <= slice.byteLength && meta.sizes[si] > fit) fit = meta.sizes[si];
+    }
+    if (fit > 0 && fit < slice.byteLength) slice = slice.slice(0, fit);
+  }
   var clean = _cmdcSanitiseFilename(part.name, 'partition_' + part.index);
   downloadD64(slice, clean + meta.ext);
 }
@@ -978,10 +979,11 @@ function importCmdContainerPartition() {
 
     var slot = findCmdContainerEmptySlot(cmdcBuffer, cmdcContainerKey);
     var free = findCmdContainerFreeSpace(cmdcBuffer, cmdcContainerKey, cmdcPartitions);
-    if (buf.byteLength > free.size) {
+    var needBytes = cmdContainerPartitionBytes(cmdcContainerKey, typeCode, buf.byteLength / 256);
+    if (needBytes > free.size) {
       showModal('Import Partition', [
         'Not enough free space in the container.',
-        'File size: ' + Math.round(buf.byteLength / 1024) + ' KiB.',
+        'Needed: ' + Math.round(needBytes / 1024) + ' KiB.',
         'Available: ' + Math.round(free.size / 1024) + ' KiB.'
       ]);
       return;

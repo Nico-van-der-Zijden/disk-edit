@@ -24,10 +24,8 @@ function _mkzipVariant(id) {
   return MKZIP_VARIANTS[0];
 }
 
-// What the box may hold while typing: uppercase, only characters a CBM name
-// can carry, capped to the variant's length. Deliberately not trimmed — a
-// space is trailing the instant you type it, and trimming here would eat it
-// before the rest of the word arrives.
+// What the box may hold while typing. Not trimmed: a space is trailing the
+// instant you type it.
 function _mkzipClean(name, max) {
   return String(name || '').toUpperCase()
     .replace(/[^A-Z0-9 .+()\-]/g, '').slice(0, max || 14);
@@ -46,19 +44,15 @@ function _mkzipDefaultName() {
   return _mkzipSanitize(f) || 'DISK';
 }
 
-// Encode on demand and keep the result — switching variants back and forth
-// shouldn't re-run the encoder.
 function _mkzipEncoded(id) {
   var s = _mkzipState;
   if (s.cache[id]) return s.cache[id];
   var res;
-  // Pass the G64/NIB layout along: only SixPack can carry raw GCR, and only
-  // with the layout can it recover sectors the D64 never decoded.
+  // Only SixPack can carry raw GCR, and it needs the G64/NIB layout for that.
   if (id === 'sixpack') res = compressSixPack(s.buffer, 'X', s.errors, s.layout);
   else if (id === 'filepacked') res = _mkzipPackFiles(s.buffer);
   else res = compressZipCode(s.buffer, 'X');
-  // FilePacked returns its directory file separately; the pane treats it as
-  // just another part so naming, planning and delivery stay uniform.
+  // FilePacked's directory file is treated as just another part.
   if (res && res.dir) res = { parts: res.parts.concat([res.dir]), tracks: 0 };
   s.cache[id] = res;
   return res;
@@ -87,9 +81,6 @@ function _mkzipRender() {
   var pct = Math.round(100 * packed / s.sourceBytes);
 
   var h = '<div class="text-md mb-md">' +
-    // .modal-input is the app's text-input style — theme-aware, and it picks
-    // up the charset-case rule, which suits a name that becomes a CBM
-    // filename. width:100% with a cap keeps it sane as the pane resizes.
     '<label>Set name<br><input type="text" id="mkzip-name" class="modal-input" maxlength="' +
     v.maxBase + '" value="' + escHtml(typed) + '" style="max-width:240px"></label>' +
     '<div class="text-sm text-muted">Parts are named ' + escHtml(base) + ' with a ' +
@@ -120,8 +111,7 @@ function _mkzipRender() {
       ? 'Each image opens as a tab; Save As writes it out.'
       : 'Downloads one file containing every part.') + '</div></div>';
 
-  // Plain integers, no thousands separators: a "." grouping renders
-  // "9.543 B" which reads as nine-and-a-half bytes.
+  // No thousands separators: "9.543 B" reads as nine-and-a-half bytes.
   h += '<div class="text-md"><b>Result</b></div><table class="geos-info-table">' +
     '<tr><th>Part</th><th>Bytes</th><th>Blocks</th></tr>';
   enc.parts.forEach(function(p) {
@@ -169,8 +159,7 @@ function _mkzipRender() {
 
   body.innerHTML = h;
 
-  // The footer outlives a re-render, so keep its label in step with the
-  // chosen output.
+  // The footer outlives a re-render.
   var go = document.getElementById('mkzip-go');
   if (go) {
     go.textContent = s.output === 'd64'
@@ -184,8 +173,7 @@ function _mkzipRender() {
       var raw = input.value;
       var caret = input.selectionStart;
       var cleaned = _mkzipClean(raw, v.maxBase);
-      // Rendering replaces the element, so put the caret back — shifted left
-      // by whatever the cleaner dropped, or it drifts past the text.
+      // Rendering replaces the element; restore the caret, less what was dropped.
       caret -= raw.length - cleaned.length;
       s.name = cleaned;
       _mkzipRender();
@@ -218,9 +206,8 @@ document.getElementById('opt-mkzip').addEventListener('click', function(e) {
   if (!currentBuffer) return;
   closeMenus();
 
-  // Count error sectors up front so the pane can steer the variant choice.
   var spt = DISK_FORMATS.d64.sectorsPerTrack;
-  var tracks = currentBuffer.byteLength >= 196608 ? 40 : 35;
+  var tracks = d64TracksForSize(currentBuffer.byteLength) || 35;
   var totalSectors = 0;
   for (var t = 1; t <= tracks; t++) totalSectors += spt(t);
   var errors = null, errorCount = 0;
@@ -229,8 +216,7 @@ document.getElementById('opt-mkzip').addEventListener('click', function(e) {
     for (var i = 0; i < errors.length; i++) if (errors[i] !== 1) errorCount++;
   }
 
-  // A tab opened from a G64 or NIB still holds raw GCR for sectors that never
-  // decoded. SixPack is the only variant that can carry those.
+  // Sectors a G64/NIB tab couldn't decode cleanly survive only in SixPack.
   var layout = (typeof currentG64Layout !== 'undefined' && currentG64Layout) ? currentG64Layout : null;
   var rawGcrSectors = 0;
   if (layout) {
@@ -256,8 +242,7 @@ document.getElementById('opt-mkzip').addEventListener('click', function(e) {
 
   openViewerSurface('Create ZipCode');
 
-  // Footer before the first render: the render labels the primary button to
-  // match the chosen output, and it can only do that once the button exists.
+  // Footer first: the render labels its primary button.
   var footer = getViewerFooter();
   if (footer) {
     footer.innerHTML = '<button id="mkzip-cancel" class="modal-btn-secondary">Close</button> ' +
@@ -268,8 +253,7 @@ document.getElementById('opt-mkzip').addEventListener('click', function(e) {
   _mkzipRender();
 });
 
-// Build the images and open each as a tab — the mirror of Decompress ZipCode,
-// which also lands in a tab. Save As from there puts them wherever you like.
+// Build the images and open each as a tab, mirroring Decompress ZipCode.
 function _mkzipCreate() {
   var s = _mkzipState;
   if (!s) return;
@@ -324,8 +308,7 @@ function _mkzipCreate() {
   showModal('Create ZipCode', lines);
 }
 
-// ZIP / tar.gz delivery: one file holding every part, so there's no
-// multi-download prompt whichever variant produced them.
+// ZIP / tar.gz delivery: one file holding every part.
 async function _mkzipDownload(parts, base, output, variant) {
   var members = parts.map(function(p) { return { name: p.name, data: p.data }; });
   var bytes, ext;
@@ -342,12 +325,8 @@ async function _mkzipDownload(parts, base, output, variant) {
     return;
   }
 
-  var safe = base.replace(/[<>:"/\|?*\x00-\x1F]/g, '_') || 'zipcode';
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
-  a.download = safe + ext;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  var safe = safeHostFileName(base, 'zipcode');
+  downloadBlob(new Blob([bytes], { type: 'application/octet-stream' }), safe + ext);
 
   closeViewer();
   showModal('Create ZipCode', [
@@ -362,7 +341,7 @@ async function _mkzipDownload(parts, base, output, variant) {
 function _mkzipPackFiles(buffer) {
   var ctx = {
     buffer: buffer, partition: null, format: DISK_FORMATS.d64,
-    tracks: buffer.byteLength >= 196608 ? 40 : 35,
+    tracks: d64TracksForSize(buffer.byteLength) || 35,
     dirInterleave: dirInterleave, fileInterleave: fileInterleave,
   };
   var info = withDiskCtx(ctx, function() { return parseCurrentDir(buffer); });

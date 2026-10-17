@@ -8,24 +8,17 @@ function detectPacker(fileData) {
   var loadAddr = d[0] | (d[1] << 8);
   if (loadAddr !== 0x0801) return null;
 
-  // Parse SYS address from BASIC line
-  // Format: [next_ptr_lo] [next_ptr_hi] [line_lo] [line_hi] [token...] [0x00]
-  // SYS token = 0x9E, followed by address digits
+  // SYS address from the first BASIC line (skip load addr, link, line number)
   var sysAddr = 0;
-  var pos = 2; // skip load address
-  // Skip next-line pointer (2 bytes) and line number (2 bytes)
-  pos += 4;
-  // Find SYS token (0x9E)
+  var pos = 2 + 4;
   var foundSys = false;
   while (pos < Math.min(d.length, 40)) {
-    if (d[pos] === 0x9E) { foundSys = true; pos++; break; }
+    if (d[pos] === 0x9E) { foundSys = true; pos++; break; } // SYS token
     if (d[pos] === 0x00) break;
     pos++;
   }
   if (foundSys) {
-    // Skip spaces
     while (pos < d.length && d[pos] === 0x20) pos++;
-    // Parse decimal digits
     var digits = '';
     while (pos < d.length && d[pos] >= 0x30 && d[pos] <= 0x39) {
       digits += String.fromCharCode(d[pos]);

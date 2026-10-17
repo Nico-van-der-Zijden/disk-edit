@@ -66,11 +66,7 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
         expBtn.addEventListener('click', function() {
           var ext = '.' + r.suggestedType.toLowerCase();
           var blob = new Blob([r.data], { type: 'application/octet-stream' });
-          var a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = 'cfs_recovered_' + String(idx + 1).padStart(3, '0') + ext;
-          a.click();
-          URL.revokeObjectURL(a.href);
+          downloadBlob(blob, 'cfs_recovered_' + String(idx + 1).padStart(3, '0') + ext);
         });
         btnRow.appendChild(expBtn);
 
@@ -88,7 +84,7 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
           var slot = cfsFindEmptyDirSlot(hddBuffer, cfsDirLba);
           if (!slot) { showModal('Restore', ['No free directory slot.']); return; }
           pushUndo();
-          var eo = slot.dirLba * 512 + slot.slotIndex * 32;
+          var eo = slot.dirLba * IDE64_SECTOR_SIZE + slot.slotIndex * CFS_DIR_ENTRY_SIZE;
           var wd = new Uint8Array(hddBuffer);
           var dirNextBits = wd[eo + 0x14] & 0x30;
           for (var z = 0; z < 32; z++) wd[eo + z] = 0;
@@ -158,9 +154,9 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
       }
 
       var integrityIcon = '';
-      if (r.integrity === 'ok') integrityIcon = '<span style="color:#4c4">&#10003;</span> ';
-      else if (r.integrity === 'broken') integrityIcon = '<span style="color:#ca4">&#9888;</span> ';
-      else integrityIcon = '<span style="color:#c44">&#9888;</span> ';
+      if (r.integrity === 'ok') integrityIcon = '<span style="color:var(--color-recover)">&#10003;</span> ';
+      else if (r.integrity === 'broken') integrityIcon = '<span style="color:var(--color-warn)">&#9888;</span> ';
+      else integrityIcon = '<span style="color:var(--color-error)">&#9888;</span> ';
 
       card.innerHTML =
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
@@ -183,11 +179,7 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
       exportBtn.addEventListener('click', function() {
         var ext = r.suggestedType === 'PRG' ? '.prg' : r.suggestedType === 'SEQ' ? '.seq' : '.bin';
         var blob = new Blob([r.data], { type: 'application/octet-stream' });
-        var a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'recovered_' + String(idx + 1).padStart(3, '0') + ext;
-        a.click();
-        URL.revokeObjectURL(a.href);
+        downloadBlob(blob, 'recovered_' + String(idx + 1).padStart(3, '0') + ext);
       });
       btnRow.appendChild(exportBtn);
 
@@ -202,21 +194,22 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
 
         var typeIdx = r.suggestedType === 'PRG' ? 2 : r.suggestedType === 'SEQ' ? 1 : 3;
 
-        var snapshot = currentBuffer.slice(0);
-        var entryOff = findFreeDirEntry(currentBuffer, getCurrentCtx());
+        pushUndo();
+        // The lost chain isn't reachable from any dir yet, so tell the
+        // dir-sector allocator about it explicitly.
+        var allocMap = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
+        for (var ai = 0; ai < r.sectors.length; ai++) allocMap[r.sectors[ai].t + ':' + r.sectors[ai].s] = true;
+        var entryOff = findFreeDirEntry(currentBuffer, allocMap, getCurrentCtx());
         if (entryOff < 0) {
-          currentBuffer = snapshot;
+          discardUndo();
           showModal('Restore Error', ['No free directory entry available.']);
           return;
         }
 
         var wd = new Uint8Array(currentBuffer);
-        // File type: closed
         wd[entryOff + 2] = 0x80 | typeIdx;
-        // First track/sector
         wd[entryOff + 3] = r.startTrack;
         wd[entryOff + 4] = r.startSector;
-        // Filename
         for (var ni = 0; ni < 16; ni++) {
           if (ni < name.length) {
             var ch = name.charCodeAt(ni);
@@ -228,13 +221,10 @@ document.getElementById('opt-scan-orphans').addEventListener('click', async func
             wd[entryOff + 5 + ni] = 0xA0;
           }
         }
-        // Clear unused
         for (var ui = 21; ui < 30; ui++) wd[entryOff + ui] = 0x00;
-        // Block count
         wd[entryOff + 30] = r.sectors.length & 0xFF;
         wd[entryOff + 31] = (r.sectors.length >> 8) & 0xFF;
 
-        // Mark chain sectors as allocated in BAM
         var ctx = getDirContext();
         var bamOff = ctx.bamOff;
         for (var si = 0; si < r.sectors.length; si++) {
@@ -348,6 +338,41 @@ document.querySelectorAll('#opt-hex-coloring [data-hex-coloring]').forEach(funct
 
 
 // ── Disk menu: Fill Free Sectors ─────────────────────────────────────
+// Overwrites every sector no chain reaches with link $00 $00 + the
+// repeating pattern. Inside a D81 partition only the partition's own
+// tracks are touched. Returns the sector count, or -1 when refused.
+function fillFreeSectors(buffer, pattern, diskCtx) {
+  var fmt = diskCtx.format;
+  var partition = diskCtx.partition;
+  var firstTrack = 1, lastTrack = diskCtx.tracks;
+  if (partition && !partition.dnpDir) {
+    var partTracks = fmt.partitionSpt ? Math.floor((partition.partSize || 0) / fmt.partitionSpt) : 0;
+    if (!partition.startTrack || partTracks < 1) return -1;
+    firstTrack = partition.startTrack;
+    lastTrack = Math.min(diskCtx.tracks, firstTrack + partTracks - 1);
+  }
+  var allocated = buildTrueAllocationMap(buffer, diskCtx);
+  var data = new Uint8Array(buffer);
+  var filled = 0;
+  for (var t = firstTrack; t <= lastTrack; t++) {
+    var spt = fmt.sectorsPerTrack(t);
+    for (var s = 0; s < spt; s++) {
+      if (allocated[t + ':' + s]) continue;
+      var off = sectorOffset(t, s, diskCtx);
+      if (off < 0) continue;
+      data[off] = 0x00;
+      data[off + 1] = 0x00;
+      var pi = 0;
+      for (var b = 2; b < 256; b++) {
+        data[off + b] = pattern[pi];
+        pi = (pi + 1) % pattern.length;
+      }
+      filled++;
+    }
+  }
+  return filled;
+}
+
 document.getElementById('opt-fill-free').addEventListener('click', function(e) {
   e.stopPropagation();
   if (!currentBuffer) return;
@@ -369,17 +394,6 @@ document.getElementById('opt-fill-free').addEventListener('click', function(e) {
   var preview = document.createElement('div');
   preview.className = 'text-md text-muted font-mono';
   body.appendChild(preview);
-
-  function updatePreview() {
-    if (fillBytes.length === 0) {
-      preview.textContent = '';
-      return;
-    }
-    preview.textContent = 'Pattern: ' + fillBytes.map(function(b) {
-      return '$' + b.toString(16).toUpperCase().padStart(2, '0');
-    }).join(' ');
-  }
-
 
   function readAllBytes(includePending) {
     var bytes = [];
@@ -522,36 +536,14 @@ document.getElementById('opt-fill-free').addEventListener('click', function(e) {
   fillBtn.addEventListener('click', function() {
     document.getElementById('modal-overlay').classList.remove('open');
 
-    // Read all valid bytes from inputs (ignore empty ones)
     var fillBytes = readAllBytes();
     if (fillBytes.length === 0) return;
     pushUndo();
-
-    // Build true allocation map (don't trust BAM)
-    var allocated = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
-    var data = new Uint8Array(currentBuffer);
-    var fmt = currentFormat;
-    var filled = 0;
-
-    for (var t = 1; t <= currentTracks; t++) {
-      var spt = fmt.sectorsPerTrack(t);
-      for (var s = 0; s < spt; s++) {
-        if (allocated[t + ':' + s]) continue;
-        var off = sectorOffset(t, s, getCurrentCtx());
-        if (off < 0) continue;
-
-        // Set track/sector link to 00 00 (no chain)
-        data[off] = 0x00;
-        data[off + 1] = 0x00;
-
-        // Fill bytes 2-255 with the repeating pattern
-        var pi = 0;
-        for (var b = 2; b < 256; b++) {
-          data[off + b] = fillBytes[pi];
-          pi = (pi + 1) % fillBytes.length;
-        }
-        filled++;
-      }
+    var filled = fillFreeSectors(currentBuffer, fillBytes, getCurrentCtx());
+    if (filled < 0) {
+      discardUndo();
+      showModal('Fill Free Sectors', ['Can\'t determine this partition\'s track range; nothing was filled.']);
+      return;
     }
 
     var info = parseCurrentDir(currentBuffer);
@@ -686,6 +678,11 @@ document.getElementById('opt-optimize').addEventListener('click', function(e) {
 
     pushUndo();
     var result = optimizeDisk(currentBuffer, ilVal, defrag, getCurrentCtx());
+    if (result.error) {
+      discardUndo();
+      showModal('Optimize Disk', result.log && result.log.length ? result.log : [result.error]);
+      return;
+    }
 
     // Update global interleave so new files use the same setting
     fileInterleave = ilVal;
@@ -712,12 +709,8 @@ document.getElementById('opt-resize-dnp').addEventListener('click', async functi
   if (optEl.classList.contains('disabled')) return;
   closeMenus();
 
-  // Runtime guard: refuse when we're inside a CMD container slice.
-  // Growing the DNP past the container slot's allocated size would
-  // silently truncate the tail on splice-back, and shrinking would
-  // waste container space without a way to reclaim it. The menu-state
-  // wiring already disables the item in this case, but a keyboard /
-  // accidental dispatch could still land here.
+  // A CMD container slot has a fixed size: growing would truncate on
+  // splice-back, shrinking would strand container space.
   if (typeof cmdcPartitionIdx !== 'undefined' && cmdcPartitionIdx >= 0) {
     showModal('Resize Image', [
       'This DNP is a fixed-size partition inside a CMD container ' +
@@ -832,34 +825,21 @@ document.getElementById('opt-export-txt').addEventListener('click', function(e) 
     fileBase = currentFileName || 'disk';
   }
   var txt = lines.join('\n') + '\n';
-  var blob = new Blob([txt], { type: 'text/plain' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = fileBase + '.txt';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(new Blob([txt], { type: 'text/plain' }), fileBase + '.txt');
 });
 
-// ── Disk menu: MD5 Hash ──────────────────────────────────────────────
+// ── Disk menu: Disk Hash (CRC32 + SHA-256) ───────────────────────────
+// Web Crypto has no MD5, so the "opt-md5" item shows CRC32 + SHA-256.
 document.getElementById('opt-md5').addEventListener('click', async function(e) {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
-  // Use Web Crypto API for SHA-256 (MD5 not available, but SHA-256 is better)
-  // Also compute a simple checksum for quick comparison
   var data = new Uint8Array(currentBuffer);
   try {
     var hashBuffer = await crypto.subtle.digest('SHA-256', data);
     var hashArray = new Uint8Array(hashBuffer);
     var sha256 = Array.from(hashArray).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
-    // Simple MD5-like CRC32 for quick checks
-    var crc = 0xFFFFFFFF;
-    for (var i = 0; i < data.length; i++) {
-      crc ^= data[i];
-      for (var j = 0; j < 8; j++) crc = (crc >>> 1) ^ (crc & 1 ? 0xEDB88320 : 0);
-    }
-    crc = (crc ^ 0xFFFFFFFF) >>> 0;
-    var crc32 = crc.toString(16).toUpperCase().padStart(8, '0');
+    var crcHex = crc32(data).toString(16).toUpperCase().padStart(8, '0');
 
     document.getElementById('modal-title').textContent = 'Disk Hash';
     var body = document.getElementById('modal-body');
@@ -867,7 +847,7 @@ document.getElementById('opt-md5').addEventListener('click', async function(e) {
       '<div style="font-size:13px;line-height:2">' +
         '<b>File:</b> ' + escHtml(currentFileName || 'unnamed') + '<br>' +
         '<b>Size:</b> ' + data.length + ' bytes<br>' +
-        '<b>CRC32:</b> <code class="code-tag">' + crc32 + '</code><br>' +
+        '<b>CRC32:</b> <code class="code-tag">' + crcHex + '</code><br>' +
         '<b>SHA-256:</b> <code class="code-tag" style="font-size:11px;word-break:break-all">' + sha256 + '</code>' +
       '</div>';
     var footer = document.querySelector('#modal-overlay .modal-footer');
@@ -882,18 +862,13 @@ document.getElementById('opt-md5').addEventListener('click', async function(e) {
 });
 
 // ── Disk menu: Show as Base64 Data URI ───────────────────────────────
-// Builds a `data:application/octet-stream;base64,…` string from the
-// disk's save buffer (so G64 tabs export the GCR-encoded G64, not the
-// internal D64) and shows it in a modal with a Copy button. Useful for
-// embedding small disks in forum posts or git issues.
+// Uses the save buffer, so a G64 tab exports the GCR image, not the D64.
 document.getElementById('opt-base64').addEventListener('click', function(e) {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
 
-  // Convert ArrayBuffer to base64 in 32KB chunks — String.fromCharCode
-  // chokes on million-byte spreads, and a per-byte concat is too slow
-  // for a 174KB D64 (let alone a 333KB G64).
+  // Chunked: String.fromCharCode.apply overflows the stack on large spreads.
   function bufferToBase64(buf) {
     var bytes = new Uint8Array(buf);
     var chunk = 0x8000;
@@ -994,13 +969,7 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
     return true;
   }
 
-  // Bucket each track by what its physical layout looks like, so the
-  // table can show plain-English labels instead of raw "12/21 i=1"
-  // strings. The thresholds are chosen so the legend's four colour
-  // bands have intuitive boundaries: green for normal, amber for
-  // copy-protected (some sectors hidden behind custom GCR), red for
-  // scrambled (the loader trampolines through a non-arithmetic order),
-  // grey for empty / undecodable tracks.
+  // Bucket each track into one of the legend's colour bands.
   function classifyTrack(t) {
     var found = t.sectorOrder.length;
     var spt = t.expectedSpt;
@@ -1023,10 +992,7 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
     return { kind: 'irregular', label: found + '/' + spt + ' sectors, irregular order', color: 'g64-tag-scrambled' };
   }
 
-  // Disk-level read: roll up the per-track classification into one of
-  // the friendlier story types ("standard mastered disk", "all tracks
-  // copy-protected on track 1 only", etc.). Callers display the head
-  // result; the byKind counts power the per-class chips next to it.
+  // Roll the per-track classes up into a disk-level headline + per-class counts.
   var byKind = { standard: 0, unmastered: 0, protected: 0, scrambled: 0, irregular: 0, empty: 0 };
   var classified = layout.map(function(t) {
     var c = classifyTrack(t);
@@ -1107,6 +1073,12 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
           '<li><span class="g64-tag g64-tag-protected">copy-protected</span> the order is still arithmetic but some sectors don’t decode (custom GCR hides them from the standard reader)</li>' +
           '<li><span class="g64-tag g64-tag-scrambled">scrambled</span> the order isn’t arithmetic at all — the loader trampolines through a custom physical layout</li>' +
         '</ul>' +
+        'Cell colours:' +
+        '<ul class="g64-legend">' +
+          '<li><span class="g64-tag g64-tag-unmastered">off order</span> sector sits where the track’s interleave doesn’t put it</li>' +
+          '<li><span class="g64-tag g64-tag-protected">bad checksum</span> header found, data block fails its checksum (error 23, usually copy protection)</li>' +
+          '<li><span class="g64-tag g64-tag-missing">not found</span> no header for this sector on the track</li>' +
+        '</ul>' +
       '</div>' +
       '<div class="g64-layout-wrap">' +
         '<canvas id="g64-layout-canvas" width="' + canvasW + '" height="' + canvasH +
@@ -1165,6 +1137,7 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
 
     var iv = computeInterleave(t);
     var uniform = isUniformInterleave(t, iv);
+    var badSum = t.badChecksumSectors || [];
     for (var i = 0; i < t.sectorOrder.length; i++) {
       var sec = t.sectorOrder[i];
       var x = labelW + i * stepX + gap;
@@ -1172,12 +1145,13 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
       // logical position computed from the track's nominal interleave.
       var expectedSec = iv != null ? (t.sectorOrder[0] + i * iv) % t.expectedSpt : sec;
       var off = (sec !== expectedSec);
-      ctx.fillStyle = off ? cellAccent : cellBg;
+      var bad = badSum.indexOf(sec) >= 0;
+      ctx.fillStyle = bad ? cellWarn : off ? cellAccent : cellBg;
       ctx.beginPath();
       ctx.roundRect(x, y, cellW, cellH, 2);
       ctx.fill();
 
-      ctx.fillStyle = off ? bgColor : cellText;
+      ctx.fillStyle = (bad || off) ? bgColor : cellText;
       ctx.textAlign = 'center';
       ctx.fillText(String(sec), x + cellW / 2, y + cellH / 2);
     }
@@ -1202,10 +1176,11 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
     if (!t) { detail.innerHTML = ''; return; }
     var iv = computeInterleave(t);
     var c = classified[idx];
-    var unreadHtml = t.unreadableSectors.length === 0 ? ''
-      : '<div class="g64-warn"><b>Unreadable sectors:</b> ' +
-        t.unreadableSectors.map(function(s){ return s; }).join(', ') +
-        '</div>';
+    var badSum = t.badChecksumSectors || [];
+    var missing = t.unreadableSectors.filter(function(s) { return badSum.indexOf(s) < 0; });
+    var unreadHtml =
+      (badSum.length === 0 ? '' : '<div class="g64-warn"><b>Bad data checksum (error 23):</b> ' + badSum.join(', ') + '</div>') +
+      (missing.length === 0 ? '' : '<div class="g64-warn"><b>Unreadable sectors:</b> ' + missing.join(', ') + '</div>');
     detail.innerHTML =
       '<div class="g64-track-detail-header">' +
         '<b>Track $' + t.track.toString(16).toUpperCase().padStart(2, '0') + '</b> ' +
@@ -1279,12 +1254,9 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
   document.getElementById('modal-overlay').classList.add('open');
 });
 
-// Render the disk as concentric tracks with each pixel coloured by the
-// bit pattern of the raw GCR byte at that angular position. Track 1 is
-// the outer ring, the last track is the inner ring; each track plays
-// counter-clockwise from the bottom. Sync marks (long $FF runs) show as
-// red, gaps/padding (long $00 runs) as blue, normal GCR data as green
-// shaded by 1-bit count. Style follows Michael Steil's 1541 visual.
+// Concentric rings, track 1 outermost, each running CCW from the bottom:
+// sync runs red, $00 gap runs blue, GCR data green shaded by popcount
+// (after Michael Steil's 1541 visual).
 function renderRawTracksCanvas(canvas, layout) {
   var w = canvas.width, h = canvas.height;
   var ctx = canvas.getContext('2d');
@@ -1303,12 +1275,8 @@ function renderRawTracksCanvas(canvas, layout) {
   var innerR = outerR * 0.22;
   var n = layout.length;
 
-  // Pre-compute per-track classification: byte index → category.
-  //   0 = data byte (use popcount green/red)
-  //   1 = mid sync run ($FF inside a long $FF run): pure red
-  //   2 = mid zero run ($00 inside a long $00 run): pure blue
-  // Using >= 4 consecutive bytes as the threshold so a single $FF in
-  // header content doesn't get tagged as sync.
+  // Per byte: 0 = data, 1 = inside a $FF run, 2 = inside a $00 run.
+  // Runs need >= 4 bytes so a lone $FF in header data isn't sync.
   function classifyTrackBytes(buf) {
     var len = buf.length;
     var cls = new Uint8Array(len);
@@ -1334,6 +1302,15 @@ function renderRawTracksCanvas(canvas, layout) {
     return cls;
   }
   var trackClass = layout.map(function(t) { return classifyTrackBytes(t.rawGCR || new Uint8Array(0)); });
+
+  // Shared with the legend swatches (.g64-tag-rawred / -rawblue).
+  function cssVarRgb(name, fallback) {
+    var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    var m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(v);
+    return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : fallback;
+  }
+  var syncRGB = cssVarRgb('--g64-raw-sync', [220, 60, 60]);
+  var gapRGB = cssVarRgb('--g64-raw-gap', [60, 80, 200]);
 
   // popcount lookup
   var popcount = new Uint8Array(256);
@@ -1370,10 +1347,10 @@ function renderRawTracksCanvas(canvas, layout) {
       var byte = rawGCR[byteIdx];
       var cls = trackClass[trackIdx][byteIdx];
       var r, g, bcol;
-      if (cls === 1) {           // sync run
-        r = 220; g = 60;  bcol = 60;
-      } else if (cls === 2) {    // zero run
-        r = 60;  g = 80;  bcol = 200;
+      if (cls === 1) {
+        r = syncRGB[0]; g = syncRGB[1]; bcol = syncRGB[2];
+      } else if (cls === 2) {
+        r = gapRGB[0]; g = gapRGB[1]; bcol = gapRGB[2];
       } else {                    // data: green shaded by popcount
         var ones = popcount[byte];
         // popcount 0..8 → brightness 60..240 with green dominant
@@ -1494,110 +1471,25 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
     name = name.toUpperCase().substring(0, 16);
 
     pushUndo();
-    var data = new Uint8Array(currentBuffer);
-    var fmt = currentFormat;
-    var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
-
-    // Allocate 2 sectors: header + first dir sector
-    var allocated = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
-    var sectorList = allocateSectors(allocated, 2, getCurrentCtx());
-    if (sectorList.length < 2) {
-      showModal('Add Directory Error', ['Not enough free sectors.']);
+    var dnpRes = _cbmCreateDnpSubdir(getCurrentCtx(), name);
+    if (!dnpRes.ok) {
+      discardUndo();
+      showModal('Add Directory Error', [dnpRes.error + '.']);
       return;
     }
-
-    var hdrSec = sectorList[0];
-    var dirSec = sectorList[1];
-
-    // Find parent header T/S for back-navigation
-    var parentHeaderT = fmt.headerTrack;
-    var parentHeaderS = fmt.headerSector;
-    if (currentPartition && currentPartition.dnpHeaderT !== undefined) {
-      parentHeaderT = currentPartition.dnpHeaderT;
-      parentHeaderS = currentPartition.dnpHeaderS;
-    }
-
-    // Write header sector
-    var hdrOff = sectorOffset(hdrSec.track, hdrSec.sector, getCurrentCtx());
-    for (var hi = 0; hi < 256; hi++) data[hdrOff + hi] = 0x00;
-    data[hdrOff + 0x00] = dirSec.track;  // dir chain T/S
-    data[hdrOff + 0x01] = dirSec.sector;
-    data[hdrOff + 0x02] = fmt.dosVersion;
-    // Write name at format's name offset
-    for (var ni = 0; ni < fmt.nameLength; ni++) {
-      if (ni < name.length) {
-        var ch = name.charCodeAt(ni);
-        data[hdrOff + fmt.nameOffset + ni] = (ch >= 0x41 && ch <= 0x5A) ? ch : (ch >= 0x30 && ch <= 0x39) ? ch : 0x20;
-      } else {
-        data[hdrOff + fmt.nameOffset + ni] = 0xA0;
-      }
-    }
-    // Copy disk ID region from root header (includes pad + DOS type)
-    var rootHdrOff = sectorOffset(fmt.headerTrack, fmt.headerSector, getCurrentCtx());
-    for (var idi = 0; idi < fmt.idLength; idi++) {
-      data[hdrOff + fmt.idOffset + idi] = data[rootHdrOff + fmt.idOffset + idi];
-    }
-    // Self-reference
-    data[hdrOff + fmt.subdirSelfRef] = hdrSec.track;
-    data[hdrOff + fmt.subdirSelfRef + 1] = hdrSec.sector;
-    // Parent header
-    data[hdrOff + fmt.subdirParentRef] = parentHeaderT;
-    data[hdrOff + fmt.subdirParentRef + 1] = parentHeaderS;
-
-    // Write empty dir sector
-    var dirOff = sectorOffset(dirSec.track, dirSec.sector, getCurrentCtx());
-    for (var di = 0; di < 256; di++) data[dirOff + di] = 0x00;
-    data[dirOff + 0x00] = 0x00;
-    data[dirOff + 0x01] = 0xFF;
-
-    // Mark sectors as used in BAM
-    bamMarkSectorUsed(data, hdrSec.track, hdrSec.sector, bamOff, getCurrentCtx());
-    bamMarkSectorUsed(data, dirSec.track, dirSec.sector, bamOff, getCurrentCtx());
-
-    // Create directory entry
-    var entryOff = findFreeDirEntry(currentBuffer, getCurrentCtx());
-    if (entryOff < 0) {
-      showModal('Add Directory Error', ['No free directory entry.']);
-      return;
-    }
-    data[entryOff + 2] = 0x80 | fmt.subdirType; // subdir type + closed
-    data[entryOff + 3] = hdrSec.track;
-    data[entryOff + 4] = hdrSec.sector;
-    for (var eni = 0; eni < fmt.nameLength; eni++) data[entryOff + 5 + eni] = data[hdrOff + fmt.nameOffset + eni];
-    for (var eu = 21; eu < 30; eu++) data[entryOff + eu] = 0x00;
-    data[entryOff + 30] = 2; // 2 blocks (header + dir)
-    data[entryOff + 31] = 0;
-
-    // Store parent dir-entry reference per D2M-DNP.TXT (rev 1.3):
-    //   +$24/$25 = T/S of the parent dir block holding our entry
-    //   +$26    = entry index within that block (0..7)
-    // For DNP / D1M / D2M / D4M, sectorOffset uses LBA encoding
-    // ((T-1)*256 + S)*256, so the inverse for any in-range entryOff is:
-    var parentDirT = (entryOff >>> 16) + 1;
-    var parentDirS = (entryOff >>> 8) & 0xFF;
-    var parentIdx = (entryOff >>> 5) & 0x07;
-    data[hdrOff + fmt.subdirParentEntry] = parentDirT;
-    data[hdrOff + fmt.subdirParentEntry + 1] = parentDirS;
-    data[hdrOff + fmt.subdirParentEntry + 2] = parentIdx;
-
     var info = parseCurrentDir(currentBuffer);
     renderDisk(info);
     updateMenuState();
     return;
   }
 
-  if (currentFormat.subdirLinked || !currentFormat.supportsSubdirs || currentPartition) return;
+  if (!currentFormat.supportsSubdirs || currentPartition) return;
 
-  // Ask for partition name
   var name = await showInputModal('Directory Name', 'SUBDIR');
   if (!name) return;
   name = name.toUpperCase().substring(0, 16);
 
-  // D81.TXT lines 433-435: sub-directory partitions must be a minimum
-  // of 120 sectors (3 tracks) and a multiple of 40 sectors. Below that,
-  // real 1581 firmware will not treat the area as a sub-directory. The
-  // value the user enters is the total partition size — same number
-  // stored in the parent dir entry's +30/+31 size field.
+  // D81.TXT 433-435: total size, min 120 sectors, multiple of 40.
   var pSpt = currentFormat.partitionSpt;
   var sizeStr = await showInputModal('Partition size in sectors (min 120, multiples of 40)', '120');
   if (!sizeStr) return;
@@ -1606,169 +1498,35 @@ document.getElementById('opt-add-partition').addEventListener('click', async fun
     showModal('Add Directory Error', ['Minimum is 120 sectors (3 tracks).']);
     return;
   }
-  // Round up to the next 40-sector boundary (spec rule).
   var partSectors = Math.ceil(requestedSectors / pSpt) * pSpt;
   var numTracks = partSectors / pSpt;
 
-  // Build true allocation map to find contiguous free tracks
-  var allocated = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
-  var fmt = currentFormat;
-
-  // Find contiguous free tracks (must not include track 40, must start at sector 0)
-  // Search for a contiguous run of numTracks tracks that are completely free
-  var startTrack = -1;
-  for (var t = 1; t <= currentTracks - numTracks + 1; t++) {
-    // Skip ranges that include track 40 (system track)
-    var endTrack = t + numTracks - 1;
-    if (t <= fmt.dirTrack && endTrack >= fmt.dirTrack) continue;
-
-    var allFree = true;
-    for (var ct = t; ct <= endTrack; ct++) {
-      var spt = fmt.sectorsPerTrack(ct);
-      for (var cs = 0; cs < spt; cs++) {
-        if (allocated[ct + ':' + cs]) { allFree = false; break; }
-      }
-      if (!allFree) break;
-    }
-    if (allFree) { startTrack = t; break; }
-  }
-
-  if (startTrack < 0) {
-    showModal('Add Directory Error', ['Not enough contiguous free space. Need ' + numTracks + ' tracks (' + partSectors + ' sectors).']);
-    return;
-  }
-
-  // Check we have a free directory entry
   if (!canInsertFile()) {
     showModal('Add Directory Error', ['No free directory entry available.']);
     return;
   }
 
   pushUndo();
-  // Take snapshot for rollback
-  var snapshot = currentBuffer.slice(0);
-  var data = new Uint8Array(currentBuffer);
-
-  // Create directory entry for the partition
-  var entryOff = findFreeDirEntry(currentBuffer, getCurrentCtx());
-  if (entryOff < 0) {
-    currentBuffer = snapshot;
-    showModal('Add Directory Error', ['Failed to allocate directory entry.']);
+  var partRes = _cbmCreateD81Partition(getCurrentCtx(), name, partSectors);
+  if (!partRes.ok) {
+    discardUndo();
+    var errMsg = /contiguous/.test(partRes.error)
+      ? 'Not enough contiguous free space. Need ' + numTracks + ' tracks (' + partSectors + ' sectors).'
+      : partRes.error.charAt(0).toUpperCase() + partRes.error.slice(1) + '.';
+    showModal('Add Directory Error', [errMsg]);
     return;
   }
+  var startTrack = partRes.partition.startTrack;
 
-  // Subdir type + closed
-  data[entryOff + 2] = 0x80 | currentFormat.subdirType;
-  // Start track/sector (sector must be 0)
-  data[entryOff + 3] = startTrack;
-  data[entryOff + 4] = 0;
-  // Name
-  for (var ni = 0; ni < 16; ni++) {
-    if (ni < name.length) {
-      var ch = name.charCodeAt(ni);
-      if (ch >= 0x41 && ch <= 0x5A) data[entryOff + 5 + ni] = ch;
-      else if (ch >= 0x30 && ch <= 0x39) data[entryOff + 5 + ni] = ch;
-      else if (ch === 0x20) data[entryOff + 5 + ni] = 0x20;
-      else data[entryOff + 5 + ni] = 0x20;
-    } else {
-      data[entryOff + 5 + ni] = 0xA0;
-    }
-  }
-  // Clear unused bytes
-  for (var ui = 21; ui < 30; ui++) data[entryOff + ui] = 0x00;
-  // Partition size in sectors
-  data[entryOff + 30] = partSectors & 0xFF;
-  data[entryOff + 31] = (partSectors >> 8) & 0xFF;
-
-  // Format the partition: header (sector 0), BAM (sectors 1-2), directory (sector 3)
-  var headerOff = sectorOffset(startTrack, 0, getCurrentCtx());
-
-  // Header sector — mirrors D81 root header layout
-  data[headerOff + 0x00] = startTrack; // dir track (self-referencing)
-  data[headerOff + 0x01] = 3;          // dir sector
-  data[headerOff + 0x02] = 0x44;       // DOS version 'D'
-  data[headerOff + 0x03] = 0xBB;
-  // Disk name at offset 0x04
-  for (var hi = 0; hi < 16; hi++) data[headerOff + 0x04 + hi] = data[entryOff + 5 + hi];
-  data[headerOff + 0x14] = 0xA0;
-  data[headerOff + 0x15] = 0xA0;
-  // Disk ID
-  data[headerOff + 0x16] = 0x31; // '1'
-  data[headerOff + 0x17] = 0x41; // 'A'
-  data[headerOff + 0x18] = 0xA0;
-  // DOS type
-  data[headerOff + 0x19] = 0x33; // '3'
-  data[headerOff + 0x1A] = 0x44; // 'D'
-  for (var fi = 0x1B; fi < 0x100; fi++) data[headerOff + fi] = 0x00;
-
-  // BAM sector 1 (startTrack, 1) — covers tracks 1..40 of the partition
-  var bam1Off = sectorOffset(startTrack, 1, getCurrentCtx());
-  data[bam1Off + 0x00] = startTrack;
-  data[bam1Off + 0x01] = 2;        // link to BAM sector 2
-  data[bam1Off + 0x02] = 0x44;     // DOS version
-  data[bam1Off + 0x03] = 0xBB;
-  data[bam1Off + 0x04] = 0x31;     // ID copy
-  data[bam1Off + 0x05] = 0x41;
-  for (var b1 = 0x06; b1 < 0x10; b1++) data[bam1Off + b1] = 0x00;
-
-  // BAM sector 2 (startTrack, 2) — covers tracks 41..80 of the partition
-  var bam2Off = sectorOffset(startTrack, 2, getCurrentCtx());
-  data[bam2Off + 0x00] = 0x00;     // end of chain
-  data[bam2Off + 0x01] = 0xFF;
-  data[bam2Off + 0x02] = 0x44;
-  data[bam2Off + 0x03] = 0xBB;
-  data[bam2Off + 0x04] = 0x31;
-  data[bam2Off + 0x05] = 0x41;
-  for (var b2 = 0x06; b2 < 0x10; b2++) data[bam2Off + b2] = 0x00;
-
-  // Initialize BAM entries for each track in the partition
-  for (var pt = 1; pt <= numTracks; pt++) {
-    var base;
-    if (pt <= 40) {
-      base = bam1Off + 0x10 + (pt - 1) * 6;
-    } else {
-      base = bam2Off + 0x10 + (pt - 41) * 6;
-    }
-
-    if (pt === 1) {
-      // First track: sectors 0-3 used (header, BAM1, BAM2, first dir sector)
-      data[base] = 40 - 4; // 36 free
-      for (var bb = 0; bb < 5; bb++) data[base + 1 + bb] = 0xFF;
-      data[base + 1] &= ~(1 << 0); // sector 0
-      data[base + 1] &= ~(1 << 1); // sector 1
-      data[base + 1] &= ~(1 << 2); // sector 2
-      data[base + 1] &= ~(1 << 3); // sector 3
-    } else {
-      // Other tracks: all 40 sectors free
-      data[base] = 40;
-      for (var bb2 = 0; bb2 < 5; bb2++) data[base + 1 + bb2] = 0xFF;
-    }
-  }
-
-  // Initialize first directory sector (startTrack, 3)
-  var dirOff = sectorOffset(startTrack, 3, getCurrentCtx());
-  data[dirOff + 0] = 0x00; // end of chain
-  data[dirOff + 1] = 0xFF;
-  for (var di = 2; di < 256; di++) data[dirOff + di] = 0x00;
-
-  // Mark all partition sectors as allocated in the root BAM
-  var rootBamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
-  for (var rt = startTrack; rt < startTrack + numTracks; rt++) {
-    var spt = fmt.sectorsPerTrack(rt);
-    // Clear all bits (mark all sectors as used)
-    var rbase;
-    if (rt <= 40) {
-      rbase = rootBamOff + 0x10 + (rt - 1) * 6;
-    } else {
-      rbase = rootBamOff + 256 + 0x10 + (rt - 41) * 6;
-    }
-    data[rbase] = 0; // 0 free
-    for (var rb = 0; rb < 5; rb++) data[rbase + 1 + rb] = 0x00; // all bits clear = all used
-  }
-
-  // Success
-  selectedEntryIndex = entryOff;
   var info = parseDisk(currentBuffer);
+  var newData = new Uint8Array(currentBuffer);
+  for (var ei = 0; ei < info.entries.length; ei++) {
+    var eo = info.entries[ei].entryOff;
+    if ((newData[eo + 2] & 0x07) === currentFormat.subdirType && newData[eo + 3] === startTrack) {
+      selectedEntryIndex = eo;
+      break;
+    }
+  }
   renderDisk(info);
   updateMenuState();
   showModal('Directory Created', [

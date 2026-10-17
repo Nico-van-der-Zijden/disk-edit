@@ -1,11 +1,6 @@
 // ── Sector allocation ─────────────────────────────────────────────────
-// Real-drive allocation strategy. Don't trust the BAM — walk every file
-// and directory chain to build a "true allocation" map first, then pick
-// free sectors matching the format's track order and interleave.
-// Used by file write, GEOS write, optimize, scan-orphans, and similar.
-
-// Build a true sector allocation map by following all file and directory chains.
-// Does NOT trust the BAM — walks every chain on disk.
+// Allocation map built from every dir and file chain (not the BAM), then
+// sectors picked in the drive's track order and interleave.
 function buildTrueAllocationMap(buffer, diskCtx) {
   diskCtx = diskCtx || getCurrentCtx();
   var data = new Uint8Array(buffer);
@@ -67,14 +62,9 @@ function buildTrueAllocationMap(buffer, diskCtx) {
           continue;
         }
 
-        // D81-style CBM partition (file type $05 on a non-linked format).
-        // The partition occupies tracks ft .. ft + numTracks-1; mark every
-        // sector in that range so a later new-partition allocation can't
-        // overlap. Walking file chains alone wouldn't catch this — the
-        // partition's data sectors aren't on the parent's chain. partSize
-        // is stored at +30/+31 of the dir entry, in sector units.
+        // D81 sub-partition: its whole track range is taken.
         if (!fmt.subdirLinked && fmt.supportsSubdirs && typeIdx === fmt.subdirType && (typeByte & 0x80)) {
-          var partSize = data[entOff + 30] | (data[entOff + 31] << 8);
+          var partSize = direntBlocks(data, entOff);
           if (partSize > 0 && fmt.partitionSpt > 0) {
             var partNumTracks = Math.floor(partSize / fmt.partitionSpt);
             for (var pt = ft; pt < ft + partNumTracks; pt++) {
@@ -128,6 +118,10 @@ function allocateSectors(allocated, numSectors, diskCtx) {
     var dirTrack = fmt.dirTrack;
     var skipTracks = fmt.getSkipTracks();
     var maxBamTrack = fmt.bamTracksRange(diskCtx.tracks);
+    // D1M/D2M/D4M: chain tracks are logical; stay inside the BAM's slots.
+    if (fmt.lbaAddressing && diskCtx.buffer) {
+      maxBamTrack = Math.min(chainTrackCount(diskCtx), fmt.getBamIterTracks(new Uint8Array(diskCtx.buffer)));
+    }
     for (var t = dirTrack - 1; t >= 1; t--) { if (!skipTracks[t]) trackOrder.push(t); }
     for (var t2 = dirTrack + 1; t2 <= maxBamTrack; t2++) { if (!skipTracks[t2]) trackOrder.push(t2); }
     interleave = diskCtx.fileInterleave;

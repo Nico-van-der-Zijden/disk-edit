@@ -1,7 +1,24 @@
 // ── ZIP archive picker modal ─────────────────────────────────────────
 
-var ZIP_DISK_EXTS = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.d1m', '.d2m', '.d4m', '.dnp', '.lnx', '.rml', '.rl', '.dhd'];
+var ZIP_DISK_EXTS = ['.d64', '.d71', '.d81', '.d80', '.d82', '.t64', '.tap', '.x64', '.g64', '.nib', '.nb2', '.d1m', '.d2m', '.d4m', '.dnp', '.lnx', '.rml', '.rl', '.dhd'];
 var ZIP_FILE_EXTS = ['.prg', '.seq', '.usr', '.rel', '.p00', '.s00', '.u00', '.r00', '.cvt', '.txt'];
+
+// Settle a picker exactly once, whether by its own buttons or by the modal
+// being dismissed (Escape / X / backdrop fire 'modaldismiss').
+function _pickerSettler(resolve, cancelValue) {
+  var overlay = document.getElementById('modal-overlay');
+  var settled = false;
+  function settle(value) {
+    if (settled) return;
+    settled = true;
+    overlay.removeEventListener('modaldismiss', onDismiss);
+    overlay.classList.remove('open');
+    resolve(value);
+  }
+  function onDismiss() { settle(cancelValue); }
+  overlay.addEventListener('modaldismiss', onDismiss);
+  return settle;
+}
 
 // Bucket ZIP members for both the picker and the auto-open shortcut, so the
 // two can't drift apart. ZipCode members group into whole sets (one row, not
@@ -62,14 +79,8 @@ function showArchiveMemberModal(archiveName, entries, skippedMembers) {
     const body = document.getElementById('modal-body');
     body.innerHTML = '';
 
-    // checkbox → entry, populated as we render. "Open Selected" walks
-    // this to collect the user's choices without re-querying the DOM.
     const checkboxes = [];
-
-    function done(picked) {
-      document.getElementById('modal-overlay').classList.remove('open');
-      resolve(picked);
-    }
+    const done = _pickerSettler(resolve, []);
 
     if (disks.length === 0 && files.length === 0 && c.sets.length === 0) {
       const empty = document.createElement('div');
@@ -116,9 +127,6 @@ function showArchiveMemberModal(archiveName, entries, skippedMembers) {
       appendArchivePickerSection(body, 'Other (skipped)', others, true, null);
     }
     if (skippedMembers && skippedMembers.length > 0) {
-      // Members the archive reader itself couldn't produce (bad CRC,
-      // unsupported compression method, truncated). Named with the reason so
-      // a damaged archive is distinguishable from an unsupported one.
       appendArchivePickerSection(body, 'Could not be extracted',
         skippedMembers.map(function(s) { return { name: s.name + '  — ' + s.reason }; }),
         true, null);
@@ -194,18 +202,12 @@ async function _expandContainer(out, parsed, containerName) {
   }
 }
 
-// ── Pre-processing: expand .gz / .zip in a list of dropped/picked files
-// Each input File is read once. .gz is transparently decompressed (the
-// .gz suffix is stripped from the resulting name). .zip pops the picker
-// and yields the user's chosen entries. Other inputs pass through as-is.
-// Returns Promise<Array<{name, buffer}>> ready for normal extension-
-// based classification by the caller.
+// Expand .gz / .tar / .lha / .zip / .nbz in a list of dropped/picked files;
+// containers go through the member picker, everything else passes through.
+// Returns Promise<Array<{name, buffer}>>.
 async function expandArchives(files) {
-  // Prefer Blob.arrayBuffer() — FileReader has unreliable error reporting
-  // and can fail silently on some files (large size, network drives,
-  // OneDrive / iCloud placeholders that haven't been hydrated). The
-  // promise-based API on the File object is better supported in modern
-  // browsers and gives a real error message when something goes wrong.
+  // Blob.arrayBuffer() first: FileReader can fail silently on unhydrated
+  // cloud placeholders, where arrayBuffer() gives a real error.
   async function readBuffer(f) {
     try {
       if (typeof f.arrayBuffer === 'function') return await f.arrayBuffer();
@@ -231,10 +233,7 @@ async function expandArchives(files) {
       if (lower.endsWith('.gz') || lower.endsWith('.tgz')) {
         var raw = await readBuffer(f);
         var dec = await decompressGzip(raw);
-        // .tgz is shorthand for .tar.gz. Either way, decide what we have by
-        // the name left after dropping the gzip suffix — a plain ".d64.gz"
-        // becomes a disk, a tarball goes on to the tar reader. Previously a
-        // ".tar.gz" was gunzipped and then silently dropped.
+        // Classify by the name left after dropping the gzip suffix.
         var inner = lower.endsWith('.tgz') ? f.name.slice(0, -4) + '.tar' : f.name.slice(0, -3);
         if (/\.tar$/i.test(inner)) {
           await _expandContainer(out, parseTar(dec), inner);
@@ -246,26 +245,19 @@ async function expandArchives(files) {
       } else if (lower.endsWith('.lha') || lower.endsWith('.lzh') || lower.endsWith('.lzs')) {
         await _expandContainer(out, parseLha(await readBuffer(f)), f.name);
       } else if (lower.endsWith('.nbz')) {
-        // NBZ = nibtools' LZ77-compressed NIB. Decompress in-memory and
-        // hand the resulting NIB to the standard disk-open path with the
-        // original base name (sans .nbz, plus .nib).
         var rawNbz = await readBuffer(f);
         var nibBuf = decompressNbz(rawNbz);
         out.push({ name: f.name.slice(0, -4) + '.nib', buffer: nibBuf });
       } else if (lower.endsWith('.zip')) {
-        var rawZip = await readBuffer(f);
-        await _expandContainer(out, { entries: await parseZip(rawZip) }, f.name);
+        await _expandContainer(out, await parseZip(await readBuffer(f)), f.name);
       } else {
         var raw2 = await readBuffer(f);
         out.push({ name: f.name, buffer: raw2 });
       }
     } catch (err) {
       var msg = (err && err.message) ? err.message : String(err);
-      // Drag-drop straight from a compressed archive (WinRAR, 7-Zip, …)
-      // hands the browser a virtual handle that points inside the
-      // archive rather than a real filesystem path, so reading the
-      // bytes fails. Same story for unhydrated cloud-storage stubs.
-      // Only the user can fix it; surface the workaround in the modal.
+      // Dragging out of WinRAR/7-Zip (or a cloud stub) gives an unreadable
+      // virtual handle; only the user can fix that.
       var hint = /Failed to read|NotReadableError|NotFoundError|network error/i.test(msg)
         ? 'If you dragged the file straight from an archive (WinRAR / 7-Zip / Bandizip / …) the browser only sees a virtual handle, not a real file. Extract the file first, then drop the extracted copy. Same fix for cloud-storage placeholders (OneDrive / iCloud) — make sure the file is downloaded locally before dropping.'
         : null;
@@ -309,8 +301,7 @@ function appendArchivePickerSection(body, title, entries, disabled, checkboxes) 
       row.appendChild(cb);
       checkboxes.push({ cb: cb, entry: entry });
     } else {
-      // Spacer so unchecked-section rows align with the rows that have
-      // checkboxes — keeps the names in a tidy column.
+      // Keeps names aligned with the rows that have checkboxes.
       var spacer = document.createElement('span');
       spacer.style.width = '13px';
       spacer.style.flexShrink = '0';
@@ -346,27 +337,19 @@ function showZipCodeSetPicker(sets) {
       'Each set you pick opens in its own tab.';
     body.appendChild(intro);
 
-    // Reuse the ZIP picker's row renderer — it labels each row with
-    // entry.name, so fold the track/file counts into the display name and
-    // carry the real set object alongside it.
     var checkboxes = [];
     var rows = sets.map(function(s) {
-      // tracks is 0 for SixPack — its track count isn't known until the
-      // signature byte is read during decode.
-      var what = s.tracks
-        ? s.tracks + ' tracks, ' + s.refs.length + ' files'
-        : 'SixPack, ' + s.refs.length + ' files';
+      // SixPack and FilePacked don't know a track count before decoding.
+      var what = s.kind === 'sixpack' ? 'SixPack, ' + s.refs.length + ' files'
+        : s.kind === 'filepack' ? 'FilePacked, ' + s.refs.length + ' files'
+        : s.tracks + ' tracks, ' + s.refs.length + ' files';
       return { name: s.name + '  (' + what + ')', set: s };
     });
     appendArchivePickerSection(body, 'ZipCode sets', rows, false, checkboxes);
 
     var footer = document.querySelector('#modal-overlay .modal-footer');
     footer.innerHTML = '';
-
-    function done(picked) {
-      document.getElementById('modal-overlay').classList.remove('open');
-      resolve(picked);
-    }
+    var done = _pickerSettler(resolve, []);
 
     var cancelBtn = document.createElement('button');
     cancelBtn.textContent = 'Cancel';

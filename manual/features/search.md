@@ -1,37 +1,36 @@
 # Search
 
-Find files by name or byte content within one disk or across all open tabs.
+Find bytes or names within one disk or across all open tabs.
 
 ## Find in current tab
 
-**Search → Find...** (Ctrl+F) opens a search modal:
+**Search → Find...** (Ctrl+F) opens a search dialog with a text field (the PETSCII picker opens while it has focus) and a scope:
 
-- **Filename** — matches against the dir-entry names (case-insensitive, partial matches OK)
-- **Byte pattern** — searches all file content + system structures for a byte sequence. Specify as hex (`A2 41 8E ...`) or PETSCII (`HELLO`)
-- **Sector address** — jump to a track/sector
+- **All sectors** — every sector of the disk, file data and system structures alike
+- **Filenames** — the name field of each directory entry on the directory track
+- **Disk name** — the disk name in the header
+- **Disk ID** — the disk ID in the header
 
-Results show inline with row numbers; click a result to navigate to it.
+The search term is read as **hex** when it looks intentional — a `$` prefix (`$A9 $00`, `$A900`) or space-separated pairs (`A2 41 8E`). Otherwise it's text and matches either the literal bytes you typed or their uppercased form (unshifted PETSCII, `$41-$5A`), so `load` finds `LOAD` in a normal CBM filename.
+
+Press **Enter** or **Search** to run it; the dialog stays open. Each result shows the track / sector, a few bytes of context and how many hits that sector has. Clicking a result closes the dialog and opens the sector editor at that sector with every occurrence highlighted.
 
 ## Find in all open tabs
 
-**Search → Find in All Tabs...** (Ctrl+Shift+F) — same search but spans every open disk. Results are grouped by tab.
-
-Useful when you've got 5+ disks open and you're hunting for a specific file (e.g., "where did I put COMPILER.PRG?").
+**Search → Find in All Tabs...** (Ctrl+Shift+F) — same search but spans every open disk. Results are grouped by tab; clicking one switches to that tab first. IDE64 `.hdd` tabs are skipped.
 
 ## Go to track / sector
 
-**Search → Go to Sector...** (Ctrl+Shift+G) opens a small modal:
+**Search → Go to Sector...** (Ctrl+Shift+G) opens a small dialog:
 
 ```
-Track:  [18]
-Sector: [ 1]
-       [Cancel] [Go]
+Track: $[12]  Sector: $[00]
+              [Cancel] [Go]
 ```
 
-Jumps to that T/S in the sector editor / hex view. The Go button stays disabled until both fields have valid values for the current format.
+Values are hex. **Enter** or **Go** opens the sector editor at that T/S; nothing happens until both values are valid for the current format.
 
 ## Caveats
 
-- **CFS (.hdd) search is not yet implemented.** Search disabled when you're inside an `.hdd` partition. A CFS-aware Find needs a B-tree walker + byte-slice decoder on every file's content. On the TODO list.
-- **Multi-byte patterns** match the literal bytes — they don't unscramble byte-sliced CFS data.
-- **Filename match** treats PETSCII bytes literally — a lowercase `a` in your search box matches PETSCII `$61` (which is `a` in lowercase mode, a graphic char in uppercase mode). Use uppercase mode for typical CBM filenames.
+- **CFS (.hdd) search is not yet implemented.** Find and Go to Sector are disabled in an `.hdd` tab. A CFS-aware Find needs a B-tree walker + byte-slice decoder on every file's content. On the TODO list.
+- **Byte patterns** match the literal bytes in sector order — a match that straddles two sectors of a file chain isn't found.

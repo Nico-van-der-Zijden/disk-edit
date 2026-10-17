@@ -1,26 +1,18 @@
 // ── Context menu on directory entries ─────────────────────────────────
 var contextMenu = document.getElementById('context-menu');
 
-// Offset of the row the user was on when Shift+Arrow started extending
-// the selection. Stays put across consecutive Shift+Arrow presses so the
-// range can grow or shrink relative to that anchor; resets on plain
-// Arrow / click / Escape.
+// Shift+Arrow range anchor: the entry offset / slot where extending began.
+// Resets on plain Arrow / click / Escape.
 var shiftSelectAnchor = -1;
-// Anchor *element* for the partition-list views (CMD container + .hdd).
-// These views don't use selectedEntryIndex — selection is class-only —
-// so the anchor is tracked by DOM reference instead of by id.
+// Same for the partition-list views, whose selection is class-only, so the
+// anchor is a row element.
 var shiftSelectAnchorRow = null;
 
-// Arrow-key handler shared by the CMD container partition list and the
-// .hdd partition list. Both use class-only selection (no
-// selectedEntryIndex). Shift+Arrow extends a range from the anchor;
-// plain Arrow replaces the selection.
+// Arrow keys on the CMD container / .hdd partition lists.
 function _arrowOnPartitionList(rowsNodeList, dir, isShift) {
   const rows = Array.prototype.slice.call(rowsNodeList);
   if (rows.length === 0) return;
-  // Current cursor row: last (in DOM order, in the direction of travel)
-  // currently-selected row, so consecutive Shift+Arrow presses advance
-  // monotonically through the list.
+  // Cursor = the selected row furthest in the direction of travel.
   const selRows = rows.filter(r => r.classList.contains('selected'));
   let curRow = null;
   if (selRows.length > 0) {
@@ -95,47 +87,24 @@ function showContextMenu(x, y) {
   // Close top menubar if open
   closeMenus();
 
-  // Clone the File menu options into the context menu
+  // Refresh state first so the clone carries current labels, check marks and
+  // disabled/hidden state; ids become data-ctx-for to avoid duplicates.
+  updateEntryMenuState();
   var source = document.querySelector('#menu-entry > .menu-dropdown');
   contextMenu.innerHTML = source.innerHTML;
-
-  // Refresh enable/disable state
-  updateEntryMenuState();
-
-  // Replace IDs with data-ctx-for (avoid duplicates) and mirror state from originals
   contextMenu.querySelectorAll('[id]').forEach(function(el) {
-    var origId = el.id;
+    el.setAttribute('data-ctx-for', el.id);
     el.removeAttribute('id');
-    el.setAttribute('data-ctx-for', origId);
-    var orig = document.getElementById(origId);
-    if (orig) {
-      if (orig.classList.contains('disabled')) el.classList.add('disabled');
-      else el.classList.remove('disabled');
-      // Copy dynamic text (Lock/Unlock, Scratch/Unscratch) for simple menu items only
-      if (!el.classList.contains('has-submenu') && !el.classList.contains('submenu')) {
-        el.textContent = orig.textContent;
-      }
-      // Copy check marks for file type submenu
-      var origChecks = orig.querySelectorAll('.check');
-      var cloneChecks = el.querySelectorAll('.check');
-      for (var ci = 0; ci < origChecks.length && ci < cloneChecks.length; ci++) {
-        cloneChecks[ci].innerHTML = origChecks[ci].innerHTML;
-      }
-    }
   });
 
   // Hide disabled clones: a popup menu only shows what can be actioned right
   // now. The persistent menubar still grays disabled items for discovery.
   hideDisabledContextItems();
 
-  // Bind submenu open/close via mouseenter/mouseleave (more reliable than
-  // CSS :hover). Plus a click handler so taps work on touch devices —
-  // mouseenter doesn't fire reliably on touch and the bare tap would
-  // otherwise bubble out and close the context menu before the submenu
-  // appears.
+  // Submenus open on mouseenter, and on click for touch (where mouseenter
+  // is unreliable).
   function openContextSubmenu(item) {
-    // Only close direct siblings — closing all open submenus would also
-    // close ancestors when the user drills into a nested has-submenu.
+    // Close siblings only, so ancestors of a nested submenu stay open.
     var parent = item.parentElement;
     if (parent) {
       parent.querySelectorAll(':scope > .has-submenu.submenu-open').forEach(function(el) {
@@ -157,11 +126,8 @@ function showContextMenu(x, y) {
     });
     item.addEventListener('click', function(e) {
       if (item.classList.contains('disabled')) return;
-      // Clicks inside this item's OWN submenu need to bubble to the
-      // delegated handler so the action fires; only the header toggles.
-      // (Checking any ancestor .submenu would break nested has-submenu —
-      // a click on a nested header is technically inside its parent's
-      // submenu, but should still open its own.)
+      // Clicks inside this item's own submenu bubble on to the action
+      // handler; only a click on the header toggles.
       var ownSub = item.querySelector(':scope > .submenu');
       if (ownSub && ownSub.contains(e.target)) return;
       e.stopPropagation();
@@ -192,9 +158,6 @@ contextMenu.addEventListener('click', function(e) {
   if (subOption && !subOption.classList.contains('disabled')) {
     closeContextMenu();
     if (subOption.dataset.sepIdx !== undefined) {
-      // Separator submenu uses delegation — call the right insert helper
-      // for the active view. CFS partitions need insertCfsSeparator;
-      // CBM-DOS shapes use insertSeparator.
       var idx = parseInt(subOption.dataset.sepIdx, 10);
       var all = getAllSeparators();
       if (!isNaN(idx) && idx >= 0 && idx < all.length) {
@@ -234,7 +197,9 @@ document.addEventListener('click', (e) => {
   if (!e.target.closest('#context-menu')) closeContextMenu();
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeContextMenu();
+  if (e.key !== 'Escape' || contextMenu.style.display !== 'block') return;
+  e.preventDefault(); // keeps the detail pane open
+  closeContextMenu();
 });
 
 // Right-click on dir entries — and the equivalent long-press on touch.
@@ -246,54 +211,25 @@ function tryShowEntryContextMenu(target, x, y) {
   var dirListing = target.closest('.dir-listing');
   if (!entry && !dirListing) return false;
 
-  if (entry && entry.dataset.cmdcPart !== undefined) {
-    // CMD container partition row — select via data-cmdc-part. Mustn't
-    // clear .selected on the wrong path: the cloned context menu mirrors
-    // the live disabled state, so the row's `.selected` class is what
-    // turns Delete Partition on.
+  // Partition-list rows (CMD / .hdd) use class-only selection. File rows
+  // (CFS slot or CBM-DOS offset) keep a multi-selection the click falls
+  // inside, otherwise retarget to the clicked row. showContextMenu
+  // refreshes the menu state.
+  if (entry && (entry.dataset.cmdcPart !== undefined || entry.dataset.hddPart !== undefined)) {
     document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
     entry.classList.add('selected');
-    updateEntryMenuState();
-  } else if (entry && entry.dataset.hddPart !== undefined) {
-    // IDE64 .hdd partition row — same idea as the CMD branch above.
-    // Without selecting on right-click, Rename / Delete Partition stay
-    // disabled and hideDisabledContextItems drops them from the popup.
-    document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
-    entry.classList.add('selected');
-    updateEntryMenuState();
-  } else if (entry && entry.dataset.cfsEntry !== undefined) {
-    // CFS file / subdir row — select via data-cfs-entry. The index is
-    // the absolute slot in cfsDirEntries (across all chained dir
-    // sectors), not a byte offset. Mirror the CBM-DOS branch below:
-    // right-click *inside* a multi-selection preserves the selection
-    // (so batch handlers act on every row); right-click *outside* it
-    // retargets to just the clicked row.
-    var cfsIdx = parseInt(entry.dataset.cfsEntry, 10);
-    if (selectedEntries.indexOf(cfsIdx) < 0) {
+  } else if (entry && (entry.dataset.cfsEntry !== undefined || entry.dataset.offset)) {
+    var rowIdx = parseInt(entry.dataset.cfsEntry !== undefined ? entry.dataset.cfsEntry : entry.dataset.offset, 10);
+    if (selectedEntries.indexOf(rowIdx) < 0) {
       document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
       entry.classList.add('selected');
-      selectedEntryIndex = cfsIdx;
-      selectedEntries = [cfsIdx];
-      updateEntryMenuState();
-    }
-  } else if (entry && entry.dataset.offset) {
-    var offset = parseInt(entry.dataset.offset, 10);
-    // Right-click on a file outside the current multi-selection retargets
-    // to just that file. Action handlers read `selectedEntries` first, so
-    // updating `selectedEntryIndex` alone would leave them aimed at the
-    // previously-clicked file.
-    if (selectedEntries.indexOf(offset) < 0) {
-      document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
-      entry.classList.add('selected');
-      selectedEntryIndex = offset;
-      selectedEntries = [offset];
-      updateEntryMenuState();
+      selectedEntryIndex = rowIdx;
+      selectedEntries = [rowIdx];
     }
   } else {
     document.querySelectorAll('.dir-entry.selected').forEach(el => el.classList.remove('selected'));
     selectedEntryIndex = -1;
     selectedEntries = [];
-    updateEntryMenuState();
   }
   showContextMenu(x, y);
   return true;
@@ -303,10 +239,8 @@ document.getElementById('content').addEventListener('contextmenu', function(e) {
   if (tryShowEntryContextMenu(e.target, e.clientX, e.clientY)) e.preventDefault();
 });
 
-// Long-press on touch → same context menu. iOS Safari doesn't reliably
-// fire `contextmenu` on long-press (and runs its own callout), so we use
-// an explicit timer. Cancel on touchmove > 10px so vertical scrolling of
-// the file listing still works.
+// Long-press on touch opens the same menu (iOS Safari doesn't fire
+// contextmenu reliably). Moving > 10px cancels, so scrolling still works.
 (function bindEntryLongPress() {
   var content = document.getElementById('content');
   if (!content) return;
@@ -319,8 +253,6 @@ document.getElementById('content').addEventListener('contextmenu', function(e) {
   content.addEventListener('touchstart', function(e) {
     if (e.touches.length !== 1) { clearLP(); return; }
     if (!currentBuffer) return;
-    // Only arm if the touch starts on something that could open a menu;
-    // avoids firing inside modals, viewers, etc.
     var t = e.touches[0];
     var hit = e.target.closest('.dir-entry:not(.dir-header-row):not(.dir-parent-row), .dir-listing');
     if (!hit) return;
@@ -342,11 +274,9 @@ document.getElementById('content').addEventListener('contextmenu', function(e) {
   content.addEventListener('touchend', function(e) {
     var fired = lpFired;
     clearLP();
-    // Swallow the synthesized click that follows a long-press so the
-    // entry doesn't also get activated (e.g. open a viewer).
+    // Swallow the click some browsers still synthesize after a long-press.
     if (fired) {
       e.preventDefault();
-      // Some browsers still dispatch the click after touchend; block one.
       var blocker = function(ev) {
         ev.stopPropagation();
         ev.preventDefault();
@@ -359,35 +289,30 @@ document.getElementById('content').addEventListener('contextmenu', function(e) {
   content.addEventListener('touchcancel', clearLP, { passive: true });
 })();
 
-// Click outside dir entries — do NOT deselect (selection persists until another file is clicked)
-
-// Keyboard: Arrow Up/Down to select, Ctrl+Arrow to move entry
-// Registered once outside bindDirSelection to avoid stacking listeners
+// Directory-list keyboard shortcuts. Registered once, outside
+// bindDirSelection, so re-renders don't stack listeners.
 document.addEventListener('keydown', (e) => {
   if (!currentBuffer) return;
   if (openMenu) return; // menu keyboard navigation handles arrow keys
-  if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.isContentEditable)) return;
-  // A viewer modal is open: arrows / page keys belong to the modal body
-  // for scrolling, not to the directory listing.
+  var ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) return;
   var modalOpen = document.getElementById('modal-overlay');
   if (modalOpen && modalOpen.classList.contains('open')) return;
+  // AltGr arrives as Ctrl+Alt; it types characters, never a shortcut.
+  if (e.ctrlKey && e.altKey && e.getModifierState && e.getModifierState('AltGraph')) return;
 
-  // Enter on the CMD container partition list — start rename on the
-  // selected partition, mirroring how Enter renames a selected D81 subdir
-  // entry. Double-click is what opens the partition (matching subdir UX).
+  // Enter / F2 renames (double-click opens), on every list view.
   if ((e.key === 'Enter' || e.key === 'F2') && isCmdContainerListView()) {
     var cSelRow = document.querySelector('.dir-entry.selected[data-cmdc-part]');
     if (cSelRow) {
       e.preventDefault();
       var cIdx = parseInt(cSelRow.dataset.cmdcPart, 10);
       var cPart = cmdcPartitions && cmdcPartitions[cIdx];
-      if (cPart && cPart.type !== 0xFF) startRenameEntry(cSelRow);
+      if (cPart && !isCmdSystemPartition(cPart)) startRenameEntry(cSelRow);
       return;
     }
   }
 
-  // Enter / F2 on the .hdd partition list — rename the selected partition.
-  // selectedEntryIndex isn't used in this view, so check the row directly.
   if ((e.key === 'Enter' || e.key === 'F2') &&
       typeof isIde64ContainerView === 'function' && isIde64ContainerView() &&
       cfsPartitionIdx < 0 && !isCmdContainerListView()) {
@@ -399,9 +324,6 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // Enter / F2: edit selected filename (CFS branch uses the CFS-aware
-  // inline rename helper since startRenameEntry reads data-offset which
-  // CFS rows don't have).
   if ((e.key === 'Enter' || e.key === 'F2') && selectedEntryIndex >= 0) {
     e.preventDefault();
     const selected = document.querySelector('.dir-entry.selected');
@@ -414,9 +336,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // Delete on the CMD container partition list — delete the highlighted
-  // partition (route through the menu handler so the confirm dialog
-  // and SYSTEM check stay in one place).
+  // Delete on a partition list goes through the confirming delete helpers.
   if (e.key === 'Delete' && isCmdContainerListView()) {
     var cDel = document.querySelector('.dir-entry.selected[data-cmdc-part]');
     if (cDel) {
@@ -426,8 +346,6 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // Delete on the .hdd partition list — same routing as CMD list, but
-  // through the IDE64 soft-delete path. Multi-select aware.
   if (e.key === 'Delete' &&
       typeof isIde64ContainerView === 'function' && isIde64ContainerView() &&
       cfsPartitionIdx < 0 && !isCmdContainerListView()) {
@@ -446,36 +364,12 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // Delete: remove selected entry (not for tape formats). CFS branch
-  // routes through the opt-remove menu handler so the CFS-aware path
-  // (cfsRemoveDirEntry, sector free) runs instead of the CBM-DOS
-  // removeFileEntry which would corrupt the buffer.
-  if (e.key === 'Delete' && selectedEntryIndex >= 0 && !isTapeFormat(getCurrentCtx())) {
-    if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-      e.preventDefault();
-      var rmEl = document.getElementById('opt-remove');
-      if (!rmEl.classList.contains('disabled')) rmEl.click();
-      return;
-    }
-    if (!currentBuffer) return;
+  // Delete = Remove Entry (handles multi-select, partition prompts and undo).
+  if (e.key === 'Delete' && selectedEntryIndex >= 0) {
+    var rmEl = document.getElementById('opt-remove');
+    if (rmEl.classList.contains('disabled')) return;
     e.preventDefault();
-    pushUndo();
-    var toRemove = selectedEntries.length > 0 ? selectedEntries.slice() : [selectedEntryIndex];
-    var slots = getDirSlotOffsets(currentBuffer);
-    var firstIdx = slots.indexOf(toRemove[0]);
-    // Remove in reverse order to keep offsets stable
-    for (var di = toRemove.length - 1; di >= 0; di--) removeFileEntry(currentBuffer, toRemove[di]);
-    var info = parseCurrentDir(currentBuffer);
-    var visibleEntries = info.entries.filter(function(en) { return !en.deleted || showDeleted; });
-    if (visibleEntries.length > 0) {
-      var newIdx = Math.min(firstIdx, visibleEntries.length - 1);
-      selectedEntryIndex = visibleEntries[newIdx].entryOff;
-      selectedEntries = [selectedEntryIndex];
-    } else {
-      selectedEntryIndex = -1;
-      selectedEntries = [];
-    }
-    renderDisk(info);
+    rmEl.click();
     return;
   }
 
@@ -483,56 +377,29 @@ document.addEventListener('keydown', (e) => {
   // doesn't fall through to the undo branch.
   if (e.ctrlKey && e.shiftKey && (e.key === 'Z' || e.key === 'z') && currentBuffer) {
     e.preventDefault();
-    if (popRedo()) {
-      if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-        if (typeof refreshIde64View === 'function') refreshIde64View();
-      } else {
-        var info = parseCurrentDir(currentBuffer);
-        renderDisk(info);
-      }
-      updateMenuState();
-      updateEntryMenuState();
-    }
+    applyUndoRedo(true);
     return;
   }
 
-  // Ctrl+Z: undo. CFS branch re-renders via refreshIde64View since
-  // parseCurrentDir is CBM-DOS-only.
+  // Ctrl+Z: undo.
   if (e.ctrlKey && !e.shiftKey && e.key === 'z' && currentBuffer) {
     e.preventDefault();
-    if (popUndo()) {
-      if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-        if (typeof refreshIde64View === 'function') refreshIde64View();
-      } else {
-        var info = parseCurrentDir(currentBuffer);
-        renderDisk(info);
-      }
-      updateMenuState();
-      updateEntryMenuState();
-    }
+    applyUndoRedo(false);
     return;
   }
 
   // Ctrl+Y: redo (Windows convention).
   if (e.ctrlKey && !e.shiftKey && e.key === 'y' && currentBuffer) {
     e.preventDefault();
-    if (popRedo()) {
-      if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-        if (typeof refreshIde64View === 'function') refreshIde64View();
-      } else {
-        var info = parseCurrentDir(currentBuffer);
-        renderDisk(info);
-      }
-      updateMenuState();
-      updateEntryMenuState();
-    }
+    applyUndoRedo(true);
     return;
   }
 
   // Ctrl+V: paste file
-  if (e.ctrlKey && e.key === 'v' && clipboard.length > 0 && currentBuffer) {
+  if (e.ctrlKey && e.key === 'v') {
     e.preventDefault();
-    document.getElementById('opt-paste').click();
+    var pasteEl = document.getElementById('opt-paste');
+    if (!pasteEl.classList.contains('disabled')) pasteEl.click();
     return;
   }
 
@@ -545,9 +412,10 @@ document.addEventListener('keydown', (e) => {
   }
 
   // Ctrl+C: copy file
-  if (e.ctrlKey && !e.shiftKey && e.key === 'c' && selectedEntryIndex >= 0 && currentBuffer) {
+  if (e.ctrlKey && !e.shiftKey && e.key === 'c' && selectedEntryIndex >= 0) {
     e.preventDefault();
-    document.getElementById('opt-copy').click();
+    var copyEl = document.getElementById('opt-copy');
+    if (!copyEl.classList.contains('disabled')) copyEl.click();
     return;
   }
 
@@ -638,22 +506,15 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // Ctrl+Shift+L: name to lowercase (Ctrl+L conflicts with browser address bar)
-  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyL' && selectedEntryIndex >= 0 && currentBuffer) {
+  // Ctrl+Shift+L / U / T: name to lower / upper / toggled case (the Ctrl-only
+  // keys belong to the browser). Gated on Name Case: tape entries aren't
+  // CBM-DOS dir entries, and rewriting their bytes corrupts the directory.
+  var caseIds = { KeyL: 'opt-case-lower', KeyU: 'opt-case-upper', KeyT: 'opt-case-toggle' };
+  if (e.ctrlKey && e.shiftKey && !e.altKey && caseIds[e.code] && selectedEntryIndex >= 0) {
     e.preventDefault();
-    document.getElementById('opt-case-lower').click();
-    return;
-  }
-  // Ctrl+Shift+U: name to uppercase (Ctrl+U conflicts with browser view source)
-  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyU' && selectedEntryIndex >= 0 && currentBuffer) {
-    e.preventDefault();
-    document.getElementById('opt-case-upper').click();
-    return;
-  }
-  // Ctrl+Shift+T: toggle name case (Ctrl+T conflicts with browser new tab)
-  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyT' && selectedEntryIndex >= 0 && currentBuffer) {
-    e.preventDefault();
-    document.getElementById('opt-case-toggle').click();
+    if (!document.getElementById('opt-case').classList.contains('disabled')) {
+      document.getElementById(caseIds[e.code]).click();
+    }
     return;
   }
   // Ctrl+Shift+D: add directory inside a dir view; new partition on a
@@ -715,7 +576,7 @@ document.addEventListener('keydown', (e) => {
       !isCmdContainerListView() &&
       !(typeof isIde64ContainerView === 'function' && isIde64ContainerView() && cfsPartitionIdx < 0) &&
       selectedEntryIndex >= 0) {
-    const allEntriesS = document.querySelectorAll('.dir-entry:not(.dir-header-row)');
+    const allEntriesS = document.querySelectorAll('.dir-entry:not(.dir-header-row):not(.dir-parent-row)');
     if (allEntriesS.length === 0) return;
     const offsetsS = [];
     allEntriesS.forEach(el => offsetsS.push(parseInt(el.dataset.offset, 10)));
@@ -806,7 +667,7 @@ document.addEventListener('keydown', (e) => {
     moveEntry(dir);
   } else {
     // Arrow: select next/previous entry
-    const allEntries = document.querySelectorAll('.dir-entry:not(.dir-header-row)');
+    const allEntries = document.querySelectorAll('.dir-entry:not(.dir-header-row):not(.dir-parent-row)');
     if (allEntries.length === 0) return;
 
     if (selectedEntryIndex < 0) {
@@ -815,9 +676,7 @@ document.addEventListener('keydown', (e) => {
       allEntries.forEach(el => el.classList.remove('selected'));
       target.classList.add('selected');
       selectedEntryIndex = parseInt(target.dataset.offset, 10);
-      // Keep selectedEntries in sync — handlers like splat / lock /
-      // scratch prefer it over selectedEntryIndex, so a stale array
-      // would make the first keypress hit the previously-clicked row.
+      // Action handlers read selectedEntries first, so keep it in sync.
       selectedEntries = [selectedEntryIndex];
       updateEntryMenuState();
       target.scrollIntoView({ block: 'nearest' });
@@ -837,7 +696,6 @@ document.addEventListener('keydown', (e) => {
         allEntries[newIdx].scrollIntoView({ block: 'nearest' });
       }
     }
-    updateEntryMenuState();
   }
 });
 
@@ -846,28 +704,17 @@ function updateEntryMenuState() {
   const multiSelect = selectedEntries.length > 1;
   const inPartition = currentPartition !== null;
   const tape = isTapeFormat(getCurrentCtx());
-  // The CMD container partition list isn't a filesystem — file-
-  // level operations (insert, rename, etc.) make no sense, so we treat
-  // it like a tape image for the disabled-state checks.
+  // The CMD container partition list isn't a filesystem: no file-level edits.
   const containerList = isCmdContainerListView();
   const noEdit = tape || containerList;
-  // Reset any items the CFS override may have hidden last time around.
-  // Without this, switching from a CFS partition view back to a D64/etc
-  // tab leaves Lock / Splat / Remove Entry / Move Up / Move Down / Align
-  // / Edit T-S / View As stuck on display:none from a prior render.
-  // Each individual disabled-state check below still runs to set the
-  // correct disabled class for the new view.
-  var _cfsHiddenIds = ['opt-change-ts',
-    'opt-scratch', 'opt-unscratch'];
-  for (var _ri = 0; _ri < _cfsHiddenIds.length; _ri++) {
-    var _re = document.getElementById(_cfsHiddenIds[_ri]);
-    if (_re) _re.style.display = '';
-  }
-  // Restore opt-change-ts to its CBM-DOS label — the CFS branch below
-  // relabels it to "Edit Data LBA…" since CFS has no T/S concept; this
-  // line undoes that when switching to a non-CFS view.
-  var _tsResetEl = document.getElementById('opt-change-ts');
-  if (_tsResetEl) _tsResetEl.textContent = 'Edit Track/Sector';
+  // Un-hide what the CFS branch below hides, so leaving a CFS view doesn't
+  // leave them stuck on display:none.
+  ['opt-change-ts', 'opt-scratch', 'opt-unscratch'].forEach(function(id) {
+    document.getElementById(id).style.display = '';
+  });
+  document.getElementById('opt-change-ts').textContent = 'Edit Track/Sector';
+  document.getElementById('opt-scratch').textContent = 'Scratch File';
+  document.getElementById('opt-unscratch').textContent = 'Unscratch File';
   // Single-select only operations (all disabled for tape / container list)
   document.getElementById('opt-rename').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
   document.getElementById('opt-insert').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || noEdit);
@@ -875,22 +722,15 @@ function updateEntryMenuState() {
   document.getElementById('opt-block-size').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
   document.getElementById('opt-change-ts').classList.toggle('disabled', !hasSelection || multiSelect || noEdit);
   document.getElementById('opt-view-as').classList.toggle('disabled', !hasSelection || multiSelect || containerList);
-  // Reset the always-applicable View As children (Hex, Disasm, PETSCII)
-  // here so they stay enabled in non-CFS contexts. Without this, entering
-  // a CFS partition adds .disabled (the CFS branch below force-disables
-  // them since selectedEntryIndex isn't a CBM byte offset there) and the
-  // class never gets cleared on the way back out.
+  // Set explicitly here so the CFS branch's overrides don't stick.
   document.getElementById('opt-view-hex').classList.toggle('disabled', !hasSelection || containerList);
   document.getElementById('opt-view-disasm').classList.toggle('disabled', !hasSelection || containerList);
   document.getElementById('opt-view-petscii').classList.toggle('disabled', !hasSelection || containerList);
   var noNesting = inPartition && !currentFormat.subdirLinked; // D81: no nesting; DNP: nesting allowed
   document.getElementById('opt-add-partition').classList.toggle('disabled', multiSelect || noNesting || !currentBuffer || !currentFormat.supportsSubdirs || !canInsertFile() || noEdit);
 
-  // CMD / IDE64 container partition management — only meaningful (and
-  // only visible) on a container's partition-list view. Both families
-  // share the same File → New / Rename / Delete Partition menu items;
-  // dispatch happens in the click handlers (ui-cmd.js for CMD, ui-ide64.js
-  // for IDE64).
+  // Partition management: shown only on a CMD or IDE64 partition list; the
+  // click handlers dispatch per family (ui-cmd.js / ui-ide64.js).
   var cNewBtn = document.getElementById('opt-cmdc-new-partition');
   var cRenBtn = document.getElementById('opt-cmdc-rename-partition');
   var cDelBtn = document.getElementById('opt-cmdc-delete-partition');
@@ -900,50 +740,41 @@ function updateEntryMenuState() {
   var cExpBtn = document.getElementById('opt-cmdc-export-partition');
   var cSep1 = document.getElementById('sep-cmdc-partitions');
   var cSep2 = document.getElementById('sep-cmdc-partition-io');
-  // Defensive: prefer CMD when both globals look active (shouldn't
-  // happen post-fix, but a stale global is worth guarding against).
   var hddListView = !containerList && (typeof isIde64ContainerView === 'function') && isIde64ContainerView() && cfsPartitionIdx < 0;
   var partDisplay = (containerList || hddListView) ? '' : 'none';
   cNewBtn.style.display = partDisplay;
   cRenBtn.style.display = partDisplay;
   cDelBtn.style.display = partDisplay;
-  // Partition Attributes is HDD-only — CMD containers don't carry the
-  // HIDDEN / WRITEABLE flag bits this dialog edits.
+  // Attributes (HIDDEN / WRITEABLE bits) and Restore are IDE64-only;
+  // Import/Export are CMD-only.
   cAttrBtn.style.display = hddListView ? '' : 'none';
   cRestoreBtn.style.display = hddListView ? '' : 'none';
-  // Import/Export stay CMD-only for now — CFS partition I/O is a
-  // separate workflow (no .dnp/.d64-style flat dump).
   var ioDisplay = containerList ? '' : 'none';
   cImpBtn.style.display = ioDisplay;
   cExpBtn.style.display = ioDisplay;
   if (cSep1) cSep1.style.display = partDisplay;
   if (cSep2) cSep2.style.display = ioDisplay;
+  // Hidden items are disabled too, for the mobile menu and shortcuts.
+  [cNewBtn, cRenBtn, cDelBtn, cAttrBtn, cRestoreBtn, cImpBtn, cExpBtn].forEach(function(el) {
+    if (el.style.display === 'none') el.classList.add('disabled');
+  });
   if (containerList) {
     var listSelEl = document.querySelector('.dir-entry.selected[data-cmdc-part]');
     var selPartIdx = listSelEl ? parseInt(listSelEl.dataset.cmdcPart, 10) : -1;
     var selPart = (selPartIdx >= 0 && cmdcPartitions) ? cmdcPartitions[selPartIdx] : null;
     cNewBtn.classList.toggle('disabled', !canAddCmdContainerPartition());
-    // Rename / Delete need a non-SYSTEM partition selected.
-    var canModify = !!selPart && selPart.type !== 0xFF;
+    var canModify = !!selPart && !isCmdSystemPartition(selPart);
     cRenBtn.classList.toggle('disabled', !canModify);
     cDelBtn.classList.toggle('disabled', !canModify);
-    // Import: a free slot must exist (same condition as New Partition).
-    // Export: requires a non-SYSTEM partition of a supported type
-    // (Native / 1541 / 1571 / 1581) — those map to .dnp / .d64 / .d71 / .d81.
     cImpBtn.classList.toggle('disabled', !canAddCmdContainerPartition());
-    var canExport = !!selPart && (selPart.type >= 0x01 && selPart.type <= 0x04);
-    cExpBtn.classList.toggle('disabled', !canExport);
+    cExpBtn.classList.toggle('disabled', !selPart || !isCmdExportablePartition(selPart));
   } else if (hddListView) {
     var hddSelEl = document.querySelector('.dir-entry.selected[data-hdd-part]');
     var selHddIdx = hddSelEl ? parseInt(hddSelEl.dataset.hddPart, 10) : -1;
     var selHddPart = (selHddIdx >= 0 && hddPartitions) ? hddPartitions[selHddIdx] : null;
-    // Empty + soft-deleted slots are both reusable for a new partition.
+    // Empty and soft-deleted slots are both reusable for a new partition.
     var hasFreeSlot = hddPartitions && hddPartitions.some(function(p) { return p.empty || p.deleted; });
     cNewBtn.classList.toggle('disabled', !hasFreeSlot);
-    // Rename / Delete / Attrs apply to live partitions only — a deleted
-    // slot has no live name to rename, can't be deleted again, and
-    // shouldn't appear to have editable attrs. Restore Partition is the
-    // mirror action: enabled only when the selected slot is deleted.
     var isLiveHdd = !!selHddPart && !selHddPart.empty && !selHddPart.deleted;
     var isDeletedHdd = !!selHddPart && selHddPart.deleted;
     cRenBtn.classList.toggle('disabled', !isLiveHdd);
@@ -962,7 +793,7 @@ function updateEntryMenuState() {
   if (hasSelection && !tape && currentBuffer) {
     var pData = new Uint8Array(currentBuffer);
     var pTypeIdx = pData[selectedEntryIndex + 2] & 0x07;
-    isCbmPartition = (pTypeIdx === 5 || pTypeIdx === 6);
+    isCbmPartition = currentFormat.supportsSubdirs && pTypeIdx === currentFormat.subdirType;
   }
   document.getElementById('opt-splat').classList.toggle('disabled', !hasSelection || noEdit || isCbmPartition);
   document.getElementById('opt-change-type').classList.toggle('disabled', !hasSelection || noEdit || isCbmPartition);
@@ -976,7 +807,9 @@ function updateEntryMenuState() {
     if (uClosed && uTypeIdx >= 1 && uTypeIdx <= 4 && !isCbmPartition) {
       canScratch = uLocked ? 'locked' : true;
     }
-    if (!uClosed && uData[selectedEntryIndex + 3] !== 0 && uData[selectedEntryIndex + 3] !== currentFormat.dirTrack) {
+    // DNP subdirs share the image's tracks, so only the root dir track is excluded there.
+    var uDirTrack = currentPartition && !currentPartition.dnpDir ? getDirContext().dirTrackNum : currentFormat.dirTrack;
+    if (!uClosed && uData[selectedEntryIndex + 3] !== 0 && uData[selectedEntryIndex + 3] !== uDirTrack) {
       var uRecov = checkScratchedRecoverable(currentBuffer, selectedEntryIndex);
       canUnscratch = (uRecov === 'yes' || uRecov === 'partial');
     }
@@ -984,7 +817,7 @@ function updateEntryMenuState() {
   var scratchEl = document.getElementById('opt-scratch');
   var unscratchEl = document.getElementById('opt-unscratch');
   scratchEl.style.display = canScratch ? '' : 'none';
-  scratchEl.classList.toggle('disabled', canScratch === 'locked');
+  scratchEl.classList.toggle('disabled', !canScratch || canScratch === 'locked');
   unscratchEl.style.display = canUnscratch ? '' : 'none';
   unscratchEl.classList.toggle('disabled', !canUnscratch);
   document.getElementById('opt-case').classList.toggle('disabled', !hasSelection || noEdit);
@@ -1024,16 +857,16 @@ function updateEntryMenuState() {
     var eClosed = (eType & 0x80) !== 0;
     var eIdx = eType & 0x07;
     exportEnabled = eClosed && eIdx >= 1 && eIdx <= 4;
-    // Copy: regular files (PRG/SEQ/USR/REL) OR a subdir/partition entry
-    // for the new cross-family tree copy. cbmCollectDirTree captures the
-    // whole subtree into the clipboard, mirroring the CFS Copy path.
+    // Copy: regular files, or a subdir/partition (copied as a whole tree).
     var isCopyableSubdir = eClosed && currentFormat && eIdx === currentFormat.subdirType;
     copyEnabled = exportEnabled || isCopyableSubdir;
     prgSelected = eClosed && eIdx === 2;
-    var geosFileType = edata[selectedEntryIndex + 0x18];
-    var geosStruct = edata[selectedEntryIndex + 0x17];
-    var isGeosGfx = (geosFileType === 0x14 || geosFileType === 0x15 || geosFileType === 0x08 || geosFileType === 0x18) ||
-      ((geosFileType === 0x07 || geosFileType === 0x13) && geosStruct === 0x01); // application data or write image + VLIR
+    var geosTypeName = GEOS_FILE_TYPES[edata[selectedEntryIndex + 0x18]];
+    var geosIsVlir = edata[selectedEntryIndex + 0x17] === 0x01;
+    var geosIsDocument = geosIsVlir &&
+      (geosTypeName === 'Application data' || geosTypeName === 'Write image');
+    var isGeosGfx = geosIsDocument ||
+      ['Paint image', 'Photo scrap', 'Font file', 'Photo album'].indexOf(geosTypeName) >= 0;
     gfxEnabled = eClosed && (eIdx === 2 || isGeosGfx) && edata[selectedEntryIndex + 3] > 0;
     if (eClosed && eIdx === 2) {
       var ft = edata[selectedEntryIndex + 3];
@@ -1047,8 +880,8 @@ function updateEntryMenuState() {
       }
     }
     geosEnabled = edata[selectedEntryIndex + 0x18] > 0;
-    // geoWrite document detection: type $07 or $13 with VLIR structure
-    if (eClosed && geosStruct === 0x01 && (geosFileType === 0x07 || geosFileType === 0x13)) {
+    // A geoWrite document is a VLIR document whose class is "Write Image".
+    if (eClosed && geosIsDocument) {
       var gwInfoT = edata[selectedEntryIndex + 0x15];
       var gwInfoS = edata[selectedEntryIndex + 0x16];
       if (gwInfoT > 0) {
@@ -1092,18 +925,11 @@ function updateEntryMenuState() {
   }
   document.getElementById('opt-view-tass').classList.toggle('disabled', !isTassCandidate);
   document.getElementById('opt-import').classList.toggle('disabled', multiSelect || !currentBuffer || !canInsertFile() || noEdit);
-  // Edit Current Sector / Edit File Sector are CBM-DOS only — they call
-  // getDirSlotOffsets / sectorOffset / dirTrack from the format spec,
-  // none of which apply to an IDE64 .hdd partition list view or to a
-  // CFS file (sectors are 512 B LBAs, not 256 B T/S). Disable across
-  // the entire .hdd context; the toggle runs every updateEntryMenuState
-  // call so they re-enable automatically on switch to a D64/etc tab.
+  // Sector editing and GEOS info are T/S based; an .hdd (CFS, 512-byte
+  // LBAs) has neither.
   var hddContext = (typeof isIde64ContainerView === 'function') && isIde64ContainerView();
   document.getElementById('opt-edit-sector').classList.toggle('disabled', !hasSelection || multiSelect || noEdit || hddContext);
   document.getElementById('opt-edit-file-sector').classList.toggle('disabled', !hasSelection || noEdit || hddContext);
-  // GEOS File Info reads the dir entry's GEOS header T/S — CBM-DOS-only;
-  // CFS dir entries don't carry that field. Disable across the .hdd
-  // context entirely (re-enables on switch to a D64/etc tab).
   document.getElementById('opt-view-geos').classList.toggle('disabled', !geosEnabled || hddContext);
   const lockEl = document.getElementById('opt-lock');
   const splatEl = document.getElementById('opt-splat');
@@ -1153,259 +979,203 @@ function updateEntryMenuState() {
       footerTs.textContent = '';
     }
   }
+  // CFS view: selectedEntryIndex is a slot in cfsDirEntries, not a byte
+  // offset, so the CBM-DOS checks above misfire and are redone here.
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) updateCfsEntryMenuState(multiSelect);
   if (typeof refreshToolbarState === 'function') refreshToolbarState();
-
-  // ── CFS dir-view overrides ───────────────────────────────────────
-  // The toggles above are CBM-DOS-shaped (selectedEntryIndex = byte
-  // offset, file-type bits in `entryOff + 2`, etc). Inside a CFS
-  // partition selectedEntryIndex is the absolute slot index in
-  // cfsDirEntries — so those checks misfire. Re-evaluate the three
-  // entry-level options we route through to CFS handlers.
-  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-    var cfsEntrySel = (selectedEntryIndex >= 0 && selectedEntryIndex < cfsDirEntries.length)
-      ? cfsDirEntries[selectedEntryIndex] : null;
-    var cfsHasEntry = !!cfsEntrySel && !cfsEntrySel.empty;
-    var cfsIsDeleted = cfsHasEntry && cfsEntrySel.ftype === CFS_FTYPE.DEL;
-    // System-managed "<<DELETED FILES>>" entry sits in every CFS
-    // partition root and points at the partition's deldir LBA. Protect
-    // it the same way DHD protects its SYSTEM partition. The canonical
-    // detector lives in ui-ide64.js as _cfsEntryIsDeldirRef and uses the
-    // partition entry's cfsDeletedDir pointer — that signal beats name
-    // / slot heuristics since neither is guaranteed stable.
-    var cfsIsDeldirRef = cfsHasEntry && typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(cfsEntrySel);
-    var cfsEditableEntry = cfsHasEntry && !cfsIsDeleted && !cfsIsDeldirRef;
-    // Live data-bearing entry — file content can be read out. Declared
-    // up here because half a dozen toggles below depend on it; the
-    // previous late-declaration relied on var hoisting and silently
-    // disabled View As / View Hex on every CFS render.
-    var cfsExportable = cfsHasEntry && !cfsIsDeleted &&
-      (cfsEntrySel.ftype === CFS_FTYPE.NORMAL || cfsEntrySel.ftype === CFS_FTYPE.REL);
-    // Rename is single-only — both startInlineRenameCfsEntry and the
-    // CBM-DOS analogue refuse with multi-select. Disable in multi too.
-    document.getElementById('opt-rename').classList.toggle('disabled', !cfsEditableEntry || multiSelect);
-    document.getElementById('opt-add-partition').classList.toggle('disabled', false);
-    // Scratch: any non-empty, non-already-deleted, non-system entry.
-    // Label flips to "Delete Directory" for DIR entries — directory
-    // deletes cascade (every child is scratched too), and the label
-    // change gives the user a heads-up before they pick the action.
-    var cfsScratchEl = document.getElementById('opt-scratch');
-    cfsScratchEl.style.display = cfsEditableEntry ? '' : 'none';
-    cfsScratchEl.classList.toggle('disabled', !cfsEditableEntry);
-    if (cfsHasEntry && cfsEntrySel.ftype === CFS_FTYPE.DIR) {
-      cfsScratchEl.textContent = 'Delete Directory';
-    } else {
-      cfsScratchEl.textContent = 'Scratch File';
-    }
-    // Unscratch: only on soft-deleted entries; cfsUnscratchEntry verifies
-    // bitmap state at click time and aborts cleanly if the data sectors
-    // have been reallocated, so the menu item is enabled whenever the
-    // entry is in DEL state. Label tracks the original type — a DEL DIR
-    // restore is recursive, so it gets a different label so the user
-    // knows it'll bring back the directory's contents too.
-    var cfsUnscratchEl = document.getElementById('opt-unscratch');
-    cfsUnscratchEl.style.display = cfsIsDeleted ? '' : 'none';
-    cfsUnscratchEl.classList.toggle('disabled', !cfsIsDeleted);
-    if (cfsIsDeleted && cfsEntrySel && cfsEntrySel.typeSuffix === 'DIR') {
-      cfsUnscratchEl.textContent = 'Restore Directory';
-    } else {
-      cfsUnscratchEl.textContent = 'Unscratch File';
-    }
-    // Change/Set File Size: only meaningful for NORMAL / REL entries —
-    // DIR / LNK / DEL have no editable byte-count field (or restoring
-    // size on a DEL would just write garbage relative to a freed tree).
-    // Override the CBM-DOS gating that left these enabled in CFS view.
-    var cfsSizeEditable = cfsEditableEntry &&
-      cfsEntrySel.ftype !== CFS_FTYPE.DIR &&
-      cfsEntrySel.ftype !== CFS_FTYPE.LNK;
-    // opt-block-size is inline DOM-edit on one row (single-only). Set
-    // Actual File Size batches via cfsCountFileDataSectors per entry.
-    document.getElementById('opt-block-size').classList.toggle('disabled', !cfsSizeEditable || multiSelect);
-    document.getElementById('opt-recalc-size').classList.toggle('disabled', !cfsSizeEditable);
-    // Name Case: case-flipping the system "<<DELETED FILES>>" entry
-    // would break IDEDOS's name-match recognition. Allow only on
-    // editable entries.
-    document.getElementById('opt-case').classList.toggle('disabled', !cfsEditableEntry);
-    // Lock / Splat: handlers route through CFS-aware attr-byte XOR
-    // (writeable bit 0x10 for lock, Closed bit 0x80 for splat). Labels
-    // flip based on current state so the user sees Lock vs Unlock /
-    // Splat vs Unsplat correctly. Splat is refused on DEL entries —
-    // scratched files share the not-Closed state and we don't want
-    // toggling them to create a weird mid-recovery state.
-    var cfsLockEl = document.getElementById('opt-lock');
-    var cfsSplatEl = document.getElementById('opt-splat');
-    cfsLockEl.style.display = '';
-    cfsSplatEl.style.display = '';
-    cfsLockEl.classList.toggle('disabled', !cfsEditableEntry);
-    cfsSplatEl.classList.toggle('disabled', !cfsEditableEntry || cfsIsDeleted);
-    if (cfsHasEntry) {
-      var attrByte = cfsEntrySel.attrByte || 0;
-      cfsLockEl.textContent = (attrByte & 0x10) ? 'Lock File' : 'Unlock File';
-      cfsSplatEl.textContent = (attrByte & 0x80) ? 'Splat File' : 'Unsplat File';
-    } else {
-      cfsLockEl.textContent = 'Lock File';
-      cfsSplatEl.textContent = 'Splat File';
-    }
-    // File Type submenu: DEL / NORMAL (SEQ/PRG/USR) / REL are valid CFS
-    // ftype targets. CBM (5) is disabled (no CBM partition files in CFS).
-    // DIR / LNK entries can't change type at all — switching a DIR to a
-    // file would orphan its children. Self-ref / deldir-ref are blocked
-    // by cfsEditableEntry already.
-    var cfsTypeChangeable = cfsEditableEntry &&
-      cfsEntrySel.ftype !== CFS_FTYPE.DIR &&
-      cfsEntrySel.ftype !== CFS_FTYPE.LNK;
-    var cfsTypeEl = document.getElementById('opt-change-type');
-    cfsTypeEl.classList.toggle('disabled', !cfsTypeChangeable);
-    for (var ti = 0; ti <= 5; ti++) {
-      var cfsTypeOpt = document.querySelector('#opt-change-type [data-typeidx="' + ti + '"]');
-      if (!cfsTypeOpt) continue;
-      var validForCfs = (ti >= 0 && ti <= 4); // CBM (5) not valid
-      cfsTypeOpt.classList.toggle('disabled', !validForCfs || !cfsTypeChangeable);
-    }
-    // Current-type check mark: map CFS ftype + suffix back to a CBM idx.
-    var cfsCheckIdx = -1;
-    if (cfsHasEntry) {
-      if (cfsEntrySel.ftype === CFS_FTYPE.NORMAL) {
-        if (cfsEntrySel.typeSuffix === 'SEQ') cfsCheckIdx = 1;
-        else if (cfsEntrySel.typeSuffix === 'PRG') cfsCheckIdx = 2;
-        else if (cfsEntrySel.typeSuffix === 'USR') cfsCheckIdx = 3;
-      } else if (cfsEntrySel.ftype === CFS_FTYPE.REL) {
-        cfsCheckIdx = 4;
-      } else if (cfsEntrySel.ftype === CFS_FTYPE.DEL) {
-        cfsCheckIdx = 0;
-      }
-    }
-    for (var tci = 0; tci <= 5; tci++) {
-      var cm = document.getElementById('check-type-' + tci);
-      if (cm) cm.innerHTML = (tci === cfsCheckIdx) ? '<i class="fa-solid fa-check"></i>' : '';
-    }
-    // Edit Track/Sector stays hidden in CFS — raw sector editing exposes
-    // the byte-sliced CFS storage layout which isn't a useful UX for
-    // end users. View As → Hex shows the de-interleaved file content
-    // for the "I want to look at the bytes" case.
-    document.getElementById('opt-change-ts').style.display = 'none';
-    // Move Up / Move Down: route to moveCfsEntries which respects the
-    // self-ref / deldir-ref protected slots and the last-used bound.
-    // Disabled when the (sorted) lowest selected slot is already at the
-    // first-user position (up) or the highest is at the last-used slot
-    // (down). Multi-select supported, same as CBM-DOS.
-    var cfsMoveCandidates = [];
-    var cfsPicked = selectedEntries.length > 1 ? selectedEntries : [selectedEntryIndex];
-    for (var mci = 0; mci < cfsPicked.length; mci++) {
-      var mcEnt = cfsDirEntries[cfsPicked[mci]];
-      if (!mcEnt || mcEnt.empty) continue;
-      if (mcEnt.isSelfRef) continue;
-      if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(mcEnt)) continue;
-      cfsMoveCandidates.push(cfsPicked[mci]);
-    }
-    var cfsFirstUserSlot = 0;
-    for (var mfu = 0; mfu < cfsDirEntries.length; mfu++) {
-      var mfuEnt = cfsDirEntries[mfu];
-      if (!mfuEnt) continue;
-      if (mfuEnt.isSelfRef) continue;
-      if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(mfuEnt)) continue;
-      cfsFirstUserSlot = mfu;
-      break;
-    }
-    var cfsLastUsed = -1;
-    for (var mlu = cfsDirEntries.length - 1; mlu >= 0; mlu--) {
-      if (cfsDirEntries[mlu] && !cfsDirEntries[mlu].empty) { cfsLastUsed = mlu; break; }
-    }
-    var cfsMoveSorted = cfsMoveCandidates.slice().sort(function(a, b) { return a - b; });
-    var cfsCanMoveUp = cfsMoveSorted.length > 0 && cfsMoveSorted[0] > cfsFirstUserSlot;
-    var cfsCanMoveDown = cfsMoveSorted.length > 0 &&
-                         cfsLastUsed >= 0 &&
-                         cfsMoveSorted[cfsMoveSorted.length - 1] < cfsLastUsed;
-    document.getElementById('opt-move-up').classList.toggle('disabled', !cfsCanMoveUp);
-    document.getElementById('opt-move-down').classList.toggle('disabled', !cfsCanMoveDown);
-    // View As submenu: the universal viewers (Hex / Disasm / PETSCII /
-    // BASIC / Graphics / TASS) accept a `preloaded` arg that bypasses
-    // readFileData, so they all work in CFS via the cfsLoadFileForViewer
-    // adapter. Each is gated on a live file/REL entry that has data.
-    // BASIC additionally needs the first 2 bytes to be a known load
-    // address; Graphics / TASS sniff their own magic at click time.
-    // geoWrite / VLIR / REL stay disabled in CFS — they're CBM-DOS
-    // GEOS/REL specific and don't apply to CFS content.
-    document.getElementById('opt-view-as').classList.toggle('disabled', !cfsExportable);
-    document.getElementById('opt-view-hex').classList.toggle('disabled', !cfsExportable);
-    document.getElementById('opt-view-disasm').classList.toggle('disabled', !cfsExportable);
-    document.getElementById('opt-view-petscii').classList.toggle('disabled', !cfsExportable);
-    var cfsBasicEnabled = false;
-    if (cfsExportable && cfsEntrySel && cfsEntrySel.dataTreePtr && cfsEntrySel.dataTreePtr.lba) {
-      // Peek at the first data sector's first 2 bytes (byte-sliced
-      // accessor: byte 0 lives at offset 0, byte 1 at offset 4) to read
-      // the load address without fetching the whole file.
-      var firstLba = cfsEntrySel.dataTreePtr.addr;
-      var firstPtr = _readIde64Pointer(new Uint8Array(hddBuffer), firstLba * 512);
-      if (firstPtr && firstPtr.lba && firstPtr.addr > 0) {
-        var dBase = firstPtr.addr * 512;
-        var dArr = new Uint8Array(hddBuffer);
-        if (dBase + 5 <= dArr.length) {
-          var loadAddr = dArr[dBase] | (dArr[dBase + 4] << 8);
-          cfsBasicEnabled = (typeof BASIC_LOAD_ADDRS === 'object') &&
-                            (BASIC_LOAD_ADDRS[loadAddr] !== undefined);
-        }
-      }
-    }
-    document.getElementById('opt-view-basic').classList.toggle('disabled', !cfsBasicEnabled);
-    document.getElementById('opt-view-gfx').classList.toggle('disabled', !cfsExportable);
-    document.getElementById('opt-view-tass').classList.toggle('disabled', !cfsExportable);
-    // GEOS / REL-specific viewers stay disabled in CFS — they read
-    // CBM-DOS-only fields (GEOS info-block T/S, REL side-sector chain).
-    document.getElementById('opt-view-geowrite').classList.add('disabled');
-    document.getElementById('opt-view-vlir').classList.add('disabled');
-    document.getElementById('opt-view-rel').classList.add('disabled');
-    // Remove Entry: hard delete — frees the data sectors (recursive for
-    // dirs) and zeros the 32-byte slot. Loses unscratch for the entry,
-    // but keeps the bitmap clean. Enabled on any editable entry (DEL
-    // entries just get the zero-slot step since their sectors are
-    // already free from the original scratch). The dir self-ref is
-    // refused at the format layer.
-    document.getElementById('opt-remove').classList.toggle('disabled', !cfsEditableEntry && !cfsIsDeleted);
-    // Insert Entry: placeholder entry, no data sectors allocated. Only
-    // disabled when the dir chain has no free slot (cfsFindEmptyDirSlot
-    // checks both truly-empty and DEL-fallback slots, mirroring import).
-    var cfsHasFreeSlot = !!cfsFindEmptyDirSlot(hddBuffer, cfsDirLba);
-    // Insert / Insert Separator are single-action; disable on multi.
-    document.getElementById('opt-insert').classList.toggle('disabled', !cfsHasFreeSlot || multiSelect);
-    document.getElementById('opt-insert-sep').classList.toggle('disabled', !cfsHasFreeSlot || multiSelect);
-    // File → Import File: dispatches to showCfsImportPicker in CFS view.
-    // Same free-slot gate; the CBM-DOS canInsertFile() check at line
-    // ~810 would reject every CFS view since currentFormat shape doesn't
-    // match.
-    document.getElementById('opt-import').classList.toggle('disabled', !cfsHasFreeSlot);
-    // Export: live file entries (NORMAL / REL) only — dirs/links/DEL
-    // have no data to dump. opt-export-menu is the parent submenu; the
-    // CBM-DOS code keeps it disabled outside CBM contexts so override
-    // here so the CFS user can reach Export File. (cfsExportable is
-    // declared up top so View As / View Hex gating sees the right value.)
-    document.getElementById('opt-export').classList.toggle('disabled', !cfsExportable);
-    document.getElementById('opt-export-menu').classList.toggle('disabled', !cfsExportable);
-    // Copy: NORMAL/REL files OR a DIR entry (recursive tree copy). LNK
-    // and the system <<DELETED FILES>> stay disabled — the handler in
-    // ui-fileops.js also defensively re-checks those cases.
-    var cfsCopyableDir = cfsHasEntry && !cfsIsDeleted && cfsEntrySel.ftype === CFS_FTYPE.DIR && !_cfsEntryIsDeldirRef(cfsEntrySel);
-    document.getElementById('opt-copy').classList.toggle('disabled', !(cfsExportable || cfsCopyableDir));
-    // Paste: enabled whenever the clipboard has anything and the dir
-    // has room (canInsertFile() reads CBM-DOS shape — bypass it here
-    // and check the CFS free-slot probe instead).
-    document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !cfsHasFreeSlot);
-    // Align: handler routes to alignCfsFilename in CFS view. Gate on
-    // the same editable-entry flag we use for Rename / Scratch so the
-    // system <<DELETED FILES>> entry stays protected.
-    document.getElementById('opt-align').classList.toggle('disabled', !cfsEditableEntry);
-    // Show-Deleted toggle works the same way in CFS view — keep it
-    // enabled whenever the partition view is open.
-    document.getElementById('opt-show-deleted').classList.toggle('disabled', false);
-    // Run in Emulator: PRG entries only (NORMAL ftype + "PRG" suffix);
-    // single-select. The click handler reads via cfsLoadFileForViewer.
-    var cfsIsPrg = cfsHasEntry && cfsEntrySel.ftype === CFS_FTYPE.NORMAL &&
-                   cfsEntrySel.typeSuffix === 'PRG';
-    document.getElementById('opt-run-in-emulator').classList.toggle('disabled', !cfsIsPrg || multiSelect);
-    // Save Current as New Separator: in CFS view, picks up the entry's
-    // 16-byte name bytes (cfsEntrySel.nameBytes) instead of reading from
-    // currentBuffer at a CBM-DOS byte offset. Enabled on any non-empty
-    // editable entry.
-    document.getElementById('opt-save-sep').classList.toggle('disabled', !cfsEditableEntry);
-  }
 }
 
+function updateCfsEntryMenuState(multiSelect) {
+  var cfsEntrySel = (selectedEntryIndex >= 0 && selectedEntryIndex < cfsDirEntries.length)
+    ? cfsDirEntries[selectedEntryIndex] : null;
+  var cfsHasEntry = !!cfsEntrySel && !cfsEntrySel.empty;
+  var cfsIsDeleted = cfsHasEntry && cfsEntrySel.ftype === CFS_FTYPE.DEL;
+  // The system "<<DELETED FILES>>" entry is protected like DHD's SYSTEM
+  // partition.
+  var cfsIsDeldirRef = cfsHasEntry && typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(cfsEntrySel);
+  var cfsEditableEntry = cfsHasEntry && !cfsIsDeleted && !cfsIsDeldirRef;
+  var cfsExportable = cfsHasEntry && !cfsIsDeleted &&
+    (cfsEntrySel.ftype === CFS_FTYPE.NORMAL || cfsEntrySel.ftype === CFS_FTYPE.REL);
+  document.getElementById('opt-rename').classList.toggle('disabled', !cfsEditableEntry || multiSelect);
+  document.getElementById('opt-add-partition').classList.toggle('disabled', false);
+  // DIR deletes cascade to every child, hence the different label.
+  var cfsScratchEl = document.getElementById('opt-scratch');
+  cfsScratchEl.style.display = cfsEditableEntry ? '' : 'none';
+  cfsScratchEl.classList.toggle('disabled', !cfsEditableEntry);
+  if (cfsHasEntry && cfsEntrySel.ftype === CFS_FTYPE.DIR) {
+    cfsScratchEl.textContent = 'Delete Directory';
+  } else {
+    cfsScratchEl.textContent = 'Scratch File';
+  }
+  // Unscratch checks the bitmap itself at click time; a DEL DIR restore
+  // is recursive, hence its own label.
+  var cfsUnscratchEl = document.getElementById('opt-unscratch');
+  cfsUnscratchEl.style.display = cfsIsDeleted ? '' : 'none';
+  cfsUnscratchEl.classList.toggle('disabled', !cfsIsDeleted);
+  if (cfsIsDeleted && cfsEntrySel && cfsEntrySel.typeSuffix === 'DIR') {
+    cfsUnscratchEl.textContent = 'Restore Directory';
+  } else {
+    cfsUnscratchEl.textContent = 'Unscratch File';
+  }
+  // DIR / LNK entries have no editable size.
+  var cfsSizeEditable = cfsEditableEntry &&
+    cfsEntrySel.ftype !== CFS_FTYPE.DIR &&
+    cfsEntrySel.ftype !== CFS_FTYPE.LNK;
+  document.getElementById('opt-block-size').classList.toggle('disabled', !cfsSizeEditable || multiSelect);
+  document.getElementById('opt-recalc-size').classList.toggle('disabled', !cfsSizeEditable);
+  document.getElementById('opt-case').classList.toggle('disabled', !cfsEditableEntry);
+  // Attr bits: $10 = writeable (so set means unlocked), $80 = closed.
+  var cfsLockEl = document.getElementById('opt-lock');
+  var cfsSplatEl = document.getElementById('opt-splat');
+  cfsLockEl.style.display = '';
+  cfsSplatEl.style.display = '';
+  cfsLockEl.classList.toggle('disabled', !cfsEditableEntry);
+  cfsSplatEl.classList.toggle('disabled', !cfsEditableEntry || cfsIsDeleted);
+  if (cfsHasEntry) {
+    var attrByte = cfsEntrySel.attrByte || 0;
+    cfsLockEl.textContent = (attrByte & 0x10) ? 'Lock File' : 'Unlock File';
+    cfsSplatEl.textContent = (attrByte & 0x80) ? 'Splat File' : 'Unsplat File';
+  } else {
+    cfsLockEl.textContent = 'Lock File';
+    cfsSplatEl.textContent = 'Splat File';
+  }
+  // DEL/SEQ/PRG/USR/REL are valid CFS targets, CBM isn't. A DIR / LNK
+  // can't change type (a DIR would orphan its children).
+  var cfsTypeChangeable = cfsEditableEntry &&
+    cfsEntrySel.ftype !== CFS_FTYPE.DIR &&
+    cfsEntrySel.ftype !== CFS_FTYPE.LNK;
+  var cfsTypeEl = document.getElementById('opt-change-type');
+  cfsTypeEl.classList.toggle('disabled', !cfsTypeChangeable);
+  for (var ti = 0; ti <= 5; ti++) {
+    var cfsTypeOpt = document.querySelector('#opt-change-type [data-typeidx="' + ti + '"]');
+    if (!cfsTypeOpt) continue;
+    var validForCfs = (ti >= 0 && ti <= 4); // CBM (5) not valid
+    cfsTypeOpt.classList.toggle('disabled', !validForCfs || !cfsTypeChangeable);
+  }
+  // Current-type check mark: map CFS ftype + suffix back to a CBM idx.
+  var cfsCheckIdx = -1;
+  if (cfsHasEntry) {
+    if (cfsEntrySel.ftype === CFS_FTYPE.NORMAL) {
+      if (cfsEntrySel.typeSuffix === 'SEQ') cfsCheckIdx = 1;
+      else if (cfsEntrySel.typeSuffix === 'PRG') cfsCheckIdx = 2;
+      else if (cfsEntrySel.typeSuffix === 'USR') cfsCheckIdx = 3;
+    } else if (cfsEntrySel.ftype === CFS_FTYPE.REL) {
+      cfsCheckIdx = 4;
+    } else if (cfsEntrySel.ftype === CFS_FTYPE.DEL) {
+      cfsCheckIdx = 0;
+    }
+  }
+  for (var tci = 0; tci <= 5; tci++) {
+    var cm = document.getElementById('check-type-' + tci);
+    if (cm) cm.innerHTML = (tci === cfsCheckIdx) ? '<i class="fa-solid fa-check"></i>' : '';
+  }
+  // CFS has no T/S; View As → Hex covers looking at the bytes.
+  var cfsTsEl = document.getElementById('opt-change-ts');
+  cfsTsEl.style.display = 'none';
+  cfsTsEl.classList.add('disabled');
+  // Move Up/Down stay between the protected leading slots and the last
+  // used slot.
+  var cfsMoveCandidates = [];
+  var cfsPicked = selectedEntries.length > 1 ? selectedEntries : [selectedEntryIndex];
+  for (var mci = 0; mci < cfsPicked.length; mci++) {
+    var mcEnt = cfsDirEntries[cfsPicked[mci]];
+    if (!mcEnt || mcEnt.empty) continue;
+    if (mcEnt.isSelfRef) continue;
+    if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(mcEnt)) continue;
+    cfsMoveCandidates.push(cfsPicked[mci]);
+  }
+  var cfsFirstUserSlot = 0;
+  for (var mfu = 0; mfu < cfsDirEntries.length; mfu++) {
+    var mfuEnt = cfsDirEntries[mfu];
+    if (!mfuEnt) continue;
+    if (mfuEnt.isSelfRef) continue;
+    if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(mfuEnt)) continue;
+    cfsFirstUserSlot = mfu;
+    break;
+  }
+  var cfsLastUsed = -1;
+  for (var mlu = cfsDirEntries.length - 1; mlu >= 0; mlu--) {
+    if (cfsDirEntries[mlu] && !cfsDirEntries[mlu].empty) { cfsLastUsed = mlu; break; }
+  }
+  var cfsMoveSorted = cfsMoveCandidates.slice().sort(function(a, b) { return a - b; });
+  var cfsCanMoveUp = cfsMoveSorted.length > 0 && cfsMoveSorted[0] > cfsFirstUserSlot;
+  var cfsCanMoveDown = cfsMoveSorted.length > 0 &&
+                       cfsLastUsed >= 0 &&
+                       cfsMoveSorted[cfsMoveSorted.length - 1] < cfsLastUsed;
+  document.getElementById('opt-move-up').classList.toggle('disabled', !cfsCanMoveUp);
+  document.getElementById('opt-move-down').classList.toggle('disabled', !cfsCanMoveDown);
+  // Generic viewers take preloaded CFS file data; BASIC also needs a known
+  // load address.
+  document.getElementById('opt-view-as').classList.toggle('disabled', !cfsExportable);
+  document.getElementById('opt-view-hex').classList.toggle('disabled', !cfsExportable);
+  document.getElementById('opt-view-disasm').classList.toggle('disabled', !cfsExportable);
+  document.getElementById('opt-view-petscii').classList.toggle('disabled', !cfsExportable);
+  var cfsBasicEnabled = false;
+  if (cfsExportable && cfsEntrySel && cfsEntrySel.dataTreePtr && cfsEntrySel.dataTreePtr.lba) {
+    // Byte-sliced storage: file bytes 0 and 1 sit at sector offsets 0 and 4.
+    var firstLba = cfsEntrySel.dataTreePtr.addr;
+    var firstPtr = _readIde64Pointer(new Uint8Array(hddBuffer), firstLba * IDE64_SECTOR_SIZE);
+    if (firstPtr && firstPtr.lba && firstPtr.addr > 0) {
+      var dBase = firstPtr.addr * IDE64_SECTOR_SIZE;
+      var dArr = new Uint8Array(hddBuffer);
+      if (dBase + 5 <= dArr.length) {
+        var loadAddr = dArr[dBase] | (dArr[dBase + 4] << 8);
+        cfsBasicEnabled = (typeof BASIC_LOAD_ADDRS === 'object') &&
+                          (BASIC_LOAD_ADDRS[loadAddr] !== undefined);
+      }
+    }
+  }
+  document.getElementById('opt-view-basic').classList.toggle('disabled', !cfsBasicEnabled);
+  document.getElementById('opt-view-gfx').classList.toggle('disabled', !cfsExportable);
+  document.getElementById('opt-view-tass').classList.toggle('disabled', !cfsExportable);
+  // GEOS / VLIR / REL viewers and exports read CBM-DOS-only fields.
+  ['opt-view-geowrite', 'opt-view-vlir', 'opt-view-rel',
+   'opt-export-cvt', 'opt-export-rtf', 'opt-export-pdf', 'opt-export-txt-gw'].forEach(function(id) {
+    document.getElementById(id).classList.add('disabled');
+  });
+  // Remove frees the sectors and zeroes the slot (no unscratch after).
+  document.getElementById('opt-remove').classList.toggle('disabled', !cfsEditableEntry && !cfsIsDeleted);
+  // canInsertFile() is CBM-DOS-shaped; use the CFS free-slot probe.
+  var cfsHasFreeSlot = !!cfsFindEmptyDirSlot(hddBuffer, cfsDirLba);
+  document.getElementById('opt-insert').classList.toggle('disabled', !cfsHasFreeSlot || multiSelect);
+  document.getElementById('opt-insert-sep').classList.toggle('disabled', !cfsHasFreeSlot || multiSelect);
+  document.getElementById('opt-import').classList.toggle('disabled', !cfsHasFreeSlot);
+  document.getElementById('opt-export').classList.toggle('disabled', !cfsExportable);
+  document.getElementById('opt-export-menu').classList.toggle('disabled', !cfsExportable);
+  // Copy: files, or a DIR as a recursive tree.
+  var cfsCopyableDir = cfsHasEntry && !cfsIsDeleted && cfsEntrySel.ftype === CFS_FTYPE.DIR && !_cfsEntryIsDeldirRef(cfsEntrySel);
+  document.getElementById('opt-copy').classList.toggle('disabled', !(cfsExportable || cfsCopyableDir));
+  document.getElementById('opt-paste').classList.toggle('disabled', clipboard.length === 0 || !cfsHasFreeSlot);
+  document.getElementById('opt-align').classList.toggle('disabled', !cfsEditableEntry);
+  document.getElementById('opt-show-deleted').classList.toggle('disabled', false);
+  var cfsIsPrg = cfsHasEntry && cfsEntrySel.ftype === CFS_FTYPE.NORMAL &&
+                 cfsEntrySel.typeSuffix === 'PRG';
+  document.getElementById('opt-run-in-emulator').classList.toggle('disabled', !cfsIsPrg || multiSelect);
+  document.getElementById('opt-save-sep').classList.toggle('disabled', !cfsEditableEntry);
+}
+
+
+// ── Menu ARIA ─────────────────────────────────────────────────────────
+// Roles on the static menu markup; aria-disabled follows the .disabled
+// class wherever the menu code toggles it (menubar and context menu).
+(function initMenuAria() {
+  var bar = document.querySelector('.menubar-items');
+  if (!bar) return;
+  bar.setAttribute('role', 'menubar');
+  bar.querySelectorAll('.menu-item').forEach(function(el) { el.setAttribute('role', 'menuitem'); });
+  document.querySelectorAll('.menu-dropdown, .submenu').forEach(function(el) { el.setAttribute('role', 'menu'); });
+  document.querySelectorAll('.menu-dropdown .option').forEach(function(el) {
+    el.setAttribute('role', 'menuitem');
+    el.setAttribute('aria-disabled', el.classList.contains('disabled') ? 'true' : 'false');
+  });
+  var observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      var el = m.target;
+      if (el.classList && el.classList.contains('option')) {
+        el.setAttribute('aria-disabled', el.classList.contains('disabled') ? 'true' : 'false');
+      }
+    });
+  });
+  observer.observe(bar, { attributes: true, attributeFilter: ['class'], subtree: true });
+  observer.observe(contextMenu, { attributes: true, attributeFilter: ['class'], subtree: true });
+})();

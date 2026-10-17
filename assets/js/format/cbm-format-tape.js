@@ -1,9 +1,5 @@
 // ── T64 tape image parser ─────────────────────────────────────────────
-// parseT64 / getTapeEntry / isTapeFormat. The TAP loader (parseTAP)
-// lives in cbm-tape.js with its multi-loader support (CBM ROM,
-// Turbotape 250, Novaload, Cyberload F1-F4 chain, Creatures custom).
-// Both share parsedT64Entries / parsedTAPEntries / parsedTapeDir
-// declared at the top of cbm-format.js.
+// TAP parsing (parseTAP) lives in cbm-tape.js.
 function parseT64(buffer) {
   var data = new Uint8Array(buffer);
   parsedT64Entries = {};
@@ -17,6 +13,16 @@ function parseT64(buffer) {
     tapeName += PETSCII_MAP[ch] || String.fromCharCode(ch);
   }
 
+  // Every used entry's data offset, sorted, to size files whose end
+  // address is bogus (T64.TXT: CONV64 wrote $C3C6 regardless of size).
+  var offsets = [];
+  for (var oi = 0; oi < maxEntries && oi < 256; oi++) {
+    var oOff = 0x40 + oi * 32;
+    if (oOff + 32 > data.length) break;
+    if (data[oOff] !== 0) offsets.push(_t64DataOffset(data, oOff));
+  }
+  offsets.sort(function(a, b) { return a - b; });
+
   var entries = [];
   for (var ei = 0; ei < maxEntries && ei < 256; ei++) {
     var eOff = 0x40 + ei * 32;
@@ -26,7 +32,12 @@ function parseT64(buffer) {
     var fileType = data[eOff + 1]; // C64 file type (1=SEQ, $82=PRG, etc.)
     var startAddr = data[eOff + 2] | (data[eOff + 3] << 8);
     var endAddr = data[eOff + 4] | (data[eOff + 5] << 8);
-    var dataOffset = data[eOff + 8] | (data[eOff + 9] << 8) | (data[eOff + 10] << 16) | (data[eOff + 11] << 24);
+    var dataOffset = _t64DataOffset(data, eOff);
+    var stored = _t64NextOffset(offsets, dataOffset, data.length) - dataOffset;
+    var dirSize = endAddr - startAddr;
+    if (stored > 0 && (endAddr === 0xC3C6 || dirSize <= 0 || dirSize > stored)) {
+      endAddr = startAddr + stored;
+    }
     var name = '';
     for (var ni = 0; ni < 16; ni++) {
       var ch2 = data[eOff + 16 + ni];
@@ -59,6 +70,18 @@ function parseT64(buffer) {
     format: 'T64',
     tracks: 0
   };
+}
+
+function _t64DataOffset(data, eOff) {
+  return (data[eOff + 8] | (data[eOff + 9] << 8) | (data[eOff + 10] << 16) | (data[eOff + 11] << 24)) >>> 0;
+}
+
+// Smallest data offset above `off`, or EOF.
+function _t64NextOffset(sortedOffsets, off, eof) {
+  for (var i = 0; i < sortedOffsets.length; i++) {
+    if (sortedOffsets[i] > off) return Math.min(sortedOffsets[i], eof);
+  }
+  return eof;
 }
 
 // Look up a tape directory entry by entryOff

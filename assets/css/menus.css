@@ -39,7 +39,7 @@
   }
   .menubar-hamburger:hover,
   .menubar-hamburger:focus-visible {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--menu-hover);
     outline: none;
   }
 
@@ -52,7 +52,7 @@
 
   .menu-item:hover,
   .menu-item.open {
-    background: rgba(255,255,255,0.1);
+    background: var(--menu-hover);
   }
 
   .menubar.menu-active:not(.menu-keynav) .menu-item:hover > .menu-dropdown {
@@ -69,9 +69,9 @@
     border-radius: 3px;
     padding: 4px 0;
     min-width: 160px;
-    /* Sit above the floating PETSCII / Separators palettes (z-index 250)
+    /* Sit above the floating PETSCII / Separators palettes (--z-palette)
        so the menus aren't hidden behind them when open. */
-    z-index: 300;
+    z-index: var(--z-menu);
     box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
 
@@ -117,7 +117,7 @@
     min-width: 180px;
     /* Same stacking lift as the parent dropdown so submenus sit above
        the floating PETSCII / Separators palettes. */
-    z-index: 310;
+    z-index: var(--z-submenu);
     box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
 
@@ -161,7 +161,7 @@
     position: fixed;
     top: 0;
     left: 0;
-    z-index: 200;
+    z-index: var(--z-overlay);
     font-size: 13px;
   }
 
@@ -214,7 +214,7 @@
     right: 0;
     bottom: 0;
     background: var(--bg-panel);
-    z-index: 200;
+    z-index: var(--z-overlay);
     flex-direction: column;
     user-select: none;
   }
@@ -250,7 +250,7 @@
   .mm-header .mm-back:active,
   .mm-header .mm-close:hover,
   .mm-header .mm-close:active {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--menu-hover);
   }
   .mm-header .mm-back[hidden] {
     display: none;
@@ -291,7 +291,7 @@
     cursor: pointer;
   }
   .mm-item:active:not(.mm-disabled) {
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--menu-hover);
   }
   .mm-item.mm-disabled {
     color: var(--text-muted);

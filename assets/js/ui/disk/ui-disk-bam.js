@@ -1,4 +1,91 @@
 // ── BAM Viewer ───────────────────────────────────────────────────────
+// The rows the BAM bitmap is indexed by: a D81 partition's own tracks,
+// LBA slots on D1M/D2M/D4M (as in checkBAMIntegrity), else physical tracks.
+function getBamViewGeometry(data, diskCtx) {
+  var fmt = diskCtx.format;
+  var partition = diskCtx.partition;
+  if (partition && !partition.dnpDir && partition.startTrack) {
+    var numTracks = Math.floor((partition.partSize || 0) / fmt.partitionSpt);
+    return {
+      first: partition.startTrack,
+      last: Math.min(diskCtx.tracks, partition.startTrack + numTracks - 1),
+      spt: function(t) { return fmt.sectorsPerTrack(t); },
+      dirTrack: partition.startTrack
+    };
+  }
+  var iterSpt = fmt.getBamIterSectorsPerTrack || fmt.sectorsPerTrack;
+  return {
+    first: 1,
+    last: fmt.getBamIterTracks ? fmt.getBamIterTracks(data) : fmt.bamTracksRange(diskCtx.tracks),
+    spt: function(t) { return iterSpt.call(fmt, t); },
+    dirTrack: fmt.dirTrack
+  };
+}
+
+// checkBAMIntegrity only understands the root BAM, so inside a D81
+// partition compare the partition's own BAM against its own chains.
+function checkPartitionBamIntegrity(buffer, diskCtx, geo, bamOff) {
+  var data = new Uint8Array(buffer);
+  var fmt = diskCtx.format;
+  var st = diskCtx.partition.startTrack;
+  var owner = {};
+  owner[st + ':0'] = owner[st + ':1'] = owner[st + ':2'] = 'System';
+  var dt = st, ds = 3;
+  while (dt !== 0 && !owner[dt + ':' + ds]) {
+    owner[dt + ':' + ds] = 'Directory';
+    var doff = sectorOffset(dt, ds, diskCtx);
+    if (doff < 0) break;
+    for (var i = 0; i < fmt.entriesPerSector; i++) {
+      var eo = doff + i * fmt.entrySize;
+      if (!(data[eo + 2] & 0x80)) continue;
+      var name = readPetsciiString(data, eo + 5, 16) || '?';
+      forEachFileSector(data, eo, function(t, s) { owner[t + ':' + s] = name; }, diskCtx);
+    }
+    dt = data[doff]; ds = data[doff + 1];
+  }
+
+  var res = { sectorOwner: owner, bamErrors: [], allocMismatch: 0, orphanCount: 0,
+              errorTracks: {}, errorSectors: {}, orphanSectors: {} };
+  for (var t = geo.first; t <= geo.last; t++) {
+    var spt = geo.spt(t);
+    var actualFree = 0;
+    for (var s = 0; s < spt; s++) {
+      var key = t + ':' + s;
+      var isFree = checkSectorFree(data, bamOff, t, s, diskCtx);
+      if (isFree) actualFree++;
+      if (t === geo.dirTrack) continue;
+      if (isFree && owner[key] !== undefined) { res.allocMismatch++; res.errorSectors[key] = true; }
+      if (!isFree && owner[key] === undefined) { res.orphanCount++; res.orphanSectors[key] = true; }
+    }
+    if (fmt.hasBamFreeCounts) {
+      var storedFree = data[getPartitionBamEntry(bamOff, t - st + 1, diskCtx)];
+      if (storedFree !== actualFree) {
+        res.bamErrors.push('T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
+          ' count=' + storedFree + ' actual=' + actualFree);
+        res.errorTracks[t] = true;
+      }
+    }
+  }
+  return res;
+}
+
+// Canvas colour for a .bam-sector state class, read from the stylesheet.
+function getBamSectorColor(cls) {
+  var el = document.createElement('span');
+  el.className = 'bam-sector ' + cls;
+  el.style.display = 'none';
+  document.body.appendChild(el);
+  var style = getComputedStyle(el);
+  var bg = style.backgroundColor;
+  var op = parseFloat(style.opacity);
+  document.body.removeChild(el);
+  if (op < 1) {
+    var m = bg.match(/\d+/g);
+    if (m) return 'rgba(' + m[0] + ',' + m[1] + ',' + m[2] + ',' + op + ')';
+  }
+  return bg;
+}
+
 document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   e.stopPropagation();
   if (!currentBuffer) return;
@@ -6,12 +93,27 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
 
   var data = new Uint8Array(currentBuffer);
   var fmt = currentFormat;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
-  var bamTracks = fmt.bamTracksRange(currentTracks);
+  var viewCtx = getCurrentCtx();
+  var bamOff = getDirContext(viewCtx).bamOff;
+  var geo = getBamViewGeometry(data, viewCtx);
+  var numRows = Math.max(0, geo.last - geo.first + 1);
+  var inD81Partition = !!(viewCtx.partition && !viewCtx.partition.dnpDir);
 
-  // Use shared BAM integrity check
-  var bamCheck = checkBAMIntegrity(currentBuffer, getCurrentCtx());
+  var bamCheck = inD81Partition
+    ? checkPartitionBamIntegrity(currentBuffer, viewCtx, geo, bamOff)
+    : checkBAMIntegrity(currentBuffer, viewCtx);
   var sectorOwner = bamCheck.sectorOwner;
+
+  function toggleBamBit(t, s) {
+    pushUndo();
+    var d = new Uint8Array(currentBuffer);
+    var ctx = getCurrentCtx();
+    var base = getBamBitmapBase(t, bamOff, ctx);
+    d[base + (s >> 3)] ^= fmt.bamBitMask(s);
+    if (fmt.hasBamFreeCounts) bamRecalcFree(d, t, bamOff, ctx);
+    document.getElementById('modal-overlay').classList.remove('open');
+    document.getElementById('opt-view-bam').click();
+  }
 
   var bamWarnings = '';
   if (bamCheck.bamErrors.length > 0 || bamCheck.allocMismatch > 0 || bamCheck.orphanCount > 0) {
@@ -54,10 +156,9 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     bamWarnings += '</ul>';
   }
 
-  // Find max sectors for header
   var maxSpt = 0;
-  for (var t = 1; t <= bamTracks; t++) {
-    var spt = fmt.sectorsPerTrack(t);
+  for (var t = geo.first; t <= geo.last; t++) {
+    var spt = geo.spt(t);
     if (spt > maxSpt) maxSpt = spt;
   }
 
@@ -69,11 +170,11 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   // Collect per-track stats for both views
   var trackStats = []; // [{free, used, spt}] indexed by track (1-based)
   var totalFree = 0, totalUsed = 0;
-  for (t = 1; t <= bamTracks; t++) {
-    spt = fmt.sectorsPerTrack(t);
+  for (t = geo.first; t <= geo.last; t++) {
+    spt = geo.spt(t);
     var tFree = 0, tUsed = 0;
     for (var cs = 0; cs < spt; cs++) {
-      if (checkSectorFree(data, bamOff, t, cs, getCurrentCtx())) tFree++; else tUsed++;
+      if (checkSectorFree(data, bamOff, t, cs, viewCtx)) tFree++; else tUsed++;
     }
     totalFree += tFree;
     totalUsed += tUsed;
@@ -82,16 +183,16 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
 
   // ── Build Track Usage view (compact bars per track) ──
   var trackUsageLegend = '<div class="bam-legend">' +
-    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#6c9bd2"></span> 0-50%</span>' +
-    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#4a7ab5"></span> 50-70%</span>' +
-    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#2d5a8e"></span> 70-90%</span>' +
-    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:#1a3a5c"></span> 90-100%</span>' +
+    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--usage-1)"></span> 0-50%</span>' +
+    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--usage-2)"></span> 50-70%</span>' +
+    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--usage-3)"></span> 70-90%</span>' +
+    '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--usage-4)"></span> 90-100%</span>' +
     '</div>';
   var trackUsageHtml = trackUsageLegend + '<div class="bam-viewer">';
-  for (t = 1; t <= bamTracks; t++) {
+  for (t = geo.first; t <= geo.last; t++) {
     var ts = trackStats[t];
     var pct = ts.spt > 0 ? Math.round(ts.used / ts.spt * 100) : 0;
-    var barColor = pct > 90 ? '#1a3a5c' : pct > 70 ? '#2d5a8e' : pct > 50 ? '#4a7ab5' : '#6c9bd2';
+    var barColor = pct > 90 ? 'var(--usage-4)' : pct > 70 ? 'var(--usage-3)' : pct > 50 ? 'var(--usage-2)' : 'var(--usage-1)';
     trackUsageHtml += '<div class="bam-track">';
     trackUsageHtml += '<span class="bam-track-num' + (bamCheck.errorTracks[t] ? ' error' : '') + '">$' + t.toString(16).toUpperCase().padStart(2, '0') + '</span>';
     trackUsageHtml += '<span class="bam-compact-bar" title="T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
@@ -150,7 +251,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       '<td style="padding:2px 0;width:80px"></td></tr>';
     for (var ffi = 0; ffi < fragFiles.length; ffi++) {
       var f = fragFiles[ffi];
-      var barCol = f.pct === 0 ? 'var(--accent)' : f.pct <= 30 ? '#6c9bd2' : f.pct <= 60 ? 'var(--color-warn)' : 'var(--color-error)';
+      var barCol = f.pct === 0 ? 'var(--accent)' : f.pct <= 30 ? 'var(--usage-1)' : f.pct <= 60 ? 'var(--color-warn)' : 'var(--color-error)';
       fileUsageHtml += '<tr>' +
         '<td style="padding:2px 8px 2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px">' + escHtml(f.name) + '</td>' +
         '<td style="padding:2px 8px;text-align:right">' + f.blocks + '</td>' +
@@ -184,15 +285,15 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     sectorsHtml += '</span></div>';
 
     sectorsHtml += '<div class="bam-viewer">';
-    for (t = 1; t <= bamTracks; t++) {
-      spt = fmt.sectorsPerTrack(t);
-      var isDirTrack = (t === fmt.dirTrack);
+    for (t = geo.first; t <= geo.last; t++) {
+      spt = geo.spt(t);
+      var isDirTrack = (t === geo.dirTrack);
       sectorsHtml += '<div class="bam-track">';
       sectorsHtml += '<span class="bam-track-num' + (bamCheck.errorTracks[t] ? ' error' : '') + '">$' + t.toString(16).toUpperCase().padStart(2, '0') + '</span>';
       sectorsHtml += '<span class="bam-sectors">';
 
       for (var s = 0; s < spt; s++) {
-        var isFree = checkSectorFree(data, bamOff, t, s, getCurrentCtx());
+        var isFree = checkSectorFree(data, bamOff, t, s, viewCtx);
         var sKey = t + ':' + s;
         var isError = bamCheck.errorSectors[sKey];
         var isOrphan = bamCheck.orphanSectors[sKey];
@@ -300,7 +401,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     var stepX = cellW + gap, stepY = cellH + gap;
     var labelW = 32; // left margin for track numbers
     var canvasW = labelW + maxSpt * stepX + gap;
-    var canvasH = bamTracks * stepY + gap;
+    var canvasH = numRows * stepY + gap;
     var mapLegend = '<div class="bam-legend">' +
       '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent)"></span> Used</span>' +
       '<span class="bam-legend-item"><span class="bam-legend-box" style="background:var(--accent);opacity:0.25"></span> Free</span>' +
@@ -364,29 +465,12 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     var accent = cs.getPropertyValue('--accent').trim();
     var bgColor = cs.getPropertyValue('--bg').trim();
 
-    // Create temporary elements to read BAM sector colors from CSS classes
-    function getCssColor(cls, opacity) {
-      var el = document.createElement('span');
-      el.className = 'bam-sector ' + cls;
-      el.style.display = 'none';
-      document.body.appendChild(el);
-      var style = getComputedStyle(el);
-      var bg = style.backgroundColor;
-      var op = parseFloat(style.opacity);
-      document.body.removeChild(el);
-      if (op < 1) {
-        // Apply opacity to the color
-        var m = bg.match(/\d+/g);
-        if (m) return 'rgba(' + m[0] + ',' + m[1] + ',' + m[2] + ',' + op + ')';
-      }
-      return bg;
-    }
-    var colUsed = getCssColor('used', 1);
-    var colFree = getCssColor('free', 1);
-    var colDirUsed = getCssColor('dir-used', 1);
-    var colDirFree = getCssColor('dir-free', 1);
-    var colError = getCssColor('error', 1);
-    var colOrphan = getCssColor('orphan', 1);
+    var colUsed = getBamSectorColor('used');
+    var colFree = getBamSectorColor('free');
+    var colDirUsed = getBamSectorColor('dir-used');
+    var colDirFree = getBamSectorColor('dir-free');
+    var colError = getBamSectorColor('error');
+    var colOrphan = getBamSectorColor('orphan');
 
     ctx2d.fillStyle = bgColor;
     ctx2d.fillRect(0, 0, bamCanvas.width, bamCanvas.height);
@@ -397,10 +481,10 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     ctx2d.textBaseline = 'middle';
     var radius = 2; // rounded corner radius matching CSS bam-sector
 
-    for (var mt = 1; mt <= bamTracks; mt++) {
-      var mSpt = fmt.sectorsPerTrack(mt);
-      var mIsDirTrack = (mt === fmt.dirTrack);
-      var my = (mt - 1) * stepY + gap;
+    for (var mt = geo.first; mt <= geo.last; mt++) {
+      var mSpt = geo.spt(mt);
+      var mIsDirTrack = (mt === geo.dirTrack);
+      var my = (mt - geo.first) * stepY + gap;
 
       // Track number label
       ctx2d.fillStyle = bamCheck.errorTracks[mt] ? colError : colLabel;
@@ -408,7 +492,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
 
       for (var ms = 0; ms < mSpt; ms++) {
         var mx = labelW + ms * stepX + gap;
-        var mFree = checkSectorFree(data, bamOff, mt, ms, getCurrentCtx());
+        var mFree = checkSectorFree(data, bamOff, mt, ms, viewCtx);
         var mKey = mt + ':' + ms;
         var mError = bamCheck.errorSectors[mKey];
         var mOrphan = bamCheck.orphanSectors[mKey];
@@ -436,19 +520,23 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       var y = e.clientY - rect.top;
       return {
         sector: Math.floor((x - gap * 0.5) / stepX),
-        track: Math.floor((y - gap * 0.5) / stepY) + 1
+        track: Math.floor((y - gap * 0.5) / stepY) + geo.first
       };
+    }
+    function inMap(pos) {
+      return pos.track >= geo.first && pos.track <= geo.last &&
+        pos.sector >= 0 && pos.sector < geo.spt(pos.track);
     }
 
     bamCanvas.addEventListener('mousemove', function(e) {
       var pos = mapCoordsFromEvent(e);
-      if (pos.track < 1 || pos.track > bamTracks || pos.sector < 0 || pos.sector >= fmt.sectorsPerTrack(pos.track)) {
+      if (!inMap(pos)) {
         if (lastTitle) { bamCanvas.title = ''; lastTitle = ''; }
         return;
       }
       var ttKey = pos.track + ':' + pos.sector;
       var ttOwner = sectorOwner[ttKey];
-      var ttFree = checkSectorFree(data, bamOff, pos.track, pos.sector, getCurrentCtx());
+      var ttFree = checkSectorFree(data, bamOff, pos.track, pos.sector, viewCtx);
       var tt = 'T:$' + pos.track.toString(16).toUpperCase().padStart(2, '0') +
         ' S:$' + pos.sector.toString(16).toUpperCase().padStart(2, '0');
       if (bamCheck.errorSectors[ttKey]) tt += ' \u26a0 BAM error';
@@ -462,26 +550,16 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     // Click to open sector editor
     bamCanvas.addEventListener('click', function(e) {
       var pos = mapCoordsFromEvent(e);
-      var mt3 = pos.track, ms3 = pos.sector;
-      if (mt3 < 1 || mt3 > bamTracks || ms3 < 0 || ms3 >= fmt.sectorsPerTrack(mt3)) return;
+      if (!inMap(pos)) return;
       document.getElementById('modal-overlay').classList.remove('open');
-      showSectorHexEditor(mt3, ms3);
+      showSectorHexEditor(pos.track, pos.sector);
     });
 
-    // Right-click to toggle free/used
     bamCanvas.addEventListener('contextmenu', function(e) {
       e.preventDefault();
       var pos = mapCoordsFromEvent(e);
-      var mt4 = pos.track, ms4 = pos.sector;
-      if (mt4 < 1 || mt4 > bamTracks || ms4 < 0 || ms4 >= fmt.sectorsPerTrack(mt4)) return;
-      pushUndo();
-      var d = new Uint8Array(currentBuffer);
-      var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
-      var base2 = fmt.getBamBitmapBase(bOff, mt4);
-      d[base2 + (ms4 >> 3)] ^= fmt.bamBitMask(ms4);
-      if (fmt.hasBamFreeCounts) bamRecalcFree(d, mt4, bOff, getCurrentCtx());
-      document.getElementById('modal-overlay').classList.remove('open');
-      document.getElementById('opt-view-bam').click();
+      if (!inMap(pos)) return;
+      toggleBamBit(pos.track, pos.sector);
     });
   }
 
@@ -495,28 +573,12 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     var dmMuted = dmCs.getPropertyValue('--text-muted').trim();
     var dmText = dmCs.getPropertyValue('--text').trim();
 
-    // Reuse getCssColor if it exists, or define locally
-    function dmGetColor(cls) {
-      var el = document.createElement('span');
-      el.className = 'bam-sector ' + cls;
-      el.style.display = 'none';
-      document.body.appendChild(el);
-      var style = getComputedStyle(el);
-      var bg = style.backgroundColor;
-      var op = parseFloat(style.opacity);
-      document.body.removeChild(el);
-      if (op < 1) {
-        var m = bg.match(/\d+/g);
-        if (m) return 'rgba(' + m[0] + ',' + m[1] + ',' + m[2] + ',' + op + ')';
-      }
-      return bg;
-    }
-    var dmColUsed = dmGetColor('used');
-    var dmColFree = dmGetColor('free');
-    var dmColDirUsed = dmGetColor('dir-used');
-    var dmColDirFree = dmGetColor('dir-free');
-    var dmColError = dmGetColor('error');
-    var dmColOrphan = dmGetColor('orphan');
+    var dmColUsed = getBamSectorColor('used');
+    var dmColFree = getBamSectorColor('free');
+    var dmColDirUsed = getBamSectorColor('dir-used');
+    var dmColDirFree = getBamSectorColor('dir-free');
+    var dmColError = getBamSectorColor('error');
+    var dmColOrphan = getBamSectorColor('orphan');
 
     var dmSize = Math.min(520, window.innerWidth - 80, window.innerHeight - 260);
     diskMapCanvas.width = dmSize;
@@ -528,8 +590,8 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
 
     function dmSectorColor(t, s) {
       var key = t + ':' + s;
-      var isDirTrack = (t === fmt.dirTrack);
-      var isFree = checkSectorFree(data, bamOff, t, s, getCurrentCtx());
+      var isDirTrack = (t === geo.dirTrack);
+      var isFree = checkSectorFree(data, bamOff, t, s, viewCtx);
       if (isDirTrack) return isFree ? dmColDirFree : dmColDirUsed;
       if (bamCheck.errorSectors[key]) return dmColError;
       if (bamCheck.orphanSectors[key]) return dmColOrphan;
@@ -542,7 +604,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
         ' S:$' + s.toString(16).toUpperCase().padStart(2, '0');
       if (bamCheck.errorSectors[key]) tt += ' \u26a0 BAM error';
       else if (bamCheck.orphanSectors[key]) tt += ' (orphan)';
-      else if (checkSectorFree(data, bamOff, t, s, getCurrentCtx())) tt += ' (free)';
+      else if (checkSectorFree(data, bamOff, t, s, viewCtx)) tt += ' (free)';
       else if (sectorOwner[key]) tt += ' (' + petsciiToReadable(sectorOwner[key]) + ')';
       else tt += ' (used)';
       return tt;
@@ -552,13 +614,13 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       dmHitMap = [];
       dmCtx.fillStyle = dmBg;
       dmCtx.fillRect(0, 0, dmSize, dmSize);
-      var ringWidth = (dmOuterR - dmInnerR) / bamTracks;
+      var ringWidth = (dmOuterR - dmInnerR) / Math.max(1, numRows);
       var sectorGap = 0.008; // radians between sectors
       var trackGap = 1; // pixels between tracks
 
-      for (var t = 1; t <= bamTracks; t++) {
-        var spt = fmt.sectorsPerTrack(t);
-        var outerR = dmOuterR - (t - 1) * ringWidth;
+      for (var t = geo.first; t <= geo.last; t++) {
+        var spt = geo.spt(t);
+        var outerR = dmOuterR - (t - geo.first) * ringWidth;
         var innerR = outerR - ringWidth + trackGap;
         for (var s = 0; s < spt; s++) {
           var startA = (s / spt) * Math.PI * 2 - Math.PI / 2 + sectorGap / 2;
@@ -640,19 +702,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     var bt = parseInt(block.getAttribute('data-t'), 10);
     var bs = parseInt(block.getAttribute('data-s'), 10);
     if (isNaN(bt) || isNaN(bs)) return;
-
-    pushUndo();
-    var d = new Uint8Array(currentBuffer);
-    var bOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
-    var base = fmt.getBamBitmapBase(bOff, bt);
-    var byteIdx = bs >> 3;
-    var bitMask = fmt.bamBitMask(bs);
-    d[base + byteIdx] ^= bitMask;
-    if (fmt.hasBamFreeCounts) bamRecalcFree(d, bt, bOff, getCurrentCtx());
-
-    // Refresh BAM view
-    document.getElementById('modal-overlay').classList.remove('open');
-    document.getElementById('opt-view-bam').click();
+    toggleBamBit(bt, bs);
   });
 });
 

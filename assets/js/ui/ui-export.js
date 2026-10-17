@@ -1,41 +1,46 @@
+// ── Host download helpers ─────────────────────────────────────────────
+// Replace characters that are illegal in host file names (incl. control codes).
+function safeHostFileName(name, fallback) {
+  return String(name || '').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || fallback || '';
+}
+
+function downloadBlob(blob, fileName) {
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 // ── Name Case Operations ──────────────────────────────────────────────
+// 'upper' moves $41-$5A to $C1-$DA, 'lower' the reverse, 'toggle' both.
+var PETSCII_LETTER_CASE_DELTA = PETSCII_SHIFTED_LETTER_START - PETSCII_UC_LETTER_START;
+var PETSCII_SHIFTED_LETTER_END = PETSCII_UC_LETTER_END + PETSCII_LETTER_CASE_DELTA;
+function petsciiChangeCase(b, mode) {
+  if (mode !== 'lower' && b >= PETSCII_UC_LETTER_START && b <= PETSCII_UC_LETTER_END) return b + PETSCII_LETTER_CASE_DELTA;
+  if (mode !== 'upper' && b >= PETSCII_SHIFTED_LETTER_START && b <= PETSCII_SHIFTED_LETTER_END) return b - PETSCII_LETTER_CASE_DELTA;
+  return b;
+}
+
 function changeNameCase(entryOff, mode) {
   var data = new Uint8Array(currentBuffer);
   for (var i = 0; i < 16; i++) {
     var b = data[entryOff + 5 + i];
     if (b === 0xA0) break; // end of name
-    if (mode === 'upper') {
-      // PETSCII lowercase ($41-$5A) → uppercase ($C1-$DA)
-      if (b >= 0x41 && b <= 0x5A) data[entryOff + 5 + i] = b + 0x80;
-    } else if (mode === 'lower') {
-      // PETSCII uppercase ($C1-$DA) → lowercase ($41-$5A)
-      if (b >= 0xC1 && b <= 0xDA) data[entryOff + 5 + i] = b - 0x80;
-    } else {
-      // Toggle
-      if (b >= 0x41 && b <= 0x5A) data[entryOff + 5 + i] = b + 0x80;
-      else if (b >= 0xC1 && b <= 0xDA) data[entryOff + 5 + i] = b - 0x80;
-    }
+    data[entryOff + 5 + i] = petsciiChangeCase(b, mode);
   }
 }
 
-// CFS analogue: name lives at $00..$0F of the 32-byte dir entry (no $05
-// offset). Same PETSCII byte conventions ($41-$5A ↔ $C1-$DA), terminated
-// by $A0 or $00 (CFS uses both depending on who wrote the entry).
+// CFS analogue: name at +$00 of the 32-byte entry, terminated by $A0 or $00
+// (CFS uses both depending on who wrote the entry).
 function changeCfsNameCase(entry, mode) {
   if (!entry || entry.dirLba == null) return;
   var data = new Uint8Array(hddBuffer);
-  var off = entry.dirLba * 512 + entry.index * 32;
+  var off = entry.dirLba * IDE64_SECTOR_SIZE + entry.index * CFS_DIR_ENTRY_SIZE;
   for (var i = 0; i < 16; i++) {
     var b = data[off + i];
     if (b === 0xA0 || b === 0x00) break;
-    if (mode === 'upper') {
-      if (b >= 0x41 && b <= 0x5A) data[off + i] = b + 0x80;
-    } else if (mode === 'lower') {
-      if (b >= 0xC1 && b <= 0xDA) data[off + i] = b - 0x80;
-    } else {
-      if (b >= 0x41 && b <= 0x5A) data[off + i] = b + 0x80;
-      else if (b >= 0xC1 && b <= 0xDA) data[off + i] = b - 0x80;
-    }
+    data[off + i] = petsciiChangeCase(b, mode);
   }
 }
 
@@ -100,8 +105,9 @@ document.getElementById('opt-compact-dir').addEventListener('click', function(e)
     for (var i = 0; i < fmt.entriesPerSector; i++) {
       var eo = off + i * fmt.entrySize;
       var typeByte = data[eo + 2];
-      if ((typeByte & 0x07) > 0) {
-        // Non-deleted entry - save the 30 bytes (offset 2-31)
+      // Only $00 is a free/scratched slot; closed DEL ($80) entries are
+      // visible separators and stay.
+      if (typeByte !== 0x00) {
         var entry = new Uint8Array(30);
         for (var j = 0; j < 30; j++) entry[j] = data[eo + 2 + j];
         allEntries.push(entry);
@@ -222,14 +228,12 @@ function zipCodeOpenTabs(results) {
   saveActiveTab();
   var firstTabId = null;
   for (var ri = 0; ri < results.length; ri++) {
-    // CBM names can hold characters illegal in host filenames ("HACK
-    // CD1/TRIAD" is real), so the tab keeps the original and Save gets a
-    // sanitized one.
-    // A SixPack carrying non-standard GCR arrives as a .g64; everything else
-    // is a .d64.
+    // CBM names may contain '/' and other host-illegal characters: the tab
+    // keeps the original, Save gets a sanitized one. Non-standard-GCR
+    // SixPacks arrive as .g64.
     var ext = results[ri].res.ext || '.d64';
     var title = results[ri].name + ext;
-    var safeBase = results[ri].name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_') || 'zipcode';
+    var safeBase = safeHostFileName(results[ri].name, 'zipcode');
     var name = safeBase + ext;
     currentBuffer = results[ri].res.buffer;
     currentFileName = name;
@@ -429,12 +433,8 @@ document.getElementById('opt-unzip').addEventListener('click', async function(e)
 });
 
 // ── LNX (Lynx) archive extraction ────────────────────────────────────
-// Parse the archive and write every file onto a fresh D64. Globals
-// (currentBuffer, currentFormat, currentTracks) are pointed at the new
-// D64 for the duration so writeFileToDisk can operate normally; the
-// caller is responsible for wiring the result into a new tab.
-//
-// Returns { buffer, imported, skipped: [{ name, reason }], error? }.
+// Write every file onto a fresh D64 (globals point at it; the caller opens
+// the tab). Returns { buffer, imported, skipped: [{ name, reason }], error? }.
 function extractLnxToNewD64(buffer) {
   var parsed = parseLnxArchive(buffer);
   if (parsed.error) return { error: parsed.error };
@@ -458,17 +458,13 @@ function extractLnxToNewD64(buffer) {
     for (var i = 0; i < nameBytes.length; i++) {
       var b = nameBytes[i];
       if (b === 0xA0 || b === 0x00) break;
-      if (b >= 0x20 && b <= 0x7E) s += String.fromCharCode(b);
-      else if (b >= 0xC1 && b <= 0xDA) s += String.fromCharCode(b - 0x80);
-      else s += '.';
+      s += String.fromCharCode(0xE000 + b);
     }
-    return s.trim();
+    return petsciiToReadable(s).trim();
   }
 
-  // Detect GEOS ConVerT files. If any are present, apply the GEOS signature
-  // to the fresh D64 so subsequent writes land on a proper GEOS-formatted
-  // disk, and route CVT files through the CVT import path so their VLIR
-  // record structure is reconstructed on the target disk.
+  // Any CVT inside makes the D64 a GEOS disk; CVTs go through the CVT
+  // importer so their VLIR structure is rebuilt.
   var hasCvt = false;
   for (var ci = 0; ci < parsed.files.length; ci++) {
     if (isCvtFile(parsed.files[ci].data)) { hasCvt = true; break; }
@@ -482,6 +478,10 @@ function extractLnxToNewD64(buffer) {
     var display = nameToDisplay(f.name) || '<file ' + (i + 1) + '>';
     if (f.typeIdx < 0 || f.typeIdx === FILE_TYPE.DEL) {
       skipped.push({ name: display, reason: 'unsupported type' });
+      continue;
+    }
+    if (f.typeIdx === FILE_TYPE.REL) {
+      skipped.push({ name: display, reason: 'REL file (side sectors aren\'t rebuilt)' });
       continue;
     }
 
@@ -643,22 +643,20 @@ function openLnxArchiveAsTab(buffer, archiveName) {
 
 // ── File Chains ──────────────────────────────────────────────────────
 // Walk a single sector chain via T/S links. Returns the list of sectors
-// visited and a `loop` flag if a cycle was detected. Does not call any
-// external helpers \u2014 keeps this self-contained for the file-chain view.
+// visited and a `loop` flag if a cycle was detected.
 function fchainWalkChain(data, startT, startS) {
-  var fmt = currentFormat;
+  var ctx = getCurrentCtx();
   var sectors = [];
   var loop = false;
   var visited = {};
   var ft = startT, fs = startS;
   while (ft !== 0) {
-    if (ft < 1 || ft > currentTracks) break;
-    if (fs >= fmt.sectorsPerTrack(ft)) break;
+    if (!isValidChainLink(ft, fs, ctx)) break;
     var key = ft + ':' + fs;
     if (visited[key]) { loop = true; break; }
     visited[key] = true;
     sectors.push({ t: ft, s: fs });
-    var off = sectorOffset(ft, fs, getCurrentCtx());
+    var off = sectorOffset(ft, fs, ctx);
     if (off < 0) break;
     ft = data[off]; fs = data[off + 1];
   }
@@ -667,13 +665,12 @@ function fchainWalkChain(data, startT, startS) {
 
 // Decompose a directory entry into its constituent sector chains. The
 // shape depends on the file type:
-//   regular file  \u2192 [{ kind:'main', sectors }]
-//   REL file      \u2192 [main, side-sectors]
-//   GEOS sequential \u2192 [info-block, main]
-//   GEOS VLIR     \u2192 [info-block, vlir-index, record 0, record 1, ...]
+//   regular file    -> [{ kind:'main', sectors }]
+//   REL file        -> [main, side-sectors]
+//   GEOS sequential -> [info-block, main]
+//   GEOS VLIR       -> [info-block, vlir-index, record 0, record 1, ...]
 // Each entry: { kind, label, sectors[], loop?, byteCount? }
 function fchainAnalyse(data, entryOff) {
-  var fmt = currentFormat;
   var typeIdx = data[entryOff + 2] & 0x07;
   var startT = data[entryOff + 3], startS = data[entryOff + 4];
   var isRel = (typeIdx === FILE_TYPE.REL);
@@ -684,7 +681,7 @@ function fchainAnalyse(data, entryOff) {
 
   function addInfoBlock() {
     var t = data[entryOff + 0x15], s = data[entryOff + 0x16];
-    if (t < 1 || t > currentTracks || s >= fmt.sectorsPerTrack(t)) return;
+    if (!isValidChainLink(t, s, getCurrentCtx())) return;
     chains.push({ kind: 'info', label: 'GEOS info', sectors: [{ t: t, s: s }] });
   }
 
@@ -791,8 +788,7 @@ document.getElementById('opt-file-chains').addEventListener('click', function(e)
     var typeName = (en.type || '').trim();
     var locked = (typeByte & 0x40) !== 0;
 
-    // Type badge \u2014 let the type letter be colour-coded by category so
-    // a quick glance shows GEOS / REL / standard at once.
+    // Type badge colour-coded by category: GEOS / REL / standard.
     var typeBadgeClass = 'fchain-badge-type';
     if (an.isVlir) typeBadgeClass += ' fchain-badge-geos';
     else if (an.isGeos) typeBadgeClass += ' fchain-badge-geos-seq';
@@ -860,14 +856,12 @@ document.getElementById('opt-export-all').addEventListener('click', function(e) 
       if (!ce.dataTreePtr || !ce.dataTreePtr.lba) continue;
       var cRes = readCfsFileData(hddBuffer, ce.dataTreePtr.addr, ce.size);
       if (cRes.error || !cRes.data || cRes.data.length === 0) continue;
-      var cName = petsciiToReadable(ce.name).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
-      if (!cName) cName = 'file' + ci;
+      var cName = safeHostFileName(petsciiToReadable(ce.name).trim(), 'file' + ci);
       var ext = '.' + (ce.typeSuffix || 'prg').toLowerCase();
       files.push({ name: cName + exportExtFor(cName, ext), data: cRes.data });
     }
     var part = hddPartitions && hddPartitions[cfsPartitionIdx];
-    diskName = (part && part.name ? petsciiToReadable(part.name) : 'partition')
-      .trim().replace(/[<>:"/\\|?*]/g, '_') || 'partition';
+    diskName = safeHostFileName((part && part.name ? petsciiToReadable(part.name) : '').trim(), 'partition');
   } else {
     if (!currentBuffer) return;
     var data = new Uint8Array(currentBuffer);
@@ -884,11 +878,10 @@ document.getElementById('opt-export-all').addEventListener('click', function(e) 
       if (isVlirFile(data, en.entryOff)) continue;
       var result = readFileData(currentBuffer, en.entryOff, getCurrentCtx());
       if (result.error || result.data.length === 0) continue;
-      var name = petsciiToReadable(en.name || '').trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
-      if (!name) name = 'file' + i;
+      var name = safeHostFileName(petsciiToReadable(en.name || '').trim(), 'file' + i);
       files.push({ name: name + exportExtFor(name, extMap[typeIdx] || '.prg'), data: result.data });
     }
-    diskName = petsciiToReadable(info.diskName || '').trim().replace(/[<>:"/\\|?*]/g, '_') || 'disk';
+    diskName = safeHostFileName(petsciiToReadable(info.diskName || '').trim(), 'disk');
   }
 
   if (files.length === 0) {
@@ -896,13 +889,7 @@ document.getElementById('opt-export-all').addEventListener('click', function(e) 
     return;
   }
 
-  var zip = buildZip(files);
-  var blob = new Blob([zip], { type: 'application/zip' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = diskName + '.zip';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(new Blob([buildZip(files)], { type: 'application/zip' }), diskName + '.zip');
 });
 
 // ── CSV Export ───────────────────────────────────────────────────────
@@ -924,7 +911,7 @@ document.getElementById('opt-export-csv').addEventListener('click', function(e) 
       lines.push('"' + cName + '",' + cType + ',' + cBlocks + ',' + cLocked + ',' + cLba + ',' + (ce.size || 0));
     }
     var part = hddPartitions[cfsPartitionIdx];
-    diskName = (part && part.name ? petsciiToReadable(part.name) : 'partition').trim().replace(/[<>:"/\\|?*]/g, '_') || 'partition';
+    diskName = safeHostFileName((part && part.name ? petsciiToReadable(part.name) : '').trim(), 'partition');
   } else {
     if (!currentBuffer) return;
     var info = parseCurrentDir(currentBuffer);
@@ -940,15 +927,9 @@ document.getElementById('opt-export-csv').addEventListener('click', function(e) 
       var fs = en.sector || 0;
       lines.push('"' + name + '",' + type + ',' + blocks + ',' + locked + ',' + ft + ',' + fs);
     }
-    diskName = petsciiToReadable(info.diskName || '').trim().replace(/[<>:"/\\|?*]/g, '_') || 'disk';
+    diskName = safeHostFileName(petsciiToReadable(info.diskName || '').trim(), 'disk');
   }
-  var csv = lines.join('\n');
-  var blob = new Blob([csv], { type: 'text/csv' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = diskName + '.csv';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(new Blob([lines.join('\n')], { type: 'text/csv' }), diskName + '.csv');
 });
 
 // ── Directory Export as HTML ─────────────────────────────────────────
@@ -970,7 +951,7 @@ document.getElementById('opt-export-html-dir').addEventListener('click', functio
       var ccBlocks = cce.size ? Math.ceil(cce.size / 256) : 0;
       var ccName = '"' + petsciiToReadable(cce.name).padEnd(16) + '"';
       var ccType = (cce.typeSuffix || 'PRG').trim();
-      cfsRows.push(String(ccBlocks).padStart(4) + ' ' + ccName + ' ' + escHtml(ccType));
+      cfsRows.push(String(ccBlocks).padStart(4) + ' ' + escHtml(ccName) + ' ' + escHtml(ccType));
     }
     var cfsHtml = '<!DOCTYPE html>\n<html>\n<head>\n<meta charset="utf-8">\n' +
       '<title>' + escHtml(cfsTitleName) + '</title>\n' +
@@ -982,13 +963,7 @@ document.getElementById('opt-export-html-dir').addEventListener('click', functio
       '0 "' + escHtml(cfsPName) + '" CFS\n' +
       cfsRows.join('\n') + (cfsRows.length ? '\n' : '') +
       '</pre>\n</body>\n</html>';
-    var cfsSafe = cfsTitleName.replace(/[<>:"/\\|?*]/g, '_') || 'directory';
-    var cfsBlob = new Blob([cfsHtml], { type: 'text/html' });
-    var cfsA = document.createElement('a');
-    cfsA.href = URL.createObjectURL(cfsBlob);
-    cfsA.download = cfsSafe + '.html';
-    cfsA.click();
-    URL.revokeObjectURL(cfsA.href);
+    downloadBlob(new Blob([cfsHtml], { type: 'text/html' }), safeHostFileName(cfsTitleName, 'directory') + '.html');
     return;
   }
   if (!currentBuffer) return;
@@ -1012,18 +987,12 @@ document.getElementById('opt-export-html-dir').addEventListener('click', functio
     var blocks = String(en.blocks || 0);
     var name = '\u0022' + petsciiToReadable(en.name || '').padEnd(16) + '\u0022';
     var type = (en.type || 'PRG').trim();
-    html += blocks.padStart(4) + ' ' + name + ' ' + escHtml(type) + '\n';
+    html += blocks.padStart(4) + ' ' + escHtml(name) + ' ' + escHtml(type) + '\n';
   }
   html += (info.freeBlocks || 0) + ' BLOCKS FREE.\n';
   html += '</pre>\n</body>\n</html>';
 
-  var safeName = diskName.trim().replace(/[<>:"/\\|?*]/g, '_') || 'directory';
-  var blob = new Blob([html], { type: 'text/html' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = safeName + '.html';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(new Blob([html], { type: 'text/html' }), safeHostFileName(diskName.trim(), 'directory') + '.html');
 });
 
 // ── Directory Export as PNG ──────────────────────────────────────────
@@ -1067,6 +1036,7 @@ document.getElementById('opt-export-png-dir').addEventListener('click', function
   // Entries
   for (var i = 0; i < info.entries.length; i++) {
     var en = info.entries[i];
+    if (en.deleted && !showDeleted) continue;
     if (!en.name && !en.type) continue;
     var blocks = String(en.blocks || 0);
     var name = '"' + petsciiToReadable(en.name || '').padEnd(16) + '"';
@@ -1078,66 +1048,18 @@ document.getElementById('opt-export-png-dir').addEventListener('click', function
   // Blocks free
   drawLine((info.freeBlocks || 0) + ' BLOCKS FREE.', C64_COLORS[14]);
 
-  var diskFileName = petsciiToReadable(info.diskName || '').trim().replace(/[<>:"/\\|?*]/g, '_') || 'directory';
+  var diskFileName = safeHostFileName(petsciiToReadable(info.diskName || '').trim(), 'directory');
   var a = document.createElement('a');
   a.href = canvas.toDataURL('image/png');
   a.download = diskFileName + '_dir.png';
   a.click();
 });
 
-// ── geoWrite to Plain Text ──────────────────────────────────────────
-document.getElementById('opt-export-rtf').parentElement.insertAdjacentHTML('beforeend', '');
-
-fileInput.addEventListener('change', async () => {
+// File → Open takes the same route as drag-and-drop (openFiles in ui-init.js).
+fileInput.addEventListener('change', () => {
   var files = Array.from(fileInput.files);
-  if (files.length === 0) return;
   fileInput.value = '';
-
-  // Same expansion as the drop handler — .gz transparently decompresses,
-  // .zip pops the picker. Result is { name, buffer } entries already
-  // loaded into memory.
-  var entries = await expandArchives(files);
-  if (entries.length === 0) return;
-
-  saveActiveTab();
-  for (var i = 0; i < entries.length; i++) {
-    try {
-      var buf = entries[i].buffer;
-      var fname = entries[i].name;
-
-      // LNX archives: extract into a new D64 tab instead of opening as-is.
-      if (/\.lnx$/i.test(fname)) {
-        clearCmdContainerState();
-        openLnxArchiveAsTab(buf, fname);
-        addRecentDisk(fname, buf);
-        continue;
-      }
-
-      // CMD containers (RAMLink, FD2000/FD4000, CMD HD): open the partition list.
-      if (/\.(rml|rl|d1m|d2m|d4m|dhd)$/i.test(fname)) {
-        await openCmdContainerAsTab(buf, fname);
-        continue;
-      }
-
-      clearCmdContainerState();
-      currentBuffer = buf;
-      currentFileName = fname;
-      currentPartition = null;
-      selectedEntryIndex = -1;
-      parseDisk(currentBuffer);
-      var tab = createTab(fname, currentBuffer, fname);
-      activeTabId = tab.id;
-      tabDirty = false;
-      clearUndo();
-      addRecentDisk(fname, buf);
-    } catch (err) {
-      showModal('Error', ['Error reading ' + entries[i].name + ': ' + err.message]);
-    }
-  }
-  var info = parseCurrentDir(currentBuffer);
-  renderDisk(info);
-  renderTabs();
-  updateMenuState();
+  openFiles(files);
 });
 
 

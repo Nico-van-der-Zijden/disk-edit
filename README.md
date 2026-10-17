@@ -67,7 +67,7 @@ Formats are detected by file size, with magic byte checks for ambiguous cases:
 - Separator entries with custom names
 
 ### File Operations
-- Import/export PRG, SEQ, USR, REL, CVT files
+- Import PRG, SEQ, USR, P00/S00/U00, CVT and TXT files (several at once); export PRG, SEQ, USR, REL, CVT. REL import / paste into CBM-DOS disks is refused until side sectors are rebuilt
 - Copy/paste files across disk images and tabs
 - Export all files as ZIP
 - ASCII to PETSCII conversion on import
@@ -229,7 +229,7 @@ assets/
         ui-disk-bam.js            BAM viewer modal, error byte viewer
         ui-disk-compare.js        Compare with… (sector-diff modal)
         ui-disk-geos.js           GEOS file info, Convert to GEOS
-        ui-disk-tools.js          Lost files, fill free, optimize, resize DNP, MD5, interleave
+        ui-disk-tools.js          Lost files, fill free, optimize, resize DNP, disk hash, interleave
       viewers/                    Per-file-type viewers
         ui-viewer-fileinfo.js     File info modal + packer detect dispatch
         ui-viewer-graphics.js     C64/GEOS graphics renderers (24+ formats)
@@ -238,7 +238,7 @@ assets/
         ui-viewer-basic.js        BASIC detokenizer + viewer
         ui-viewer-geowrite.js     geoWrite document viewer
         ui-tass-viewer.js         Turbo Assembler V5.x source viewer
-    matomo.js                     Analytics (excluded from dist builds)
+    site-local.js                 Optional, server-only (gitignored, not in the repo or dist builds)
   fontawesome/           FontAwesome icons (bundled)
   webfonts/              C64 Pro Mono font + FontAwesome webfonts
 build.ps1               Build script (PowerShell)
@@ -299,6 +299,19 @@ Covers sector geometry, BAM operations, PETSCII conversion, GEOS VLIR helpers, D
 - [JiffyDOS V6 User's Manual](https://archive.org/details/JiffyDos_V6_Users_Manual) — Sector interleave and fast loader reference
 - [IDEDOS / CFS 0.11 spec](https://singularcrew.hu/idedos/cfs.html) by Soci/Singular — IDE64 cartridge firmware and filesystem documentation
 - [fusecfs](http://c64.rulez.org/pub/c64/IDE64/source/fusecfs/) + [cfsfdisk](http://c64.rulez.org/pub/c64/IDE64/source/cfsfdisk/) by Soci/Singular (GPL) — reference FUSE driver and partition utility; canonical byte-level layout for the .hdd reader/writer
+- [Visualizing a 1541 Floppy Disk](https://www.pagetable.com/?p=1070) by Michael Steil — concentric-ring raw GCR rendering style used in the G64 Layout viewer
+- [nibtools](https://github.com/markusC64/nibtools) by Pete Rittwage and contributors — NIB file format reference for the .nib reader
+- LZ77 compressor/decompressor by Marcus Geelnard (2003-2006, BSD-3) — distributed inside [nibtools/lz.c](https://github.com/markusC64/nibtools/blob/upstream/lz.c); algorithm ported to JS for the .nbz reader
+- [Color-code your bytes](https://simonomi.dev/blog/color-code-your-bytes/) by simonomi — schemes (hexyl, xcd-rgb, nybble) for the optional Hex Coloring picker
+
+### Tape Format References
+
+- [Final TAP](http://wav-prg.sourceforge.net/) by Stewart Wilson (Subchrist Software) — C64 tape loader format documentation and reference scanners (GPL)
+- [TAPClean](https://github.com/Luigi-Di-Fraia/tapclean) by Luigi Di Fraia — extended scanner suite, game-specific loaders (Creatures), and per-tape pattern matching (GPL)
+
+### Browser Emulator
+
+- [EmulatorJS](https://emulatorjs.org/) + the libretro [vice_x64sc](https://github.com/libretro/vice-libretro) core — actual VICE running in the browser; hosted at [c64.sannic.nl](https://c64.sannic.nl/) for the Run / Open in Emulator handoff
 
 ## License
 

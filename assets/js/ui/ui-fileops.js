@@ -3,11 +3,7 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
-  // CFS view: read via the B-tree walker, name + extension from the
-  // entry's typeSuffix. The CFS dir layout doesn't match CBM-DOS's
-  // entryOff + 2 / + 5 conventions, so the CBM-DOS loop below would
-  // misread the byte offsets. Handles multi-select — every browser will
-  // show a "site is downloading multiple files" prompt after the first.
+  // CFS: data via the B-tree walker, extension from the entry's typeSuffix.
   if (cfsPartitionIdx >= 0 && cfsDirEntries) {
     var rawIdx = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
     for (var ti = 0; ti < rawIdx.length; ti++) {
@@ -17,21 +13,14 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
       if (!cEntry.dataTreePtr || !cEntry.dataTreePtr.lba) continue;
       var cRes = readCfsFileData(hddBuffer, cEntry.dataTreePtr.addr, cEntry.size);
       if (cRes.error || !cRes.data || cRes.data.length === 0) continue;
-      var cName = petsciiToReadable(cEntry.name).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
-      if (!cName) cName = 'export';
+      var cName = safeHostFileName(petsciiToReadable(cEntry.name).trim(), 'export');
       var cExt = (cEntry.typeSuffix || 'PRG').toLowerCase();
-      var cBlob = new Blob([cRes.data], { type: 'application/octet-stream' });
-      var cAnchor = document.createElement('a');
-      cAnchor.href = URL.createObjectURL(cBlob);
-      cAnchor.download = cName + '.' + cExt;
-      cAnchor.click();
-      URL.revokeObjectURL(cAnchor.href);
+      downloadBlob(new Blob([cRes.data], { type: 'application/octet-stream' }), cName + '.' + cExt);
     }
     return;
   }
   var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
   var data = new Uint8Array(currentBuffer);
-  var extMap = { 1: '.seq', 2: '.prg', 3: '.usr', 4: '.rel' };
 
   for (var ei = 0; ei < entries.length; ei++) {
     var entOff = entries[ei];
@@ -45,25 +34,18 @@ document.getElementById('opt-export').addEventListener('click', (e) => {
     } else {
       var typeByte = data[entOff + 2];
       var typeIdx = typeByte & 0x07;
-      if (typeIdx < 1 || typeIdx > 4) continue;
+      if (typeIdx < FILE_TYPE.SEQ || typeIdx > FILE_TYPE.REL) continue;
       // GEOS VLIR: dir T/S is the index sector, not file data — use Export CVT
       if (isVlirFile(data, entOff)) continue;
-      ext = extMap[typeIdx];
+      ext = '.' + FILE_TYPES[typeIdx].toLowerCase();
       name = petsciiToReadable(readPetsciiString(data, entOff + 5, 16)).trim();
     }
 
     var result = readFileData(currentBuffer, entOff, getCurrentCtx());
     if (result.error || result.data.length === 0) continue;
 
-    name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
-    if (!name) name = 'export';
-
-    var blob = new Blob([result.data], { type: 'application/octet-stream' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = name + exportExtFor(name, ext);
-    a.click();
-    URL.revokeObjectURL(a.href);
+    name = safeHostFileName(name, 'export');
+    downloadBlob(new Blob([result.data], { type: 'application/octet-stream' }), name + exportExtFor(name, ext));
   }
 });
 
@@ -153,17 +135,9 @@ document.getElementById('opt-export-cvt').addEventListener('click', function(e) 
   closeMenus();
 
   var data = new Uint8Array(currentBuffer);
-  var name = petsciiToReadable(readPetsciiString(data, selectedEntryIndex + 5, 16)).trim();
-  name = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
-  if (!name) name = 'export';
-
+  var name = safeHostFileName(petsciiToReadable(readPetsciiString(data, selectedEntryIndex + 5, 16)).trim(), 'export');
   var cvtData = buildCvtFile(selectedEntryIndex);
-  var blob = new Blob([cvtData], { type: 'application/octet-stream' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name + '.cvt';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(new Blob([cvtData], { type: 'application/octet-stream' }), name + '.cvt');
 });
 
 
@@ -278,41 +252,14 @@ function _pasteArtDelToCbmDos(item) {
     d[off + 31] = (item.blockCount >> 8) & 0xFF;
     return true;
   }
-  // Payload path. Snapshot the existing dir slot offsets so we can find
-  // the entry writeFileToDisk just added (it doesn't return an offset).
-  var beforeSlots = getDirSlotOffsets(currentBuffer);
-  var snap = new Uint8Array(currentBuffer);
-  var beforeFingerprints = {};
-  for (var bsi = 0; bsi < beforeSlots.length; bsi++) {
-    var bo = beforeSlots[bsi];
-    beforeFingerprints[bo] = snap[bo + 2];
-  }
+  // Payload path: writeFileToDisk leaves the new entry in selectedEntryIndex.
   if (!writeFileToDisk(0, item.nameBytes, item.payload, null, true, getCurrentCtx())) return false;
-  var afterSlots = getDirSlotOffsets(currentBuffer);
   var nowData = new Uint8Array(currentBuffer);
-  for (var asi = 0; asi < afterSlots.length; asi++) {
-    var ao = afterSlots[asi];
-    // Newly written entry: either a slot that didn't exist before, or
-    // a slot whose type byte just flipped from 0 (empty) to non-zero.
-    var wasFingerprint = beforeFingerprints[ao];
-    if (wasFingerprint !== undefined && wasFingerprint !== 0) continue;
-    if (nowData[ao + 2] === 0) continue;
-    // Confirm by nameBytes match — guards against picking up an
-    // unrelated concurrent write.
-    var match = true;
-    for (var nm = 0; nm < 16; nm++) {
-      if (nowData[ao + 5 + nm] !== item.nameBytes[nm]) { match = false; break; }
-    }
-    if (!match) continue;
-    nowData[ao + 2] = item.typeByte;   // restore Lock bit; writeFileToDisk only set 0x80|typeIdx
-    nowData[ao + 30] = item.blockCount & 0xFF;
-    nowData[ao + 31] = (item.blockCount >> 8) & 0xFF;
-    for (var gb = 0; gb < 9; gb++) nowData[ao + 21 + gb] = item.geosBytes[gb];
-    return true;
-  }
-  // Fallback — entry was written but we couldn't locate it to patch.
-  // Disk is still consistent (just block count derived from chain length
-  // and lock bit cleared), so report success.
+  var ao = selectedEntryIndex;
+  nowData[ao + 2] = item.typeByte;   // restore Lock bit; writeFileToDisk only set 0x80|typeIdx
+  nowData[ao + 30] = item.blockCount & 0xFF;
+  nowData[ao + 31] = (item.blockCount >> 8) & 0xFF;
+  for (var gb = 0; gb < 9; gb++) nowData[ao + 21 + gb] = item.geosBytes[gb];
   return true;
 }
 
@@ -322,19 +269,13 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
-  // CFS view: read each selected file via the B-tree walker, stash a
-  // clipboard entry shaped like the CBM-DOS entries below (typeIdx +
-  // 16-byte name + payload), plus a `cfsTypeSuffix` so pasting back
-  // into CFS preserves the original label. CFS files have no GEOS
-  // metadata to carry along; geosBytes are zeroed and infoBlock stays
-  // null. DIR / LNK / DEL entries are skipped — they have no file
-  // payload to copy.
+  // CFS: same clipboard shape as CBM-DOS, plus cfsTypeSuffix so a paste
+  // back into CFS keeps the original label.
   if (cfsPartitionIdx >= 0 && cfsDirEntries) {
     var rawIdx = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
     clipboard = [];
     var cfsSkipped = [];
     var cfsProgress = rawIdx.length > 1 ? showProgressModal('Copying Files') : null;
-    var cfsSuffixToTypeIdx = { SEQ: 1, PRG: 2, USR: 3, REL: 4 };
     for (var cci = 0; cci < rawIdx.length; cci++) {
       var ce = cfsDirEntries[rawIdx[cci]];
       if (!ce || ce.empty) continue;
@@ -352,7 +293,7 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
         }
         var dirDisk = new Uint8Array(hddBuffer);
         var dirNameBytes = new Uint8Array(16);
-        var dirSrcOff = ce.dirLba * 512 + ce.index * 32;
+        var dirSrcOff = ce.dirLba * IDE64_SECTOR_SIZE + ce.index * CFS_DIR_ENTRY_SIZE;
         for (var dni = 0; dni < 16; dni++) dirNameBytes[dni] = dirDisk[dirSrcOff + dni];
         if (cfsProgress) await cfsProgress.update(cci, rawIdx.length, ceName);
         var dirColl = cfsCollectDirTree(hddBuffer, ce.dataTreePtr.addr, dirNameBytes);
@@ -376,7 +317,7 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
       if (ce.ftype === CFS_FTYPE.DEL && ce.closed) {
         var sepDisk = new Uint8Array(hddBuffer);
         var sepNameBytes = new Uint8Array(16);
-        var sepSrcOff = ce.dirLba * 512 + ce.index * 32;
+        var sepSrcOff = ce.dirLba * IDE64_SECTOR_SIZE + ce.index * CFS_DIR_ENTRY_SIZE;
         for (var spi = 0; spi < 16; spi++) sepNameBytes[spi] = sepDisk[sepSrcOff + spi];
         clipboard.push({
           kind: 'cbm-del',
@@ -405,16 +346,16 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
       // dir entry — preserves PETSCII reversed glyphs / hard-spaces.
       var disk = new Uint8Array(hddBuffer);
       var nameBytes = new Uint8Array(16);
-      var srcOff = ce.dirLba * 512 + ce.index * 32;
+      var srcOff = ce.dirLba * IDE64_SECTOR_SIZE + ce.index * CFS_DIR_ENTRY_SIZE;
       for (var nbi = 0; nbi < 16; nbi++) nameBytes[nbi] = disk[srcOff + nbi];
-      // Map typeSuffix → CBM-DOS typeIdx for pasting into a D64 etc.
-      // Falls back to PRG when the suffix is custom (CVT/TXT/etc).
+      // Custom suffixes (CVT, TXT, ...) paste into CBM-DOS as PRG.
       var sufKey = (ce.typeSuffix || 'PRG').toUpperCase();
-      var typeIdxFromCfs = cfsSuffixToTypeIdx[sufKey] || 2;
+      var typeIdxFromCfs = FILE_TYPE[sufKey] >= FILE_TYPE.SEQ && FILE_TYPE[sufKey] <= FILE_TYPE.REL
+        ? FILE_TYPE[sufKey] : FILE_TYPE.PRG;
       clipboard.push({
         typeIdx: typeIdxFromCfs,
         nameBytes: nameBytes,
-        geosBytes: new Uint8Array(9),
+        geosBytes: null,
         geosInfoBlock: null,
         data: new Uint8Array(cRes.data),
         vlirRecords: null,
@@ -566,16 +507,21 @@ document.getElementById('opt-copy').addEventListener('click', async (e) => {
         });
         continue;
       }
-      if (typeIdx < 1 || typeIdx > 4) {
+      if (typeIdx < FILE_TYPE.SEQ || typeIdx > FILE_TYPE.REL) {
         skipped.push({ name: fileName, reason: 'Unsupported file type' });
         continue;
       }
-      geosBytes = new Uint8Array(9);
-      for (var g = 0; g < 9; g++) geosBytes[g] = data[entOff + 21 + g];
+      // $15-$1D only carry GEOS metadata on GEOS files; on a REL file
+      // $15-$17 are its side-sector T/S and record length.
+      var isGeos = data[entOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL;
+      geosBytes = null;
       geosInfoBlock = null;
+      if (isGeos) {
+        geosBytes = data.slice(entOff + 21, entOff + 30);
+      }
       var infoTrack = data[entOff + 0x15];
       var infoSector = data[entOff + 0x16];
-      if (data[entOff + 0x18] > 0 && infoTrack > 0) {
+      if (isGeos && infoTrack > 0) {
         var infoOff = sectorOffset(infoTrack, infoSector, getCurrentCtx());
         if (infoOff >= 0) {
           geosInfoBlock = new Uint8Array(256);
@@ -638,164 +584,154 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (clipboard.length === 0) return;
   closeMenus();
-  // CFS view: paste each clipboard entry via cfsImportFile. Works for
-  // clipboard items copied from either a D64 (carries CBM typeIdx) or
-  // another CFS partition (additionally carries cfsTypeSuffix). GEOS
-  // metadata is dropped — CFS has no GEOS notion. DIR/LNK clipboard
-  // shapes don't exist (copy refuses on them), so the paste only ever
-  // handles file-style payloads.
-  if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-    var cPart = hddPartitions && hddPartitions[cfsPartitionIdx];
-    if (!cPart) return;
-    // Dir-tree clipboard: route through the recursive paste helper.
-    // Accepts both 'cfs-dir-tree' (CFS source) and 'cbm-dir-tree'
-    // (CBM-DOS source) — cfsPasteDirTree's cross-family translation
-    // handles the type-field difference. Pre-check destination free
-    // space, prompt on top-level conflict, then call cfsPasteDirTree.
-    var treeItems = clipboard.filter(function(it) {
-      return it.kind === 'cfs-dir-tree' || it.kind === 'cbm-dir-tree';
-    });
-    if (treeItems.length > 0) {
-      // Pre-check: sum sectors needed across all tree items + count free.
-      var needed = 0;
-      for (var ti = 0; ti < treeItems.length; ti++) needed += cfsEstimateTreeSectors(treeItems[ti].tree);
-      var freeSec = cfsCountFreeSectors(hddBuffer, cPart.startLba, cPart.endLba);
-      if (needed > freeSec) {
-        showModal('Paste — not enough space', [
-          'Pasting needs at least ' + needed + ' free sectors but the partition has ' + freeSec + '.',
-          'Free up ' + (needed - freeSec) + ' more sector(s) (or pick a bigger partition) and try again.',
-        ]);
-        return;
-      }
-      // Per-item: check top-level conflict, prompt if any, then paste.
-      var treePasted = 0, treeFiles = 0, treeDirs = 0;
-      var treeAllLnks = [];
-      pushUndo();
-      for (var pti = 0; pti < treeItems.length; pti++) {
-        var titem = treeItems[pti];
-        var existingTop = _cfsFindDirEntryByNameBytes(hddBuffer, cfsDirLba, titem.nameBytes);
-        var mode = 'cancel';
-        if (existingTop) {
-          var dispName = '';
-          for (var dn = 0; dn < 16; dn++) {
-            var dnb = titem.nameBytes[dn];
-            if (dnb === 0xA0 || dnb === 0x00) break;
-            if (dnb >= 0xC1 && dnb <= 0xDA) dispName += String.fromCharCode(dnb - 0x80);
-            else if (dnb >= 0x20 && dnb <= 0x7E) dispName += String.fromCharCode(dnb);
-          }
-          var choice = await showChoiceModal(
-            'Directory exists',
-            'The destination already has an entry named "' + dispName.trim() + '". What would you like to do?',
-            [
-              { label: 'Cancel', value: 'cancel', secondary: true },
-              { label: 'Rename', value: 'rename' },
-              { label: 'Overwrite', value: 'overwrite' },
-            ]
-          );
-          if (choice === 'cancel' || choice == null) {
-            if (typeof popUndo === 'function') popUndo();
-            return;
-          }
-          mode = choice;
-        } else {
-          mode = 'cancel'; // no conflict — onConflict arg is unused, but paste expects a value
-        }
-        var pres = cfsPasteDirTree(hddBuffer, cPart.startLba, cPart.endLba, cfsDirLba, titem.tree, { onConflict: mode });
-        if (!pres.ok) {
-          showModal('Paste failed', [pres.error || 'Unknown error.']);
-          if (typeof popUndo === 'function') popUndo();
-          return;
-        }
-        treePasted++;
-        treeFiles += pres.copiedFiles;
-        treeDirs += pres.copiedDirs;
-        if (pres.skippedLnks) treeAllLnks = treeAllLnks.concat(pres.skippedLnks);
-        // Also include LNKs noted at copy-time but not seen during paste
-        // (paste's recurse only sees them via the source tree).
-        if (titem.skippedLnks) {
-          for (var tlnk = 0; tlnk < titem.skippedLnks.length; tlnk++) {
-            if (treeAllLnks.indexOf(titem.skippedLnks[tlnk]) < 0) treeAllLnks.push(titem.skippedLnks[tlnk]);
-          }
-        }
-      }
-      refreshIde64View();
-      var summary = ['Pasted ' + treeDirs + ' director' + (treeDirs === 1 ? 'y' : 'ies') + ' and ' + treeFiles + ' file' + (treeFiles === 1 ? '' : 's') + '.'];
-      if (treeAllLnks.length > 0) {
-        summary.push('');
-        summary.push(treeAllLnks.length + ' link(s) not copied (link targets generally don\'t resolve across .hdd images):');
-        for (var sl = 0; sl < treeAllLnks.length && sl < 12; sl++) summary.push('  ' + treeAllLnks[sl]);
-        if (treeAllLnks.length > 12) summary.push('  … and ' + (treeAllLnks.length - 12) + ' more');
-      }
-      showModal('Paste complete', summary);
+  if (cfsPartitionIdx >= 0 && cfsDirEntries) await pasteIntoCfs();
+  else await pasteIntoCbmDos();
+});
+
+function _isTreeClipItem(it) {
+  return it.kind === 'cfs-dir-tree' || it.kind === 'cbm-dir-tree';
+}
+
+function _clipItemName(nameBytes) {
+  return petsciiToReadable(readPetsciiString(nameBytes, 0, 16)).trim() || '?';
+}
+
+// Summary lines for a "not copied" list, capped at 12 names.
+function _pasteListLines(header, names) {
+  if (!names.length) return [];
+  var out = ['', header];
+  for (var i = 0; i < names.length && i < 12; i++) out.push('  ' + names[i]);
+  if (names.length > 12) out.push('  … and ' + (names.length - 12) + ' more');
+  return out;
+}
+
+// One undo step for the whole paste: trees first, then flat items.
+async function pasteIntoCfs() {
+  var cPart = hddPartitions && hddPartitions[cfsPartitionIdx];
+  if (!cPart) return;
+  var treeItems = clipboard.filter(_isTreeClipItem);
+  var flatItems = clipboard.filter(function(it) { return !_isTreeClipItem(it); });
+  if (treeItems.length > 0) {
+    var needed = 0;
+    for (var ti = 0; ti < treeItems.length; ti++) needed += cfsEstimateTreeSectors(treeItems[ti].tree);
+    var freeSec = cfsCountFreeSectors(hddBuffer, cPart.startLba, cPart.endLba);
+    if (needed > freeSec) {
+      showModal('Paste — not enough space', [
+        'Pasting needs at least ' + needed + ' free sectors but the partition has ' + freeSec + '.',
+        'Free up ' + (needed - freeSec) + ' more sector(s) (or pick a bigger partition) and try again.',
+      ]);
       return;
     }
-    // cfsImportFile auto-extends the dir chain when every existing dir
-    // sector is full, so we don't pre-block here. If extension itself
-    // fails (the partition is out of free sectors), the per-file result
-    // surfaces the error in the partial-paste summary.
-    var cfsTypeIdxToSuffix = { 1: 'SEQ', 2: 'PRG', 3: 'USR', 4: 'REL' };
-    var cfsFtypeFromIdx = { 1: CFS_FTYPE.NORMAL, 2: CFS_FTYPE.NORMAL, 3: CFS_FTYPE.NORMAL, 4: CFS_FTYPE.REL };
-    var cTotal = clipboard.length;
-    var cProgress = cTotal > 1 ? showProgressModal('Pasting Files') : null;
-    pushUndo();
-    var cPasted = 0;
-    var cSkipped = [];
-    for (var pi2 = 0; pi2 < cTotal; pi2++) {
-      var item = clipboard[pi2];
-      // Closed-DEL clipboard entry (directory art) — route through the
-      // existing CFS separator insert. Block count + lock bit don't
-      // translate; payload, if captured on the source side, is dropped.
-      if (item.kind === 'cbm-del') {
-        if (cProgress) await cProgress.update(pi2, cTotal, '<separator>');
-        var sepRes = cfsInsertSeparator(hddBuffer, cfsDirLba, item.nameBytes);
-        if (sepRes.ok) {
-          cPasted++;
-          if (item.payload) cSkipped.push('separator: payload dropped (CFS has no DEL-with-data convention)');
-        } else {
-          cSkipped.push('separator: ' + (sepRes.error || 'unknown'));
-        }
-        continue;
-      }
-      if (!item.data || item.vlirRecords) {
-        cSkipped.push((item.cfsTypeSuffix || cfsTypeIdxToSuffix[item.typeIdx] || '?') + ': cannot paste VLIR / empty');
-        continue;
-      }
-      // Build the CFS-side name string: read bytes from clipboard (stops
-      // at $A0 / $00 terminator) so reversed-PETSCII glyphs and
-      // hard-space padding survive the round-trip.
-      var pName = '';
-      for (var ni = 0; ni < 16; ni++) {
-        var nb = item.nameBytes[ni];
-        if (nb === 0xA0 || nb === 0x00) break;
-        pName += String.fromCharCode(nb);
-      }
-      if (!pName) pName = 'PASTED';
-      var pSuffix = item.cfsTypeSuffix || cfsTypeIdxToSuffix[item.typeIdx] || 'PRG';
-      var pFtype = cfsFtypeFromIdx[item.typeIdx] || CFS_FTYPE.NORMAL;
-      if (cProgress) await cProgress.update(pi2, cTotal, pName);
-      var pRes = cfsImportFile(hddBuffer, cPart.startLba, cPart.endLba, cfsDirLba, pName, item.data, {
-        ftype: pFtype, typeSuffix: pSuffix,
-      });
-      if (pRes.ok) cPasted++;
-      else cSkipped.push(pName + ' — ' + (pRes.error || 'unknown'));
-    }
-    if (cProgress) document.getElementById('modal-overlay').classList.remove('open');
+  }
+
+  function abort(title, lines) {
+    discardUndo();
     refreshIde64View();
-    if (cSkipped.length > 0) {
-      showModal('Paste — partial', [cPasted + ' file(s) pasted.'].concat(cSkipped));
+    if (title) showModal(title, lines);
+  }
+
+  pushUndo();
+  var treeFiles = 0, treeDirs = 0;
+  var treeAllLnks = [];
+  for (var pti = 0; pti < treeItems.length; pti++) {
+    var titem = treeItems[pti];
+    var mode = 'cancel'; // no conflict: cfsPasteDirTree ignores the mode
+    if (_cfsFindDirEntryByNameBytes(hddBuffer, cfsDirLba, titem.nameBytes)) {
+      var choice = await showChoiceModal(
+        'Directory exists',
+        'The destination already has an entry named "' + _clipItemName(titem.nameBytes) + '". What would you like to do?',
+        [
+          { label: 'Cancel', value: 'cancel', secondary: true },
+          { label: 'Rename', value: 'rename' },
+          { label: 'Overwrite', value: 'overwrite' },
+        ]
+      );
+      if (choice === 'cancel' || choice == null) { abort(); return; }
+      mode = choice;
     }
+    var pres = cfsPasteDirTree(hddBuffer, cPart.startLba, cPart.endLba, cfsDirLba, titem.tree, { onConflict: mode });
+    if (!pres.ok) { abort('Paste failed', [pres.error || 'Unknown error.']); return; }
+    treeFiles += pres.copiedFiles;
+    treeDirs += pres.copiedDirs;
+    if (pres.skippedLnks) treeAllLnks = treeAllLnks.concat(pres.skippedLnks);
+    // LNKs noted at copy time never reach the paste's recursion.
+    if (titem.skippedLnks) {
+      for (var tlnk = 0; tlnk < titem.skippedLnks.length; tlnk++) {
+        if (treeAllLnks.indexOf(titem.skippedLnks[tlnk]) < 0) treeAllLnks.push(titem.skippedLnks[tlnk]);
+      }
+    }
+  }
+
+  // cfsImportFile extends the dir chain itself when every slot is used.
+  var cTotal = flatItems.length;
+  var cProgress = cTotal > 1 ? showProgressModal('Pasting Files') : null;
+  var cPasted = 0;
+  var cSkipped = [];
+  for (var pi2 = 0; pi2 < cTotal; pi2++) {
+    var item = flatItems[pi2];
+    // Directory art goes through the CFS separator insert; block count,
+    // lock bit and any DEL payload don't translate.
+    if (item.kind === 'cbm-del') {
+      if (cProgress) await cProgress.update(pi2, cTotal, '<separator>');
+      var sepRes = cfsInsertSeparator(hddBuffer, cfsDirLba, item.nameBytes);
+      if (sepRes.ok) {
+        cPasted++;
+        if (item.payload) cSkipped.push('separator: payload dropped (CFS has no DEL-with-data convention)');
+      } else {
+        cSkipped.push('separator: ' + (sepRes.error || 'unknown'));
+      }
+      continue;
+    }
+    var typeName = item.typeIdx >= FILE_TYPE.SEQ && item.typeIdx <= FILE_TYPE.REL ? FILE_TYPES[item.typeIdx] : 'PRG';
+    if (!item.data || item.vlirRecords) {
+      cSkipped.push((item.cfsTypeSuffix || typeName) + ': cannot paste VLIR / empty');
+      continue;
+    }
+    // Raw name bytes, so reversed glyphs and hard spaces survive.
+    var pName = '';
+    for (var ni = 0; ni < 16; ni++) {
+      var nb = item.nameBytes[ni];
+      if (nb === 0xA0 || nb === 0x00) break;
+      pName += String.fromCharCode(nb);
+    }
+    if (!pName) pName = 'PASTED';
+    if (cProgress) await cProgress.update(pi2, cTotal, pName);
+    var pRes = cfsImportFile(hddBuffer, cPart.startLba, cPart.endLba, cfsDirLba, pName, item.data, {
+      ftype: item.typeIdx === FILE_TYPE.REL ? CFS_FTYPE.REL : CFS_FTYPE.NORMAL,
+      typeSuffix: item.cfsTypeSuffix || typeName,
+    });
+    if (pRes.ok) cPasted++;
+    else cSkipped.push(pName + ' — ' + (pRes.error || 'unknown'));
+  }
+  if (cProgress) document.getElementById('modal-overlay').classList.remove('open');
+
+  if (treeItems.length === 0 && cPasted === 0) {
+    abort('Paste failed', cSkipped.length ? cSkipped : ['Nothing could be pasted.']);
     return;
   }
-  if (!currentBuffer || !canInsertFile()) return;
+  refreshIde64View();
+  if (treeItems.length === 0 && cSkipped.length === 0) return;
+  var summary = [];
+  if (treeItems.length > 0) {
+    summary.push('Pasted ' + treeDirs + ' director' + (treeDirs === 1 ? 'y' : 'ies') + ' and ' +
+      treeFiles + ' file' + (treeFiles === 1 ? '' : 's') + '.');
+  }
+  if (cTotal > 0) summary.push(cPasted + ' file(s) pasted.');
+  summary = summary.concat(_pasteListLines(
+    treeAllLnks.length + ' link(s) not copied (link targets generally don\'t resolve across .hdd images):', treeAllLnks));
+  if (cSkipped.length > 0) summary = summary.concat([''], cSkipped);
+  showModal(cSkipped.length > 0 ? 'Paste — partial' : 'Paste complete', summary);
+}
 
-  // Check if any GEOS files in clipboard and disk is not GEOS. Tree
-  // entries (kind:'cfs-dir-tree' / 'cbm-dir-tree') have no top-level
-  // geosInfoBlock field; the per-file GEOS data inside the tree is
-  // handled by cbmPasteDirTree per-file. Exclude tree kinds and use a
-  // loose != so undefined doesn't trigger the prompt.
-  var hasGeos = clipboard.some(function(c) {
-    return c.kind !== 'cfs-dir-tree' && c.kind !== 'cbm-dir-tree' && c.geosInfoBlock != null;
-  });
+// One undo step for the whole paste, including a GEOS conversion or a
+// partition grow the user agreed to on the way.
+async function pasteIntoCbmDos() {
+  if (!currentBuffer || !canInsertFile()) return;
+  var treeItems = clipboard.filter(_isTreeClipItem);
+  var flatItems = clipboard.filter(function(it) { return !_isTreeClipItem(it); });
+
+  var convertGeos = false;
+  var hasGeos = flatItems.some(function(c) { return c.geosInfoBlock != null; });
   if (hasGeos && !hasGeosSignature(currentBuffer, getCurrentCtx())) {
     var choice = await showChoiceModal(
       'GEOS File',
@@ -806,37 +742,21 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
         { label: 'Convert & Paste', value: 'convert' }
       ]
     );
-    if (choice === 'cancel') return;
-    if (choice === 'convert') {
-      writeGeosSignature(currentBuffer, getCurrentCtx());
-      updateMenuState();
-    }
+    if (choice !== 'paste' && choice !== 'convert') return;
+    convertGeos = choice === 'convert';
   }
 
-  var total = clipboard.length;
-
-  // Tree clipboard items route through cbmPasteDirTree. Symmetric with
-  // the CFS branch above — accepts both 'cfs-dir-tree' (CFS source)
-  // and 'cbm-dir-tree' (CBM-DOS source); cbmPasteDirTree's cross-family
-  // type translation handles the field-shape difference. Trees are
-  // processed BEFORE the regular file-paste loop so the loop only ever
-  // sees flat file entries.
-  var cbmTreeItems = clipboard.filter(function(it) {
-    return it.kind === 'cfs-dir-tree' || it.kind === 'cbm-dir-tree';
-  });
-  if (cbmTreeItems.length > 0) {
-    // Pre-check: sum sectors needed across all tree items + count free.
+  var growShortfall = 0;
+  if (treeItems.length > 0) {
     var cbmPreCtx = getCurrentCtx();
     var cbmNeeded = 0;
-    for (var cni = 0; cni < cbmTreeItems.length; cni++) {
-      cbmNeeded += cbmEstimateTreeSectors(cbmTreeItems[cni].tree, cbmPreCtx.format);
+    for (var cni = 0; cni < treeItems.length; cni++) {
+      cbmNeeded += cbmEstimateTreeSectors(treeItems[cni].tree, cbmPreCtx.format);
     }
     var cbmFree = cbmCountFreeSectors(cbmPreCtx);
     if (cbmNeeded > cbmFree) {
       var shortfall = cbmNeeded - cbmFree;
-      // If we're inside a D81 sub-partition, see whether growing it into
-      // adjacent free root tracks could close the gap, and ask the user
-      // before mutating anything.
+      // A 1581 sub-partition may be able to grow into adjacent free root tracks.
       var canGrow = (cbmPreCtx.partition && cbmPreCtx.partition.startTrack &&
                      cbmPreCtx.format.supportsSubdirs && !cbmPreCtx.format.subdirLinked);
       var growPreview = null;
@@ -844,13 +764,11 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
         var preview = _cbmGrowD81Partition(cbmPreCtx, shortfall, { dryRun: true });
         if (preview.ok) growPreview = preview;
       }
-
+      var needLine = 'Need ' + shortfall + ' more block(s) (' + cbmNeeded + ' needed, ' + cbmFree + ' free).';
       if (growPreview && growPreview.addedSectors >= shortfall) {
-        // Grow can close the gap. Offer it as a choice.
         var grow = await showChoiceModal(
           'Directory full',
-          'Need ' + shortfall + ' more block(s) (' + cbmNeeded + ' needed, ' + cbmFree + ' free).\n' +
-          'Grow this directory by ' + growPreview.addedTracks + ' track(s) (' +
+          needLine + '\nGrow this directory by ' + growPreview.addedTracks + ' track(s) (' +
             growPreview.addedSectors + ' blocks) into adjacent free space?',
           [
             { label: 'Cancel', value: false, secondary: true },
@@ -858,194 +776,144 @@ document.getElementById('opt-paste').addEventListener('click', async (e) => {
           ]
         );
         if (!grow) return;
-        var grown = _cbmGrowD81Partition(cbmPreCtx, shortfall);
-        if (!grown.ok) {
-          showModal('Grow failed', [grown.error || 'Could not grow the directory.']);
-          return;
-        }
-        cbmPreCtx.partition.partSize = grown.newPartSize;
-        if (typeof currentPartition !== 'undefined' && currentPartition) {
-          currentPartition.partSize = grown.newPartSize;
-        }
-        cbmFree = cbmCountFreeSectors(cbmPreCtx);
+        growShortfall = shortfall;
       } else if (growPreview) {
-        // Grow possible but not enough. Tell the user the partial figure.
         showModal('Directory full', [
-          'Need ' + shortfall + ' more block(s) (' + cbmNeeded + ' needed, ' + cbmFree + ' free).',
+          needLine,
           'This directory can only be grown by ' + growPreview.addedSectors +
             ' block(s) — still ' + (shortfall - growPreview.addedSectors) + ' block(s) short.',
           'Free up space or paste into a different directory.',
         ]);
         return;
       } else {
-        // No growth possible (root dir, no adjacent free tracks, or BAM cap hit).
-        showModal('Directory full', [
-          'Need ' + shortfall + ' more block(s) (' + cbmNeeded + ' needed, ' + cbmFree + ' free).',
-          'Free up space or paste into a different directory.',
-        ]);
+        showModal('Directory full', [needLine, 'Free up space or paste into a different directory.']);
         return;
       }
-    }
-    pushUndo();
-    var cbmTreePasted = 0, cbmTreeFiles = 0, cbmTreeDirs = 0;
-    var cbmTreeSkippedDirs = [];
-    var cbmTreeSkippedLnks = [];
-    for (var ctI = 0; ctI < cbmTreeItems.length; ctI++) {
-      var titem = cbmTreeItems[ctI];
-      // Compute display name from the tree's top-level nameBytes.
-      var dispName = '';
-      if (titem.nameBytes) {
-        for (var dnI = 0; dnI < 16; dnI++) {
-          var dnB = titem.nameBytes[dnI];
-          if (dnB === 0xA0 || dnB === 0x00) break;
-          if (dnB >= 0xC1 && dnB <= 0xDA) dispName += String.fromCharCode(dnB - 0x80);
-          else if (dnB >= 0x20 && dnB <= 0x7E) dispName += String.fromCharCode(dnB);
-        }
-      }
-      // Conflict pre-scan: covers both top-level wrap (D81 root partition
-      // collision) AND immediate child file / subdir collisions when the
-      // tree pastes flat into the current dir (e.g. inside an existing
-      // D81 sub-partition). One prompt for any of the above.
-      var cbmCtx = getCurrentCtx();
-      var conflicts = cbmFindTreeConflicts(cbmCtx, titem.tree);
-      var mode = 'cancel';
-      if (conflicts.total > 0) {
-        var msgLines = [];
-        if (conflicts.topLevel) {
-          msgLines.push('Directory "' + conflicts.topLevel + '" already exists at the destination.');
-        } else {
-          if (conflicts.files.length) {
-            msgLines.push(conflicts.files.length + ' file(s) at the destination have the same name:');
-            for (var ci = 0; ci < Math.min(conflicts.files.length, 8); ci++) msgLines.push('  ' + conflicts.files[ci]);
-            if (conflicts.files.length > 8) msgLines.push('  … and ' + (conflicts.files.length - 8) + ' more');
-          }
-          if (conflicts.subdirs.length) {
-            if (msgLines.length) msgLines.push('');
-            msgLines.push(conflicts.subdirs.length + ' director(y/ies) at the destination have the same name:');
-            for (var cs = 0; cs < Math.min(conflicts.subdirs.length, 8); cs++) msgLines.push('  ' + conflicts.subdirs[cs]);
-            if (conflicts.subdirs.length > 8) msgLines.push('  … and ' + (conflicts.subdirs.length - 8) + ' more');
-          }
-        }
-        msgLines.push('');
-        msgLines.push('What would you like to do?');
-        var cbmChoice = await showChoiceModal(
-          conflicts.topLevel ? 'Directory exists' : 'Existing items',
-          msgLines.join('\n'),
-          [
-            { label: 'Cancel', value: 'cancel', secondary: true },
-            { label: 'Rename', value: 'rename' },
-            { label: 'Overwrite', value: 'overwrite' },
-          ]
-        );
-        if (cbmChoice === 'cancel' || cbmChoice == null) {
-          if (typeof popUndo === 'function') popUndo();
-          return;
-        }
-        mode = cbmChoice;
-      }
-      var pres = cbmPasteDirTree(cbmCtx, titem.tree, { onConflict: mode });
-      if (!pres.ok) {
-        showModal('Paste failed', [pres.error || 'Unknown error.']);
-        if (typeof popUndo === 'function') popUndo();
-        return;
-      }
-      cbmTreePasted++;
-      cbmTreeFiles += pres.copiedFiles;
-      cbmTreeDirs += pres.copiedDirs;
-      if (pres.skippedDirs) cbmTreeSkippedDirs = cbmTreeSkippedDirs.concat(pres.skippedDirs);
-      if (pres.skippedLnks) cbmTreeSkippedLnks = cbmTreeSkippedLnks.concat(pres.skippedLnks);
-    }
-    // Re-render after tree paste
-    renderDisk(parseCurrentDir(currentBuffer));
-    updateMenuState();
-    // If clipboard had ONLY trees, summarise + return. Otherwise the
-    // remaining (file) items continue through the normal paste loop.
-    var nonTreeRemaining = clipboard.length - cbmTreeItems.length;
-    if (nonTreeRemaining === 0) {
-      var cbmSummary = ['Pasted ' + cbmTreeDirs + ' director' + (cbmTreeDirs === 1 ? 'y' : 'ies') +
-        ' and ' + cbmTreeFiles + ' file' + (cbmTreeFiles === 1 ? '' : 's') + '.'];
-      if (cbmTreeSkippedDirs.length > 0) {
-        cbmSummary.push('');
-        cbmSummary.push(cbmTreeSkippedDirs.length + ' director' +
-          (cbmTreeSkippedDirs.length === 1 ? 'y' : 'ies') + ' not copied:');
-        for (var sdi = 0; sdi < cbmTreeSkippedDirs.length && sdi < 12; sdi++) cbmSummary.push('  ' + cbmTreeSkippedDirs[sdi]);
-        if (cbmTreeSkippedDirs.length > 12) cbmSummary.push('  … and ' + (cbmTreeSkippedDirs.length - 12) + ' more');
-      }
-      if (cbmTreeSkippedLnks.length > 0) {
-        cbmSummary.push('');
-        cbmSummary.push(cbmTreeSkippedLnks.length + ' link(s) not copied:');
-        for (var sli = 0; sli < cbmTreeSkippedLnks.length && sli < 12; sli++) cbmSummary.push('  ' + cbmTreeSkippedLnks[sli]);
-        if (cbmTreeSkippedLnks.length > 12) cbmSummary.push('  … and ' + (cbmTreeSkippedLnks.length - 12) + ' more');
-      }
-      showModal('Paste complete', cbmSummary);
-      return;
     }
   }
 
-  var progress = showProgressModal('Pasting Files');
+  function abort(title, lines) {
+    discardUndo();
+    resyncPartitionSize();
+    renderDisk(parseCurrentDir(currentBuffer));
+    updateMenuState();
+    if (title) showModal(title, lines);
+  }
+
+  pushUndo();
+  if (convertGeos) writeGeosSignature(currentBuffer, getCurrentCtx());
+  if (growShortfall > 0) {
+    var grown = _cbmGrowD81Partition(getCurrentCtx(), growShortfall);
+    if (!grown.ok) { abort('Grow failed', [grown.error || 'Could not grow the directory.']); return; }
+    currentPartition.partSize = grown.newPartSize;
+  }
+
+  var treeFiles = 0, treeDirs = 0;
+  var treeSkippedDirs = [], treeSkippedLnks = [];
+  for (var ctI = 0; ctI < treeItems.length; ctI++) {
+    var titem = treeItems[ctI];
+    // One prompt covers a top-level clash and clashes among the tree's
+    // immediate children when it pastes flat into the current dir.
+    var cbmCtx = getCurrentCtx();
+    var conflicts = cbmFindTreeConflicts(cbmCtx, titem.tree);
+    var mode = 'cancel';
+    if (conflicts.total > 0) {
+      var msgLines = [];
+      if (conflicts.topLevel) {
+        msgLines.push('Directory "' + conflicts.topLevel + '" already exists at the destination.');
+      } else {
+        if (conflicts.files.length) {
+          msgLines.push(conflicts.files.length + ' file(s) at the destination have the same name:');
+          for (var ci = 0; ci < Math.min(conflicts.files.length, 8); ci++) msgLines.push('  ' + conflicts.files[ci]);
+          if (conflicts.files.length > 8) msgLines.push('  … and ' + (conflicts.files.length - 8) + ' more');
+        }
+        if (conflicts.subdirs.length) {
+          if (msgLines.length) msgLines.push('');
+          msgLines.push(conflicts.subdirs.length + ' director(y/ies) at the destination have the same name:');
+          for (var cs = 0; cs < Math.min(conflicts.subdirs.length, 8); cs++) msgLines.push('  ' + conflicts.subdirs[cs]);
+          if (conflicts.subdirs.length > 8) msgLines.push('  … and ' + (conflicts.subdirs.length - 8) + ' more');
+        }
+      }
+      msgLines.push('');
+      msgLines.push('What would you like to do?');
+      var cbmChoice = await showChoiceModal(
+        conflicts.topLevel ? 'Directory exists' : 'Existing items',
+        msgLines.join('\n'),
+        [
+          { label: 'Cancel', value: 'cancel', secondary: true },
+          { label: 'Rename', value: 'rename' },
+          { label: 'Overwrite', value: 'overwrite' },
+        ]
+      );
+      if (cbmChoice === 'cancel' || cbmChoice == null) { abort(); return; }
+      mode = cbmChoice;
+    }
+    var pres = cbmPasteDirTree(cbmCtx, titem.tree, { onConflict: mode });
+    if (!pres.ok) { abort('Paste failed', [pres.error || 'Unknown error.']); return; }
+    treeFiles += pres.copiedFiles;
+    treeDirs += pres.copiedDirs;
+    if (pres.skippedDirs) treeSkippedDirs = treeSkippedDirs.concat(pres.skippedDirs);
+    if (pres.skippedLnks) treeSkippedLnks = treeSkippedLnks.concat(pres.skippedLnks);
+  }
+
+  var progress = flatItems.length > 0 ? showProgressModal('Pasting Files') : null;
   var pasted = 0;
   var skipped = [];
-
-  for (var pi = 0; pi < total; pi++) {
-    var item = clipboard[pi];
-    // Skip tree-kind items — they were processed above.
-    if (item.kind === 'cfs-dir-tree' || item.kind === 'cbm-dir-tree') continue;
-    var fileName = petsciiToReadable(readPetsciiString(item.nameBytes, 0, 16)).trim() || '?';
-
-    await progress.update(pi, total, fileName);
-
-    // Closed-DEL clipboard entry (directory art). Bare or payload — the
-    // helper handles both, and preserves typeByte (Closed + Lock) +
-    // block count from the source verbatim.
-    if (item.kind === 'cbm-del') {
-      if (_pasteArtDelToCbmDos(item)) pasted++;
-      else { skipped.push({ name: fileName, reason: 'No directory space' }); break; }
-      continue;
-    }
+  var stoppedAt = flatItems.length;
+  for (var pi = 0; pi < flatItems.length; pi++) {
+    var item = flatItems[pi];
+    var fileName = _clipItemName(item.nameBytes);
+    await progress.update(pi, flatItems.length, fileName);
 
     var success;
-    if (item.vlirRecords) {
-      success = writeVlirFileToDisk(
-        item.typeIdx | 0x80,
-        item.nameBytes,
-        item.vlirRecords,
-        item.geosBytes,
-        item.geosInfoBlock
-      );
+    if (item.kind === 'cbm-del') {
+      success = _pasteArtDelToCbmDos(item);
+    } else if (item.typeIdx === FILE_TYPE.REL) {
+      skipped.push({ name: fileName, reason: 'REL files can\'t be pasted into a CBM-DOS disk yet (side sectors aren\'t rebuilt)' });
+      continue;
+    } else if (item.vlirRecords) {
+      success = writeVlirFileToDisk(item.typeIdx | 0x80, item.nameBytes, item.vlirRecords,
+        item.geosBytes, item.geosInfoBlock, true);
     } else {
-      var geosData = null;
-      if (item.geosBytes || item.geosInfoBlock) {
-        geosData = { geosBytes: item.geosBytes, geosInfoBlock: item.geosInfoBlock };
-      }
-      success = writeFileToDisk(item.typeIdx, item.nameBytes, item.data, geosData, getCurrentCtx());
+      var geosData = item.geosBytes
+        ? { geosBytes: item.geosBytes, geosInfoBlock: item.geosInfoBlock }
+        : null;
+      success = writeFileToDisk(item.typeIdx, item.nameBytes, item.data, geosData, true);
     }
     if (success) {
       pasted++;
     } else {
-      skipped.push({ name: fileName, reason: 'Disk full or no directory space' });
+      skipped.push({ name: fileName, reason: item.kind === 'cbm-del' ? 'No directory space' : 'Disk full or no directory space' });
+      stoppedAt = pi;
       break;
     }
   }
-
-  for (var ri = pasted + skipped.length; ri < total; ri++) {
-    var rItem = clipboard[ri];
-    var rName = petsciiToReadable(readPetsciiString(rItem.nameBytes, 0, 16)).trim() || '?';
-    skipped.push({ name: rName, reason: 'Not attempted (previous file failed)' });
-  }
-
-  if (pasted > 0) {
-    var info = parseCurrentDir(currentBuffer);
-    renderDisk(info);
+  for (var ri = stoppedAt + 1; ri < flatItems.length; ri++) {
+    skipped.push({ name: _clipItemName(flatItems[ri].nameBytes), reason: 'Not attempted (previous file failed)' });
   }
 
   var lines = [];
-  if (pasted > 0) lines.push(pasted + ' file(s) pasted successfully.');
-  for (var si2 = 0; si2 < skipped.length; si2++) {
-    lines.push('Warning: ' + skipped[si2].name + ' \u2014 ' + skipped[si2].reason);
+  if (treeItems.length > 0) {
+    lines.push('Pasted ' + treeDirs + ' director' + (treeDirs === 1 ? 'y' : 'ies') +
+      ' and ' + treeFiles + ' file' + (treeFiles === 1 ? '' : 's') + '.');
   }
-  if (lines.length === 0) lines.push('No files pasted.');
-  showModal(pasted === total ? 'Paste Complete' : 'Paste Incomplete', lines);
-});
+  if (pasted > 0) lines.push(pasted + ' file(s) pasted successfully.');
+  lines = lines.concat(
+    _pasteListLines(treeSkippedDirs.length + ' director' + (treeSkippedDirs.length === 1 ? 'y' : 'ies') + ' not copied:', treeSkippedDirs),
+    _pasteListLines(treeSkippedLnks.length + ' link(s) not copied:', treeSkippedLnks));
+  if (skipped.length > 0 && lines.length > 0) lines.push('');
+  for (var si2 = 0; si2 < skipped.length; si2++) {
+    lines.push('Warning: ' + skipped[si2].name + ' — ' + skipped[si2].reason);
+  }
+
+  if (treeItems.length === 0 && pasted === 0) {
+    abort('Paste Failed', lines.length ? lines : ['No files pasted.']);
+    return;
+  }
+  renderDisk(parseCurrentDir(currentBuffer));
+  updateMenuState();
+  showModal(skipped.length === 0 ? 'Paste Complete' : 'Paste Incomplete', lines);
+}
 
 // ── File menu: Import File ────────────────────────────────────────────
 var importFileInput = document.createElement('input');
@@ -1085,6 +953,16 @@ async function readPickedFiles(fileList) {
   }));
 }
 
+// Why files can't be imported into the current (non-CFS) view, or null.
+// The drop path doesn't go through the menu's enable checks.
+function importRefusalReason() {
+  if (isTapeFormat(getCurrentCtx())) return 'Tape images are read-only.';
+  if (isCmdContainerListView()) return 'Open a partition first, then import into it.';
+  if (typeof hddPartitions !== 'undefined' && hddPartitions) return 'Open a partition first, then import into it.';
+  if (!canInsertFile()) return 'The directory is full.';
+  return null;
+}
+
 // Imports [{ name, buffer }] into the open disk, or into the current
 // directory when an IDE64 CFS partition is shown. Shared by File → Import
 // File and drag-and-drop. One file keeps the per-file result modal;
@@ -1094,6 +972,11 @@ async function importFilesToCurrentDisk(entries) {
   var inCfs = typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx >= 0;
   var cfsPart = inCfs && hddPartitions ? hddPartitions[cfsPartitionIdx] : null;
   if (inCfs ? !cfsPart : !currentBuffer) return;
+  var refusal = inCfs ? null : importRefusalReason();
+  if (refusal) {
+    showModal('Import Error', [refusal]);
+    return;
+  }
   var batch = entries.length > 1;
   var imported = 0, skipped = 0, errors = [];
   for (var i = 0; i < entries.length; i++) {
@@ -1130,9 +1013,9 @@ async function importFilesToCurrentDisk(entries) {
 // nameBytes = 16-byte Uint8Array of PETSCII filename (already padded with $A0)
 // Returns true on success, false on failure (with rollback).
 // geosData is optional: { geosBytes: Uint8Array(9), geosInfoBlock: Uint8Array(256)|null }
+// silent: no modals and no undo entry (the caller owns both).
 function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent, diskCtx) {
   diskCtx = diskCtx || getCurrentCtx();
-  if (!silent) pushUndo();
   var buffer = diskCtx.buffer;
   var snapshot = buffer.slice(0);
   var data = new Uint8Array(buffer);
@@ -1231,13 +1114,9 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent, diskCtx
     bamMarkSectorUsed(data, sectorList[bi].track, sectorList[bi].sector, bamOff, diskCtx);
   }
 
-  // Rollback helper: byte-restore from snapshot so we don't replace the
-  // buffer object (callers may hold references). Only matters when the
-  // caller passed an explicit diskCtx; the legacy fallback path reassigns
-  // currentBuffer below to preserve old behavior for un-ported callers.
+  // Restore in place: callers and the tab hold references to this buffer.
   function rollback() {
     new Uint8Array(buffer).set(new Uint8Array(snapshot));
-    if (diskCtx.buffer === currentBuffer) currentBuffer = snapshot;
   }
 
   // Verify the write by reading back the file data
@@ -1255,15 +1134,13 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent, diskCtx
     }
   }
 
+  if (!silent) pushUndo(snapshot);
   selectedEntryIndex = entryOff;
   return true;
 }
 
-// Convert ASCII filename to 16-byte PETSCII name padded with $A0
-// When the OS file name (extension stripped) is longer than 16 chars,
-// prompt the user with the auto-truncated suggestion and let them edit
-// it. Returns the chosen name string, or null if the user cancelled.
-// Pass-through when the name already fits.
+// A name longer than 16 chars gets an edit prompt with the truncated
+// suggestion. Returns the name, or null when the user cancels.
 async function promptShortenImportName(baseName, fullFileName) {
   if (baseName.length <= 16) return baseName;
   var picked = await showInputModal(
@@ -1277,6 +1154,7 @@ async function promptShortenImportName(baseName, fullFileName) {
   return picked == null ? null : picked;
 }
 
+// ASCII name → 16 PETSCII bytes, $A0-padded.
 function asciiToNameBytes(name) {
   var bytes = new Uint8Array(16);
   name = name.toUpperCase().substring(0, 16);
@@ -1323,35 +1201,32 @@ async function importFileToDisk(fileName, fileData, batch) {
     ext = 'seq';
   }
 
-  var typeMap = { prg: 2, seq: 1, usr: 3, rel: 4, p00: 2, s00: 1, u00: 3, r00: 4 };
-  var typeIdx = typeMap[ext];
-  if (typeIdx === undefined) {
+  var typeIdx = importTypeForExt(ext);
+  if (typeIdx < 0) {
     if (!batch) showModal('Import Error', ['Unsupported file type: .' + ext]);
     return { error: 'Unsupported file type: .' + ext };
   }
-
-  var baseName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
-  // Too-long names get a Cancel / OK prompt with the auto-truncated
-  // suggestion; OK is gated on length 1..16. PC64-format names are
-  // re-read from the file header further down and override this.
-  var chosen = await promptShortenImportName(baseName, fileName);
-  if (chosen == null) return { skipped: true };
-  baseName = chosen;
-  var nameBytes = asciiToNameBytes(baseName);
-
-  // PC64 format (.P00/.S00/etc.): 26-byte header with original filename
-  if (ext === 'p00' || ext === 's00' || ext === 'u00' || ext === 'r00') {
-    if (fileData.length > 26 && fileData[0] === 0x43 && fileData[1] === 0x36 && fileData[2] === 0x34) {
-      // "C64File" magic — extract original name and strip header
-      var pc64Name = '';
-      for (var pi = 8; pi < 24 && fileData[pi] !== 0x00; pi++) pc64Name += String.fromCharCode(fileData[pi]);
-      if (pc64Name) nameBytes = asciiToNameBytes(pc64Name);
-      fileData = fileData.subarray(26);
-    }
+  if (typeIdx === FILE_TYPE.REL) {
+    var relMsg = 'REL files can\'t be imported into a CBM-DOS disk yet (side sectors aren\'t built).';
+    if (!batch) showModal('Import Error', [relMsg]);
+    return { error: relMsg };
   }
 
-  // Batch writes run silent (no modal, no undo push) and roll themselves
-  // back on failure, so only a successful write gets an undo entry.
+  // A PC64 header carries the real CBM name; only prompt without one.
+  var pc64 = /^[psu]\d\d$/.test(ext) ? parsePc64Header(fileData) : null;
+  var nameBytes;
+  if (pc64 && pc64.nameBytes) {
+    nameBytes = pc64.nameBytes;
+  } else {
+    var baseName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
+    var chosen = await promptShortenImportName(baseName, fileName);
+    if (chosen == null) return { skipped: true };
+    nameBytes = asciiToNameBytes(chosen);
+  }
+  if (pc64) fileData = pc64.data;
+
+  // Batch writes run silent and roll themselves back on failure, so only
+  // a successful write gets an undo entry.
   var snap = batch ? currentBuffer.slice(0) : null;
   if (!writeFileToDisk(typeIdx, nameBytes, fileData, null, batch, getCurrentCtx())) {
     return { error: 'Disk or directory full.' };
@@ -1361,9 +1236,33 @@ async function importFileToDisk(fileName, fileData, batch) {
     var info = parseCurrentDir(currentBuffer);
     renderDisk(info);
     var numSectors = fileData.length === 0 ? 1 : Math.ceil(fileData.length / 254);
-    showModal('Import Successful', ['"' + baseName.toUpperCase() + '" imported successfully.', numSectors + ' block(s) written.']);
+    var shownName = petsciiToReadable(readPetsciiString(nameBytes, 0, 16)).trim();
+    showModal('Import Successful', ['"' + shownName + '" imported successfully.', numSectors + ' block(s) written.']);
   }
   return { ok: true };
+}
+
+// CBM file type for an import extension (.prg, .s00, ...), or -1.
+function importTypeForExt(ext) {
+  if (/^(prg|seq|usr|rel)$/.test(ext)) return FILE_TYPE[ext.toUpperCase()];
+  if (/^[psur]\d\d$/.test(ext)) return FILE_TYPE[{ p: 'PRG', s: 'SEQ', u: 'USR', r: 'REL' }[ext[0]]];
+  return -1;
+}
+
+// PC64 (.P00 etc.): "C64File\0", 16-byte PETSCII name ($00-padded), $00,
+// REL record length, then the data. Returns { nameBytes ($A0-padded, null
+// if the name is empty), data } or null when the header is missing.
+function parsePc64Header(bytes) {
+  var magic = 'C64File';
+  if (!bytes || bytes.length < 26) return null;
+  for (var i = 0; i < magic.length; i++) {
+    if (bytes[i] !== magic.charCodeAt(i)) return null;
+  }
+  if (bytes[7] !== 0x00) return null;
+  var nameBytes = new Uint8Array(16).fill(0xA0);
+  var len = 0;
+  while (len < 16 && bytes[8 + len] !== 0x00) { nameBytes[len] = bytes[8 + len]; len++; }
+  return { nameBytes: len > 0 ? nameBytes : null, data: bytes.subarray(26) };
 }
 
 // ── CVT Import ─────────────────────────────────────────────────────
@@ -1540,8 +1439,8 @@ function importCvtFileCore(cvt, silent) {
 
 function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock, silent, diskCtx) {
   diskCtx = diskCtx || getCurrentCtx();
-  if (!silent) pushUndo();
   var buffer = diskCtx.buffer;
+  var snapshot = silent ? null : buffer.slice(0);
   var data = new Uint8Array(buffer);
   var allocated = buildTrueAllocationMap(buffer, diskCtx);
 
@@ -1667,17 +1566,17 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock,
     writeGeosSignature(buffer, diskCtx);
   }
 
-  // selectedEntryIndex tracks the UI focus and only makes sense when
-  // writing into the active partition. Skip for cross-ctx writes (e.g.
-  // tree-paste into a new sub-partition).
+  if (snapshot) pushUndo(snapshot);
+  // Selection only makes sense for writes into the shown directory.
   if (!diskCtx.partition || diskCtx.partition === currentPartition) {
     selectedEntryIndex = entryOff;
   }
   return true;
 }
 
-// Find a free directory entry (typeByte === 0x00 with all entry bytes zeroed)
-// Also allocates a new directory sector if needed (like insertFileEntry but without writing an entry)
+// Offset of the first all-zero dir slot, extending the dir chain by one
+// sector when it's full; -1 when there's no room. preAllocated: an
+// allocation map whose sectors the extension must avoid (it is updated).
 function findFreeDirEntry(buffer, preAllocated, diskCtx) {
   diskCtx = diskCtx || getCurrentCtx();
   var data = new Uint8Array(buffer);
@@ -1709,29 +1608,31 @@ function findFreeDirEntry(buffer, preAllocated, diskCtx) {
     t = data[off]; s = data[off + 1];
   }
 
-  // No empty slot — allocate new directory sector
+  // No empty slot — extend the chain with a sector nothing else uses.
   var dirTrk, newSector;
+  var allocMap = preAllocated || buildTrueAllocationMap(buffer, diskCtx);
 
   if (fmt.subdirLinked && partition && partition.dnpDir) {
-    // Linked subdirs: directory can span any track, use allocateSectors
-    var allocMap = preAllocated || buildTrueAllocationMap(buffer, diskCtx);
+    // Linked subdirs: directory can span any track
     var secList = allocateSectors(allocMap, 1, diskCtx);
     if (secList.length === 0) return -1;
     dirTrk = secList[0].track;
     newSector = secList[0].sector;
   } else {
-    // Standard: allocate on the directory track only
     dirTrk = dctx.dirTrackNum;
     var spt = sectorsPerTrack(dirTrk, diskCtx);
     var protectedSecs = fmt.getProtectedSectors(dirTrk);
     newSector = -1;
     for (var cs = 1; cs < spt; cs++) {
-      if (visited[dirTrk + ':' + cs]) continue;
+      var csKey = dirTrk + ':' + cs;
+      if (visited[csKey] || allocMap[csKey]) continue;
       if (protectedSecs.indexOf(cs) !== -1) continue;
+      if (!checkSectorFree(data, bamOff, dirTrk, cs, diskCtx)) continue;
       newSector = cs;
       break;
     }
     if (newSector === -1) return -1;
+    allocMap[dirTrk + ':' + newSector] = true;
   }
 
   if (lastOff >= 0) {
@@ -1744,10 +1645,29 @@ function findFreeDirEntry(buffer, preAllocated, diskCtx) {
   data[newOff + 1] = 0xFF;
   for (var zi = 2; zi < 256; zi++) data[newOff + zi] = 0x00;
 
-  // Mark sector as used in BAM
   bamMarkSectorUsed(data, dirTrk, newSector, bamOff, diskCtx);
+  if (fmt.subdirLinked && partition && partition.dnpDir) _bumpDnpParentBlocks(data, diskCtx);
 
   return newOff;
+}
+
+// A DNP subdir's block count in its parent entry covers header + dir
+// chain (D2M-DNP.TXT, header bytes $24-$26 locate that entry), so it
+// grows with every dir sector added.
+function _bumpDnpParentBlocks(data, diskCtx) {
+  var partition = diskCtx.partition;
+  if (!partition.dnpHeaderT) return;
+  var hdrOff = sectorOffset(partition.dnpHeaderT, partition.dnpHeaderS, diskCtx);
+  if (hdrOff < 0) return;
+  var pe = diskCtx.format.subdirParentEntry;
+  var pT = data[hdrOff + pe], pS = data[hdrOff + pe + 1], pIdx = data[hdrOff + pe + 2];
+  if (pT === 0) return;
+  var pDirOff = sectorOffset(pT, pS, diskCtx);
+  if (pDirOff < 0) return;
+  var pEntry = pDirOff + pIdx * diskCtx.format.entrySize;
+  var sz = (data[pEntry + 0x1E] | (data[pEntry + 0x1F] << 8)) + 1;
+  data[pEntry + 0x1E] = sz & 0xFF;
+  data[pEntry + 0x1F] = (sz >>> 8) & 0xFF;
 }
 
 document.getElementById('opt-lock').addEventListener('click', (e) => {
@@ -1902,8 +1822,9 @@ document.getElementById('opt-scratch').addEventListener('click', async (e) => {
       if (!res.ok) failures.push(petsciiToReadable(targets[di].name) + ': ' + (res.error || 'unknown'));
     }
     if (failures.length === targets.length) {
+      discardUndo();
+      refreshIde64View();
       showModal('Scratch failed', failures);
-      if (typeof popUndo === 'function') popUndo();
       return;
     }
     refreshIde64View();
@@ -1912,19 +1833,26 @@ document.getElementById('opt-scratch').addEventListener('click', async (e) => {
     }
     return;
   }
-  pushUndo();
   var data = new Uint8Array(currentBuffer);
-  var entryOff = selectedEntryIndex;
-  var fmt = currentFormat;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
-
-  // Clear the closed bit (scratch the file)
-  data[entryOff + 2] &= ~0x80;
-
-  // Free all file sectors in BAM (main chain + REL + GEOS)
-  forEachFileSector(data, entryOff, function(t, s) {
-    bamMarkSectorFree(data, t, s, bamOff, getCurrentCtx());
-  }, getCurrentCtx());
+  var ctx = getCurrentCtx();
+  var bamOff = getDirContext(ctx).bamOff;
+  // Same rule as the menu: closed, unlocked SEQ/PRG/USR/REL only.
+  var scratchTargets = (selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex])
+    .filter(function(off) {
+      var tb = data[off + 2];
+      return (tb & 0x80) && !(tb & 0x40) &&
+        (tb & 0x07) >= FILE_TYPE.SEQ && (tb & 0x07) <= FILE_TYPE.REL;
+    });
+  if (scratchTargets.length === 0) return;
+  pushUndo();
+  for (var sti = 0; sti < scratchTargets.length; sti++) {
+    var entryOff = scratchTargets[sti];
+    // Like DOS: type $00 hides the entry; the T/S link stays for Unscratch.
+    data[entryOff + 2] = 0x00;
+    forEachFileSector(data, entryOff, function(t, s) {
+      bamMarkSectorFree(data, t, s, bamOff, ctx);
+    }, ctx);
+  }
 
   var info = parseCurrentDir(currentBuffer);
   renderDisk(info);
@@ -1932,7 +1860,7 @@ document.getElementById('opt-scratch').addEventListener('click', async (e) => {
   updateEntryMenuState();
 });
 
-document.getElementById('opt-unscratch').addEventListener('click', (e) => {
+document.getElementById('opt-unscratch').addEventListener('click', async (e) => {
   e.stopPropagation();
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
@@ -1947,8 +1875,9 @@ document.getElementById('opt-unscratch').addEventListener('click', (e) => {
     pushUndo();
     var res = cfsUnscratchEntry(hddBuffer, part.startLba, part.endLba, entry);
     if (!res.ok) {
+      discardUndo();
+      refreshIde64View();
       showModal('Unscratch failed', [res.error || 'Unknown error.']);
-      if (typeof popUndo === 'function') popUndo();
       return;
     }
     // Recursive dir restores can partially succeed (children whose data
@@ -1966,31 +1895,68 @@ document.getElementById('opt-unscratch').addEventListener('click', (e) => {
     refreshIde64View();
     return;
   }
-  pushUndo();
   var data = new Uint8Array(currentBuffer);
-  var entryOff = selectedEntryIndex;
-
-  // Set file type to PRG + closed
-  // Set closed bit, preserve original file type; default to PRG if type is DEL
-  if ((data[entryOff + 2] & 0x07) === 0) data[entryOff + 2] = 0x82;
-  else data[entryOff + 2] |= 0x80;
-
-  // Mark all file sectors as used in BAM (main chain + REL + GEOS)
-  var fmt = currentFormat;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
-  var sectorCount = forEachFileSector(data, entryOff, function(t, s) {
-    bamMarkSectorUsed(data, t, s, bamOff, getCurrentCtx());
-  }, getCurrentCtx());
-
-  // Update block count in directory entry
-  data[entryOff + 30] = sectorCount & 0xFF;
-  data[entryOff + 31] = (sectorCount >> 8) & 0xFF;
+  var targets = (selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex])
+    .filter(function(off) { return !(data[off + 2] & 0x80) && data[off + 3] !== 0; });
+  if (targets.length === 0) return;
+  // A DOS scratch leaves type $00, so the original type is gone: ask.
+  var restoreType = FILE_TYPE.PRG;
+  if (targets.some(function(off) { return (data[off + 2] & 0x07) === FILE_TYPE.DEL; })) {
+    restoreType = await showChoiceModal('Unscratch', 'Restore the file type as:', [
+      { label: 'Cancel', value: null, secondary: true },
+      { label: 'SEQ', value: FILE_TYPE.SEQ },
+      { label: 'USR', value: FILE_TYPE.USR },
+      { label: 'PRG', value: FILE_TYPE.PRG }
+    ]);
+    if (restoreType == null) return;
+  }
+  pushUndo();
+  var restored = 0, refused = [];
+  for (var ui = 0; ui < targets.length; ui++) {
+    var ures = unscratchCbmEntry(currentBuffer, targets[ui], getCurrentCtx(), restoreType);
+    if (ures.ok) restored++;
+    else refused.push(petsciiToReadable(readPetsciiString(data, targets[ui] + 5, 16)).trim() + ': ' + ures.error);
+  }
+  if (restored === 0) discardUndo();
 
   var info = parseCurrentDir(currentBuffer);
   renderDisk(info);
   updateMenuState();
   updateEntryMenuState();
+  if (refused.length > 0) {
+    showModal(restored ? 'Unscratch — partial' : 'Unscratch failed', refused);
+  }
 });
+
+// Restore a scratched CBM-DOS entry: set the closed bit (a $00 type byte
+// becomes restoreType, default PRG), mark its sectors used and fix the
+// block count. Refuses when another file has since taken any of its sectors.
+function unscratchCbmEntry(buffer, entryOff, ctx, restoreType) {
+  var data = new Uint8Array(buffer);
+  // Owners map without scratched entries — they no longer own anything.
+  var probe = buffer.slice(0);
+  var probeData = new Uint8Array(probe);
+  var slots = withDiskCtx(Object.assign({}, ctx, { buffer: buffer }), function() {
+    return getDirSlotOffsets(buffer);
+  });
+  for (var si = 0; si < slots.length; si++) {
+    if (!(probeData[slots[si] + 2] & 0x80)) probeData[slots[si] + 2] = 0;
+  }
+  var owned = buildTrueAllocationMap(probe, Object.assign({}, ctx, { buffer: probe }));
+  var taken = 0;
+  forEachFileSector(data, entryOff, function(t, s) { if (owned[t + ':' + s]) taken++; }, ctx);
+  if (taken > 0) return { ok: false, error: taken + ' of its sectors now belong to other data.' };
+
+  if ((data[entryOff + 2] & 0x07) === FILE_TYPE.DEL) data[entryOff + 2] = 0x80 | (restoreType || FILE_TYPE.PRG);
+  else data[entryOff + 2] |= 0x80;
+  var bamOff = getDirContext(ctx).bamOff;
+  var sectorCount = forEachFileSector(data, entryOff, function(t, s) {
+    bamMarkSectorUsed(data, t, s, bamOff, ctx);
+  }, ctx);
+  data[entryOff + 30] = sectorCount & 0xFF;
+  data[entryOff + 31] = (sectorCount >> 8) & 0xFF;
+  return { ok: true };
+}
 
 document.querySelectorAll('#opt-change-type .submenu .option').forEach(el => {
   el.addEventListener('click', (e) => {
@@ -1998,9 +1964,7 @@ document.querySelectorAll('#opt-change-type .submenu .option').forEach(el => {
     if (!currentBuffer || selectedEntryIndex < 0) return;
     closeMenus();
     var typeIdx = parseInt(el.dataset.typeidx, 10);
-    // CFS view: dispatch to cfsChangeFileType which maps the CBM type
-    // index to CFS ftype + 3-char typeSuffix. DEL (0) + CBM (5) aren't
-    // valid CFS targets — the menu state disables them in CFS view.
+    // CFS: maps the CBM type to ftype + suffix (DEL / CBM are menu-disabled).
     if (cfsPartitionIdx >= 0 && cfsDirEntries) {
       pushUndo();
       var cfsEntries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
@@ -2012,8 +1976,7 @@ document.querySelectorAll('#opt-change-type .submenu .option').forEach(el => {
       refreshIde64View();
       return;
     }
-    var entries = selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex];
-    for (var i = 0; i < entries.length; i++) changeFileType(entries[i], typeIdx);
+    changeFileType(selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex], typeIdx);
   });
 });
 

@@ -110,35 +110,9 @@ function readGeosBorderEntries(buffer, ctx) {
   return entries;
 }
 
-// Check if a disk has GEOS formatting (border sector signature at T18/S0 offset 0xAD)
-function isGeosDisk(buffer, ctx) {
-  if (!buffer) return false;
-  var data = new Uint8Array(buffer);
-  var bamOff = sectorOffset(ctx.format.bamTrack, ctx.format.bamSector, ctx);
-  if (bamOff < 0) return false;
-  // GEOS identification: bytes at BAM offset 0xAD-0xBC contain "GEOS format"
-  // or the border sector has specific values. A simpler check: look for any
-  // directory entry with GEOS file type > 0
-  var info = parseDisk(buffer);
-  for (var i = 0; i < info.entries.length; i++) {
-    var eOff = info.entries[i].entryOff;
-    if (data[eOff + 0x18] > 0) return true; // GEOS file type at byte 24
-  }
-  return false;
-}
-
-// Read GEOS info for a directory entry. Applies the 5-step detection
-// process from GEOS.TXT rev 1.4 (lines 280-303), with one deliberate
-// deviation:
-//   1. Lower 3 bits of dir +$02: spec says 0/1/2 only (DEL/SEQ/PRG);
-//      we also accept 3 (USR) because real-world GEOS disks (e.g.
-//      geoMagazine) store VLIR Application Data files as USR with
-//      valid GEOS metadata. REL (4) and higher are still rejected,
-//      matching the existing isVlirFile heuristic at line 310.
-//   2. If structure (+$17) and filetype (+$18) are both 0 → plain C64.
-//   3. Structure must be 0 or 1; any other value = not GEOS.
-//   4. Structure=1 → VLIR; else → GEOS-Sequential.
-//   5. Filetype != 0 → INFO block likely exists; verify info T/S range.
+// Read GEOS info for a directory entry, per the detection steps in GEOS.TXT
+// rev 1.4. One deviation: USR (3) is accepted besides DEL/SEQ/PRG, because
+// geoMagazine-style disks store VLIR application data as USR.
 function readGeosInfo(buffer, entryOff, ctx) {
   var data = new Uint8Array(buffer);
   var cbmTypeBits = data[entryOff + 0x02] & 0x07;
@@ -205,14 +179,12 @@ function decodeGeosString(data, offset, maxLen) {
   return s;
 }
 
-// Read VLIR records from a GEOS VLIR file.
-// The directory entry's T/S points to the VLIR index sector.
-// The index contains up to 127 record pointers (T/S pairs at bytes 2-255).
-// Each record is a standard sector chain. Returns array of Uint8Array (one per record).
+// Read the records of a VLIR file: the entry's T/S is the index sector, whose
+// bytes 2-255 hold up to 127 record T/S pairs. Per GEOS.TXT, $00/$00 ends the
+// index and $00/$FF is a record that isn't there. Returns one Uint8Array per
+// record, null for absent ones.
 function readVLIRRecords(buffer, entryOff, ctx) {
   var data = new Uint8Array(buffer);
-  var fmt = ctx.format;
-  var tracks = ctx.tracks;
   var indexT = data[entryOff + 3];
   var indexS = data[entryOff + 4];
   if (indexT === 0) return [];
@@ -221,16 +193,12 @@ function readVLIRRecords(buffer, entryOff, ctx) {
   if (idxOff < 0) return [];
 
   var records = [];
-  // Index sector: bytes 2-255 = up to 127 record T/S pairs
   for (var ri = 0; ri < 127; ri++) {
     var recT = data[idxOff + 2 + ri * 2];
     var recS = data[idxOff + 2 + ri * 2 + 1];
-    if (recT === 0 && recS === 0) {
-      records.push(null); // empty record
-      continue;
-    }
-    if (recT === 0 && recS === 0xFF) {
-      records.push(null); // non-existent record
+    if (recT === 0 && recS === 0) break;
+    if (recT === 0) {
+      records.push(null);
       continue;
     }
     // Follow this record's sector chain
@@ -238,8 +206,7 @@ function readVLIRRecords(buffer, entryOff, ctx) {
     var visited = {};
     var t = recT, s = recS;
     while (t !== 0) {
-      if (t < 1 || t > tracks) break;
-      if (s >= fmt.sectorsPerTrack(t)) break;
+      if (!isValidChainLink(t, s, ctx)) break;
       var key = t + ':' + s;
       if (visited[key]) break;
       visited[key] = true;
@@ -268,8 +235,6 @@ function readVLIRRecords(buffer, entryOff, ctx) {
 // so a VLIR file can be copied and pasted without losing its index structure.
 function readVLIRRecordsForCopy(buffer, entryOff, ctx) {
   var data = new Uint8Array(buffer);
-  var fmt = ctx.format;
-  var tracks = ctx.tracks;
   var indexT = data[entryOff + 3];
   var indexS = data[entryOff + 4];
   if (indexT === 0) return [];
@@ -293,8 +258,7 @@ function readVLIRRecordsForCopy(buffer, entryOff, ctx) {
     var visited = {};
     var t = recT, s = recS;
     while (t !== 0) {
-      if (t < 1 || t > tracks) break;
-      if (s >= fmt.sectorsPerTrack(t)) break;
+      if (!isValidChainLink(t, s, ctx)) break;
       var key = t + ':' + s;
       if (visited[key]) break;
       visited[key] = true;
@@ -323,16 +287,13 @@ function isVlirFile(data, entryOff) {
 
 /** @param {Uint8Array} data @param {number} entryOff @param {(track: number, sector: number) => void} callback @returns {number} Total sectors visited */
 function forEachFileSector(data, entryOff, callback, ctx) {
-  var fmt = ctx.format;
-  var tracks = ctx.tracks;
   var typeIdx = data[entryOff + 2] & 0x07;
   var count = 0;
 
   function followChain(ft, fs) {
     var visited = {};
     while (ft !== 0) {
-      if (ft < 1 || ft > tracks) break;
-      if (fs >= fmt.sectorsPerTrack(ft)) break;
+      if (!isValidChainLink(ft, fs, ctx)) break;
       var key = ft + ':' + fs;
       if (visited[key]) break;
       visited[key] = true;
@@ -357,8 +318,7 @@ function forEachFileSector(data, entryOff, callback, ctx) {
   if (data[entryOff + 0x18] > 0 && typeIdx !== FILE_TYPE.REL) {
     var infoT = data[entryOff + 0x15];
     var infoS = data[entryOff + 0x16];
-    if (infoT >= 1 && infoT <= tracks &&
-        infoS < fmt.sectorsPerTrack(infoT)) {
+    if (isValidChainLink(infoT, infoS, ctx)) {
       callback(infoT, infoS);
       count++;
     }
@@ -387,13 +347,13 @@ function forEachFileSector(data, entryOff, callback, ctx) {
 // (keys "t:s") to mark chosen sectors, and returns the new [{ track, sector }]
 // list. Callers build their own trackOrder + allocated map.
 function allocateSectorsFromTrackOrder(allocated, numSectors, trackOrder, interleave, ctx) {
-  var fmt = ctx.format;
   var sectorList = [];
   var lastSector = 0;
 
   for (var ti = 0; ti < trackOrder.length && sectorList.length < numSectors; ti++) {
     var track = trackOrder[ti];
-    var spt = fmt.sectorsPerTrack(track);
+    var spt = chainSectorsPerTrack(track, ctx);
+    if (spt <= 0) continue;
 
     var s = (lastSector + interleave) % spt;
     var foundFirst = false;
@@ -439,6 +399,7 @@ function findDnpHighTrackOwners(buffer, minTrack) {
   var totalTracks = buffer.byteLength / 65536;
   var fmt = DISK_FORMATS.dnp;
   var owners = [];
+  var seenSubdirs = {};
 
   function dnpOff(t, s) { return (t - 1) * 65536 + s * 256; }
   function record(ownerLabel, t, s) {
@@ -479,6 +440,11 @@ function findDnpHighTrackOwners(buffer, minTrack) {
 
         if (typeIdx === fmt.subdirType) {
           var hdrT = data[eo + 3], hdrS = data[eo + 4];
+          // Shared across the recursion: a corrupt subdir pointing back at an
+          // ancestor would otherwise recurse until the stack overflows.
+          var hdrKey = hdrT + ':' + hdrS;
+          if (hdrT === 0 || hdrT > totalTracks || seenSubdirs[hdrKey]) continue;
+          seenSubdirs[hdrKey] = true;
           record(label + ' (subdir header)', hdrT, hdrS);
           var hdrOff = dnpOff(hdrT, hdrS);
           walkDir(data[hdrOff], data[hdrOff + 1], label);
@@ -513,6 +479,7 @@ function findDnpHighTrackOwners(buffer, minTrack) {
     }
   }
 
+  seenSubdirs[fmt.headerTrack + ':' + fmt.headerSector] = true;
   walkDir(fmt.dirTrack, fmt.dirSector, '');
   return owners;
 }
@@ -642,17 +609,13 @@ function readGeosInfoBlock(buffer, track, sector, ctx) {
   if (off < 0) return null;
   var data = new Uint8Array(buffer);
 
-  // GEOS.TXT line 130: INFO block always starts with 00 FF (link bytes,
-  // since it's a single sector). If the bytes are missing, the dir entry's
-  // INFO T/S is stale or points at unrelated data — bail out so callers
-  // fall back to "no INFO" instead of parsing garbage. The 03/15/BF "ID"
-  // bytes (spec line 131) are NOT validated — spec line 133 explicitly
-  // notes exceptions exist.
+  // An INFO block is one sector, so its link is always $00/$FF; anything else
+  // is a stale pointer. The 03/15/BF ID bytes have known exceptions, so
+  // they aren't checked.
   if (data[off + 0x00] !== 0x00 || data[off + 0x01] !== 0xFF) return null;
 
   // Info block layout (GEOS.TXT rev 1.4):
-  //   0x00-0x01: 00/FF link (validated above)
-  //   0x02-0x04: icon dimensions ID (width-bytes / height-pixels / sig)
+  //   0x02-0x04: icon width (bytes), height (pixels), $BF
   //   0x05-0x43: icon sprite data (63 bytes)
   //   0x44:      CBM file type
   //   0x45:      GEOS file type
@@ -671,9 +634,8 @@ function readGeosInfoBlock(buffer, track, sector, ctx) {
   var createdBy = decodeGeosString(data, off + 0x75, 20);
   var description = decodeGeosString(data, off + 0xA0, 96);
 
-  // Icon: $02 = width (bytes), $03 = height (pixels), $04 = width (pixels), $05-$43 = bitmap
-  var iconW = data[off + 0x02]; // width in bytes (typically 3 = 24px)
-  var iconH = data[off + 0x03]; // height in pixels (typically 21)
+  var iconW = data[off + 0x02];
+  var iconH = data[off + 0x03];
   var iconBytes = iconW * iconH;
   var iconData = (iconW > 0 && iconH > 0 && iconBytes <= 63)
     ? data.subarray(off + 0x05, off + 0x05 + iconBytes) : null;
@@ -690,11 +652,4 @@ function readGeosInfoBlock(buffer, track, sector, ctx) {
     iconH: iconH,
     iconData: iconData,
   };
-}
-
-function unicodeToPetscii(char) {
-  var cp = char.charCodeAt(0);
-  if (cp >= 0xE000 && cp <= 0xE0FF) return cp - 0xE000;
-  if (cp >= 0xE100 && cp <= 0xE1FF) return cp - 0xE100;
-  return UNICODE_TO_PETSCII.get(char) || 0x20;
 }

@@ -1,10 +1,7 @@
-// ── Separators ─────────────────────────────────────────────────────
-// ── Insert Separator ──────────────────────────────────────────────────
-// Separator patterns — each is a 16-byte array or a single byte (repeated 16x)
-// PETSCII codes for box drawing: $C0=─, $DD=│, $B0=┌, $AE=┐, $AD=└, $BD=┘, $AB=├, $B3=┤, $B1=┴, $B2=┬
-// PETSCII box drawing: $C0=─, $DD=│, $B0=┌, $AE=┐, $AD=└, $BD=┘, $AB=├, $B3=┤, $B1=┴, $B2=┬
-// Rounded corners: $D5=╭, $C9=╮, $CA=╰, $CB=╯
-// Diagonals: $CD=╱, $CC=╲
+// ── Separators ────────────────────────────────────────────────────────
+// Patterns are { bytes: [16 bytes] } or { byte: N } (repeated 16x).
+// Box drawing: $C0=─ $DD=│ $B0=┌ $AE=┐ $AD=└ $BD=┘ $AB=├ $B3=┤ $B1=┴ $B2=┬
+// Rounded: $D5=╭ $C9=╮ $CA=╰ $CB=╯   Diagonals: $CD=╱ $CC=╲
 var _h14 = [0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0,0xC0];
 var _s14 = [0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x20];
 var DEFAULT_SEPARATORS = [
@@ -19,7 +16,11 @@ var DEFAULT_SEPARATORS = [
 ];
 
 // Custom separators stored in localStorage
-var customSeparators = JSON.parse(localStorage.getItem('cbm-customSeparators') || '[]');
+var customSeparators = [];
+try {
+  var _storedSeps = JSON.parse(localStorage.getItem('cbm-customSeparators') || '[]');
+  if (Array.isArray(_storedSeps)) customSeparators = _storedSeps;
+} catch (err) { /* corrupt entry: start empty */ }
 
 function saveCustomSeparators() {
   localStorage.setItem('cbm-customSeparators', JSON.stringify(customSeparators));
@@ -44,7 +45,7 @@ function sepBytesToPreview(bytes) {
   var preview = '';
   for (var j = 0; j < 16; j++) {
     var b = bytes[j] != null ? bytes[j] : 0xA0;
-    var rev = (b <= 0x1F) || (b >= 0x80 && b <= 0x9F);
+    var rev = isPetsciiReversed(b);
     var ch = escHtml(PETSCII_MAP[b]);
     preview += rev ? '<span class="petscii-rev">' + ch + '</span>' : ch;
   }
@@ -139,7 +140,9 @@ function showSeparatorEditor() {
     }
     mountPetsciiInput(preBytes, preLen);
 
-    body.addEventListener('click', function handler(e) {
+    // Bound to the rendered layout, not the shared #modal-body: each
+    // re-render or reopen replaces it, so handlers never stack.
+    body.querySelector('.sep-editor-layout').addEventListener('click', function(e) {
       if (e.target.tagName === 'INPUT') return;
       if (e.target.closest('.petscii-editor')) return;
       var btn = e.target.closest('[data-action]');
@@ -158,21 +161,19 @@ function showSeparatorEditor() {
             customSeparators[editIdx].bytes = bytes;
             customSeparators[editIdx].name = sepName;
           } else {
-            if (separatorExists(bytes)) { render(); return; }
+            if (separatorExists(bytes)) return;
             customSeparators.push({ name: sepName, bytes: bytes });
           }
           saveCustomSeparators();
           buildSepSubmenu();
           if (typeof renderSepFloatBody === 'function') renderSepFloatBody();
           editIdx = -1;
-          body.removeEventListener('click', handler);
           body.innerHTML = render();
           attachEvents();
           return;
         }
         if (e.target.closest('#sep-edit-cancel')) {
           editIdx = -1;
-          body.removeEventListener('click', handler);
           body.innerHTML = render();
           attachEvents();
           return;
@@ -189,12 +190,10 @@ function showSeparatorEditor() {
         buildSepSubmenu();
         if (typeof renderSepFloatBody === 'function') renderSepFloatBody();
         editIdx = -1;
-        body.removeEventListener('click', handler);
         body.innerHTML = render();
         attachEvents();
       } else if (action === 'edit') {
         editIdx = cidx;
-        body.removeEventListener('click', handler);
         body.innerHTML = render();
         attachEvents();
       }
@@ -266,6 +265,7 @@ function insertSeparator(pattern) {
   data[newOff + 31] = 0x00;
 
   selectedEntryIndex = newOff;
+  selectedEntries = [newOff];
   var info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 }
@@ -485,8 +485,9 @@ function insertCfsSeparator(pattern) {
   pushUndo();
   var res = cfsInsertSeparator(hddBuffer, cfsDirLba, patBytes);
   if (!res.ok) {
+    discardUndo();
+    refreshIde64View();
     showModal('Insert Separator failed', [res.error || 'Unknown error.']);
-    if (typeof popUndo === 'function') popUndo();
     return;
   }
   // Same shift-backward dance as opt-insert so the new row lands right

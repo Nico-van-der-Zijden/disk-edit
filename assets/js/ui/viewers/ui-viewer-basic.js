@@ -75,7 +75,7 @@ var BASIC_V35_TOKENS = [
   'RGR','RCLR','RLUM','JOY','RDOT','DEC','HEX$','ERR$',         // $CC-$D3
   'INSTR','ELSE','RESUME','TRAP','TRON','TROFF','SOUND',          // $D4-$DA
   'VOL','AUTO','PUDEF','GRAPHIC','PAINT','CHAR','BOX',            // $DB-$E1
-  'CIRCLE','PASTE','CUT','LINE','LOCATE','COLOR','SCNCLR',       // $E2-$E8
+  'CIRCLE','GSHAPE','SSHAPE','DRAW','LOCATE','COLOR','SCNCLR',   // $E2-$E8
   'SCALE','HELP','DO','LOOP','EXIT','DIRECTORY','DSAVE',          // $E9-$EF
   'DLOAD','HEADER','SCRATCH','COLLECT','COPY','RENAME','BACKUP',  // $F0-$F6
   'DELETE','RENUMBER','KEY','MONITOR','USING','UNTIL','WHILE'     // $F7-$FD
@@ -83,12 +83,13 @@ var BASIC_V35_TOKENS = [
 
 // Known BASIC load addresses → version
 var BASIC_LOAD_ADDRS = {
-  0x0401: 'V2',   // VIC-20 unexpanded
+  0x0401: 'V2',   // VIC-20 +3K
   0x0801: 'V2',   // C64
-  0x1001: 'V35',  // C16/Plus4 (or VIC-20 +8K)
-  0x1201: 'V2',   // VIC-20 +16K
+  0x1001: 'V35',  // C16/Plus4, but also unexpanded VIC-20 (dialect bar lets the user pick)
+  0x1201: 'V2',   // VIC-20 +8K and up
   0x1C01: 'V7'    // C128
 };
+var BASIC_AMBIGUOUS_ADDR = 0x1001;
 
 // Check if file data looks like a BASIC program
 function isBasicProgram(fileData) {
@@ -97,15 +98,9 @@ function isBasicProgram(fileData) {
   return BASIC_LOAD_ADDRS[addr] !== undefined;
 }
 
+// Control codes ($00-$1F, $80-$9F) render reversed, as LIST shows them in quotes.
 function emitLiteral(parts, b, type) {
-  // Render every PETSCII byte through the same map filenames/TASS use,
-  // so the visible glyph is consistent across the app and the C64 Pro
-  // font handles all 256 positions. Control-code ranges ($00-$1F and
-  // $80-$9F) get reversed:true so the renderer wraps them in
-  // `.petscii-rev` — matching how the C64 LIST routine displays them
-  // and how TASS draws .text strings.
-  var rev = (b <= 0x1F) || (b >= 0x80 && b <= 0x9F);
-  parts.push({ type: type, text: petsciiToAscii(b), reversed: rev });
+  parts.push({ type: type, text: petsciiToAscii(b), reversed: isPetsciiControlCode(b) });
 }
 
 function detokenizeBasic(fileData, dialect) {
@@ -202,13 +197,12 @@ function detokenizeBasic(fileData, dialect) {
         continue;
       }
 
-      // Extended tokens ($CC-$FD) for non-V7 dialects
+      // Extended tokens ($CC-$FD) for non-V7 dialects; plain V2 has none
       if (!isV7 && b >= 0xCC && b <= 0xFD) {
         var extKw = null;
         if (version === 'V35') extKw = BASIC_V35_TOKENS[b - 0xCC];
         else if (version === 'FC3') extKw = FC3_TOKENS[b - 0xCC];
         else if (version === 'SIMONS') extKw = SIMONS_TOKENS[b - 0xCC];
-        else extKw = SIMONS_TOKENS[b - 0xCC]; // default for V2
         if (extKw) {
           parts.push({ type: 'keyword', text: extKw });
           pos++;
@@ -216,10 +210,7 @@ function detokenizeBasic(fileData, dialect) {
         }
       }
 
-      // Literal character (rare — should normally be inside a string or REM,
-      // but handle gracefully). Same PETSCII rendering rules as emitLiteral.
-      var revLit = (b <= 0x1F) || (b >= 0x80 && b <= 0x9F);
-      parts.push({ type: 'text', text: petsciiToAscii(b), reversed: revLit });
+      emitLiteral(parts, b, 'text');
       pos++;
     }
 
@@ -264,9 +255,10 @@ function showFileBasicRendered(entryOff, dialect, preloaded) {
   var titleText = versionLabel + ' \u2014 "' + name + '" (load: $' + hex16(rendered.basic.loadAddr) + ')';
   if (result.error) titleText += ' \u2014 ' + result.error;
 
-  // Dialect selector for C64 programs (V2 load address, not V7/V35)
+  // Dialect selector for V2 load addresses and for $1001 (C16/Plus4 or VIC-20)
   var detectedVersion = BASIC_LOAD_ADDRS[rendered.basic.loadAddr] || 'V2';
-  var showDialect = (detectedVersion === 'V2');
+  var ambiguous = rendered.basic.loadAddr === BASIC_AMBIGUOUS_ADDR;
+  var showDialect = (detectedVersion === 'V2') || ambiguous;
   var currentDialect = dialect || detectedVersion;
 
   var body = showViewerModal(titleText, rendered.html);
@@ -278,7 +270,10 @@ function showFileBasicRendered(entryOff, dialect, preloaded) {
     selLabel.textContent = 'Dialect:';
     selLabel.style.color = 'var(--text-muted)';
     selDiv.appendChild(selLabel);
-    var dialects = [
+    var dialects = ambiguous ? [
+      ['V35', 'BASIC V3.5 (C16/Plus4)'],
+      ['V2', 'BASIC V2 (VIC-20)']
+    ] : [
       ['V2', 'BASIC V2 (standard)'],
       ['SIMONS', "Simons' BASIC"],
       ['FC3', 'Final Cartridge III']
@@ -299,7 +294,7 @@ function showFileBasicRendered(entryOff, dialect, preloaded) {
 }
 
 function renderBasicHtml(basic, name, result) {
-  var html = '<div class="basic-listing">';
+  var html = '<div class="basic-listing basic-c64">';
   for (var li = 0; li < basic.lines.length; li++) {
     var line = basic.lines[li];
     html += '<div class="basic-line">';

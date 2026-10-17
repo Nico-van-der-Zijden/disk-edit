@@ -113,9 +113,14 @@ function _lhaReadCLen(br, tHuff) {
   return _lhaBuildHuffman(lens, LHA_NC);
 }
 
+// Largest member we will allocate for. The size field is untrusted; anything
+// bigger than the largest CMD HD image is a corrupt header, not a real file.
+var LHA_MAX_MEMBER = 256 * 1024 * 1024;
+
 // Decode one -lh5- member into `origSize` bytes.
 function _lhaDecodeLh5(data, start, end, origSize) {
-  var out = new Uint8Array(origSize);
+  var out;
+  try { out = new Uint8Array(origSize); } catch (e) { return { error: 'declared size too large' }; }
   var br = _lhaBitReader(data, start, end);
   var outPos = 0, blockSize = 0;
   var cHuff = null, pHuff = null;
@@ -148,8 +153,6 @@ function _lhaDecodeLh5(data, start, end, origSize) {
     }
   }
 
-  // Level-1 producers disagree on whether "skip size" covers the extended
-  // headers, so report what was consumed and let the caller advance by it.
   var consumed = (br.pos - start) + (br.bit > 0 ? 1 : 0);
   return {
     data: out,
@@ -179,6 +182,16 @@ function _lhaName(data, off, len) {
   return s.replace(/^.*[\xFF\\\/]/, '');
 }
 
+// True when `p` is a plausible place for the next header: end of data, the
+// zero terminator, or a method id two bytes in.
+function _lhaHeaderAt(data, p) {
+  if (p >= data.length || data[p] === 0) return true;
+  if (p + 7 > data.length) return false;
+  var m = '';
+  for (var i = 0; i < 5; i++) m += String.fromCharCode(data[p + 2 + i]);
+  return /^-l[hz][0-9d]-$/.test(m);
+}
+
 // Returns { entries, skipped } or { error }; entries match the
 // { name, data } shape of parseZip/parseTar.
 function parseLha(arrayBuffer) {
@@ -201,7 +214,7 @@ function parseLha(arrayBuffer) {
     var packedSize = dv.getUint32(pos + 7, true);
     var origSize = dv.getUint32(pos + 11, true);
     var level = data[pos + 20];
-    var name, dataStart, nextPos;
+    var name, dataStart, nextPos, skipFallback = -1;
 
     var headerCrc = -1;
     if (level === 0) {
@@ -221,27 +234,29 @@ function parseLha(arrayBuffer) {
       // The base header size at $00 *includes* the first extended header's
       // size field, so the chain starts at $19+nameLen — not 2+headerSize,
       // which is already 2 bytes past it. A zero size ends the chain.
-      var chainStart = pos + 25 + nameLen1;
-      var cur = chainStart;
-      var extTotal = 0;
+      var cur = pos + 25 + nameLen1;
       while (cur + 1 < data.length) {
         var extSize = dv.getUint16(cur, true);
-        if (extSize === 0) { extTotal += 2; cur += 2; break; }
-        extTotal += extSize;
+        if (extSize === 0) { cur += 2; break; }
         cur += extSize;
       }
       dataStart = cur;
       // Producers disagree on whether "skip size" covers the extended
-      // headers, so read to the end and advance by what was consumed.
+      // headers, so decode to the end and advance by what was consumed;
+      // when nothing is consumed, take whichever reading lands on a header.
+      var spec = pos + 2 + headerSize + packedSize;
+      var plain = dataStart + packedSize;
+      if (_lhaHeaderAt(data, spec)) skipFallback = spec;
+      else if (_lhaHeaderAt(data, plain)) skipFallback = plain;
       packedSize = data.length - dataStart;
-      nextPos = -1;                       // filled in from `consumed` below
+      nextPos = -1;
     } else {
       skipped.push({ name: '(header level ' + level + ')', reason: 'unsupported header level' });
       break;                                        // can't find the next header safely
     }
     sawHeader = true;
 
-    if (dataStart < 0 || nextPos > data.length || packedSize < 0) {
+    if (nextPos > data.length || packedSize < 0) {
       skipped.push({ name: name || '(unnamed)', reason: 'truncated' });
       break;
     }
@@ -249,9 +264,16 @@ function parseLha(arrayBuffer) {
     var out = null;
     if (method === '-lhd-') {
       // Directory entry, no payload.
+      if (nextPos < 0) nextPos = dataStart;
+    } else if (origSize > LHA_MAX_MEMBER) {
+      skipped.push({ name: name || '(unnamed)', reason: 'declared size too large' });
     } else if (method === '-lh0-') {
       // Stored: packed length is the original length by definition, which is
       // also the level-1 answer without trusting its size fields.
+      if (dataStart + origSize > data.length) {
+        skipped.push({ name: name || '(unnamed)', reason: 'truncated' });
+        break;
+      }
       out = data.slice(dataStart, dataStart + origSize);
       if (nextPos < 0) nextPos = dataStart + origSize;
     } else if (method === '-lh5-') {
@@ -276,9 +298,9 @@ function parseLha(arrayBuffer) {
       }
     }
 
+    if (nextPos < 0) nextPos = skipFallback;
     // Never move backwards or stand still — a level-1 member we couldn't
-    // size means we can't safely find the next header, so stop cleanly with
-    // whatever we already have.
+    // size means we can't safely find the next header, so stop cleanly.
     if (nextPos <= pos) break;
     pos = nextPos;
   }

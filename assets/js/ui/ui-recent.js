@@ -98,7 +98,7 @@ function addRecentDisk(name, bytes) {
     formatName: isArchive ? 'LNX' : ((currentFormat && currentFormat.name) ? currentFormat.name : ''),
     isArchive: isArchive,
     timestamp: Date.now(),
-    bytes: bytes
+    bytes: bytes.slice(0) // callers often pass the tab's live buffer
   };
   // Update in-memory cache (move-to-front, deduplicate by id).
   recentCache = recentCache.filter(function(e) { return e.id !== id; });
@@ -132,7 +132,7 @@ function clearRecentDisks() {
 // Open a cached recent disk as a new tab. LNX archives go through the
 // archive extractor (same as drag-drop of a .lnx); other files go through
 // the normal parseDisk + createTab flow.
-function openRecentDisk(entry) {
+async function openRecentDisk(entry) {
   if (!entry || !entry.bytes) return;
   saveActiveTab();
   try {
@@ -143,7 +143,7 @@ function openRecentDisk(entry) {
     } else if (/\.(rml|rl|d1m|d2m|d4m|dhd)$/i.test(entry.name)) {
       // CMD containers (RAMLink, FD2000/FD4000, CMD HD) open to the
       // partition list — double-click a partition to enter it.
-      openCmdContainerAsTab(bufCopy, entry.name);
+      await openCmdContainerAsTab(bufCopy, entry.name);
     } else if (/\.hdd$/i.test(entry.name)) {
       // IDE64 .hdd opens via its own dispatcher — CBM-DOS parseDisk
       // would treat the magic bytes / partition table as random sector

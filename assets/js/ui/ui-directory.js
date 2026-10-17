@@ -1,5 +1,3 @@
-// ── Move directory entry ──────────────────────────────────────────────
-// Get ordered list of directory entry offsets from the chain
 // ── Partition-aware parse helper ──────────────────────────────────────
 function parseCurrentDir(buffer) {
   // CMD container, partition-list view: nothing to parse as a disk.
@@ -59,6 +57,7 @@ function getDirContext(diskCtx) {
   };
 }
 
+// Ordered directory slot offsets of the current view's dir chain.
 function getDirSlotOffsets(buffer) {
   const data = new Uint8Array(buffer);
   const offsets = [];
@@ -150,40 +149,18 @@ function sortDirectory(buffer, sortType) {
   pushUndo();
   const data = new Uint8Array(buffer);
 
-  // Collect all directory entry slots (raw 32-byte blocks) from the chain
-  const slots = []; // { off, bytes, isEmpty, name, blocks }
-  let t = currentFormat.dirTrack, s = currentFormat.dirSector;
-  const visited = new Set();
-  const sectorOffsets = [];
-
-  while (t !== 0) {
-    const key = `${t}:${s}`;
-    if (visited.has(key)) break;
-    visited.add(key);
-    const off = sectorOffset(t, s, getCurrentCtx());
-    if (off < 0) break;
-    sectorOffsets.push(off);
-
-    for (let i = 0; i < 8; i++) {
-      const eo = off + i * 32;
-      const raw = data.slice(eo, eo + 32);
-      const typeByte = raw[2];
-
-      // Check if slot is empty
-      let isEmpty = true;
-      for (let j = 2; j < 32; j++) {
-        if (raw[j] !== 0x00) { isEmpty = false; break; }
-      }
-
-      const name = readPetsciiString(data, eo + 5, 16);
-      const blocks = raw[30] | (raw[31] << 8);
-
-      slots.push({ off: eo, bytes: new Uint8Array(raw), isEmpty, name, blocks, typeByte });
+  const slots = getDirSlotOffsets(buffer).map(function(eo) {
+    const raw = data.slice(eo, eo + 32);
+    let isEmpty = true;
+    for (let j = 2; j < 32; j++) {
+      if (raw[j] !== 0x00) { isEmpty = false; break; }
     }
-
-    t = data[off];
-    s = data[off + 1];
-  }
+    return {
+      off: eo, bytes: raw, isEmpty: isEmpty,
+      name: readPetsciiString(data, eo + 5, 16),
+      blocks: raw[30] | (raw[31] << 8),
+    };
+  });
 
   // Separate non-empty and empty slots
   const entries = slots.filter(s => !s.isEmpty);
@@ -198,15 +175,10 @@ function sortDirectory(buffer, sortType) {
   // Recombine: entries first, empties at end
   const sorted = [...entries, ...empties];
 
-  // Write back to the directory sectors in order
-  // Note: bytes 0-1 of each entry slot are NOT part of the entry data for entries 1-7.
-  // Only entry 0 of each sector uses bytes 0-1 as the chain link (next T/S).
-  // For entries 1-7, bytes 0-1 in their 32-byte slot are part of the entry but
-  // conventionally unused (the real chain link is only in entry 0).
+  // Bytes 0-1 stay put: in slot 0 of each sector they are the chain link.
   for (let i = 0; i < sorted.length && i < slots.length; i++) {
     const targetOff = slots[i].off;
     const srcBytes = sorted[i].bytes;
-    // Write bytes 2-31 (skip 0-1 which are chain link for entry 0 or unused)
     for (let j = 2; j < 32; j++) {
       data[targetOff + j] = srcBytes[j];
     }
@@ -321,7 +293,7 @@ function alignCfsFilename(entry, alignment) {
   if (entry.ftype === CFS_FTYPE.DEL) return;
   if (typeof _cfsEntryIsDeldirRef === 'function' && _cfsEntryIsDeldirRef(entry)) return;
   const data = new Uint8Array(hddBuffer);
-  const nameOff = entry.dirLba * 512 + entry.index * 32;
+  const nameOff = entry.dirLba * IDE64_SECTOR_SIZE + entry.index * CFS_DIR_ENTRY_SIZE;
   const content = [];
   for (let i = 0; i < 16; i++) {
     const b = data[nameOff + i];
@@ -335,33 +307,30 @@ function alignCfsFilename(entry, alignment) {
 }
 
 // ── Remove directory entry ────────────────────────────────────────────
-function removeFileEntry(buffer, entryOff) {
-  pushUndo();
+// Callers push the undo snapshot. Removing a 1581 partition frees its
+// tracks in the root BAM, except sectors listed in keepSectors ("t:s")
+// — the data of files moved out to the root.
+function removeFileEntry(buffer, entryOff, keepSectors) {
   const data = new Uint8Array(buffer);
   const slots = getDirSlotOffsets(buffer);
   const idx = slots.indexOf(entryOff);
-  if (idx < 0) return;
+  if (idx < 0) return false;
 
-  // If removing a CBM partition, free its tracks in the root BAM
   var typeByte = data[entryOff + 2];
-  if (!currentFormat.subdirLinked && (typeByte & 0x07) === currentFormat.subdirType) {
+  if (currentFormat.supportsSubdirs && !currentFormat.subdirLinked &&
+      (typeByte & 0x07) === currentFormat.subdirType) {
+    var fmt = currentFormat;
+    var ctx = getCurrentCtx();
+    var bamOff = getDirContext(ctx).bamOff;
     var partStart = data[entryOff + 3];
     var partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
-    var fmt = currentFormat;
-    var partTracks = Math.floor(partSize / fmt.partitionSpt);
-    var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
-
-    for (var pt = partStart; pt < partStart + partTracks; pt++) {
+    var partEnd = Math.min(partStart + Math.floor(partSize / fmt.partitionSpt), currentTracks + 1);
+    for (var pt = Math.max(1, partStart); pt < partEnd; pt++) {
       var spt = fmt.sectorsPerTrack(pt);
-      var rbase;
-      if (pt <= 40) {
-        rbase = bamOff + 0x10 + (pt - 1) * 6;
-      } else {
-        rbase = bamOff + 256 + 0x10 + (pt - 41) * 6;
+      for (var ps = 0; ps < spt; ps++) {
+        if (keepSectors && keepSectors[pt + ':' + ps]) bamMarkSectorUsed(data, pt, ps, bamOff, ctx);
+        else bamMarkSectorFree(data, pt, ps, bamOff, ctx);
       }
-      // Mark all sectors as free
-      data[rbase] = spt; // free count = all sectors
-      for (var rb = 0; rb < 5; rb++) data[rbase + 1 + rb] = 0xFF;
     }
   }
 
@@ -380,6 +349,7 @@ function removeFileEntry(buffer, entryOff) {
   for (let j = 2; j < 32; j++) {
     data[lastSlot + j] = 0x00;
   }
+  return true;
 }
 
 // ── Insert file entry ─────────────────────────────────────────────────
@@ -424,104 +394,9 @@ function canInsertFile() {
 
 function insertFileEntry() {
   if (!currentBuffer) return -1;
-  const data = new Uint8Array(currentBuffer);
-  var ctx = getDirContext();
-  const bamOff = ctx.bamOff;
-
-  // Walk directory chain, find first empty slot
-  let t = ctx.dirTrack, s = ctx.dirSector;
-  const visited = new Set();
-  let lastOff = -1;
-
-  while (t !== 0) {
-    const key = `${t}:${s}`;
-    if (visited.has(key)) break;
-    visited.add(key);
-    const off = sectorOffset(t, s, getCurrentCtx());
-    if (off < 0) break;
-    lastOff = off;
-
-    for (let i = 0; i < 8; i++) {
-      const eo = off + i * 32;
-      let isEmpty = true;
-      for (let j = 2; j < 32; j++) {
-        if (data[eo + j] !== 0x00) { isEmpty = false; break; }
-      }
-      if (isEmpty) {
-        writeNewEntry(data, eo);
-        return eo;
-      }
-    }
-
-    t = data[off];
-    s = data[off + 1];
-  }
-
-  // No empty slots — allocate a new directory sector
-  var dirTrk, newSector;
-
-  if (currentFormat.subdirLinked && currentPartition && currentPartition.dnpDir) {
-    // Linked subdirs: directory can span any track
-    var allocated = buildTrueAllocationMap(currentBuffer, getCurrentCtx());
-    var secList = allocateSectors(allocated, 1, getCurrentCtx());
-    if (secList.length === 0) return -1;
-    dirTrk = secList[0].track;
-    newSector = secList[0].sector;
-  } else {
-    // Standard: allocate on the directory track only
-    dirTrk = ctx.dirTrackNum;
-    const spt = sectorsPerTrack(dirTrk, getCurrentCtx());
-    var protectedSecs = new Set(currentFormat.getProtectedSectors(dirTrk));
-    newSector = -1;
-    for (let cs = 1; cs < spt; cs++) {
-      if (visited.has(`${dirTrk}:${cs}`)) continue;
-      if (protectedSecs.has(cs)) continue;
-      newSector = cs;
-      break;
-    }
-    if (newSector === -1) return -1;
-  }
-
-  if (lastOff >= 0) {
-    data[lastOff] = dirTrk;
-    data[lastOff + 1] = newSector;
-  }
-
-  const newOff = sectorOffset(dirTrk, newSector, getCurrentCtx());
-  data[newOff] = 0x00;
-  data[newOff + 1] = 0xFF;
-  for (let i = 2; i < 256; i++) data[newOff + i] = 0x00;
-
-  writeNewEntry(data, newOff);
-
-  // Mark sector as used in BAM
-  bamMarkSectorUsed(data, dirTrk, newSector, bamOff, getCurrentCtx());
-
-  // DNP subdir: bump the parent entry's block count by 1. Spec D2M-DNP.TXT
-  // §directory header bytes 24-26: track/sector + index of the entry for
-  // this subdir in its parent directory. The size field at +$1E/+$1F counts
-  // header + dir-chain blocks only; growing the chain must keep it in sync.
-  if (currentFormat.subdirLinked && currentPartition && currentPartition.dnpDir
-      && currentPartition.dnpHeaderT) {
-    var hdrOff = sectorOffset(currentPartition.dnpHeaderT, currentPartition.dnpHeaderS, getCurrentCtx());
-    if (hdrOff >= 0) {
-      var pe = currentFormat.subdirParentEntry;
-      var pT = data[hdrOff + pe];
-      var pS = data[hdrOff + pe + 1];
-      var pIdx = data[hdrOff + pe + 2];
-      if (pT !== 0) {
-        var pDirOff = sectorOffset(pT, pS, getCurrentCtx());
-        if (pDirOff >= 0) {
-          var pEntry = pDirOff + pIdx * 32;
-          var sz = (data[pEntry + 0x1E] | (data[pEntry + 0x1F] << 8)) + 1;
-          data[pEntry + 0x1E] = sz & 0xFF;
-          data[pEntry + 0x1F] = (sz >>> 8) & 0xFF;
-        }
-      }
-    }
-  }
-
-  return newOff;
+  var off = findFreeDirEntry(currentBuffer, null, getCurrentCtx());
+  if (off >= 0) writeNewEntry(new Uint8Array(currentBuffer), off);
+  return off;
 }
 
 function writeNewEntry(data, entryOff) {
@@ -540,12 +415,16 @@ function writeNewEntry(data, entryOff) {
 }
 
 // ── Change file type ──────────────────────────────────────────────────
-function changeFileType(entryOff, newTypeIdx) {
+// entryOffs: one offset or an array (multi-select) — one undo step.
+function changeFileType(entryOffs, newTypeIdx) {
   if (!currentBuffer) return;
+  if (!Array.isArray(entryOffs)) entryOffs = [entryOffs];
   pushUndo();
   const data = new Uint8Array(currentBuffer);
   // Preserve closed (bit 7) and locked (bit 6), replace type bits (0-2)
-  data[entryOff + 2] = (data[entryOff + 2] & 0xC0) | (newTypeIdx & 0x07);
+  for (var i = 0; i < entryOffs.length; i++) {
+    data[entryOffs[i] + 2] = (data[entryOffs[i] + 2] & 0xC0) | (newTypeIdx & 0x07);
+  }
   const info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 }
@@ -562,10 +441,7 @@ function showTypeDropdown(typeSpan, entryOff) {
   const dropdown = document.createElement('div');
   dropdown.className = 'type-dropdown';
 
-  // Only list types valid for the current format (DISK_FORMATS.fileTypes).
-  // D64/D71/D81/etc. don't support CBM (partition) or DIR types; only
-  // CMD containers and DNP do. Filtering here keeps the dropdown honest
-  // — was showing all 7 types regardless of format before.
+  // Only the types the current format supports (CBM / DIR are format-specific).
   var allowedTypes = (currentFormat && currentFormat.fileTypes) || [0, 1, 2, 3, 4];
   FILE_TYPES.forEach((typeName, idx) => {
     if (allowedTypes.indexOf(idx) < 0) return;
@@ -621,16 +497,14 @@ const MAX_BLOCKS = 65024;
 // chain broken before T=0 end-marker), 'no' (head invalid / nothing free).
 function checkScratchedRecoverable(buffer, entryOff) {
   var data = new Uint8Array(buffer);
-  var fmt = currentFormat;
   var t = data[entryOff + 3], s = data[entryOff + 4];
   if (t === 0) return 'no';
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, getCurrentCtx());
+  var bamOff = getDirContext().bamOff;
   var totalSectors = 0, freeSectors = 0;
   var visited = {};
   var chainClean = false;
   while (t !== 0) {
-    if (t < 1 || t > currentTracks) break;
-    if (s >= fmt.sectorsPerTrack(t)) break;
+    if (!isValidChainLink(t, s, getCurrentCtx())) break;
     var key = t + ':' + s;
     if (visited[key]) break;
     visited[key] = true;
@@ -716,30 +590,52 @@ function countActualBlocks(buffer, entryOff) {
 }
 
 // ── Free blocks editing ───────────────────────────────────────────────
-// Free block count per track is a single byte (0-255), stored in BAM.
-// BAM only covers tracks 1-35. Data tracks = tracks 1-35 minus track 18.
-// 34 data tracks × 255 = 8670 max.
+// The per-track free-count bytes that add up to "blocks free" in the
+// current view: the root BAM minus the dir track, or a 1581 partition's
+// own BAM minus its system track. Each count byte holds 0-255.
+function freeCountTracks(data) {
+  var ctx = getCurrentCtx();
+  var fmt = ctx.format;
+  var bamOff = getDirContext(ctx).bamOff;
+  var part = ctx.partition;
+  var list = [];
+  if (part && !part.dnpDir) {
+    var numTracks = Math.floor(part.partSize / fmt.partitionSpt);
+    for (var r = 2; r <= numTracks; r++) {
+      (function(t, off) {
+        list.push({ t: t, read: function() { return data[off]; }, write: function(v) { data[off] = v; } });
+      })(part.startTrack + r - 1, getPartitionBamEntry(bamOff, r, ctx));
+    }
+    return list;
+  }
+  var bamTracks = fmt.bamTracksRange(ctx.tracks);
+  for (var bt = 1; bt <= bamTracks; bt++) {
+    if (bt === fmt.dirTrack) continue;
+    (function(t) {
+      list.push({
+        t: t,
+        read: function() { return fmt.readTrackFree(data, bamOff, t); },
+        write: function(v) { fmt.writeTrackFree(data, bamOff, t, v); },
+      });
+    })(bt);
+  }
+  return list;
+}
+
 function getMaxFreeBlocks() {
-  // Max = (number of BAM tracks - 1 for dir track) × 255 per track byte
-  var bamTracks = currentFormat.bamTracksRange(currentTracks);
-  return (bamTracks - 1) * 255;
+  return freeCountTracks(new Uint8Array(currentBuffer)).length * 255;
 }
 
 function writeFreeBlocks(buffer, freeBlocks) {
   const data = new Uint8Array(buffer);
-  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector, getCurrentCtx());
-
-  // BAM only covers tracks 1-35
-  const bamTracks = currentFormat.bamTracksRange(currentTracks);
+  const counts = freeCountTracks(data);
 
   // Read current per-track free counts and their max
   const tracks = [];
   let currentTotal = 0;
-  for (let t = 1; t <= bamTracks; t++) {
-    if (t === currentFormat.dirTrack) continue;
-    const free = currentFormat.readTrackFree(data, bamOff, t);
-    const spt = sectorsPerTrack(t, getCurrentCtx());
-    tracks.push({ t, free, spt });
+  for (const c of counts) {
+    const free = c.read();
+    tracks.push({ t: c.t, free, spt: sectorsPerTrack(c.t, getCurrentCtx()), write: c.write });
     currentTotal += free;
   }
 
@@ -786,21 +682,7 @@ function writeFreeBlocks(buffer, freeBlocks) {
   }
 
   // Write back only the count bytes, leave bitmaps untouched
-  for (const tr of tracks) {
-    currentFormat.writeTrackFree(data, bamOff, tr.t, tr.free);
-  }
-}
-
-function countActualFreeBlocks(buffer) {
-  const data = new Uint8Array(buffer);
-  const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector, getCurrentCtx());
-  let free = 0;
-  const bamTracks = currentFormat.bamTracksRange(currentTracks);
-  for (let t = 1; t <= bamTracks; t++) {
-    if (t === currentFormat.dirTrack) continue;
-    free += currentFormat.readTrackFree(data, bamOff, t);
-  }
-  return free;
+  for (const tr of tracks) tr.write(tr.free);
 }
 
 // ── Pure helpers for the inline editors below ────────────────────────
@@ -960,7 +842,7 @@ function startEditTrackSector(entryEl) {
   const trackInput = createHexInput({
     value: curTrack,
     maxBytes: 1,
-    validate: (val) => val === 0 || (val >= 1 && val <= currentTracks)
+    validate: (val) => val === 0 || (val >= 1 && val <= chainTrackCount(getCurrentCtx()))
   });
 
   const sep = document.createElement('span');
@@ -970,7 +852,7 @@ function startEditTrackSector(entryEl) {
   const sectorInput = createHexInput({
     value: curSector,
     maxBytes: 1,
-    validate: (val) => isTrackSectorInRange(trackInput.getValue(), val, currentTracks)
+    validate: (val) => isValidChainLink(trackInput.getValue(), val, getCurrentCtx())
   });
 
   // Re-validate sector when track changes
@@ -1228,7 +1110,7 @@ function insertAndPosition() {
   if (!currentBuffer || !canInsertFile()) return -1;
   pushUndo();
   var newOff = insertFileEntry();
-  if (newOff < 0) return -1;
+  if (newOff < 0) { discardUndo(); return -1; }
 
   if (selectedEntryIndex >= 0 && selectedEntryIndex !== newOff) {
     var slots = getDirSlotOffsets(currentBuffer);
@@ -1271,8 +1153,9 @@ document.getElementById('opt-insert').addEventListener('click', async (e) => {
     pushUndo();
     var res = cfsInsertPlaceholderEntry(hddBuffer, cfsDirLba, cleanName, { ftype: CFS_FTYPE.NORMAL, typeSuffix: 'PRG' });
     if (!res.ok) {
+      discardUndo();
+      refreshIde64View();
       showModal('Insert Entry failed', [res.error || 'Unknown error.']);
-      if (typeof popUndo === 'function') popUndo();
       return;
     }
     // Shift the inserted slot backward through the dir chain until it
@@ -1322,39 +1205,66 @@ document.getElementById('opt-insert').addEventListener('click', async (e) => {
   var newOff = insertAndPosition();
   if (newOff < 0) return;
   selectedEntryIndex = newOff;
+  selectedEntries = [newOff];
   var info = parseCurrentDir(currentBuffer);
   renderDisk(info);
 });
 
 
+// A 1581 partition's size lives in its root entry; after a restore (undo
+// of a grow, failed paste) the in-memory copy has to follow it.
+function resyncPartitionSize() {
+  var p = currentPartition;
+  if (!p || p.dnpDir || !p.startTrack || !currentBuffer) return;
+  var rootCtx = Object.assign({}, getCurrentCtx(), { partition: null });
+  var dctx = getDirContext(rootCtx);
+  var data = new Uint8Array(currentBuffer);
+  var t = dctx.dirTrack, s = dctx.dirSector, seen = {};
+  while (t !== 0 && !seen[t + ':' + s]) {
+    seen[t + ':' + s] = true;
+    var off = sectorOffset(t, s, rootCtx);
+    if (off < 0) return;
+    for (var i = 0; i < currentFormat.entriesPerSector; i++) {
+      var eo = off + i * currentFormat.entrySize;
+      if ((data[eo + 2] & 0x87) === (0x80 | currentFormat.subdirType) && data[eo + 3] === p.startTrack) {
+        p.partSize = data[eo + 30] | (data[eo + 31] << 8);
+        return;
+      }
+    }
+    t = data[off]; s = data[off + 1];
+  }
+}
+
+// Shared by the Edit menu and Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z. The
+// container list views keep their own buffer reference, so resync it.
+function applyUndoRedo(redo) {
+  var old = currentBuffer;
+  if (!(redo ? popRedo() : popUndo())) return;
+  resyncPartitionSize();
+  if (hddPartitions) {
+    refreshIde64View(); // resyncs hddBuffer and re-reads the partition table
+    return;
+  }
+  if (cmdcBuffer === old) {
+    cmdcBuffer = currentBuffer;
+    refreshCmdContainerView();
+  } else {
+    renderDisk(parseCurrentDir(currentBuffer));
+  }
+  updateMenuState();
+  updateEntryMenuState();
+}
+
 document.getElementById('opt-undo').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
-  if (popUndo()) {
-    if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-      if (typeof refreshIde64View === 'function') refreshIde64View();
-    } else {
-      var info = parseCurrentDir(currentBuffer);
-      renderDisk(info);
-    }
-    updateMenuState();
-    updateEntryMenuState();
-  }
+  applyUndoRedo(false);
 });
 
 document.getElementById('opt-redo').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
-  if (popRedo()) {
-    if (cfsPartitionIdx >= 0 && cfsDirEntries) {
-      if (typeof refreshIde64View === 'function') refreshIde64View();
-    } else {
-      var info = parseCurrentDir(currentBuffer);
-      renderDisk(info);
-    }
-    updateMenuState();
-    updateEntryMenuState();
-  }
+  applyUndoRedo(true);
 });
 
 
@@ -1363,13 +1273,7 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
 
-  // CFS view: cfsRemoveDirEntry handles both DEL (just zero slot) and
-  // live (cfsDeleteFile to free bitmap, then zero slot) paths so the
-  // bitmap stays consistent. Dir self-ref is refused at the format
-  // layer; the menu state separately blocks the protected
-  // <<DELETED FILES>> entry. Auto-selects the next entry after removal,
-  // matching the CBM-DOS Remove Entry behavior — fall back to the last
-  // remaining entry if we removed at the end of the list.
+  // CFS: cfsRemoveDirEntry also frees a live entry's sectors in the bitmap.
   if (cfsPartitionIdx >= 0 && cfsDirEntries) {
     var part = hddPartitions && hddPartitions[cfsPartitionIdx];
     if (!part) return;
@@ -1407,8 +1311,9 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
       if (!rmRes.ok) rmFailures.push(petsciiToReadable(rmTargets[rd].entry.name) + ': ' + (rmRes.error || 'unknown'));
     }
     if (rmFailures.length === rmTargets.length) {
+      discardUndo();
+      refreshIde64View();
       showModal('Remove Entry failed', rmFailures);
-      if (typeof popUndo === 'function') popUndo();
       return;
     }
     refreshIde64View();
@@ -1439,80 +1344,93 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
     return;
   }
 
-  var removeEntryOff = selectedEntryIndex;
   var data = new Uint8Array(currentBuffer);
-  var typeByte = data[removeEntryOff + 2];
-  var isCBM = !currentFormat.subdirLinked && (typeByte & 0x07) === currentFormat.subdirType;
+  const slots = getDirSlotOffsets(currentBuffer);
+  var targets = (selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex])
+    .filter(function(off) { return slots.indexOf(off) >= 0; })
+    .sort(function(a, b) { return slots.indexOf(a) - slots.indexOf(b); });
+  if (targets.length === 0) return;
+  const idx = slots.indexOf(targets[0]);
 
-  // Check if this is a CBM partition with files inside
-  if (isCBM) {
-    var partStart = data[removeEntryOff + 3];
-    var partSize = data[removeEntryOff + 30] | (data[removeEntryOff + 31] << 8);
-    var partInfo = parsePartition(currentBuffer, partStart, partSize, getCurrentCtx());
+  // 1581 partitions that still hold files get asked about first.
+  var fullParts = [];
+  for (var ti = 0; ti < targets.length; ti++) {
+    var tOff = targets[ti];
+    if (!currentFormat.supportsSubdirs || currentFormat.subdirLinked ||
+        (data[tOff + 2] & 0x07) !== currentFormat.subdirType) continue;
+    var partSize = data[tOff + 30] | (data[tOff + 31] << 8);
+    var partInfo = parsePartition(currentBuffer, data[tOff + 3], partSize, getCurrentCtx());
     var fileEntries = partInfo ? partInfo.entries.filter(function(en) { return !en.deleted; }) : [];
-
-    if (fileEntries.length > 0) {
-      var choice = await showChoiceModal(
-        'Remove Directory',
-        'This directory contains ' + fileEntries.length + ' file(s). What would you like to do?',
-        [
-          { label: 'Cancel', value: 'cancel', secondary: true },
-          { label: 'Move to Root', value: 'move' },
-          { label: 'Remove All', value: 'remove' }
-        ]
-      );
-
-      if (choice === 'cancel') return;
-
-      if (choice === 'move') {
-        // Take snapshot before any changes
-        var snapshot = currentBuffer.slice(0);
-
-        // Count available root directory slots
-        var freeSlots = getMaxDirEntries() - countDirEntries();
-        // We'll also free one slot by removing the partition entry itself
-        freeSlots += 1;
-
-        if (freeSlots < fileEntries.length) {
-          // Not enough room — show which files can't be moved
-          var canMove = freeSlots;
-          var cantMove = fileEntries.slice(canMove);
-          var lostNames = cantMove.map(function(en) {
-            return '"' + petsciiToReadable(en.name).trim() + '"';
-          });
-          var msg = 'Only ' + canMove + ' of ' + fileEntries.length +
-            ' files can be moved to root. The following ' + cantMove.length +
-            ' file(s) will be lost:';
-          var choice2 = await showChoiceModal(
-            'Not Enough Directory Entries',
-            msg,
-            [
-              { label: 'Revert', value: 'revert', secondary: true },
-              { label: 'Continue', value: 'continue' }
-            ],
-            lostNames
-          );
-
-          if (choice2 === 'revert') return;
-        }
-
-        // Move files from partition to root directory
-        var moveCount = Math.min(fileEntries.length, freeSlots);
-        for (var fi = 0; fi < moveCount; fi++) {
-          var srcOff = fileEntries[fi].entryOff;
-          var dstOff = findFreeDirEntry(currentBuffer, getCurrentCtx());
-          if (dstOff < 0) break;
-          var moveData = new Uint8Array(currentBuffer);
-          for (var j = 2; j < 32; j++) moveData[dstOff + j] = moveData[srcOff + j];
-        }
-      }
-      // For both 'move' and 'remove': proceed to remove the partition entry
-    }
+    if (fileEntries.length > 0) fullParts.push({ off: tOff, files: fileEntries });
   }
 
-  const slots = getDirSlotOffsets(currentBuffer);
-  const idx = slots.indexOf(removeEntryOff);
-  removeFileEntry(currentBuffer, removeEntryOff);
+  // "Move to Root" (single partition only): the entries to re-create in
+  // the root, plus their sectors so the partition's BAM release spares them.
+  var movedEntries = [], keepSectors = null;
+  if (fullParts.length === 1 && targets.length === 1) {
+    var fileEntries1 = fullParts[0].files;
+    var choice = await showChoiceModal(
+      'Remove Directory',
+      'This directory contains ' + fileEntries1.length + ' file(s). What would you like to do?',
+      [
+        { label: 'Cancel', value: 'cancel', secondary: true },
+        { label: 'Move to Root', value: 'move' },
+        { label: 'Remove All', value: 'remove' }
+      ]
+    );
+    if (choice !== 'move' && choice !== 'remove') return;
+
+    if (choice === 'move') {
+      // +1: the partition's own entry is removed first.
+      var freeSlots = getMaxDirEntries() - countDirEntries() + 1;
+      if (freeSlots < fileEntries1.length) {
+        var cantMove = fileEntries1.slice(freeSlots);
+        var lostNames = cantMove.map(function(en) {
+          return '"' + petsciiToReadable(en.name).trim() + '"';
+        });
+        var choice2 = await showChoiceModal(
+          'Not Enough Directory Entries',
+          'Only ' + freeSlots + ' of ' + fileEntries1.length +
+            ' files can be moved to root. The following ' + cantMove.length +
+            ' file(s) will be lost:',
+          [
+            { label: 'Revert', value: 'revert', secondary: true },
+            { label: 'Continue', value: 'continue' }
+          ],
+          lostNames
+        );
+        if (choice2 !== 'continue') return;
+      }
+      keepSectors = {};
+      var moveCount = Math.min(fileEntries1.length, freeSlots);
+      for (var fi = 0; fi < moveCount; fi++) {
+        var srcOff = fileEntries1[fi].entryOff;
+        movedEntries.push(data.slice(srcOff, srcOff + 32));
+        forEachFileSector(data, srcOff, function(t, s) { keepSectors[t + ':' + s] = true; }, getCurrentCtx());
+      }
+    }
+  } else if (fullParts.length > 0) {
+    var removeAll = await showChoiceModal(
+      'Remove Directories',
+      fullParts.length + ' of the selected directories still contain files. Remove them with everything inside?',
+      [
+        { label: 'Cancel', value: false, secondary: true },
+        { label: 'Remove All', value: true }
+      ]
+    );
+    if (!removeAll) return;
+  }
+
+  pushUndo();
+  // Last slot first, so the earlier offsets don't shift.
+  for (var ri = targets.length - 1; ri >= 0; ri--) removeFileEntry(currentBuffer, targets[ri], keepSectors);
+  for (var mi = 0; mi < movedEntries.length; mi++) {
+    var dstOff = findFreeDirEntry(currentBuffer, null, getCurrentCtx());
+    if (dstOff < 0) break;
+    var moveData = new Uint8Array(currentBuffer);
+    for (var j = 2; j < 32; j++) moveData[dstOff + j] = movedEntries[mi][j];
+  }
+
   const info = parseCurrentDir(currentBuffer);
   const visibleEntries = info.entries.filter(en => !en.deleted || showDeleted);
   if (visibleEntries.length > 0) {
@@ -1626,7 +1544,7 @@ document.getElementById('opt-recalc-size').addEventListener('click', (e) => {
     pushUndo();
     for (var si = 0; si < targets.length; si++) {
       var sectors = cfsCountFileDataSectors(hddBuffer, part.startLba, part.endLba, targets[si]);
-      cfsWriteFileSize(hddBuffer, targets[si].dirLba, targets[si].index, sectors * 512, targets[si].ftype);
+      cfsWriteFileSize(hddBuffer, targets[si].dirLba, targets[si].index, sectors * IDE64_SECTOR_SIZE, targets[si].ftype);
     }
     refreshIde64View();
     return;

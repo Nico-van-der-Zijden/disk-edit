@@ -72,6 +72,9 @@ function startEditing(el) {
   showPetsciiPicker(editor, maxLen);
 
   let reverted = false;
+  // Re-entry guard: hidePetsciiPicker can blur the editor, which would
+  // commit a second time (double undo, unresolved subdir-ID prompt).
+  let finished = false;
 
   function cleanup() {
     el.classList.remove('editing');
@@ -84,7 +87,8 @@ function startEditing(el) {
   }
 
   async function commitEdit() {
-    if (reverted) return;
+    if (reverted || finished) return;
+    finished = true;
     // For 'name' we pad with $A0; for 'id' we write exactly what's there
     // (id's default is space-filled, not A0-terminated).
     const padByte = field === 'name' ? 0xA0 : 0x20;
@@ -119,6 +123,8 @@ function startEditing(el) {
   }
 
   function revert() {
+    if (finished) return;
+    finished = true;
     reverted = true;
     cleanup();
     if (currentBuffer) renderDisk(parseCurrentDir(currentBuffer));
@@ -162,12 +168,7 @@ function getSaveFileName() {
 }
 
 function downloadD64(buffer, fileName) {
-  const blob = new Blob([buffer], { type: 'application/octet-stream' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = fileName;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(new Blob([buffer], { type: 'application/octet-stream' }), fileName);
 }
 
 function updateMenuState() {
@@ -185,7 +186,6 @@ function updateMenuState() {
   const hddListView = hddCtx && (typeof cfsPartitionIdx !== 'undefined' && cfsPartitionIdx < 0);
   document.getElementById('opt-close').classList.toggle('disabled', !hasDisk);
   document.getElementById('opt-close-all').classList.toggle('disabled', tabs.length === 0);
-  var activeTab = activeTabId !== null ? tabs.find(function(t) { return t.id === activeTabId; }) : null;
   // Save / Save-As stay enabled on the container list — that's how you
   // download the whole container after editing a partition. Only tape
   // gates them off (tape images are read-only).
@@ -197,7 +197,9 @@ function updateMenuState() {
   // Blocks-free is a BAM counter — CFS derives free count from the
   // bitmap chain at read time, so the editor doesn't apply.
   document.getElementById('opt-edit-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
-  document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
+  // Recalc Free, Fill Free and Optimize work on the root BAM only.
+  const inD81Part = !!(currentPartition && !currentPartition.dnpDir);
+  document.getElementById('opt-recalc-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx || inD81Part);
   // View BAM: inside a CFS partition the CFS bitmap viewer fires; on the
   // HDD partition list the disk-map strip fires. Either way it's enabled
   // whenever we have a disk.
@@ -253,14 +255,15 @@ function updateMenuState() {
   document.getElementById('opt-file-chains').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
   document.getElementById('opt-unzip').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
   // DiskPacked encodes a whole 35/40-track D64, so it needs exactly that.
-  var d64Sizes = [174848, 175531, 196608, 197376];
   var canMakeZip = hasDisk && !noEdit && !hddCtx && !currentPartition &&
-    d64Sizes.indexOf(currentBuffer.byteLength) >= 0;
+    DISK_FORMATS.d64.sizes.some(function(sz) {
+      return (sz.tracks === 35 || sz.tracks === 40) && sz.bytes === currentBuffer.byteLength;
+    });
   document.getElementById('opt-mkzip').classList.toggle('disabled', !canMakeZip);
   document.getElementById('opt-undo').classList.toggle('disabled', undoStack.length === 0 || tape);
   document.getElementById('opt-redo').classList.toggle('disabled', redoStack.length === 0 || tape);
-  document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
-  document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || noEdit || hddCtx);
+  document.getElementById('opt-fill-free').classList.toggle('disabled', !hasDisk || noEdit || hddCtx || inD81Part);
+  document.getElementById('opt-optimize').classList.toggle('disabled', !hasDisk || noEdit || hddCtx || inD81Part);
   // Resize Image only safe on a stand-alone DNP. Inside a CMD container
   // (DHD / RAMLink / FD-* / etc.) the DNP is a fixed-size slice spliced
   // back into a container slot — growing past that slot's size would
@@ -856,9 +859,7 @@ function closeTabsToRight(fromId) {
   closeMultipleTabs(ids, 'Close to Right');
 }
 
-// Wires right-click, middle-click, and long-press on a tab element.
-// Long-press uses a 500ms timer that's cancelled on touchmove > 10px so
-// horizontal swipes (used to scroll the tab strip) still work.
+// Right-click (context menu) and middle-click (close) on a tab.
 function bindTabGestures(el, tabId) {
   el.addEventListener('contextmenu', function(e) {
     e.preventDefault();
@@ -1187,17 +1188,8 @@ document.getElementById('opt-close-all').addEventListener('click', async (e) => 
     );
     if (!choice) return;
   }
-  while (tabs.length > 0) {
-    tabs.pop();
-  }
-  activeTabId = null;
-  currentBuffer = null;
-  currentFileName = null;
-  selectedEntryIndex = -1;
-  currentPartition = null;
-  tabDirty = false;
-  clearCmdContainerState();
-  clearUndo();
+  tabs.length = 0;
+  resetNoTabState();
   showEmptyState();
   renderTabs();
   updateMenuState();
@@ -1260,9 +1252,7 @@ document.getElementById('opt-save-as').addEventListener('click', async (e) => {
     downloadD64(getSaveBuffer(), finalName);
   } else {
     currentFileName = finalName;
-    // Route through getSaveBuffer so the G64 encoder runs when the tab
-    // was opened from a .g64 (was bypassed in earlier versions and
-    // produced a D64 with a .g64 filename — VICE wouldn't mount it).
+    // getSaveBuffer re-encodes tabs opened from a .g64.
     downloadD64(getSaveBuffer(), finalName);
   }
   markClean();

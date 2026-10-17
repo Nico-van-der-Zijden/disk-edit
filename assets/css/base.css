@@ -38,6 +38,29 @@
     --c64-control: #9A6759;
     --c64-highlight: #B8C76F;
     --c64-sys: #70A4B2;
+
+    --color-good: #9ad284;
+    --color-bad: #d26a6a;
+    --outline-hover: #fff;
+    --outline-selected: #ffcc00;
+    --map-strip-bg: #1c2030;
+    --usage-1: #6c9bd2;
+    --usage-2: #4a7ab5;
+    --usage-3: #2d5a8e;
+    --usage-4: #1a3a5c;
+    /* G64 Raw Tracks canvas sits on a fixed dark backdrop in both themes */
+    --g64-raw-sync: #dc3c3c;
+    --g64-raw-gap: #3c50c8;
+
+    /* Global stacking layers. Values 1-6 elsewhere are local to a component. */
+    --z-popup: 100;
+    --z-pane: 150;
+    --z-overlay: 200;
+    --z-overlay-menu: 210;
+    --z-palette: 250;
+    --z-menu: 300;
+    --z-submenu: 310;
+    --z-top: 9999;
   }
 
   [data-theme="light"] {
@@ -59,6 +82,16 @@
     --color-warn: #df8e1d;
     --color-dir: #d4af37;
     --color-orphan: #c0a050;
+
+    --color-good: #3d7a2a;
+    --color-bad: #b03030;
+    --outline-hover: #282b4a;
+    --outline-selected: #b07800;
+    --map-strip-bg: #b4b8cc;
+    --usage-1: #8fb3e0;
+    --usage-2: #5a88c4;
+    --usage-3: #2d5a8e;
+    --usage-4: #1a3a5c;
   }
 
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-user-modify: unset; }

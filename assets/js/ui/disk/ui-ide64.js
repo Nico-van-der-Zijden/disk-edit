@@ -1,11 +1,6 @@
-// ── IDE64 .hdd partition list (Phase 1, read-only) ────────────────────
-//
-// Mirrors the CMD container UI in ui-cmd.js: opening a .hdd creates a tab
-// showing the disk label + 16 partition slots. Double-click currently
-// shows a "not yet supported" modal — entering CFS partitions is Phase 2.
-//
-// State globals (hddBuffer, hddPartitions, hddBootInfo) are persisted on
-// the active tab so switching tabs and coming back keeps the view.
+// ── IDE64 .hdd: partition list + CFS directory views ─────────────────
+// State globals (hddBuffer, hddPartitions, hddBootInfo, cfs*) live in
+// cbm-editor.js and are saved per tab.
 
 function isIde64ContainerView() {
   return !!hddBuffer && !!hddPartitions;
@@ -17,19 +12,13 @@ function isIde64ContainerView() {
 // ui-render.js for CBM-DOS rows).
 var _dragSrcCfsIdx = null;
 
-// True when we're inside a CFS partition (Phase 2+ view). Distinguished
-// from the partition-list view by cfsPartitionIdx >= 0.
+// True inside a CFS partition (vs. the partition list).
 function isCfsPartitionView() {
   return !!hddBuffer && cfsPartitionIdx >= 0;
 }
 
-// True iff `entry` is the system-managed "<<DELETED FILES>>" placeholder
-// that lives in every CFS partition's root dir. Canonical detection:
-// its data-tree pointer points at the partition's deldir LBA (recorded
-// in the partition entry's $18..$1B field). Name spelling and slot
-// position aren't checked because IDEDOS could in theory write either
-// differently. Used to refuse rename / scratch / case-flip on this
-// entry — analogous to DHD's SYSTEM-partition protection.
+// True for the root dir's system-managed <<DELETED FILES>> entry: its
+// pointer is the partition's deldir LBA (name and slot aren't reliable).
 function _cfsEntryIsDeldirRef(entry) {
   if (!entry || cfsPartitionIdx < 0 || !hddPartitions) return false;
   var part = hddPartitions[cfsPartitionIdx];
@@ -72,10 +61,19 @@ function openIde64AsTab(buffer, fileName) {
   refreshIde64View();
 }
 
+// Roll back a failed edit: drop its pushUndo snapshot (no redo step) and
+// re-read the partition table from the restored buffer.
+function _hddDiscardEdit() {
+  if (!discardUndo()) return;
+  var info = readIde64Partitions(hddBuffer);
+  if (info) {
+    hddBootInfo = info;
+    hddPartitions = info.partitions;
+  }
+}
+
 function refreshIde64View() {
-  // Re-sync hddBuffer from currentBuffer in case popUndo (or another
-  // buffer-rewriting path) handed us a fresh reference. The partition
-  // table and dir reads below all read through hddBuffer.
+  // Undo / redo swap currentBuffer; re-read everything from the new one.
   if (currentBuffer && hddBuffer !== currentBuffer) {
     hddBuffer = currentBuffer;
     if (typeof readIde64Partitions === 'function') {
@@ -270,10 +268,7 @@ function renderIde64PartitionList() {
   updateEntryMenuState();
 }
 
-// ── Enter a CFS partition (Phase 2 view) ──────────────────────────────
-// Switch from the HDD partition-list to a CFS directory listing.
-// Phase 2 is read-only: parse the partition's root dir, display the
-// entries; clicking a file selects, clicking a subdir opens it (Phase 3+).
+// ── Enter a CFS partition ─────────────────────────────────────────────
 function enterIde64Partition(idx) {
   if (!hddPartitions) return;
   var p = hddPartitions[idx];
@@ -292,9 +287,8 @@ function enterIde64Partition(idx) {
   cfsDirEntries = entries;
   cfsDirStack = [];
   cfsEnteredAs = null; // partition root → header uses self-ref/partition name
-  // Swap the descriptor so renderer / menu-state code that branches on
-  // currentFormat.filesystem picks the CFS path. currentBuffer stays on
-  // the whole .hdd buffer — Phase 2 doesn't slice the partition out.
+  // CFS descriptor for renderer / menu state; currentBuffer stays the
+  // whole .hdd (partitions are edited in place, not sliced out).
   currentFormat = DISK_FORMATS.cfs;
   currentTracks = 0;
   selectedEntryIndex = -1;
@@ -444,34 +438,21 @@ function renderCfsDirectoryView() {
     if (e.ftype === CFS_FTYPE.DEL && !e.closed && !showDeleted) continue;
 
     var absIdx = i; // unique across all chained sectors
-    // Type column: "*"-prefix for splat (Closed bit cleared), "<"-suffix
-    // for locked (W bit cleared) — same display convention CBM-DOS uses.
-    // Always emit 1+3+1 chars so columns align in the .dir-type slot
-    // (width: 5ch; white-space: pre). DEL entries don't get the splat
-    // prefix since their not-Closed state has DEL semantics, not splat.
+    // "*" = not Closed (except DEL), "<" = not W; always 5 chars wide.
     var baseType = e.typeSuffix || _cfsFtypeLabel(e.ftype);
     var splatPrefix = (!e.closed && e.ftype !== CFS_FTYPE.DEL) ? '*' : ' ';
     var lockedSuffix = !(e.attrByte & 0x10) ? '<' : ' ';
     var typeStr = splatPrefix + baseType + lockedSuffix;
-    // Hide size for directories / links — and also for deleted-directory
-    // entries, which keep typeSuffix "DIR" but have ftype=0 (DEL). Without
-    // this, a scratched subdir shows "0" in the size column where a live
-    // subdir shows nothing.
+    // No size for dirs / links, scratched ones included (suffix survives).
     var isDirLike = (e.typeSuffix === 'DIR' || e.typeSuffix === 'LNK' ||
                      e.ftype === CFS_FTYPE.DIR || e.ftype === CFS_FTYPE.LNK);
     var sizeStr;
     if (isDirLike) {
       sizeStr = '';
     } else {
-      // CFS reports file size in 256-byte blocks (one 512-byte CFS sector
-      // = 2 blocks). The CBM-DOS convention of 254 bytes/block doesn't
-      // apply — CFS data sectors carry no T/S link, all 512 bytes are
-      // payload. IDE64's "LOAD\"$\",8" agrees: each sector = 2 blocks.
+      // 256-byte blocks, as IDEDOS's LOAD"$" shows them.
       var entryBlocks = Math.ceil(e.size / 256);
       sizeStr = entryBlocks.toString();
-      // Skip DEL entries from the per-listing total — separators and
-      // scratched rows show up in the listing under their own rules but
-      // shouldn't count toward "blocks used by files".
       if (e.ftype !== CFS_FTYPE.DEL) blocksUsed += entryBlocks;
     }
     var mtimeStr = formatCfsTimestamp(e.mtime);
@@ -500,7 +481,7 @@ function renderCfsDirectoryView() {
     // trailing spaces are meaningful for File → Align (right/center/
     // expand) and we'd otherwise display an aligned name visually
     // indistinguishable from a left-aligned one.
-    var entryByteOff = e.dirLba * 512 + e.index * 32;
+    var entryByteOff = e.dirLba * IDE64_SECTOR_SIZE + e.index * CFS_DIR_ENTRY_SIZE;
     var nlen = 16;
     for (var nb = 0; nb < 16; nb++) {
       if (disk[entryByteOff + nb] === 0xA0 || disk[entryByteOff + nb] === 0x00) { nlen = nb; break; }
@@ -561,11 +542,8 @@ function renderCfsDirectoryView() {
     row.addEventListener('dblclick', goBack);
   });
 
-  // File rows: click selects; dblclick on DIR is reserved for Phase 3.
-  // Click also supports Ctrl (toggle) and Shift (range) multi-select,
-  // mirroring CBM-DOS in ui-render.js. selectedEntries carries the
-  // absolute indices into cfsDirEntries (same convention as
-  // selectedEntryIndex), so downstream batch handlers can iterate it.
+  // File rows: click / Ctrl / Shift selection as in ui-render.js;
+  // selectedEntries holds absolute indices into cfsDirEntries.
   content.querySelectorAll('.dir-entry[data-cfs-entry]').forEach(function(row) {
     var idx = parseInt(row.dataset.cfsEntry, 10);
     var entry = cfsDirEntries[idx];
@@ -679,7 +657,7 @@ function renderCfsDirectoryView() {
         var a = cfsDirEntries[cur];
         var b = cfsDirEntries[cur + dir];
         if (!a || !b) break;
-        cfsSwapDirEntries(hddBuffer, a.dirLba, a.index, b.dirLba, b.index);
+        cfsSwapDirSlots(hddBuffer, { dirLba: a.dirLba, slotIndex: a.index }, { dirLba: b.dirLba, slotIndex: b.index });
         cur += dir;
       }
       selectedEntries = [target];
@@ -877,7 +855,7 @@ function moveCfsEntries(direction) {
       var srcU = cfsDirEntries[indices[u]];
       var dstU = cfsDirEntries[indices[u] - 1];
       if (!srcU || !dstU) continue;
-      cfsSwapDirEntries(hddBuffer, srcU.dirLba, srcU.index, dstU.dirLba, dstU.index);
+      cfsSwapDirSlots(hddBuffer, { dirLba: srcU.dirLba, slotIndex: srcU.index }, { dirLba: dstU.dirLba, slotIndex: dstU.index });
       indices[u]--;
     }
   } else {
@@ -885,7 +863,7 @@ function moveCfsEntries(direction) {
       var srcD = cfsDirEntries[indices[d]];
       var dstD = cfsDirEntries[indices[d] + 1];
       if (!srcD || !dstD) continue;
-      cfsSwapDirEntries(hddBuffer, srcD.dirLba, srcD.index, dstD.dirLba, dstD.index);
+      cfsSwapDirSlots(hddBuffer, { dirLba: srcD.dirLba, slotIndex: srcD.index }, { dirLba: dstD.dirLba, slotIndex: dstD.index });
       indices[d]++;
     }
   }
@@ -993,23 +971,14 @@ function showCfsFileHexViewer(entry) {
     showCfsDeleteConfirm(entry);
   });
   document.getElementById('cfs-dl').addEventListener('click', function() {
-    var blob = new Blob([payload], { type: 'application/octet-stream' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = suggestedName;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    downloadBlob(new Blob([payload], { type: 'application/octet-stream' }), suggestedName);
   });
   document.getElementById('modal-close').addEventListener('click', function() {
     document.getElementById('modal-overlay').classList.remove('open');
   });
 }
 
-// ── CFS rename dialog (Phase 4a) ──────────────────────────────────────
-// Plain text input. CFS names are 16 bytes, space-padded; the field
-// accepts any printable ASCII. The PETSCII editor used by CBM-DOS isn't
-// quite right here — CFS stores names verbatim (ASCII for the reference
-// images I've seen), not as PETSCII.
+// ── CFS rename dialog (from the hex viewer's footer) ──────────────────
 function showCfsRenameDialog(entry) {
   if (!entry || entry.dirLba == null) return;
   var titleEl = document.getElementById('modal-title');
@@ -1036,6 +1005,7 @@ function showCfsRenameDialog(entry) {
       document.getElementById('modal-overlay').classList.remove('open');
       refreshIde64View();
     } else {
+      _hddDiscardEdit();
       showModal('Rename failed', ['Could not write the new name.']);
     }
   }
@@ -1049,20 +1019,9 @@ function showCfsRenameDialog(entry) {
   });
 }
 
-// Validate a CFS partition / dir / file name. Returns the sanitised
-// name on success or null with an error message via showModal.
-// CBM-DOS's asciiToNameBytes (ui-fileops.js) handles the character set
-// for us — uppercase A-Z + digits + the PETSCII-safe 0x21..0x3F
-// punctuation range, anything else → space, padded with 0xA0. The only
-// CFS-specific tweak is the "/" byte (0x2F): asciiToNameBytes keeps it
-// as printable punctuation, but CFS treats it as the path separator and
-// our cfsResolvePath splits on it. Returns a 16-char string whose
-// char codes are the bytes cfsImportFile should write.
-// Convert an OS file name into a 16-char CFS name string ready for
-// cfsImportFile. Reuses CBM-DOS's asciiToNameBytes so dropped files
-// land the same way as on a D64, then strips '/' (CFS path separator).
-// When the base name (extension stripped) exceeds 16 chars, prompts
-// the user with the auto-truncated suggestion. Returns null on cancel.
+// OS file name → 16-char CFS name for cfsImportFile: asciiToNameBytes as
+// on a D64, with "/" (the CFS path separator) turned into a space.
+// Prompts when the base name is over 16 chars; null on cancel.
 async function _cfsImportNameBytesPrompted(rawName) {
   var dotIdx = rawName.lastIndexOf('.');
   var base = dotIdx >= 0 ? rawName.substring(0, dotIdx) : rawName;
@@ -1078,8 +1037,8 @@ async function _cfsImportNameBytesPrompted(rawName) {
   return String.fromCharCode.apply(null, bytes);
 }
 
-// Disallows `/` since CFS uses it as the path separator in cfsResolvePath
-// (and the IDEDOS firmware treats slashes the same way).
+// Trimmed name (max 16), or null after telling the user. "/" is refused:
+// it's the CFS path separator.
 function _sanitiseCfsName(input, title) {
   var trimmed = (input || '').trim();
   if (!trimmed) return null;
@@ -1092,22 +1051,14 @@ function _sanitiseCfsName(input, title) {
   return trimmed.slice(0, 16);
 }
 
-// Inline rename for a CFS directory entry (file or subdir). Mirrors
-// startInlineRenameHddPartition but writes to the entry's $00..$0F
-// (CFS-DOS layout) inside hddBuffer. Selected via data-cfs-entry, which
-// stores the absolute index into cfsDirEntries (across all dir-chain
-// sectors); each entry has dirLba + index fields that pin the byte
-// offset within hddBuffer.
+// Inline PETSCII rename of a CFS entry (the row's data-cfs-entry indexes
+// cfsDirEntries).
 function startInlineRenameCfsEntry(entryEl) {
   if (!hddBuffer || !entryEl || !cfsDirEntries) return;
   var absIdx = parseInt(entryEl.dataset.cfsEntry, 10);
   if (isNaN(absIdx)) return;
   var entry = cfsDirEntries[absIdx];
   if (!entry || entry.empty) return;
-  // Block the system-managed "<<DELETED FILES>>" entry — same canonical
-  // detection as the menu state uses (tree-ptr === partition's deldir
-  // pointer). Defensive: menu state already disables Rename here, but
-  // this protects dblclick / context-menu / future entry points too.
   if (_cfsEntryIsDeldirRef(entry)) {
     if (typeof showModal === 'function') {
       showModal('Protected entry', ['The <<DELETED FILES>> entry is system-managed and can\'t be renamed.']);
@@ -1119,7 +1070,7 @@ function startInlineRenameCfsEntry(entryEl) {
   if (typeof cancelActiveEdits === 'function') cancelActiveEdits();
 
   var disk = new Uint8Array(hddBuffer);
-  var entryOff = entry.dirLba * 512 + entry.index * 32;
+  var entryOff = entry.dirLba * IDE64_SECTOR_SIZE + entry.index * CFS_DIR_ENTRY_SIZE;
   var origBytes = new Uint8Array(16);
   var origLen = 16;
   for (var i = 0; i < 16; i++) {
@@ -1195,14 +1146,9 @@ function startInlineRenameCfsEntry(entryEl) {
       var data = new Uint8Array(hddBuffer);
       for (var wi = 0; wi < 16; wi++) data[entryOff + wi] = newBytes[wi];
       cfsTouchEntryMtime(hddBuffer, entry.dirLba, entry.index);
-      // If the renamed entry is a DIR, also rewrite the child dir's
-      // slot-0 self-reference name so the two stay in sync. Without
-      // this, IDEDOS-style drift returns the next time something edits
-      // the parent without touching the child. See
-      // project_cfs_dir_self_ref_naming.md memory for the open question
-      // about which side is canonical on real IDEDOS / VICE.
+      // A DIR's self-ref is what IDEDOS shows as its header; keep it in sync.
       if (entry.ftype === CFS_FTYPE.DIR && entry.dataTreePtr && entry.dataTreePtr.lba) {
-        var childBase = entry.dataTreePtr.addr * 512;
+        var childBase = entry.dataTreePtr.addr * IDE64_SECTOR_SIZE;
         for (var sri = 0; sri < 16; sri++) data[childBase + sri] = newBytes[sri];
       }
     }
@@ -1292,14 +1238,8 @@ function showCfsTypeDropdown(typeSpan, entry) {
   setTimeout(function() { document.addEventListener('click', closeDropdown); }, 0);
 }
 
-// Inline block-size edit for a CFS directory entry. Mirrors the
-// CBM-DOS startEditBlockSize UX exactly — dblclick the blocks column,
-// type a new block count, enter to commit. CFS stores the file's byte
-// count at $10..$13 of the dir entry; the displayed "blocks" value is
-// ceil(size / 254). We commit by multiplying the entered block count
-// by 254. This loses fine byte-level resolution (1..253 bytes within
-// the last block all map to the same displayed block count), which
-// matches CBM-DOS's own limitation. Skipped for DIR / LNK / DEL.
+// Inline block-count edit (as CBM-DOS's startEditBlockSize). The entry
+// stores bytes, so the new size is blocks × 256. Not for DIR / LNK / DEL.
 function startInlineEditCfsBlockSize(entryEl) {
   if (!hddBuffer || !entryEl || !cfsDirEntries) return;
   var absIdx = parseInt(entryEl.dataset.cfsEntry, 10);
@@ -1311,17 +1251,11 @@ function startInlineEditCfsBlockSize(entryEl) {
   if (!blocksSpan || blocksSpan.querySelector('input')) return;
   if (typeof cancelActiveEdits === 'function') cancelActiveEdits();
 
-  // CFS blocks are 256 bytes (one 512-byte sector = 2 blocks). Not 254
-  // like CBM-DOS — CFS data sectors carry no T/S link, every byte is
-  // payload. Matches what IDE64 reports in BASIC "LOAD\"$\",8".
+  // 256-byte blocks, as IDEDOS lists them (no T/S link bytes).
   var currentBlocks = Math.ceil(entry.size / 256);
   var input = document.createElement('input');
   input.type = 'number';
   input.min = '0';
-  // Same cap as CBM-DOS — VICE's directory listing truncates anything
-  // above 65024, so block-count edits stop there even though the CFS
-  // size field is 32 bits wide. Users who need finer / larger sizes can
-  // use Set Actual File Size or edit the underlying bytes another way.
   input.max = String(MAX_BLOCKS);
   input.value = String(currentBlocks);
   input.className = 'blocks-input';
@@ -1332,11 +1266,7 @@ function startInlineEditCfsBlockSize(entryEl) {
   input.focus();
   input.select();
 
-  // `finished` guards against re-entrancy: commit() → refreshIde64View()
-  // → innerHTML reset → input loses focus → blur fires → commit() again,
-  // which then tries to set innerHTML mid-removal and explodes with
-  // "node to be removed is no longer a child". One-shot flag, set at the
-  // top of commit/revert, makes the blur a no-op.
+  // `finished` stops the blur fired by the re-render from committing twice.
   var reverted = false;
   var finished = false;
   function cleanup() {
@@ -1349,12 +1279,8 @@ function startInlineEditCfsBlockSize(entryEl) {
   function commit() {
     if (reverted || finished) return;
     var parsed = parseInt(input.value, 10);
-    // Validate before setting `finished` — if we bail to revert, revert
-    // needs to do its own work and can't short-circuit on `finished`.
     if (!isFinite(parsed) || parsed < 0) { revert(); return; }
-    // `input.max` only constrains the spinner buttons — typed values
-    // aren't auto-clamped. Clamp here so the stored size matches what
-    // VICE will actually display (cap = MAX_BLOCKS = 65024 blocks).
+    // Typed values ignore input.max; VICE's listing tops out at MAX_BLOCKS.
     if (parsed > MAX_BLOCKS) parsed = MAX_BLOCKS;
     finished = true;
     cleanup();
@@ -1397,7 +1323,7 @@ function startInlineRenameHddPartition(entryEl) {
   // Read the 16 raw name bytes from the partition table entry. Mark
   // the editor's initial length at the first $A0 (CBM padding) or $00.
   var disk = new Uint8Array(hddBuffer);
-  var entryOff = 1 * 512 + slotIdx * 32; // partition table at LBA 1
+  var entryOff = _cfsPartEntryOffset(disk, slotIdx);
   var origBytes = new Uint8Array(16);
   var origLen = 16;
   for (var i = 0; i < 16; i++) {
@@ -1475,8 +1401,11 @@ function startInlineRenameHddPartition(entryEl) {
     }
     if (differs) {
       pushUndo();
-      var data = new Uint8Array(hddBuffer);
-      for (var wi = 0; wi < 16; wi++) data[entryOff + wi] = newBytes[wi];
+      var res = cfsRenamePartition(hddBuffer, slotIdx, String.fromCharCode.apply(null, newBytes));
+      if (!res.ok) {
+        _hddDiscardEdit();
+        showModal('Rename Partition', [res.error || 'Could not write the new name.']);
+      }
     }
     cleanup();
     var info = readIde64Partitions(hddBuffer);
@@ -1510,23 +1439,24 @@ function startInlineRenameHddPartition(entryEl) {
   if (typeof registerActiveEdit === 'function') registerActiveEdit(nameSpan, revert);
 }
 
-// ── HDD partition editor (Phase 6 cosmetics) ──────────────────────────
-// New-partition dialog: slot picker, name, start LBA, size in MiB.
-// Rename is now inline (startInlineRenameHddPartition) — this function
-// only handles New from now on, even though it accepts the same -1
-// sentinel the dispatch uses.
+// Live partition whose LBA range overlaps [startLba, endLba], or null.
+function _hddFindLiveOverlap(partitions, startLba, endLba) {
+  for (var i = 0; i < partitions.length; i++) {
+    var p = partitions[i];
+    if (!p || p.empty || p.deleted || p.startLba == null || p.endLba == null) continue;
+    if (p.endLba >= startLba && p.startLba <= endLba) return p;
+  }
+  return null;
+}
+
+// ── New CFS partition dialog (idx -1; rename is inline) ───────────────
+// Soft-deleted partitions' ranges are free for reuse: commit() wipes any
+// deleted slot the new range overlaps. Live ranges are refused.
 function showHddPartitionEditor(idx) {
   if (!hddBuffer || !hddPartitions) return;
-  // Rename is handled by the inline editor (startInlineRenameHddPartition)
-  // — this function only covers New now.
   if (idx != null && idx >= 0) return;
-  var totalLbas = hddBuffer.byteLength / 512;
+  var totalLbas = hddBuffer.byteLength / IDE64_SECTOR_SIZE;
 
-  // Compute the next free LBA past every *live* partition. Deleted
-  // partitions still carry an end LBA but their range is up for grabs —
-  // creating a new partition that overlaps a deleted one wipes the
-  // deleted slot's entry in the commit step below (the data is already
-  // considered lost by the user).
   var defaultStart = 2;
   for (var pi = 0; pi < hddPartitions.length; pi++) {
     var p = hddPartitions[pi];
@@ -1538,17 +1468,10 @@ function showHddPartitionEditor(idx) {
     showModal('New partition', ['Not enough free space left in this .hdd image.']);
     return;
   }
-  var maxMib = Math.max(1, Math.floor(maxLbas * 512 / (1024 * 1024)));
+  var maxMib = Math.max(1, Math.floor(maxLbas * IDE64_SECTOR_SIZE / (1024 * 1024)));
   var defaultMib = Math.min(maxMib, 4);
 
-  // Empty + deleted slots are both available for reuse. Deleted slots
-  // are labelled so the user knows they're overwriting a recoverable
-  // entry; commit() will zero any deleted slot that overlaps the new
-  // partition's LBA range.
-  // Empty + soft-deleted slots are both reusable. We don't surface the
-  // "deleted" state in the dropdown — the LBA range chosen below decides
-  // which (if any) deleted partitions get overwritten, not which slot the
-  // user picks. Labelling a slot "(deleted)" implied otherwise.
+  // Empty and soft-deleted slots are both reusable.
   var reusable = function(pp) { return pp.empty || pp.deleted; };
   var firstReusable = hddPartitions.findIndex(reusable);
   var slotOpts = '';
@@ -1562,11 +1485,7 @@ function showHddPartitionEditor(idx) {
   var footer = document.querySelector('#modal-overlay .modal-footer');
   titleEl.textContent = 'New CFS partition';
 
-  // Table-row layout matching the CMD-container "New Partition" modal so
-  // every disk-container picker uses the same styling. Name auto-uppercases
-  // as the user types — CFS names are raw ASCII, and lowercase a-z ($61-$7A)
-  // decode to PETSCII graphics in the partition-list font, so anything
-  // mixed-case would render as garbage glyphs.
+  // Name is uppercased: $61-$7A would show as PETSCII graphics.
   body.innerHTML =
     '<table style="width:100%;border-collapse:collapse">' +
       '<tr>' +
@@ -1599,13 +1518,23 @@ function showHddPartitionEditor(idx) {
     var startLba = parseInt(document.getElementById('hdd-pe-start').value, 10);
     var mib = parseInt(document.getElementById('hdd-pe-size').value, 10);
     if (!startLba || startLba < 2 || !mib || mib < 1) return;
-    var endLba = Math.min(totalLbas - 1, startLba + Math.floor(mib * 1024 * 1024 / 512) - 1);
+    if (startLba >= totalLbas) {
+      showModal('New partition', ['Start LBA is past the end of the image.']);
+      return;
+    }
+    var endLba = Math.min(totalLbas - 1, startLba + Math.floor(mib * 1024 * 1024 / IDE64_SECTOR_SIZE) - 1);
+    var clash = _hddFindLiveOverlap(hddPartitions, startLba, endLba);
+    if (clash) {
+      showModal('New partition', [
+        'LBA $' + startLba.toString(16).toUpperCase() + '..$' + endLba.toString(16).toUpperCase() +
+          ' overlaps partition "' + (petsciiToReadable(clash.name) || ('slot ' + clash.index)) + '" ($' +
+          clash.startLba.toString(16).toUpperCase() + '..$' + clash.endLba.toString(16).toUpperCase() + ').',
+        'Pick a start LBA and size outside it.',
+      ]);
+      return;
+    }
     pushUndo();
-    // Any deleted partition whose LBA range overlaps the new partition's
-    // range becomes unrestorable — its data sectors will be reinitialised
-    // by cfsInitPartitionStorage. Zero those stale slot entries first so
-    // the partition list doesn't show a deleted entry pointing into a
-    // freshly-allocated partition.
+    // Deleted partitions in the new range can't be restored any more.
     for (var oi = 0; oi < hddPartitions.length; oi++) {
       var op = hddPartitions[oi];
       if (oi === slot || !op.deleted) continue;
@@ -1616,19 +1545,17 @@ function showHddPartitionEditor(idx) {
     }
     var init = cfsInitPartitionStorage(hddBuffer, startLba, endLba, partitionName);
     if (!init.ok) {
+      _hddDiscardEdit();
       showModal('New partition failed', [init.error || 'Could not initialise partition storage.']);
-      if (typeof popUndo === 'function') popUndo();
       return;
     }
     var add = cfsAddPartitionToTable(hddBuffer, slot, partitionName, startLba, endLba, init.rootDirLba, init.deletedDirLba, 0x01);
     if (!add.ok) {
+      _hddDiscardEdit();
       showModal('New partition failed', [add.error || 'Could not write the partition entry.']);
-      if (typeof popUndo === 'function') popUndo();
       return;
     }
-    // First partition into an otherwise-empty image becomes default.
-    // Counts include the slot we just wrote; everything else must be
-    // empty for the populated total to land at 1.
+    // The only live partition becomes the default.
     var populated = 0;
     for (var pi = 0; pi < hddPartitions.length; pi++) {
       if (pi === slot) { populated++; continue; }
@@ -1699,7 +1626,7 @@ function showHddPartitionAttrsDialog(idx) {
       var res = cfsWritePartitionFlags(hddBuffer, idx, newHidden, newWriteable);
       if (!res.ok) {
         showModal('Partition Attributes failed', [res.error || 'Unknown error.']);
-        if (typeof popUndo === 'function') popUndo();
+        _hddDiscardEdit();
         return;
       }
     }
@@ -1709,7 +1636,7 @@ function showHddPartitionAttrsDialog(idx) {
       var dres = cfsSetDefaultPartition(hddBuffer, newDefault ? idx : 0);
       if (!dres.ok) {
         showModal('Partition Attributes failed', [dres.error || 'Unknown error.']);
-        if (typeof popUndo === 'function') popUndo();
+        _hddDiscardEdit();
         return;
       }
     }
@@ -1727,15 +1654,10 @@ function showHddPartitionAttrsDialog(idx) {
   document.getElementById('modal-overlay').classList.add('open');
 }
 
-// Delete confirmation for a partition slot. Matches the DHD/RAMLink/FD
-// delete dialog shape (showChoiceModal with the same "Delete partition
-// "<name>" (<type>, <blocks>)" wording) for cross-container consistency.
-// CFS partition names are ASCII so no PETSCII conversion is needed.
+// Confirm + soft-delete one or more partitions (same dialog as DHD/FD/RAMLink).
 async function confirmHddPartitionDelete(idxOrIndices) {
   if (!hddBuffer || !hddPartitions) return;
-  // Accept a single idx (legacy) or an array (multi-select).
   var indices = Array.isArray(idxOrIndices) ? idxOrIndices.slice() : [idxOrIndices];
-  // Filter to deletable partitions — skip empty / already-deleted slots.
   var targets = [];
   for (var ii = 0; ii < indices.length; ii++) {
     var pi = indices[ii];
@@ -1752,8 +1674,6 @@ async function confirmHddPartitionDelete(idxOrIndices) {
     var sizeStr = p.sizeSectors !== null
       ? (partitionSizeInMib ? formatPartitionSize(p.sizeBytes, sizeBlocks) : sizeBlocks + ' blocks')
       : '? blocks';
-    // p.name may carry PUA-PETSCII codepoints — petsciiToReadable strips
-    // them down to plain ASCII for the modal text.
     var nameForModal = petsciiToReadable(p.name || '') || ('slot ' + targets[0]);
     prompt = 'Delete partition "' + nameForModal + '" (' + p.typeName + ', ' + sizeStr + ')?\nIt will be recoverable via Restore Partition until the slot is reused.';
   } else {
@@ -1769,9 +1689,6 @@ async function confirmHddPartitionDelete(idxOrIndices) {
   );
   if (!choice) return;
   pushUndo();
-  // Soft delete each — clears the VALID bit, preserves metadata,
-  // mirrors to the backup partition directory + bumps the boot-sector
-  // generation counter per slot. Matches IDEDOS scratch byte-for-byte.
   var hitErr = null;
   for (var di = 0; di < targets.length; di++) {
     var res = cfsSoftDeletePartition(hddBuffer, targets[di]);
@@ -1779,11 +1696,10 @@ async function confirmHddPartitionDelete(idxOrIndices) {
   }
   if (hitErr) {
     showModal('Delete partition failed', [hitErr]);
-    if (typeof popUndo === 'function') popUndo();
+    _hddDiscardEdit();
     return;
   }
-  // If we just dropped the default, point it at the first remaining
-  // live partition (skip deleted slots too — they can't be the default).
+  // A deleted default moves to the first remaining live partition.
   if (hddBootInfo && targets.indexOf(hddBootInfo.defaultPart) >= 0) {
     var newDefault = 0;
     for (var ni = 0; ni < hddPartitions.length; ni++) {
@@ -1799,12 +1715,7 @@ async function confirmHddPartitionDelete(idxOrIndices) {
   refreshIde64View();
 }
 
-// Restore a soft-deleted partition slot. Flips VALID back on, mirrors to
-// the backup partition dir, bumps the generation counter. The partition's
-// internal storage (bitmap, root dir, files) is untouched by the delete,
-// so a restore immediately brings everything back as long as nothing was
-// allocated over the slot's LBA range in the meantime. UI gate: only
-// callable from a row where p.deleted === true.
+// Restore a soft-deleted partition (its contents were never touched).
 async function confirmHddPartitionRestore(idx) {
   if (!hddBuffer || !hddPartitions) return;
   var p = hddPartitions[idx];
@@ -1813,7 +1724,7 @@ async function confirmHddPartitionRestore(idx) {
   var res = cfsRestorePartition(hddBuffer, idx);
   if (!res.ok) {
     showModal('Restore partition failed', [res.error || 'Unknown error.']);
-    if (typeof popUndo === 'function') popUndo();
+    _hddDiscardEdit();
     return;
   }
   var info = readIde64Partitions(hddBuffer);
@@ -1824,30 +1735,21 @@ async function confirmHddPartitionRestore(idx) {
   refreshIde64View();
 }
 
-// ── Rename Disk Label (.hdd boot-sector $20..$2F) ────────────────────
-// cfsfdisk's "g" command equivalent. The 16-byte label is space-padded
-// ASCII; cfsfdisk prompts plain text and stores it as-is, so we do the
-// same via showInputModal (no PETSCII inline editor needed here).
+// ── Rename Disk Label (boot $20..$2F, cfsfdisk's "g") ─────────────────
 async function showHddRenameDiskDialog() {
   if (!hddBuffer || !hddBootInfo) return;
   var current = hddBootInfo.label || '';
   var entered = await showInputModal('Disk Label', current);
   if (entered === null || entered === undefined) return;
-  // Match cfsfdisk: stored space-padded, max 16 chars. Trim any trailing
-  // spaces the user typed so the boot sector has a clean label string.
   entered = entered.substring(0, 16).replace(/ +$/, '');
   if (entered === current) return;
   pushUndo();
   var res = cfsSetHddLabel(hddBuffer, entered);
   if (!res.ok) {
     showModal('Rename disk failed', [res.error || 'Unknown error.']);
-    if (typeof popUndo === 'function') popUndo();
+    _hddDiscardEdit();
     return;
   }
-  // Re-read boot info so hddBootInfo.label reflects the new value before
-  // the next render. The partition table itself doesn't change, so we
-  // could skip the partitions re-read — but readIde64Partitions also
-  // refreshes the boot info, keeping the path simple.
   var info = readIde64Partitions(hddBuffer);
   if (info) {
     hddBootInfo = info;
@@ -1856,13 +1758,8 @@ async function showHddRenameDiskDialog() {
   refreshIde64View();
 }
 
-// ── Restore Partition Table from Backup ──────────────────────────────
-// cfsfdisk's "u" command. Reads the backup at boot $1C's LBA, previews
-// its partition list, and on confirm copies it over the primary at LBA
-// 1. The per-partition data (bitmap / dirs / files) is untouched — only
-// the 32-byte slot entries in LBA 1 change. Recovery use case: the
-// primary got corrupted (bad write, FS check failure, manual edit gone
-// wrong) and the backup still has the last-good copy.
+// ── Restore Partition Table from Backup (cfsfdisk's "u") ──────────────
+// Previews the backup table, then copies it over the primary.
 async function confirmHddLoadBackupPartitionTable() {
   if (!hddBuffer || !hddBootInfo) return;
   var backupInfo = readIde64BackupPartitions(hddBuffer);
@@ -1870,9 +1767,7 @@ async function confirmHddLoadBackupPartitionTable() {
     showModal('Restore from backup failed', ['No backup partition table is referenced from the boot sector, or the backup LBA is out of range.']);
     return;
   }
-  // Build a preview so the user knows what they're about to replace
-  // their primary table with.
-  var lines = ['This will replace the primary partition table at LBA 1 with the backup copy.'];
+  var lines = ['This will replace the primary partition table with the backup copy.'];
   var livePart = backupInfo.partitions.filter(function(p) { return !p.empty && !p.deleted; });
   var deletedPart = backupInfo.partitions.filter(function(p) { return !p.empty && p.deleted; });
   if (livePart.length === 0 && deletedPart.length === 0) {
@@ -1898,7 +1793,7 @@ async function confirmHddLoadBackupPartitionTable() {
   var res = cfsLoadBackupPartitionTable(hddBuffer);
   if (!res.ok) {
     showModal('Restore from backup failed', [res.error || 'Unknown error.']);
-    if (typeof popUndo === 'function') popUndo();
+    _hddDiscardEdit();
     return;
   }
   var info = readIde64Partitions(hddBuffer);
@@ -1909,11 +1804,7 @@ async function confirmHddLoadBackupPartitionTable() {
   refreshIde64View();
 }
 
-// ── CFS new subdirectory ──────────────────────────────────────────────
-// Same modal + uppercase-then-truncate that DHD's Add Directory uses
-// (showInputModal + .toUpperCase().substring(0, 16)) — so the name is
-// stored as proper PETSCII uppercase letter bytes ($41-$5A), which
-// render correctly in either uppercase or lowercase charset mode.
+// ── CFS new subdirectory (uppercased like DHD's Add Directory) ────────
 async function showCfsNewSubdirDialog() {
   if (cfsPartitionIdx < 0 || !hddPartitions) return;
   var part = hddPartitions[cfsPartitionIdx];
@@ -1926,26 +1817,20 @@ async function showCfsNewSubdirDialog() {
   var res = cfsCreateSubdir(hddBuffer, part.startLba, part.endLba, cfsDirLba, name);
   if (!res.ok) {
     showModal('Create subdirectory failed', [res.error || 'Unknown error.']);
-    if (typeof popUndo === 'function') popUndo();
+    _hddDiscardEdit();
     return;
   }
   refreshIde64View();
 }
 
-// ── CFS import (Phase 4b) ─────────────────────────────────────────────
-// Pops a native file picker (multi-select) and hands the files to
-// importFilesToCurrentDisk, which routes each one to importFileToCfs
-// while a CFS partition is shown.
+// ── CFS import ────────────────────────────────────────────────────────
+// File picker → importFilesToCurrentDisk → importFileToCfs per file.
 function showCfsImportPicker() {
   if (cfsPartitionIdx < 0 || !hddPartitions) return;
   if (!hddPartitions[cfsPartitionIdx]) return;
   var input = document.createElement('input');
   input.type = 'file';
   input.multiple = true;
-  // Same default filter as the CBM-DOS importer in ui-fileops.js. CFS
-  // accepts any 3-char typeSuffix, but defaulting the file dialog to
-  // the recognised filetypes saves the user from accidentally dropping
-  // a binary they didn't mean to.
   input.accept = '.prg,.seq,.usr,.rel,.p00,.s00,.u00,.r00,.cvt,.txt';
   input.style.display = 'none';
   document.body.appendChild(input);
@@ -1971,9 +1856,6 @@ async function importFileToCfs(fileName, payload, part, batch) {
     }
     return { error: 'Over the 4 MiB import cap.' };
   }
-  // Reuse CBM-DOS's asciiToNameBytes (via _cfsImportNameBytesPrompted)
-  // so imported files get the same byte layout in CFS as on a D64,
-  // and prompts when the OS name exceeds 16 chars.
   var baseName = await _cfsImportNameBytesPrompted(fileName);
   if (baseName == null) return { skipped: true }; // user cancelled
   // Type suffix from extension (if present and 1-3 chars)
@@ -1986,8 +1868,7 @@ async function importFileToCfs(fileName, payload, part, batch) {
     typeSuffix: ext,
   });
   if (!res.ok) {
-    // Undo to roll back any partial allocation
-    if (typeof popUndo === 'function') popUndo();
+    _hddDiscardEdit();
     if (!batch) showModal('Import failed', [res.error || 'Unknown error.']);
     return { error: res.error || 'Unknown error.' };
   }
@@ -1995,9 +1876,7 @@ async function importFileToCfs(fileName, payload, part, batch) {
   return { ok: true };
 }
 
-// ── CFS delete (Phase 4b) ─────────────────────────────────────────────
-// Frees the file's data + tree sectors in the bitmap and marks the dir
-// entry as deleted. Confirmation modal before mutation.
+// ── CFS delete (scratch, after confirmation) ──────────────────────────
 function showCfsDeleteConfirm(entry) {
   if (!entry || cfsPartitionIdx < 0 || !hddPartitions) return;
   var part = hddPartitions[cfsPartitionIdx];
@@ -2014,6 +1893,7 @@ function showCfsDeleteConfirm(entry) {
     pushUndo();
     var res = cfsDeleteFile(hddBuffer, part.startLba, part.endLba, entry);
     if (!res.ok) {
+      _hddDiscardEdit();
       showModal('Delete failed', [res.error || 'Unknown error.']);
       return;
     }
@@ -2025,10 +1905,7 @@ function showCfsDeleteConfirm(entry) {
   });
 }
 
-// ── CFS attribute editor (Phase 4a) ───────────────────────────────────
-// Edits bits 7..3 of the attribute byte at dir-entry +$18 (Closed +
-// Deleteable + Readable + Writeable + Executable). Bits 2..0 are the
-// file type and are preserved as-is — type changes are a separate flow.
+// ── CFS attribute editor: C/D/R/W/X bits of $18; the type bits stay ──
 function showCfsAttrsDialog(entry) {
   if (!entry || entry.dirLba == null) return;
   var titleEl = document.getElementById('modal-title');
@@ -2068,6 +1945,7 @@ function showCfsAttrsDialog(entry) {
       document.getElementById('modal-overlay').classList.remove('open');
       refreshIde64View();
     } else {
+      _hddDiscardEdit();
       showModal('Attribute change failed', ['Could not write the attribute byte.']);
     }
   });

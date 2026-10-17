@@ -1,5 +1,3 @@
-// ── File Content Viewer ───────────────────────────────────────────────
-
 // ── Options menu ──────────────────────────────────────────────────────
 document.getElementById('opt-unsafe-chars').addEventListener('click', (e) => {
   e.stopPropagation();
@@ -59,19 +57,17 @@ document.getElementById('opt-export-settings').addEventListener('click', functio
   e.stopPropagation();
   closeMenus();
   var settings = {};
+  // Not settings: separators export separately, and the HD-DOS shadow is a
+  // large binary blob extracted from a user's disk image.
+  var skipKeys = ['cbm-customSeparators', DHD_DOS_LS_KEY];
   for (var i = 0; i < localStorage.length; i++) {
     var key = localStorage.key(i);
-    if (key.indexOf('cbm-') === 0 && key !== 'cbm-customSeparators') {
+    if (key.indexOf('cbm-') === 0 && skipKeys.indexOf(key) < 0) {
       settings[key] = localStorage.getItem(key);
     }
   }
   var json = JSON.stringify(settings, null, 2);
-  var blob = new Blob([json], { type: 'application/json' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'cbm-disk-editor-settings.json';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(new Blob([json], { type: 'application/json' }), 'cbm-disk-editor-settings.json');
 });
 
 // ── Export Separators ─────────────────────────────────────────────────
@@ -83,12 +79,7 @@ document.getElementById('opt-export-separators').addEventListener('click', funct
     return;
   }
   var json = JSON.stringify(customSeparators, null, 2);
-  var blob = new Blob([json], { type: 'application/json' });
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'cbm-disk-editor-separators.json';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadBlob(new Blob([json], { type: 'application/json' }), 'cbm-disk-editor-separators.json');
 });
 
 // ── Import Settings / Separators (auto-detects format) ───────────────

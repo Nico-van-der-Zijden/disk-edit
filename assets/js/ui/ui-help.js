@@ -2,6 +2,7 @@
 document.getElementById('opt-about').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
+  setModalSize(null);
   document.getElementById('modal-title').textContent = 'About CBM Disk Editor';
   var body = document.getElementById('modal-body');
 
@@ -48,9 +49,16 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
           '<b>T64</b> &middot; ' +
           '<b>TAP</b> (raw pulses)' +
         '</span>' +
+        '<span class="about-format-cat">Archives</span>' +
+        '<span class="about-format-list">' +
+          '<b>ZipCode</b> (DiskPacked / SixPack / FilePacked) &middot; ' +
+          '<b>ZIP</b> &middot; ' +
+          '<b>gzip</b> / <b>tar</b> &middot; ' +
+          '<b>LHA</b> / <b>LZH</b> &middot; ' +
+          '<b>LNX</b>' +
+        '</span>' +
         '<span class="about-format-cat">Other</span>' +
         '<span class="about-format-list">' +
-          '<b>LNX</b> archives &middot; ' +
           '<b>CVT</b> (GEOS) &middot; ' +
           '<b>NIB</b> / <b>NBZ</b> (nibtools)' +
         '</span>' +
@@ -58,7 +66,8 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
       '<div class="about-format-note">' +
         'G64 round-trips fully — custom-GCR copy protection survives the save. ' +
         'NIB / NBZ open read-only and save back as G64. ' +
-        'Tape and archive formats are read-only.' +
+        'Tape images are read-only. ZipCode sets and ZIPs can be written; ' +
+        'tar, LHA and LNX are read by extracting them.' +
       '</div>' +
     '</div>';
 
@@ -98,7 +107,8 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
           'Compare two disks (file + sector diff)',
           'Resize DNP, compact directory',
           'Convert to GEOS format',
-          'MD5 / SHA-256 / CRC32 hash',
+          'Create ZipCode sets (all three variants)',
+          'CRC32 / SHA-256 disk hash',
         ]) +
         card('Export', [
           'ZIP all files, CVT, RTF, PDF, CSV, HTML',
@@ -122,6 +132,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
   body.innerHTML = bootHtml + formatHtml + featureHtml + footerHtml;
 
   var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.className = 'modal-footer';
   footer.innerHTML = '<button id="modal-close">OK</button>';
   document.getElementById('modal-close').addEventListener('click', function() {
     document.getElementById('modal-overlay').classList.remove('open');
@@ -132,6 +143,7 @@ document.getElementById('opt-about').addEventListener('click', function(e) {
 document.getElementById('opt-credits').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
+  setModalSize(null);
   document.getElementById('modal-title').textContent = 'Credits & Thanks';
   var body = document.getElementById('modal-body');
   body.innerHTML =
@@ -144,6 +156,9 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '<br>' +
       '<b>Fonts:</b><br>' +
       '&bull; <a href="https://style64.org/c64-truetype" target="_blank" class="link">C64 Pro Mono</a> by Style64 — TrueType PETSCII font<br>' +
+      '<br>' +
+      '<b>Icons:</b><br>' +
+      '&bull; <a href="https://fontawesome.com/" target="_blank" class="link">FontAwesome</a> (Free)<br>' +
       '<br>' +
       '<b>GEOS format references:</b><br>' +
       '&bull; <a href="https://www.pagetable.com/?p=1471" target="_blank" class="link">Inside geoWrite</a> by Michael Steil — geoWrite file format documentation<br>' +
@@ -182,6 +197,7 @@ document.getElementById('opt-credits').addEventListener('click', function(e) {
       '&bull; <a href="http://c64.rulez.org/pub/c64/IDE64/source/cfsfdisk/" target="_blank" class="link">cfsfdisk</a> by Soci/Singular (GPL) — partition utility; reference for the MBR partition entry, boot-sector total-LBA-count, and byte padding used by new .hdd images<br>' +
     '</div>';
   var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.className = 'modal-footer';
   footer.innerHTML = '<button id="modal-close">OK</button>';
   document.getElementById('modal-close').addEventListener('click', function() {
     document.getElementById('modal-overlay').classList.remove('open');
@@ -202,14 +218,16 @@ document.getElementById('opt-manual').addEventListener('click', function(e) {
 document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
+  setModalSize(null);
   document.getElementById('modal-title').textContent = 'Keyboard Shortcuts';
   var body = document.getElementById('modal-body');
   var sections = [
     { title: 'File Navigation', shortcuts: [
       ['Arrow Up / Down', 'Select previous/next file'],
+      ['Shift + Arrow Up / Down', 'Extend the selection'],
       ['Ctrl + Arrow Up / Down', 'Move file up/down in directory'],
-      ['Enter', 'Rename selected file'],
-      ['Delete', 'Remove selected file'],
+      ['Enter / F2', 'Rename selected file or partition'],
+      ['Delete', 'Remove selected entries (partition list: delete partition)'],
     ]},
     { title: 'File Operations', shortcuts: [
       ['Ctrl + C', 'Copy selected file(s)'],
@@ -217,7 +235,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
       ['Ctrl + V', 'Paste file (works across tabs)'],
       ['Ctrl + Shift + I', 'Insert file'],
       ['Ctrl + Alt + E', 'Export selected file(s)'],
-      ['Ctrl + Shift + D', 'Add directory (D81/DNP)'],
+      ['Ctrl + Shift + D', 'Add directory (partition list: new partition)'],
       ['Ctrl + Z', 'Undo last change'],
       ['Ctrl + Y / Ctrl + Shift + Z', 'Redo'],
       ['Ctrl + Alt + O', 'Open disk'],
@@ -265,17 +283,18 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
     { title: 'Sector Editor', shortcuts: [
       ['Ctrl + J', 'Follow sector chain (jump to T/S in bytes 0-1)'],
       ['Click hex byte', 'Edit byte value'],
-      ['Escape', 'Cancel byte edit'],
+      ['Tab / Shift + Tab', 'Next / previous byte while editing'],
+      ['Escape', 'Cancel byte edit (again: close the editor)'],
     ]},
     { title: 'Drag & Drop', shortcuts: [
       ['Drop a disk image', 'Open in new tab(s) — any supported format (D64, D71, D81, DNP, DHD, HDD, RML, FD, G64, NIB, …)'],
-      ['Drop .prg/.seq/.usr/.rel/.cvt', 'Import file(s) into current disk'],
+      ['Drop .prg/.seq/.usr/.cvt/.txt', 'Import file(s) into current disk'],
       ['Drag file entry to OS', 'Export file (Chrome/Edge)'],
     ]},
     { title: 'General', shortcuts: [
       ['Ctrl + Shift', 'Toggle uppercase/lowercase charset'],
       ['Right-click', 'Context menu on file entry or empty area'],
-      ['Escape', 'Close modal or menu'],
+      ['Escape', 'Close modal, menu or side pane'],
       ['Tab', 'Next input (fill pattern, hex editor)'],
     ]},
   ];
@@ -293,6 +312,7 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
   }
   body.innerHTML = html;
   var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.className = 'modal-footer';
   footer.innerHTML = '<button id="modal-close">OK</button>';
   document.getElementById('modal-close').addEventListener('click', function() {
     document.getElementById('modal-overlay').classList.remove('open');
@@ -303,11 +323,12 @@ document.getElementById('opt-shortcuts').addEventListener('click', function(e) {
 document.getElementById('opt-changelog').addEventListener('click', function(e) {
   e.stopPropagation();
   closeMenus();
+  setModalSize(null);
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
     { ver: '1.5.1', title: 'Create ZipCode sets', items: [
-      'New Disk → Disk Tools → Create ZipCode… packs the disk you have open into a ZipCode set. Pick DiskPacked, SixPack or FilePacked and a side pane shows exactly what you will get — every part, its size, and how much of the disk it saves — before anything is written',
+      'Disk → Disk Tools → Create ZipCode… packs the disk you have open into a ZipCode set. Pick DiskPacked, SixPack or FilePacked and a side pane shows exactly what you will get — every part, its size, and how much of the disk it saves — before anything is written',
       'Choose how it arrives: a single ZIP or tar.gz download, or D64 image(s) that open as tabs. A set too big for one disk splits the way real sets do, so a six-part SixPack comes out as NAME-123 and NAME-456',
       'SixPack keeps the read errors of the source disk, so a protected or damaged disk survives the round trip. If the open disk has errors the pane starts on SixPack and warns you if you pick a format that would drop them',
       'A FilePacked set you create can list itself: LOAD its x! part on a real C64, RUN it, and it prints the file names, sizes and types the set holds',
@@ -387,12 +408,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
     ]},
     { ver: '1.4.0', title: 'Open IDE64 .hdd images', items: [
       'Read and edit IDE64 hard-disk images (.hdd). Browse CFS partitions, navigate subdirectories, rename / scratch / restore files, drag in / out, view files as Hex / BASIC / PETSCII / Graphics / TASS, run in an emulator — same UX as D64 / D71 / D81. Byte-for-byte round-trip with DirMaster and VICE',
-      'File → New → IDE64 HDD creates fresh .hdd images from 4 MiB to 512 MiB. VICE\'s auto-detect picks them up without the manual C/H/S dance',
+      'Disk → New → IDE64 HDD creates fresh .hdd images from 4 MiB to 512 MiB. VICE\'s auto-detect picks them up without the manual C/H/S dance',
       'CFS-aware Validate, Sort Directory, Scan for Lost Files (Quick + Deep with per-candidate Export / Restore), Export Disk (zip + HTML / CSV listing), and View BAM with a Density / Ownership heat map',
       'Recovery matches what IDEDOS writes — scratched files / directories / partitions can be unscratched, and the backup partition table at the last sector mirrors the primary, so accidental wipes are recoverable in the same way the firmware allows',
     ]},
     { ver: '1.3.112', title: 'Run / Open in Emulator', items: [
-      'New Disk → Open in Emulator and File → Run in Emulator hand the current disk or selected PRG to <a href="https://c64.sannic.nl/" target="_blank" class="link">c64.sannic.nl</a> (VICE x64sc via EmulatorJS) over postMessage — no upload, no URL length limit',
+      'New: Disk → Open in Emulator and File → Run in Emulator hand the current disk or selected PRG to <a href="https://c64.sannic.nl/" target="_blank" class="link">c64.sannic.nl</a> (VICE x64sc via EmulatorJS) over postMessage — no upload, no URL length limit',
       'Scratched-file recoverability indicator (green/yellow) now also checks that the file\'s sector chain ends with a clean T=0 link, not at a bogus track pointer. Files whose tail was overwritten with garbage no longer claim to be fully recoverable',
     ]},
     { ver: '1.3.111', title: 'CMD HD (DHD) container support', items: [
@@ -401,9 +422,9 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
       'Native-partition size pickers (inside CMD containers and for standalone DNP) now use a slider with a live MiB readout',
     ]},
     { ver: '1.3.110', title: 'Disk-format spec audit pass', items: [
-      'BAM view banner now flags format-specific quirks when present: soft write-protect (BAM +$02 mismatch), 40-track speeder-DOS extended BAM (SpeedDOS / DolphinDOS), C128 auto-boot signature, and 1581 auto-boot loader flag. New Disk → Restore DOS Version Byte action clears the soft-WP byte on D64 / D71 / D81 / D80 / D82',
+      'BAM view banner now flags format-specific quirks when present: soft write-protect (BAM +$02 mismatch), 40-track speeder-DOS extended BAM (SpeedDOS / DolphinDOS), C128 auto-boot signature, and 1581 auto-boot loader flag. New: Disk → Disk Tools → Restore DOS Version Byte clears the soft-WP byte on D64 / D71 / D81 / D80 / D82',
       'GEOS Info modal now shows Author and "Created by app" fields (when present in the INFO block). USR-typed GEOS VLIR files — like the ones on geoMagazine disks — are now correctly recognised as GEOS so the info dialog and load-address fields work for them',
-      'New Disk → View GEOS Border Sector dialog for the rarely-used cross-disk drag-and-drop area (header +$AB/$AC pointer on GEOS-formatted disks)',
+      'New: Disk → Disk Tools → View GEOS Border Sector dialog for the rarely-used cross-disk drag-and-drop area (header +$AB/$AC pointer on GEOS-formatted disks)',
       'D81 CBM partition creation now enforces the spec’s 3-track / 120-block minimum (was 80). 40-track speeder-DOS D64s render tracks 36-40 in the BAM view at the right offset for the detected variant. D80 / D82 file and directory interleave default to 1 (per the IEEE-488 whole-track buffering)',
       'Fixes: opening a Native partition from a D2M / D4M no longer mis-detects as D81 once you double-click in; a fresh D1M / D2M / D4M no longer reports thousands of phantom "orphan" sectors in the BAM integrity check; sub-directory entries on DNP-style disks now correctly bump their parent block count when the directory grows',
     ]},
@@ -445,7 +466,7 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
       'Drag-drop error modal now adds a hint when reads fail (extract from inside an archive / hydrate cloud-storage placeholders) — common cause that\'s no longer a mystery',
     ]},
     { ver: '1.3.100', title: 'Export disk as base64 data URI', items: [
-      'New Disk → Export Disk → Show as Base64 Data URI: get a data: URI for the current disk in a modal, with a Copy button — handy for embedding small disks in forum posts or git issues',
+      'New: Disk → Export Disk → Show as Base64 Data URI: get a data: URI for the current disk in a modal, with a Copy button — handy for embedding small disks in forum posts or git issues',
     ]},
     { ver: '1.3.99', title: 'G64 round-trip save', items: [
       'Saving a .g64 now produces a real GCR-encoded G64 that VICE will mount as a 1541 image — earlier the file was just D64 bytes under a .g64 extension and emulators rejected it',
@@ -457,7 +478,7 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
       'Zoom slider 1×→5× with click-and-drag panning when zoomed in, same feel as the graphics viewer; pixelated rendering keeps bytes crisp at high zoom',
     ]},
     { ver: '1.3.97', title: 'G64 layout viewer', items: [
-      'New Disk → Disk Tools → G64 Layout… modal shows the physical sector order each track was laid down in, with a plain-English headline like "Mastered disk with copy protection: 4 tracks hide sectors behind custom GCR"',
+      'New: Disk → Disk Tools → G64 Layout… modal shows the physical sector order each track was laid down in, with a plain-English headline like "Mastered disk with copy protection: 4 tracks hide sectors behind custom GCR"',
       'Tracks are tagged standard / interleave 1 / copy-protected / scrambled — colour-coded so you can scan a copy-protected disk and see which tracks the protection touches; click a track for its full physical sector sequence and the list of sectors the standard reader couldn\'t decode',
       'Fixed a long-standing GCR decode bug — header bytes containing nybble 0 were rejected, so any G64 with a $00 in a header position decoded to an empty disk. G64 size detection now snaps to the real disk extent (35 / 40 / 42) instead of trusting the header-declared half-track count',
     ]},
@@ -938,6 +959,7 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   }
   body.innerHTML = html;
   var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.className = 'modal-footer';
   footer.innerHTML = '<button id="modal-close">OK</button>';
   document.getElementById('modal-close').addEventListener('click', function() {
     document.getElementById('modal-overlay').classList.remove('open');

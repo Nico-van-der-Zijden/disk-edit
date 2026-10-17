@@ -6,7 +6,7 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     padding: 10px;
-    z-index: 250;
+    z-index: var(--z-palette);
     box-shadow: 0 8px 32px rgba(0,0,0,.4);
   }
 
@@ -132,7 +132,7 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     box-shadow: 0 8px 32px rgba(0,0,0,.4);
-    z-index: 250;
+    z-index: var(--z-palette);
   }
   .petscii-float.open { display: block; }
 
@@ -225,7 +225,7 @@
     border: 1px solid var(--border);
     border-radius: 4px;
     box-shadow: 0 8px 32px rgba(0,0,0,.4);
-    z-index: 250;
+    z-index: var(--z-palette);
     min-width: 280px;
     max-width: 360px;
   }

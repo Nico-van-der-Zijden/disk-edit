@@ -4,7 +4,7 @@ Non-obvious things you'll want to know.
 
 ## Charset mode matters for what you SEE, not what you SAVE
 
-The editor stores PETSCII bytes raw. The charset mode (Options → Uppercase / Lowercase, Ctrl+Shift) only changes how those bytes render on your screen.
+The editor stores PETSCII bytes raw. The charset mode (View → Switch to Uppercase / Lowercase, Ctrl+Shift) only changes how those bytes render on your screen.
 
 - Switching modes doesn't modify the disk
 - Saving and re-opening uses whatever mode is active at open-time
@@ -19,7 +19,7 @@ The C64's PETSCII isn't quite ASCII:
 - Bytes `$C1-$DA` are the **shifted variants** — graphics in uppercase mode, uppercase A-Z in lowercase mode
 - Bytes `$61-$7A` (= ASCII `a-z`) don't exist as letters in PETSCII; they overlap with graphic chars
 
-If you import a file whose PC filename has lowercase letters, the editor uppercases them (`asciiToNameBytes` converts `$61-$7A` to `$41-$5A`) so the result looks right in uppercase mode. If you want lowercase, use **File → Name Case → lowercase** after importing.
+If you import a file whose PC filename has lowercase letters, the editor uppercases them to `$41-$5A` so the result looks right in uppercase mode (characters with no safe PETSCII equivalent become spaces). If you want capitals in lowercase mode, use **File → Name Case → UPPERCASE** after importing — it moves the letters to `$C1-$DA`.
 
 ## Block-count cap = 65,024
 
@@ -111,7 +111,7 @@ Tab as the CBM-key shortcut (matching VICE) was considered + rejected — would 
 
 All your settings (charset mode, hex coloring, toolbar visibility, picker preferences, recent files, separator library) live in browser localStorage. They don't sync between browsers or devices.
 
-**File → Export Settings** writes a JSON; **File → Import Settings** restores. Use this to sync your setup across machines.
+**Options → Export Settings** writes a JSON; **Options → Import Settings / Separators** restores. Use this to sync your setup across machines.
 
 ## Privacy
 

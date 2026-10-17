@@ -1,35 +1,26 @@
 // ── Modal z-index stacking ────────────────────────────────────────────
 var modalZCounter = 200;
 
-// Charset-toggle re-render hook for modals. Modals that show PETSCII
-// glyphs assign their own render function to this slot when they open;
-// the slot is auto-cleared when the modal closes (see the observer
-// below) so the wrong modal's render isn't called after a close+reopen.
+// Charset-toggle re-render hook; set by viewers that paint PETSCII, cleared
+// when the modal closes.
 var modalCharsetRedraw = null;
 
-// The container a read-only viewer is currently rendered into: the docked
-// detail pane when it's open (and no modal sits on top), otherwise the shared
-// modal body. Viewers and the charset-redraw handler write through this so the
-// same code paints into whichever surface is live.
+// Body of the live viewer surface: the modal when open, else the detail pane.
 function getViewerBody() {
   if (document.querySelector('#modal-overlay.open')) return document.getElementById('modal-body');
   if (document.body.classList.contains('pane-open')) return document.getElementById('detail-pane-body');
   return document.getElementById('modal-body');
 }
 
-// Footer for the active viewer surface — pane footer when the pane is the live
-// surface, otherwise the shared modal footer. Lets footer-building viewers
-// (graphics, CFS hex, File Info) work in either place. The pane footer carries
-// the .modal-footer class so the same styling/sub-layout classes apply.
+// Footer of the live viewer surface (the pane footer also carries .modal-footer).
 function getViewerFooter() {
   if (document.querySelector('#modal-overlay.open')) return document.querySelector('#modal-overlay .modal-footer');
   if (document.body.classList.contains('pane-open')) return document.getElementById('detail-pane-footer');
   return document.querySelector('#modal-overlay .modal-footer');
 }
 
-// Close whichever viewer surface is live. Viewers that used to call
-// `document.getElementById('modal-overlay').classList.remove('open')` route
-// here so the same Close button works in the pane.
+// Close whichever viewer surface is live, so the same Close button works in
+// the pane and in the modal.
 function closeViewer() {
   if (document.querySelector('#modal-overlay.open')) {
     document.getElementById('modal-overlay').classList.remove('open');
@@ -41,8 +32,6 @@ function closeViewer() {
 }
 
 // Set the title of the active viewer surface (pane header or modal title).
-// For viewers like graphics that rewrite their title on each internal
-// re-render (format switch) rather than once at open time.
 function setViewerTitle(text) {
   if (document.querySelector('#modal-overlay.open')) {
     document.getElementById('modal-title').textContent = text;
@@ -54,11 +43,8 @@ function setViewerTitle(text) {
   }
 }
 
-// Open an empty viewer surface and return its body, for viewers that build
-// their body incrementally (and re-render in place) rather than handing a
-// finished HTML string to showViewerModal. Routes to the detail pane unless
-// forceModal. After this, getViewerBody/getViewerFooter/setViewerTitle all
-// resolve to this surface.
+// Open an empty viewer surface (detail pane unless forceModal) and return its
+// body, for viewers that build and re-render their body themselves.
 function openViewerSurface(title, forceModal) {
   if (!forceModal && typeof openDetailPane === 'function') {
     return openDetailPane(title, '');
@@ -76,12 +62,8 @@ function openViewerSurface(title, forceModal) {
 
 document.addEventListener('cbm-charsetchange', function() {
   if (typeof modalCharsetRedraw !== 'function') return;
-  // Preserve scroll across the redraw — viewers typically rebuild the
-  // body innerHTML wholesale, which resets scrollTop. The TASS and hex
-  // viewers scroll on an inner element (`.basic-listing` / `.hex-editor`,
-  // see editors.css `:has` rules); other viewers scroll on the body itself.
-  // Find whichever element currently shows scroll before the redraw, then
-  // restore on the matching post-redraw node.
+  // Preserve scroll across the redraw. TASS/hex viewers scroll an inner
+  // .basic-listing / .hex-editor; other viewers scroll the body itself.
   var body = getViewerBody();
   function findScroller(root) {
     if (!root) return null;
@@ -95,7 +77,29 @@ document.addEventListener('cbm-charsetchange', function() {
   if (next) next.scrollTop = prevScroll;
 });
 
-// Auto-manage z-index stacking when modals open/close
+// Close the shared modal without a footer button (Esc, X, backdrop). Listeners
+// for 'modaldismiss' settle pending promises / drop per-session handlers.
+function dismissModal() {
+  var overlay = document.getElementById('modal-overlay');
+  if (!overlay.classList.contains('open')) return;
+  hidePetsciiPicker();
+  overlay.classList.remove('open');
+  overlay.dispatchEvent(new CustomEvent('modaldismiss'));
+}
+
+// Focus to hand back when a modal closes. Tracked on focusin because openers
+// usually focus a field inside the modal before the observer below runs.
+var lastFocusOutsideModal = null;
+document.addEventListener('focusin', function(e) {
+  if (!e.target.closest('.modal-overlay')) lastFocusOutsideModal = e.target;
+});
+document.addEventListener('focusout', function(e) {
+  if (!e.relatedTarget && e.target === lastFocusOutsideModal) lastFocusOutsideModal = null;
+});
+
+// Z-index stacking, scroll reset, and open/close bookkeeping. Runs as a
+// mutation callback, so a close immediately followed by a re-open (chained
+// dialogs) is seen as "still open".
 document.addEventListener('DOMContentLoaded', function() {
   var overlays = document.querySelectorAll('.modal-overlay');
   var observer = new MutationObserver(function(mutations) {
@@ -105,16 +109,34 @@ document.addEventListener('DOMContentLoaded', function() {
       if (el.classList.contains('open')) {
         modalZCounter += 10;
         el.style.zIndex = modalZCounter;
-        // Always open modals at the top — scroll position should not persist
-        // between open/close cycles.
         el.querySelectorAll('.modal-body, .modal-body .basic-listing, .modal-body .hex-editor').forEach(function(scroller) {
           scroller.scrollTop = 0;
         });
       } else {
-        // Modal just closed — drop any registered charset-redraw so a
-        // future modal that doesn't set one doesn't accidentally fire
-        // the previous modal's render.
         modalCharsetRedraw = null;
+      }
+    });
+    overlays.forEach(function(el) {
+      var isOpen = el.classList.contains('open');
+      if (isOpen === !!el._wasOpen) return;
+      el._wasOpen = isOpen;
+      if (isOpen) {
+        el._prevFocus = lastFocusOutsideModal;
+        return;
+      }
+      if (el.id === 'modal-overlay') {
+        // Every opener starts from the default size and a plain footer.
+        setModalSize(null);
+        var footer = el.querySelector('.modal-footer');
+        if (footer) footer.className = 'modal-footer';
+      }
+      // Return focus only if it was lost to <body> or left inside the modal.
+      var prev = el._prevFocus;
+      el._prevFocus = null;
+      var ae = document.activeElement;
+      if (prev && document.contains(prev) && typeof prev.focus === 'function' &&
+          (!ae || ae === document.body || el.contains(ae))) {
+        prev.focus();
       }
     });
   });
@@ -138,8 +160,8 @@ function setModalSize(size) {
 function showModal(title, lines) {
   setModalSize(null);
   document.getElementById('modal-title').textContent = title;
-  // Always restore the standard OK footer
   var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.className = 'modal-footer';
   footer.innerHTML = '<button id="modal-close">OK</button>';
   document.getElementById('modal-close').addEventListener('click', function() {
     document.getElementById('modal-overlay').classList.remove('open');
@@ -175,24 +197,11 @@ document.getElementById('modal-close').addEventListener('click', () => {
   document.getElementById('modal-overlay').classList.remove('open');
 });
 
-// Drop-in scaffolding for read-only viewer modals (hex, BASIC, TASS,
-// VLIR, REL, ...): set the title, install body content, restore the
-// standard "OK" footer (clearing any custom modal-footer-* classes a
-// previous viewer left behind), and open the overlay.
-//
-//   bodyContent: HTML string, a Node, or null to leave the body untouched
-//                (callers that need to mix in extra elements append them
-//                after this returns).
-//   size:        optional modal size class (passed through to setModalSize).
-// Returns the modal-body element.
+// Open a read-only viewer: in the detail pane by default (size is ignored
+// there), or in the shared modal with a plain OK footer when forceModal.
+//   bodyContent: HTML string, a Node, or null to leave the body untouched.
+// Returns the body element of whichever surface was used.
 function showViewerModal(title, bodyContent, size, forceModal) {
-  // Read-only per-file viewers render into the docked detail pane (desktop) /
-  // its full-screen overlay (mobile) rather than a modal. openDetailPane
-  // returns the pane body, so callers that capture and append/query the body
-  // still work unchanged. The `size` hint is irrelevant in the pane (its width
-  // is user-controlled) and is ignored. Pass forceModal=true for viewers that
-  // need the modal's footer/controls (e.g. the tabbed Disk Map). Falls back to
-  // the legacy modal if the pane controller isn't present.
   if (!forceModal && typeof openDetailPane === 'function') {
     return openDetailPane(title, bodyContent);
   }
@@ -221,7 +230,9 @@ function showProgressModal(title) {
   body.innerHTML =
     '<div class="text-md text-muted mb-md" id="progress-status"></div>' +
     '<div class="progress-track"><div class="progress-fill" id="progress-bar"></div></div>';
-  document.querySelector('#modal-overlay .modal-footer').innerHTML = '';
+  var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.className = 'modal-footer';
+  footer.innerHTML = '';
   var status = document.getElementById('progress-status');
   var bar = document.getElementById('progress-bar');
   document.getElementById('modal-overlay').classList.add('open');
@@ -267,33 +278,38 @@ function showChoiceModal(title, message, buttons, items) {
       body.appendChild(ul);
     }
 
-    var footer = document.querySelector('#modal-overlay .modal-footer');
+    var overlay = document.getElementById('modal-overlay');
+    var footer = overlay.querySelector('.modal-footer');
+    footer.className = 'modal-footer';
     footer.innerHTML = '';
+    // Dismissing without a button resolves like the Cancel-style button
+    // (the first secondary one), or undefined when there is none.
+    var cancelBtn = buttons.filter(function(b) { return b.secondary; })[0];
+    function onDismiss() { finish(cancelBtn ? cancelBtn.value : undefined); }
+    function finish(value) {
+      overlay.removeEventListener('modaldismiss', onDismiss);
+      resolve(value);
+    }
+    overlay.addEventListener('modaldismiss', onDismiss);
     buttons.forEach(function(btn) {
       var el = document.createElement('button');
       el.textContent = btn.label;
       if (btn.secondary) el.className = 'modal-btn-secondary';
       el.addEventListener('click', function() {
-        document.getElementById('modal-overlay').classList.remove('open');
-        resolve(btn.value);
+        overlay.classList.remove('open');
+        finish(btn.value);
       });
       footer.appendChild(el);
     });
-    document.getElementById('modal-overlay').classList.add('open');
+    overlay.classList.add('open');
   });
 }
 
 document.getElementById('modal-overlay').addEventListener('click', (e) => {
-  if (e.target === e.currentTarget) {
-    hidePetsciiPicker();
-    document.getElementById('modal-overlay').classList.remove('open');
-  }
+  if (e.target === e.currentTarget) dismissModal();
 });
 
-document.getElementById('modal-close-x').addEventListener('click', () => {
-  hidePetsciiPicker();
-  document.getElementById('modal-overlay').classList.remove('open');
-});
+document.getElementById('modal-close-x').addEventListener('click', dismissModal);
 
 // Ctrl+Shift toggles charset (like Commodore+Shift on C64)
 // Fires on keyup only if no other key was pressed while both modifiers were held,
@@ -305,17 +321,20 @@ document.addEventListener('keydown', (e) => {
   } else if (e.ctrlKey && e.shiftKey) {
     ctrlShiftClean = false;
   }
-  if (e.key === 'Escape' && document.getElementById('modal-overlay').classList.contains('open')) {
-    hidePetsciiPicker();
-    document.getElementById('modal-overlay').classList.remove('open');
+  // Handlers that consume Esc themselves (byte edit, input modal, mobile
+  // menu) stop its propagation. defaultPrevented can't be used here because
+  // createHexInput prevents the default of every non-hex key.
+  if (e.key === 'Escape' &&
+      document.getElementById('modal-overlay').classList.contains('open')) {
+    e.preventDefault(); // tells the detail pane this Esc was used
+    dismissModal();
+    return;
   }
 
-  // Enter inside an open modal triggers its primary action — the footer
-  // button that doesn't carry .modal-btn-secondary, matching the visual
-  // "bright" styling. Textareas + contenteditables keep their newline
-  // behaviour, and a focused button keeps the browser default so Tab + Enter
-  // still works on a non-primary button.
-  if (e.key === 'Enter' && document.getElementById('modal-overlay').classList.contains('open')) {
+  // Enter triggers the primary (non-secondary) footer button. Textareas,
+  // contenteditables and a focused button keep their own Enter behaviour.
+  if (e.key === 'Enter' && !e.defaultPrevented &&
+      document.getElementById('modal-overlay').classList.contains('open')) {
     var ae = document.activeElement;
     if (ae && (ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
     if (ae && ae.tagName === 'BUTTON') return;
@@ -326,18 +345,15 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // While a viewer modal is open, scroll its content with the cursor / page
-  // keys instead of letting the directory listing intercept them. Skip when
-  // an editable element is focused so input fields keep working.
+  var ae = document.activeElement;
+  var inField = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
+                       ae.tagName === 'SELECT' || ae.isContentEditable);
+
+  // Cursor / page keys scroll an open modal instead of the directory list.
+  // Inner .basic-listing / .hex-editor scrollers win so static headers stay.
   var overlay = document.getElementById('modal-overlay');
   if (overlay && overlay.classList.contains('open')) {
-    var ae = document.activeElement;
-    var inField = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable);
     if (!inField && !e.ctrlKey && !e.altKey && !e.metaKey) {
-      // Prefer an inner viewer container (.basic-listing / .hex-editor)
-      // if present — those have their own scrollbar so a static header
-      // (e.g. the BASIC dialect selector) stays in view. Fall back to
-      // modal-body for plain modals.
       var body = document.getElementById('modal-body');
       var scroller = body && (body.querySelector('.basic-listing, .hex-editor') || body);
       if (scroller) {
@@ -358,95 +374,41 @@ document.addEventListener('keydown', (e) => {
       }
     }
   }
-  // Ctrl+Alt+G: view as graphics
-  if (e.ctrlKey && e.altKey && e.code === 'KeyG') {
-    e.preventDefault();
-    if (currentBuffer && selectedEntryIndex >= 0) {
-      closeMenus();
-      showFileGfxViewer(selectedEntryIndex);
-    }
+  // Global shortcuts. Never while typing, and never for AltGr (reported as
+  // Ctrl+Alt), which types characters like é ß ñ on international layouts.
+  if (inField || !e.ctrlKey) return;
+  var ctrlAlt = e.altKey && !(e.getModifierState && e.getModifierState('AltGraph'));
+  var ctrlShift = e.shiftKey && !e.altKey;
+  var ctrlOnly = !e.shiftKey && !e.altKey;
+  var menuId = null;
+  if (ctrlAlt) {
+    menuId = {
+      KeyG: 'opt-view-gfx', KeyH: 'opt-view-hex', KeyB: 'opt-view-basic',
+      KeyP: 'opt-view-petscii', KeyD: 'opt-view-disasm',
+      KeyW: 'opt-close', KeyV: 'opt-validate', KeyO: 'opt-open',
+    }[e.code] || null;
+  } else if (ctrlShift) {
+    // Ctrl+G / Ctrl+S variants without Shift belong to the browser.
+    menuId = { KeyF: 'opt-find-tabs', KeyG: 'opt-goto-sector', KeyS: 'opt-save-as' }[e.code] || null;
+  } else if (ctrlOnly && e.code === 'KeyF') {
+    menuId = 'opt-find';
   }
-  // Ctrl+F: find in current tab
-  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.code === 'KeyF') {
+  if (menuId) {
     e.preventDefault();
-    if (currentBuffer) showSearchModal('Find', false);
+    var menuEl = document.getElementById(menuId);
+    if (menuEl && !menuEl.classList.contains('disabled')) menuEl.click();
+    return;
   }
-  // Ctrl+Shift+F: find in all tabs
-  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyF') {
+  // Ctrl+Alt+S: save, or Save As for a disk that has no file name yet
+  if (ctrlAlt && e.code === 'KeyS') {
     e.preventDefault();
-    if (tabs.length > 0) showSearchModal('Find in All Tabs', true);
-  }
-  // Ctrl+Shift+G: go to track/sector (Ctrl+G conflicts with browser Find Next)
-  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyG') {
-    e.preventDefault();
-    if (currentBuffer && !isTapeFormat(getCurrentCtx())) showGoToSector();
-  }
-  // Ctrl+Alt+W: close current tab (Ctrl+W conflicts with browser close tab)
-  if (e.ctrlKey && e.altKey && e.code === 'KeyW') {
-    e.preventDefault();
-    var closeEl = document.getElementById('opt-close');
-    if (!closeEl.classList.contains('disabled')) closeEl.click();
-  }
-  // Ctrl+Alt+H: view as hex
-  if (e.ctrlKey && e.altKey && e.code === 'KeyH') {
-    e.preventDefault();
-    if (currentBuffer && selectedEntryIndex >= 0) {
-      closeMenus();
-      showFileHexViewer(selectedEntryIndex);
-    }
-  }
-  // Ctrl+Alt+B: view as BASIC
-  if (e.ctrlKey && e.altKey && e.code === 'KeyB') {
-    e.preventDefault();
-    if (currentBuffer && selectedEntryIndex >= 0) {
-      closeMenus();
-      showFileBasicViewer(selectedEntryIndex);
-    }
-  }
-  // Ctrl+Alt+P: view as PETSCII
-  if (e.ctrlKey && e.altKey && e.code === 'KeyP') {
-    e.preventDefault();
-    if (currentBuffer && selectedEntryIndex >= 0) {
-      closeMenus();
-      showFilePetsciiViewer(selectedEntryIndex);
-    }
-  }
-  // Ctrl+Alt+D: view as disassembly
-  if (e.ctrlKey && e.altKey && e.code === 'KeyD') {
-    e.preventDefault();
-    if (currentBuffer && selectedEntryIndex >= 0) {
-      closeMenus();
-      showFileDisasmViewer(selectedEntryIndex);
-    }
-  }
-  // Ctrl+Alt+V: validate disk
-  if (e.ctrlKey && e.altKey && e.code === 'KeyV') {
-    e.preventDefault();
-    var valEl = document.getElementById('opt-validate');
-    if (!valEl.classList.contains('disabled')) valEl.click();
-  }
-  // Ctrl+Shift+S: save as
-  if (e.ctrlKey && e.shiftKey && !e.altKey && e.code === 'KeyS') {
-    e.preventDefault();
-    var saveAsEl = document.getElementById('opt-save-as');
-    if (!saveAsEl.classList.contains('disabled')) saveAsEl.click();
-  }
-  // Ctrl+Alt+O: open disk
-  if (e.ctrlKey && e.altKey && e.code === 'KeyO') {
-    e.preventDefault();
-    document.getElementById('opt-open').click();
-  }
-  // Ctrl+Alt+S: save disk
-  if (e.ctrlKey && e.altKey && e.code === 'KeyS') {
-    e.preventDefault();
-    if (currentBuffer && currentFileName && !isTapeFormat(getCurrentCtx())) {
-      document.getElementById('opt-save').click();
-    } else if (currentBuffer && !isTapeFormat(getCurrentCtx())) {
-      document.getElementById('opt-save-as').click();
-    }
+    var saveEl = document.getElementById('opt-save');
+    if (saveEl.classList.contains('disabled')) saveEl = document.getElementById('opt-save-as');
+    if (!saveEl.classList.contains('disabled')) saveEl.click();
+    return;
   }
   // Ctrl+Alt+N: new disk (open Disk > New submenu with first option focused)
-  if (e.ctrlKey && e.altKey && e.code === 'KeyN') {
+  if (ctrlAlt && e.code === 'KeyN') {
     e.preventDefault();
     var diskMenu = document.querySelector('.menu-item');
     closeMenus();
@@ -466,22 +428,18 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('keyup', (e) => {
   if ((e.key === 'Shift' || e.key === 'Control') && ctrlShiftClean) {
     ctrlShiftClean = false;
-    // If an inline rename is active, capture enough state to re-enter
-    // it after renderDisk rebuilds the DOM, then suppress its commit so
-    // the typed-but-uncommitted bytes survive the round-trip.
+    // An in-progress inline rename survives the re-render: capture it and
+    // skip its commit, then re-enter it on the new DOM.
     var resumeEdit = (typeof captureActiveEditResume === 'function')
       ? captureActiveEditResume() : null;
     if (resumeEdit) suppressActiveEditCommit = true;
-    // Blur active editable first: opt-charset-mode synchronously calls
-    // renderDisk → content.innerHTML, and a focused editable's blur
-    // handler firing mid-innerHTML reparents siblings and throws
-    // NotFoundError (Chrome's "moved in a blur event handler" error).
+    // Blur first: a blur handler firing mid-renderDisk innerHTML throws
+    // NotFoundError in Chrome.
     var ae = document.activeElement;
     if (ae && typeof ae.blur === 'function' && ae !== document.body) ae.blur();
     document.getElementById('opt-charset-mode').click();
     if (resumeEdit) {
       suppressActiveEditCommit = false;
-      // Defer to a microtask so the re-entered edit sees the new DOM.
       setTimeout(resumeEdit, 0);
     }
   }
@@ -499,13 +457,9 @@ function showInputModal(title, defaultValue, opts) {
     inputModalResolve = resolve;
     document.getElementById('input-modal-title').textContent = title;
     var bodyEl = document.querySelector('#input-modal-overlay .modal-body');
-    // Replace / remove any prior description blocks (there can be many
-    // when a previous call passed a multi-line description).
     var prevDescs = bodyEl.querySelectorAll('.modal-input-desc');
     for (var pi = 0; pi < prevDescs.length; pi++) prevDescs[pi].remove();
     if (opts.description) {
-      // Split on \n so callers can split a long explanation onto multiple
-      // lines without forcing the modal wider than it needs to be.
       var lines = String(opts.description).split('\n');
       for (var li = lines.length - 1; li >= 0; li--) {
         var desc = document.createElement('div');
@@ -562,11 +516,14 @@ document.getElementById('input-modal-close-x').addEventListener('click', () => {
 });
 
 document.getElementById('input-modal-field').addEventListener('keydown', (e) => {
+  // Stop propagation so a modal underneath doesn't also act on the key.
   if (e.key === 'Enter') {
     e.preventDefault();
+    e.stopPropagation();
     closeInputModal(document.getElementById('input-modal-field').value);
   } else if (e.key === 'Escape') {
     e.preventDefault();
+    e.stopPropagation();
     closeInputModal(null);
   }
 });
@@ -702,21 +659,21 @@ function showDnpSizePicker(defaultBlocks) {
     wrap.appendChild(footer);
     body.appendChild(wrap);
 
-    var modalFooter = document.querySelector('#modal-overlay .modal-footer');
+    var overlay = document.getElementById('modal-overlay');
+    var modalFooter = overlay.querySelector('.modal-footer');
+    modalFooter.className = 'modal-footer';
     modalFooter.innerHTML = '';
     var done = false;
-    function ok() {
+    function finish(value) {
       if (done) return;
       done = true;
-      document.getElementById('modal-overlay').classList.remove('open');
-      resolve(sliderRow.getValue());
+      overlay.removeEventListener('modaldismiss', cancel);
+      overlay.classList.remove('open');
+      resolve(value);
     }
-    function cancel() {
-      if (done) return;
-      done = true;
-      document.getElementById('modal-overlay').classList.remove('open');
-      resolve(null);
-    }
+    function ok() { finish(sliderRow.getValue()); }
+    function cancel() { finish(null); }
+    overlay.addEventListener('modaldismiss', cancel);
     var cancelBtn = document.createElement('button');
     cancelBtn.textContent = 'Cancel';
     cancelBtn.className = 'modal-btn-secondary';
@@ -727,7 +684,7 @@ function showDnpSizePicker(defaultBlocks) {
     okBtn.addEventListener('click', ok);
     modalFooter.appendChild(okBtn);
 
-    document.getElementById('modal-overlay').classList.add('open');
+    overlay.classList.add('open');
     setTimeout(function() { sliderRow.input.focus(); sliderRow.input.select(); }, 0);
   });
 }

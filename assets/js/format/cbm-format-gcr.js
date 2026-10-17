@@ -1,44 +1,37 @@
 // ── G64 GCR decoder + encoder ────────────────────────────────────────
-// GCR 5-bit to 4-bit decode table. Each 5-bit GCR pattern maps to a
-// 4-bit nybble; entries marked -1 are illegal patterns (no nybble has
-// that encoding) and should fail the decode. The standard C64/1541
-// table is small enough to enumerate by encoded value:
-//   01010 (10) → 0    01011 (11) → 1    10010 (18) → 2    10011 (19) → 3
-//   01110 (14) → 4    01111 (15) → 5    10110 (22) → 6    10111 (23) → 7
-//   01001 ( 9) → 8    11001 (25) → 9    11010 (26) → A    11011 (27) → B
-//   01101 (13) → C    11101 (29) → D    11110 (30) → E    10101 (21) → F
+// GCR 5-bit pattern → nybble; -1 marks patterns no nybble encodes to.
 var GCR_DECODE = [
   -1,-1,-1,-1,-1,-1,-1,-1,-1, 8, 0, 1,-1,12, 4, 5,
   -1,-1, 2, 3,-1,15, 6, 7,-1, 9,10,11,-1,13,14,-1
 ];
-// Reverse table: nybble (0..15) → 5-bit GCR pattern, used by the
-// encoder when writing modified sectors back to a .g64 on save.
+// Nybble → 5-bit GCR pattern.
 var GCR_ENCODE = [10, 11, 18, 19, 14, 15, 22, 23, 9, 25, 26, 27, 13, 29, 30, 21];
 
-// Returns { d64: ArrayBuffer, layout: Track[] } where each Track records the
-// physical on-disk sector order so the G64 layout viewer can show real
-// interleave (not just logical sector content). Pre-existing callers that
-// only want the D64 buffer should read result.d64.
+var GCR_HEADER_BYTES = 10;   // $08 header block: 8 plain bytes
+var GCR_DATA_PLAIN = 260;    // $07 marker + 256 data + checksum + 2 pad
+var GCR_DATA_GROUPS = 65;    // GCR_DATA_PLAIN / 4
+var GCR_DATA_BYTES = 325;    // GCR_DATA_GROUPS * 5
+var GCR_SYNC_SCAN = 500;     // how far past a header to look for its data sync
+// Nominal bytes per revolution, indexed by speed zone (s2g.c / d64tog64.c).
+var GCR_ZONE_CAPACITY = [6250, 6666, 7142, 7692];
+
+/** 1541 speed zone for a track: 3 = outermost (tracks 1-17) .. 0 = 31+. */
+function gcrSpeedZone(track) {
+  if (track <= 17) return 3;
+  if (track <= 24) return 2;
+  if (track <= 30) return 1;
+  return 0;
+}
+
+// Returns { d64: ArrayBuffer, layout: Track[] }; the layout keeps each
+// track's raw GCR and physical sector order for the layout viewer and save.
 function decodeG64toD64(g64) {
   var numHalfTracks = g64[9];
-  // Header-declared upper bound; real tooling almost always writes 84
-  // half-tracks (i.e. 42 whole) regardless of the disk's actual extent.
   var maxHalfTracks = Math.min(numHalfTracks, 84);
+  var spt = DISK_FORMATS.d64.sectorsPerTrack;
 
-  // Standard D64 sector counts per track
-  var spt = function(t) {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
-
-  // Walk every half-track in the source. Whole tracks (ht even) get
-  // their sector layout decoded; half-tracks (ht odd) are kept as raw
-  // GCR only — they're rare and typically hold custom copy-protection
-  // bytes (V-MAX, Vorpal, the Creatures-style hidden tracks) that have
-  // no D64 sector mapping. Preserving them verbatim in the layout lets
-  // save round-trip the disk without dropping the protection.
+  // Half-tracks have no D64 mapping; they are kept as raw GCR only, which is
+  // what lets save round-trip protections that live there.
   var perHt = [];
   for (var ht = 0; ht < maxHalfTracks; ht++) {
     var trackNum = Math.floor(ht / 2) + 1;
@@ -50,89 +43,66 @@ function decodeG64toD64(g64) {
     var trackSize = g64[trackOffset] | (g64[trackOffset + 1] << 8);
     if (trackSize === 0 || trackOffset + 2 + trackSize > g64.length) continue;
     var trackData = g64.subarray(trackOffset + 2, trackOffset + 2 + trackSize);
-    var entry = {
+    perHt.push({
       track: trackNum,
       halfTrack: isHalf,
-      walk: null,
-      trackSize: trackSize,
+      walk: (!isHalf && trackNum <= 42) ? walkGCRTrack(trackData, trackNum, spt(trackNum)) : null,
       expectedSpt: isHalf ? 0 : spt(trackNum),
-      // Detached copy so the raw GCR survives after the original .g64
-      // ArrayBuffer is dropped. Used by the Raw Tracks visualization
-      // AND, for half-tracks, the only source for save round-trip.
-      rawGCR: new Uint8Array(trackData)
-    };
-    if (!isHalf && trackNum <= 42) {
-      entry.walk = walkGCRTrack(trackData, trackNum, entry.expectedSpt);
-    }
-    perHt.push(entry);
+      rawGCR: new Uint8Array(trackData)     // detached from the source buffer
+    });
   }
+  return _gcrBuildImage(perHt, false);
+}
 
-  // Highest WHOLE track where the walker returned at least one sector.
-  // Snap up to the nearest known D64 size class (35 / 40 / 42) so
-  // detectFormat picks the right size label downstream. Half-tracks
-  // don't influence the D64 size.
+// Shared tail of the G64 and NIB readers: size the D64 by the highest whole
+// track that yielded a sector, snapped to 35/40/42, and fill it. NIB filler
+// tracks past that size are dropped from the layout (`dropBeyond`).
+function _gcrBuildImage(perTrack, dropBeyond) {
+  var spt = DISK_FORMATS.d64.sectorsPerTrack;
   var realTracks = 0;
-  for (var i = 0; i < perHt.length; i++) {
-    var p = perHt[i];
-    if (!p.halfTrack && p.walk && p.walk.sectorOrder.length > 0) {
-      realTracks = p.track;
-    }
+  for (var i = 0; i < perTrack.length; i++) {
+    var p = perTrack[i];
+    if (!p.halfTrack && p.walk && p.walk.sectorOrder.length > 0) realTracks = p.track;
   }
-  if (realTracks === 0) realTracks = 35;
-  var numTracks;
-  if (realTracks <= 35)      numTracks = 35;
-  else if (realTracks <= 40) numTracks = 40;
-  else                       numTracks = 42;
+  var numTracks = realTracks <= 35 ? 35 : realTracks <= 40 ? 40 : 42;
 
-  // Allocate the D64 buffer at the right size and copy payloads in.
   var totalSectors = 0;
   for (var t = 1; t <= numTracks; t++) totalSectors += spt(t);
   var d64 = new Uint8Array(totalSectors * 256);
   var layout = [];
 
-  for (var pi = 0; pi < perHt.length; pi++) {
-    var pt = perHt[pi];
+  for (var pi = 0; pi < perTrack.length; pi++) {
+    var pt = perTrack[pi];
     var w = pt.walk;
-    // Populate the D64 buffer only for whole tracks within the chosen
-    // size class. Anything past that is for layout-preservation only.
+    if (dropBeyond && pt.track > numTracks) continue;
     if (!pt.halfTrack && w && pt.track <= numTracks) {
       for (var s = 0; s < pt.expectedSpt; s++) {
-        var payload = w.sectorPayloads[s];
-        if (payload) {
-          var d64Off = calcD64Offset(pt.track, s, spt);
-          for (var bi = 0; bi < 256; bi++) d64[d64Off + bi] = payload[bi];
-        }
+        // A bad-checksum sector still lands in the D64, as a drive's buffer would.
+        if (w.allPayloads[s]) d64.set(w.allPayloads[s], calcD64Offset(pt.track, s, spt));
       }
     }
-    // Every present half-track/whole-track goes into the layout so the
-    // save path can write it back verbatim.
     layout.push({
       track: pt.track,
-      halfTrack: pt.halfTrack,
+      halfTrack: !!pt.halfTrack,
       sectorOrder: w ? w.sectorOrder : [],
-      rawTrackBytes: pt.trackSize,
+      rawTrackBytes: pt.rawGCR.length,
       expectedSpt: pt.expectedSpt,
       unreadableSectors: w ? w.unreadable : [],
+      badChecksumSectors: w ? w.badChecksum : [],
       rawGCR: pt.rawGCR,
-      sectorDataStart: w ? w.sectorDataStart : {}
+      sectorDataStart: w ? w.sectorDataStart : {},
+      // What each sector decoded to, so save re-encodes only edited sectors.
+      sectorPayloads: w ? w.allPayloads : {}
     });
   }
-
   return { d64: d64.buffer, layout: layout };
 }
 
-// Single-pass GCR track scanner: walk one revolution of trackData and
-// record every sector header in the order it appears, plus its 256-byte
-// payload when the data block decodes cleanly. Returns:
-//   { sectorOrder, sectorPayloads (sector → Uint8Array),
-//     sectorDataStart (sector → byte position of data block in trackData
-//                       — the start of the 325 GCR bytes after the data
-//                       sync; used by the encoder when splicing modified
-//                       sectors back on save), unreadable }
-//
-// Backed by a doubled buffer so headers/payloads that wrap past the end
-// of the track decode correctly. Each sector is recorded at most once;
-// duplicate headers (rare physical anomaly) are ignored after the first.
+// Scan one revolution of trackData for sector headers, in physical order.
+// Returns { sectorOrder, sectorPayloads (checksum-good only), allPayloads
+// (good + bad checksum), sectorDataStart (sector → offset of its 325 GCR
+// data bytes), unreadable (no good payload), badChecksum }.
+// The doubled buffer lets a header or data block straddle the track join.
 function walkGCRTrack(trackData, track, expectedSpt) {
   var trackLen = trackData.length;
   var wrapped = new Uint8Array(trackLen * 2);
@@ -141,168 +111,156 @@ function walkGCRTrack(trackData, track, expectedSpt) {
 
   var sectorOrder = [];
   var sectorPayloads = {};
+  var allPayloads = {};
   var sectorDataStart = {};
+  var seenHeaderAt = {};
   var pos = 0;
-  // One revolution — anything past the original track length would be a
-  // duplicate of what we've already seen via the wrap copy.
-  var stopBefore = trackLen;
 
-  while (pos < stopBefore - 10) {
+  while (pos < trackLen) {
     if (wrapped[pos] !== 0xFF) { pos++; continue; }
     while (pos < wrapped.length && wrapped[pos] === 0xFF) pos++;
-    if (pos >= wrapped.length - 10) break;
+    if (pos + GCR_HEADER_BYTES > wrapped.length) break;
 
     var hdr = decodeGCR5(wrapped, pos);
     var hdr2 = decodeGCR5(wrapped, pos + 5);
     if (!hdr || !hdr2 || hdr[0] !== 0x08) { pos++; continue; }
 
-    var hdrTrack = hdr[3];
     var hdrSector = hdr[2];
-    if (hdrTrack !== track || hdrSector < 0 || hdrSector >= expectedSpt) {
+    // A sync spanning the join is seen at both ends of the doubled buffer.
+    if (hdr[3] !== track || hdrSector >= expectedSpt || seenHeaderAt[pos % trackLen] ||
+        sectorPayloads[hdrSector] !== undefined) {
       pos++;
       continue;
     }
-    if (sectorPayloads[hdrSector] !== undefined) { pos++; continue; }
+    seenHeaderAt[pos % trackLen] = true;
+    if (sectorOrder.indexOf(hdrSector) < 0) sectorOrder.push(hdrSector);
 
-    // Find data sync after the header. The header is followed by a small
-    // gap, then a $FF sync run, then the data block.
-    var dataPos = pos + 10;
-    var foundData = false;
-    var scanEnd = Math.min(dataPos + 500, wrapped.length);
-    for (var sp = dataPos; sp < scanEnd; sp++) {
+    var syncStart = -1, dataPos = -1;
+    var scanEnd = Math.min(pos + GCR_HEADER_BYTES + GCR_SYNC_SCAN, wrapped.length);
+    for (var sp = pos + GCR_HEADER_BYTES; sp < scanEnd; sp++) {
       if (wrapped[sp] === 0xFF) {
+        syncStart = sp;
         while (sp < wrapped.length && wrapped[sp] === 0xFF) sp++;
         dataPos = sp;
-        foundData = true;
         break;
       }
     }
+    if (dataPos < 0) { pos += GCR_HEADER_BYTES; continue; }
 
-    var payload = null;
-    if (foundData && dataPos + 325 <= wrapped.length) {
-      var decoded = [];
-      var ok = true;
-      var lastPartialByte = -1;
-      for (var gi = 0; gi < 65; gi++) {
-        var group = decodeGCR5(wrapped, dataPos + gi * 5);
-        if (!group) {
-          // The last group (covers data byte 255 + checksum + 2 padding
-          // bytes) can fail when a dumper / custom encoder omits the
-          // trailing 0x00 0x00 padding — the bytes there end up looking
-          // like transitional gap bytes which aren't valid GCR. We can
-          // still salvage data byte 255 from the first plain byte of
-          // that group. Earlier groups must decode cleanly.
-          if (gi === 64) {
-            lastPartialByte = decodeGCR5FirstPlain(wrapped, dataPos + gi * 5);
-            if (lastPartialByte < 0) ok = false;
-          } else {
-            ok = false;
-          }
-          break;
-        }
-        decoded.push(group[0], group[1], group[2], group[3]);
-      }
-      if (ok && decoded.length > 0 && decoded[0] === 0x07) {
-        if (decoded.length >= 260) {
-          payload = new Uint8Array(decoded.slice(1, 257));
-        } else if (decoded.length === 256 && lastPartialByte >= 0) {
-          // Salvaged-tail path: 64 full groups (marker + 255 data) +
-          // first byte of group 64 (= data byte 255).
-          var bytes = decoded.slice(1, 256);
-          bytes.push(lastPartialByte);
-          payload = new Uint8Array(bytes);
-        }
-      }
-      // Record the data block start within the original (un-doubled) track
-      // buffer. dataPos is into the wrapped buffer; if it exceeded trackLen
-      // we wrapped — fold back. Recorded even when the block didn't decode:
-      // the position is still where the data lives, which is what lets a
-      // caller lift non-standard GCR back out verbatim. buildG64ForSave
-      // skips unreadable sectors before consulting this, so it is unaffected.
-      if (dataPos + 325 <= wrapped.length) {
-        sectorDataStart[hdrSector] = dataPos % trackLen;
+    // The next sync may belong to the next header when this sector has no
+    // data block; leave that header for the main loop.
+    var first = decodeGCR5(wrapped, dataPos);
+    if (first && first[0] === 0x08) { pos = syncStart; continue; }
+
+    if (dataPos + GCR_DATA_BYTES <= wrapped.length) {
+      // Recorded even when undecodable, so the raw block can be lifted out.
+      sectorDataStart[hdrSector] = dataPos % trackLen;
+      var block = _gcrDecodeDataBlock(wrapped, dataPos);
+      if (block) {
+        allPayloads[hdrSector] = block.data;
+        if (block.ok) sectorPayloads[hdrSector] = block.data;
       }
     }
-
-    sectorOrder.push(hdrSector);
-    if (payload) sectorPayloads[hdrSector] = payload;
-    pos = (foundData ? dataPos + 325 : pos + 10);
+    pos = (first && first[0] === 0x07) ? dataPos + GCR_DATA_BYTES : syncStart + 1;
   }
 
-  var unreadable = [];
+  var unreadable = [], badChecksum = [];
   for (var s = 0; s < expectedSpt; s++) {
-    if (sectorPayloads[s] === undefined) unreadable.push(s);
+    if (sectorPayloads[s] !== undefined) continue;
+    unreadable.push(s);
+    if (allPayloads[s] !== undefined) badChecksum.push(s);
   }
 
   return {
     sectorOrder: sectorOrder,
     sectorPayloads: sectorPayloads,
+    allPayloads: allPayloads,
     sectorDataStart: sectorDataStart,
-    unreadable: unreadable
+    unreadable: unreadable,
+    badChecksum: badChecksum
   };
 }
 
-// Encode a 256-byte sector payload as the 325 GCR bytes that make up a
-// 1541 data block: $07 marker, 256 payload bytes, XOR checksum, two
-// $00 pad bytes, encoded in 65 groups of 4 → 5 GCR bytes each.
+// Decode a data block at `pos`. Returns { data (256 bytes), ok } where ok
+// means the XOR checksum matched, or null when the block isn't a $07 block.
+function _gcrDecodeDataBlock(gcr, pos) {
+  var plain = new Uint8Array(GCR_DATA_PLAIN);
+  var got = 0;
+  for (var gi = 0; gi < GCR_DATA_GROUPS; gi++) {
+    var group = decodeGCR5(gcr, pos + gi * 5);
+    if (!group) break;
+    plain.set(group, gi * 4);
+    got += 4;
+  }
+  if (got === 0 || plain[0] !== 0x07) return null;
+
+  var checksum;
+  if (got >= 258) {
+    checksum = plain[257];
+  } else if (got === 256) {
+    // Some dumpers drop the two $00 pad bytes, spoiling the last group;
+    // data byte 255 and the checksum can still be read from its front.
+    var tail = decodeGCR5Partial(gcr, pos + 64 * 5);
+    if (tail.length < 1) return null;
+    plain[256] = tail[0];
+    checksum = tail.length >= 2 ? tail[1] : -1;
+  } else {
+    return null;
+  }
+
+  var data = plain.slice(1, 257);
+  var x = 0;
+  for (var i = 0; i < 256; i++) x ^= data[i];
+  // An unreadable checksum can't be held against the sector.
+  return { data: data, ok: checksum < 0 || x === checksum };
+}
+
+/** 4 plain bytes → 5 GCR bytes, the inverse of decodeGCR5. */
+function encodeGCR4(b0, b1, b2, b3) {
+  var n = [(b0 >> 4) & 15, b0 & 15, (b1 >> 4) & 15, b1 & 15,
+           (b2 >> 4) & 15, b2 & 15, (b3 >> 4) & 15, b3 & 15];
+  for (var k = 0; k < 8; k++) n[k] = GCR_ENCODE[n[k]];
+  return [
+    (n[0] << 3) | (n[1] >> 2),
+    ((n[1] & 0x03) << 6) | (n[2] << 1) | (n[3] >> 4),
+    ((n[3] & 0x0F) << 4) | (n[4] >> 1),
+    ((n[4] & 0x01) << 7) | (n[5] << 2) | (n[6] >> 3),
+    ((n[6] & 0x07) << 5) | n[7]
+  ];
+}
+
+/** 260 plain bytes → the 325 GCR bytes of a data block. */
+function encodeGCRDataBlock(plain) {
+  var out = new Uint8Array(GCR_DATA_BYTES);
+  for (var g = 0; g < GCR_DATA_GROUPS; g++) {
+    out.set(encodeGCR4(plain[g * 4], plain[g * 4 + 1], plain[g * 4 + 2], plain[g * 4 + 3]), g * 5);
+  }
+  return out;
+}
+
+/** 256-byte payload → standard 1541 data block ($07, data, checksum, $00 $00). */
 function encodeGCRSector(payload) {
-  // Build the 260-byte plaintext data block.
-  var raw = new Uint8Array(260);
+  var raw = new Uint8Array(GCR_DATA_PLAIN);
   raw[0] = 0x07;
   raw.set(payload, 1);
   var checksum = 0;
   for (var i = 0; i < 256; i++) checksum ^= payload[i];
   raw[257] = checksum;
-  raw[258] = 0;
-  raw[259] = 0;
-
-  // 65 × 4 plaintext → 65 × 5 GCR bytes
-  var out = new Uint8Array(325);
-  for (var g = 0; g < 65; g++) {
-    var b0 = raw[g * 4];
-    var b1 = raw[g * 4 + 1];
-    var b2 = raw[g * 4 + 2];
-    var b3 = raw[g * 4 + 3];
-    var n = [
-      (b0 >> 4) & 0xF, b0 & 0xF,
-      (b1 >> 4) & 0xF, b1 & 0xF,
-      (b2 >> 4) & 0xF, b2 & 0xF,
-      (b3 >> 4) & 0xF, b3 & 0xF
-    ];
-    for (var k = 0; k < 8; k++) n[k] = GCR_ENCODE[n[k]];
-    var o = g * 5;
-    out[o]     = (n[0] << 3) | (n[1] >> 2);
-    out[o + 1] = ((n[1] & 0x03) << 6) | (n[2] << 1) | (n[3] >> 4);
-    out[o + 2] = ((n[3] & 0x0F) << 4) | (n[4] >> 1);
-    out[o + 3] = ((n[4] & 0x01) << 7) | (n[5] << 2) | (n[6] >> 3);
-    out[o + 4] = ((n[6] & 0x07) << 5) | n[7];
-  }
-  return out;
+  return encodeGCRDataBlock(raw);
 }
 
-// Splice a 256-byte sector payload back into a track's raw GCR buffer
-// at the position the original data block occupied. Handles wrap-around
-// (when the data block straddles the track's circular boundary) by
-// writing the tail bytes at the start of the track. Mutates rawGCR in
-// place; caller is responsible for ensuring the layout reflects the
-// sector being saved (i.e. don't call for sectors in unreadableSectors).
+// Write an encoded payload over the data block at `dataStart`, wrapping at
+// the end of the track.
 function spliceGCRSector(rawGCR, dataStart, payload) {
   var encoded = encodeGCRSector(payload);
   var len = rawGCR.length;
-  for (var i = 0; i < 325; i++) {
+  for (var i = 0; i < GCR_DATA_BYTES; i++) {
     rawGCR[(dataStart + i) % len] = encoded[i];
   }
 }
 
-// Reconstruct a .g64 file (ArrayBuffer) from a layout. The layout's
-// rawGCR per track is what gets written back, so the caller is expected
-// to have already spliced any modified sectors into rawGCR.
-//
-// We always emit a standard 84-half-track G64 with whole-track data
-// only — half-track entries get offset 0. The speed table follows the
-// 1541 zone convention: tracks 1-17 zone 3, 18-24 zone 2, 25-30 zone 1,
-// 31-42 zone 0. Track data is laid out consecutively after the offset
-// + speed tables, each track preceded by its 2-byte LE size.
+// Emit a standard 84-half-track G64 from a layout's rawGCR. Each entry lands
+// at its own half-track slot; missing ones get offset 0.
 function encodeG64FromLayout(layout) {
   var numHalfTracks = 84; // standard for VICE / DirMaster output
   var maxTrackSize = 0;
@@ -320,110 +278,73 @@ function encodeG64FromLayout(layout) {
   var out = new Uint8Array(totalSize);
   var v = new DataView(out.buffer);
 
-  // GCR-1541 magic + version + track count + max track size.
+  // "GCR-1541", version 0, half-track count, max track size.
   out[0] = 0x47; out[1] = 0x43; out[2] = 0x52; out[3] = 0x2D;
   out[4] = 0x31; out[5] = 0x35; out[6] = 0x34; out[7] = 0x31;
   out[8] = 0;
   out[9] = numHalfTracks;
   v.setUint16(10, maxTrackSize, true);
 
-  function speedFor(trackNum) {
-    if (trackNum <= 17) return 3;
-    if (trackNum <= 24) return 2;
-    if (trackNum <= 30) return 1;
-    return 0;
-  }
-
-  // Map each layout entry to its half-track index in the G64 offset
-  // table. Whole tracks land at even ht, half-tracks at odd ht. Robust
-  // to arbitrary layout order and gaps — earlier code assumed layout
-  // was a dense T1..T_N sequence which broke as soon as we started
-  // preserving half-tracks (and would have broken on any G64 with a
-  // missing whole track).
   var htToIdx = {};
   layout.forEach(function(t, idx) {
     var ht = (t.track - 1) * 2 + (t.halfTrack ? 1 : 0);
     if (ht < numHalfTracks) htToIdx[ht] = idx;
   });
 
-  // Offset table + speed table.
   for (var ht = 0; ht < numHalfTracks; ht++) {
-    var trackNum = Math.floor(ht / 2) + 1;
     var idx = htToIdx[ht];
     var offsetVal = (idx !== undefined) ? dataStart + idx * trackEntrySize : 0;
     v.setUint32(headerSize + ht * 4, offsetVal, true);
-    v.setUint32(headerSize + tableSize + ht * 4, speedFor(trackNum), true);
+    v.setUint32(headerSize + tableSize + ht * 4, gcrSpeedZone(Math.floor(ht / 2) + 1), true);
   }
 
-  // Track data: 2-byte size + rawGCR padded to maxTrackSize.
   layout.forEach(function(t, idx) {
     var off = dataStart + idx * trackEntrySize;
     var size = t.rawGCR ? t.rawGCR.length : 0;
     v.setUint16(off, size, true);
-    if (t.rawGCR && size > 0) {
-      out.set(t.rawGCR, off + 2);
-    }
+    if (t.rawGCR && size > 0) out.set(t.rawGCR, off + 2);
   });
 
   return out.buffer;
 }
 
-// Build a fresh .g64 ArrayBuffer that captures the current contents of
-// the in-memory D64 buffer for every readable sector. Sectors flagged
-// unreadable on open are left as the original raw GCR (preserves the
-// custom encoding copy-protection schemes rely on). Mutates the layout
-// in place — modified sectors get their rawGCR rewritten before the
-// container is emitted, so subsequent saves see the new state.
+// Build a .g64 from the D64 buffer and the layout it was opened with. Only
+// sectors whose D64 bytes differ from what they decoded to are re-encoded;
+// everything else — including bad-checksum and undecodable sectors — keeps
+// its original GCR. Mutates the layout so later saves compare against it.
 function buildG64ForSave(d64Buffer, layout) {
   var d64 = new Uint8Array(d64Buffer);
+  var spt = DISK_FORMATS.d64.sectorsPerTrack;
   layout.forEach(function(t) {
-    // Half-tracks have no D64 sector mapping — keep their rawGCR
-    // verbatim. Same for whole tracks that the walker couldn't decode
-    // (sectorDataStart empty); those get preserved by the standard
-    // skip-undefined-dataPos path below.
-    if (t.halfTrack) return;
-    var spt = t.expectedSpt;
-    var unreadSet = {};
-    t.unreadableSectors.forEach(function(s) { unreadSet[s] = true; });
-    for (var s = 0; s < spt; s++) {
-      if (unreadSet[s]) continue;
+    if (t.halfTrack || !t.sectorPayloads) return;
+    for (var s = 0; s < t.expectedSpt; s++) {
+      var orig = t.sectorPayloads[s];
       var dataPos = t.sectorDataStart && t.sectorDataStart[s];
-      if (typeof dataPos !== 'number') continue;
-      var d64Off = _g64SectorOffset(t.track, s);
+      if (!orig || typeof dataPos !== 'number') continue;
+      var d64Off = calcD64Offset(t.track, s, spt);
       if (d64Off + 256 > d64.length) continue;
       var payload = d64.subarray(d64Off, d64Off + 256);
+      var same = true;
+      for (var i = 0; i < 256 && same; i++) same = payload[i] === orig[i];
+      if (same) continue;
       spliceGCRSector(t.rawGCR, dataPos, payload);
+      t.sectorPayloads[s] = payload.slice();
+      // Re-encoded with a correct checksum, so it reads cleanly now.
+      t.unreadableSectors = t.unreadableSectors.filter(function(x) { return x !== s; });
+      if (t.badChecksumSectors) {
+        t.badChecksumSectors = t.badChecksumSectors.filter(function(x) { return x !== s; });
+      }
     }
   });
   return encodeG64FromLayout(layout);
 }
 
-// Same sector-offset math as decodeG64toD64 — kept private to this file
-// because cbm-format.js's sectorOffset() depends on currentFormat being
-// set to a 1541 D64, which is true here but not worth coupling to.
-function _g64SectorOffset(track, sector) {
-  var spt = function(t) {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
-  var off = 0;
-  for (var t = 1; t < track; t++) off += spt(t) * 256;
-  return off + sector * 256;
-}
-
 // ── NIB (raw nibble dump from a 1541) reader ─────────────────────────
-// Reads files produced by nibtools (markusC64/nibtools): "MNIB-1541-RAW"
-// magic, a halftrack table at byte 0x10 (pairs of {halftrack, density}
-// terminated by a zero halftrack), then NIB_TRACK_LENGTH (0x2000) bytes
-// of raw GCR per declared track at offset 0x100. We only support whole
-// tracks — the half-track entries (odd halftrack values) are ignored,
-// since G64 (our internal representation) is whole-track-only too.
-//
-// Returns { d64, layout } in the same shape as decodeG64toD64 so the
-// rest of the editor (sector views, layout modal, save-as-G64) doesn't
-// need to know about NIB at all once the buffer has been parsed.
+// nibtools format: "MNIB-1541-RAW" magic, a halftrack table at $10 of
+// {halftrack, density} pairs ended by a zero halftrack, then 0x2000 bytes
+// of raw GCR per table entry from $100. Only whole tracks are used.
+var NIB_TRACK_LENGTH = 0x2000;
+
 function isNibBuffer(data) {
   if (data.length < 16) return false;
   // ASCII for "MNIB-1541-RAW"
@@ -435,100 +356,68 @@ function isNibBuffer(data) {
 }
 
 function parseNibFile(data) {
-  var NIB_TRACK_LENGTH = 0x2000;   // 8192 bytes per track in the .nib payload
-  var DATA_OFFSET = 0x100;          // raw track data starts here
-  var HEADER_TABLE = 0x10;          // halftrack table starts here
+  var DATA_OFFSET = 0x100;
+  var HEADER_TABLE = 0x10;
+  var spt = DISK_FORMATS.d64.sectorsPerTrack;
 
-  // Walk the halftrack table: 2-byte entries (halftrack, density+flags)
-  // until a zero halftrack terminates. Each entry's index in the table
-  // tells us where its track data lives in the payload.
-  var entries = [];
+  var byHalftrack = {};
   for (var i = 0; i < (DATA_OFFSET - HEADER_TABLE) / 2; i++) {
     var off = HEADER_TABLE + i * 2;
     var halftrack = data[off];
     if (halftrack === 0) break;
-    entries.push({ halftrack: halftrack, density: data[off + 1] & 0x03, tIndex: i });
+    var trackOff = DATA_OFFSET + i * NIB_TRACK_LENGTH;
+    if (trackOff + NIB_TRACK_LENGTH > data.length) continue;
+    byHalftrack[halftrack] = data.subarray(trackOff, trackOff + NIB_TRACK_LENGTH);
   }
 
-  // Index by halftrack so whole tracks (halftrack = track*2) are easy
-  // to look up. Half-tracks (odd halftrack values) are present in the
-  // file when the original disk used them, but we currently can't
-  // represent them — they get dropped on the way into our G64 layout.
-  var byHalftrack = {};
-  entries.forEach(function(e) {
-    var trackOff = DATA_OFFSET + e.tIndex * NIB_TRACK_LENGTH;
-    if (trackOff + NIB_TRACK_LENGTH > data.length) return;
-    byHalftrack[e.halftrack] = data.subarray(trackOff, trackOff + NIB_TRACK_LENGTH);
-  });
-
-  // 1541 sectors-per-track for each zone.
-  var sptFn = function(t) {
-    if (t <= 17) return 21;
-    if (t <= 24) return 19;
-    if (t <= 30) return 18;
-    return 17;
-  };
-
-  // First pass: walk every populated whole track once. nibtools tends
-  // to emit halftrack entries for the full 1..42 range even on a real
-  // 35-track disk (extra entries are unformatted filler), so we can't
-  // trust "track has GCR" as the disk-extent signal. We need "track
-  // had at least one sector decode" — same approach as decodeG64toD64.
+  // nibtools lists 1..42 even for a 35-track disk, so the extent comes from
+  // which tracks decode (in _gcrBuildImage), not which are present.
   var perTrack = [];
   for (var track = 1; track <= 42; track++) {
-    var trackData = byHalftrack[track * 2];
-    var expectedSpt = sptFn(track);
+    var nt = byHalftrack[track * 2];
+    var raw = nt ? nibTrimToRevolution(nt) : new Uint8Array(0);
     perTrack.push({
       track: track,
-      walk: trackData ? walkGCRTrack(trackData, track, expectedSpt) : null,
-      trackData: trackData || null,
-      expectedSpt: expectedSpt
+      walk: raw.length ? walkGCRTrack(raw, track, spt(track)) : null,
+      expectedSpt: spt(track),
+      rawGCR: raw
     });
   }
+  return _gcrBuildImage(perTrack, true);
+}
 
-  var realTracks = 0;
-  for (var ri = 0; ri < perTrack.length; ri++) {
-    if (perTrack[ri].walk && perTrack[ri].walk.sectorOrder.length > 0) {
-      realTracks = perTrack[ri].track;
+// A nibtools capture can hold more than one revolution. Find the period by a
+// sector header's next occurrence (byte-aligned, since the drive re-syncs on
+// every sync mark) and return one revolution starting at that header's sync.
+function nibTrimToRevolution(gcr) {
+  var len = gcr.length;
+  var MIN_REV = 5000;            // well under the slowest zone's capacity
+  var KEY = 256;                 // header, gap and most of the data block
+  var tries = 4;                 // headers to try before giving up
+
+  for (var p = 1; p + MIN_REV + KEY <= len && tries > 0; p++) {
+    if (gcr[p - 1] !== 0xFF || gcr[p] === 0xFF) continue;
+    var h = decodeGCR5(gcr, p);
+    if (!h || h[0] !== 0x08) continue;
+    tries--;
+    for (var q = p + MIN_REV; q + KEY <= len; q++) {
+      var k = 0;
+      while (k < KEY && gcr[p + k] === gcr[q + k]) k++;
+      if (k < KEY) continue;
+      var syncStart = p - 1;
+      while (syncStart > 0 && gcr[syncStart - 1] === 0xFF) syncStart--;
+      return new Uint8Array(gcr.subarray(syncStart, syncStart + (q - p)));
     }
   }
-  if (realTracks === 0) realTracks = 35;
-  var numTracks;
-  if (realTracks <= 35)      numTracks = 35;
-  else if (realTracks <= 40) numTracks = 40;
-  else                       numTracks = 42;
+  // No repeat: the capture is about one revolution already.
+  return new Uint8Array(gcr);
+}
 
-  var totalSectors = 0;
-  for (var t = 1; t <= numTracks; t++) totalSectors += sptFn(t);
-  var d64 = new Uint8Array(totalSectors * 256);
-  var layout = [];
-
-  for (var pi = 0; pi < perTrack.length && perTrack[pi].track <= numTracks; pi++) {
-    var pt = perTrack[pi];
-    var w = pt.walk;
-    if (w) {
-      for (var s = 0; s < pt.expectedSpt; s++) {
-        var payload = w.sectorPayloads[s];
-        if (payload) {
-          var d64Off = calcD64Offset(pt.track, s, sptFn);
-          for (var bi = 0; bi < 256; bi++) d64[d64Off + bi] = payload[bi];
-        }
-      }
-    }
-    layout.push({
-      track: pt.track,
-      sectorOrder: w ? w.sectorOrder : [],
-      rawTrackBytes: pt.trackData ? pt.trackData.length : 0,
-      expectedSpt: pt.expectedSpt,
-      unreadableSectors: w ? w.unreadable : [],
-      // Detached copy so the NIB ArrayBuffer can be discarded after
-      // open. Same lifecycle as the rawGCR captured by decodeG64toD64.
-      rawGCR: pt.trackData ? new Uint8Array(pt.trackData) : new Uint8Array(0),
-      sectorDataStart: w ? w.sectorDataStart : {}
-    });
-  }
-
-  return { d64: d64.buffer, layout: layout };
+/** Track count of a D64 image of `len` bytes (+Errors sizes included), or 0. */
+function d64TracksForSize(len) {
+  var sizes = DISK_FORMATS.d64.sizes;
+  for (var i = 0; i < sizes.length; i++) if (sizes[i].bytes === len) return sizes[i].tracks;
+  return 0;
 }
 
 function calcD64Offset(track, sector, sptFn) {
@@ -556,18 +445,21 @@ function decodeGCR5(gcr, pos) {
   return [(n0 << 4) | n1, (n2 << 4) | n3, (n4 << 4) | n5, (n6 << 4) | n7];
 }
 
-// Lenient single-plain-byte decoder. Reads the first two nibbles (= one
-// plain byte) from a GCR group. Used to salvage the last data byte from
-// the trailing group of a sector when the 2 trailing zero-padding bytes
-// have been replaced with transitional gap bytes — a quirk some custom
-// dumpers / copy-protection tools (e.g. Cyberload-encoded G64s) produce.
-// Returns -1 if the first two 5-bit chunks aren't valid GCR.
-function decodeGCR5FirstPlain(gcr, pos) {
-  if (pos + 1 >= gcr.length) return -1;
-  var b0 = gcr[pos], b1 = gcr[pos + 1];
-  var n0 = GCR_DECODE[b0 >> 3];
-  var n1 = GCR_DECODE[((b0 & 7) << 2) | (b1 >> 6)];
-  if (n0 < 0 || n1 < 0) return -1;
-  return (n0 << 4) | n1;
+// Lenient decode of one GCR group: the leading plain bytes whose nybbles are
+// valid, stopping at the first bad one (so 0-4 bytes).
+function decodeGCR5Partial(gcr, pos) {
+  var bits = 0, nbits = 0, nyb = [], out = [];
+  for (var i = 0; i < 5 && pos + i < gcr.length; i++) {
+    bits = (bits << 8) | gcr[pos + i];
+    nbits += 8;
+    while (nbits >= 5) {
+      nbits -= 5;
+      var v = GCR_DECODE[(bits >> nbits) & 0x1F];
+      if (v < 0) return out;
+      nyb.push(v);
+      if (nyb.length % 2 === 0) out.push((nyb[nyb.length - 2] << 4) | v);
+    }
+    bits &= (1 << nbits) - 1;
+  }
+  return out;
 }
-

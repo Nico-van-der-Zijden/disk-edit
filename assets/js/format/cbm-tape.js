@@ -1,23 +1,8 @@
-// ────────────────────────────────────────────────────────────────────────
-// cbm-tape.js — Commodore tape image (TAP v0/v1) parser
-// ────────────────────────────────────────────────────────────────────────
-//
-// Decodes the standard CBM ROM tape encoding plus selected turbo loaders.
-// Loaders supported: CBM ROM, Turbotape 250, Novaload (+Special).
-// Cyberload F1-F4 stub left for follow-up (variable thresholds per tape
-// require interpreting the boot loader's 6502 code).
-//
-// Pulse-stream convention: clock cycles (PAL ~985248 Hz). FT Console's
-// "TAP byte" units are cycles/8 — multiply by 8 to compare. Each turbo
-// loader encodes 1 bit per pulse (threshold compare). The CBM ROM format
-// encodes 1 bit per pulse pair via S/M/L pulse classes.
-//
-// Module globals:
-//   parseTAP(buffer)        — entry point invoked from cbm-format.js
-//   parsedTAPEntries        — declared in cbm-format.js, written here
-//   parsedTapeDir           — declared in cbm-format.js, written here
-//
-// Reads PETSCII_MAP (declared in cbm-format.js, loaded earlier).
+// ── cbm-tape.js — TAP v0/v1 parser ───────────────────────────────────
+// CBM ROM encoding plus turbo loaders (Turbotape 250, Novaload, Cyberload,
+// Creatures). Pulses are in clock cycles; FT Console's "TAP byte" units are
+// cycles/8. Turbo loaders carry 1 bit per pulse, the ROM format 1 bit per
+// S/M/L pulse pair. parseTAP() writes parsedTAPEntries / parsedTapeDir.
 
 // ── Tape format parameters (from FT Console main.c) ──────────────────
 // Values are TAP-byte units (cycles/8). en: 'MSB' | 'LSB'.
@@ -183,8 +168,9 @@ function scanCbmRom(pulses, ctx) {
 
     var hdr = headerBlock.bytes;
     var fileType = hdr[0];
-    if (fileType < 1 || fileType > 5) continue;
-    if (fileType === 5) continue; // end-of-tape marker
+    // 1/3 = program header, 4 = SEQ header. A 2 is a SEQ data block and only
+    // means something right after a 4; 5 is end-of-tape.
+    if (fileType !== 1 && fileType !== 3 && fileType !== 4) continue;
 
     // Stash the raw 192-byte header for chained decoders (Cyberload F1
     // reads the encrypted loader code from offsets 21..191).
@@ -203,17 +189,24 @@ function scanCbmRom(pulses, ctx) {
       else name += PETSCII_MAP[ch] || '?';
     }
 
-    var dataPi = findCbmSync(pulses, pi);
     var fileData = null;
     var dataSize = endAddr > startAddr ? endAddr - startAddr : 0;
-    if (dataPi >= 0 && dataSize > 0) {
-      var dataBlock = decodeCbmBlock(pulses, dataPi, dataSize + 10);
-      pi = dataBlock.nextIndex;
-      var decoded = dataBlock.bytes.slice(0, dataSize);
-      fileData = new Uint8Array(decoded.length + 2);
-      fileData[0] = startAddr & 0xFF;
-      fileData[1] = (startAddr >> 8) & 0xFF;
-      for (var di = 0; di < decoded.length; di++) fileData[di + 2] = decoded[di];
+    if (fileType === 4) {
+      var seq = readCbmSeqBlocks(pulses, pi);
+      pi = seq.nextIndex;
+      fileData = seq.data;
+      dataSize = fileData.length;
+    } else {
+      var dataPi = findCbmSync(pulses, pi);
+      if (dataPi >= 0 && dataSize > 0) {
+        var dataBlock = decodeCbmBlock(pulses, dataPi, dataSize + 10);
+        pi = dataBlock.nextIndex;
+        var decoded = dataBlock.bytes.slice(0, dataSize);
+        fileData = new Uint8Array(decoded.length + 2);
+        fileData[0] = startAddr & 0xFF;
+        fileData[1] = (startAddr >> 8) & 0xFF;
+        for (var di = 0; di < decoded.length; di++) fileData[di + 2] = decoded[di];
+      }
     }
 
     var blocks = Math.ceil(dataSize / 254);
@@ -227,6 +220,29 @@ function scanCbmRom(pulses, ctx) {
       fileData: fileData,
     });
   }
+}
+
+// Collect the type-2 data blocks that follow a SEQ header: 192-byte blocks
+// of a type byte plus 191 data bytes. Stops before the first block of any
+// other type so the caller sees it as the next header.
+function readCbmSeqBlocks(pulses, pi) {
+  var out = [];
+  var next = pi;
+  var ended = false;
+  for (;;) {
+    var at = findCbmSync(pulses, next);
+    if (at < 0) break;
+    var blk = decodeCbmBlock(pulses, at, 192);
+    if (blk.bytes.length < 2 || blk.bytes[0] !== 2) break;
+    // Like the KERNAL, the data ends at the first $00 (CLOSE writes one);
+    // later blocks are still consumed so they aren't taken for a header.
+    for (var i = 1; i < blk.bytes.length && !ended; i++) {
+      if (blk.bytes[i] === 0x00) ended = true;
+      else out.push(blk.bytes[i]);
+    }
+    next = blk.nextIndex;
+  }
+  return { data: new Uint8Array(out), nextIndex: next };
 }
 
 // ── Turbotape 250 scanner ────────────────────────────────────────────
@@ -355,10 +371,8 @@ function scanNovaload(pulses, ctx) {
     var fnLen = readTurboByte(pulses, sod, fmt.sp, fmt.lp, fmt.tp, fmt.en);
 
     if (fnLen === 0x55) {
-      // Novaload Special — sub-block chain with no main header.
-      // We don't reassemble these because each sub-block's load address is
-      // independent (any address in C64 RAM). Note the detection so the
-      // user knows the loader is present.
+      // Novaload Special: every sub-block has its own load address, so it
+      // isn't reassembled — only listed.
       pushTapeEntry(ctx, {
         name: 'NOVA*SPECIAL',
         type: ' PRG ',
@@ -548,21 +562,10 @@ function scanCreatures(pulses, ctx) {
 }
 
 // ── Cyberload chain decoder: F1 + F2 ─────────────────────────────────
-// Cyberload's per-tape variables (thresholds, pilot/sync, XOR keys) live
-// as immediate operands inside the boot loader's 6502 code. We extract
-// them by following the same chain FT Console uses, but without a 6502
-// emulator — direct byte-level deciphering and opcode-pattern signature
-// matching at fixed offsets:
-//
-//   1. CBM boot block:  decipher LOADER1 in-place, read tp/pv/sv from
-//      fixed offsets 28, 33, 47, 58.
-//   2. F1 file (LOADER2): find the decryptor pattern + 16 fixed
-//      "decryptor codes", run the F2 decipher routine in JS, then
-//      pattern-match set-pilot and set-threshold opcode sequences to
-//      extract F2 params and EOR keys.
-//   3. F2 file (LOADER3): pattern-match same set-pilot / set-threshold
-//      opcodes for F3/F4 params (we already have a heuristic F3 scanner
-//      that handles the unencrypted sub-block decoding).
+// Per-tape thresholds, pilot/sync and XOR keys are immediate operands in
+// the boot loader's 6502 code. Following FT Console's chain without an
+// emulator: decipher LOADER1 (CBM boot block), then match set-pilot /
+// set-threshold opcode patterns in F1 and F2 to get the next stage's params.
 
 // Threshold-to-pulse-set mapping (from FT). Returns null on no match —
 // such tapes fall through to heuristic auto-detection.
@@ -722,9 +725,7 @@ var CYBER_SET_PILOT_PATTERN = [0xC9, -1, 0xF0, -1, 0xC9, -1, 0xD0];
 
 // Run the F2 decipher routine on a buffer copy of the F1-decoded
 // LOADER2 file. Returns { buf, eor1, eor2, params } or null on failure.
-// The decipher index can run past the end of the buffer (in C64 RAM
-// it's reading zero-page); we pad with 200 zero bytes to avoid out-of-
-// bounds reads, mirroring FT's approach.
+// The decipher index runs past the end, so pad with 200 zeros as FT does.
 function decipherCyberloadF2(loader2Bytes) {
   var bufsz = loader2Bytes.length;
   var buf = new Uint8Array(bufsz + 200);
@@ -908,10 +909,8 @@ function runCyberloadChain(pulses, ctx) {
 }
 
 // ── Auto-detect turbo pulse thresholds ───────────────────────────────
-// Build a histogram of pulse-byte values and locate the two strongest
-// peaks. Returns { sp, lp, tp } in TAP-byte units, or null if the stream
-// doesn't look like a clean two-class turbo encoding (e.g. CBM ROM has 3
-// pulse classes and would return null).
+// The two strongest histogram peaks as { sp, lp, tp } in TAP-byte units, or
+// null when the stream isn't a clean two-class turbo encoding.
 function autoDetectTurboThresholds(pulses) {
   var hist = new Uint32Array(256);
   for (var i = 0; i < pulses.length; i++) {
@@ -983,11 +982,8 @@ function tryDecodeCyberloadF4(pulses, ctx, sof, sod, sp, lp, tp) {
   var size = hd[ofn + 18] | (hd[ofn + 19] << 8);
   if (size === 0 || size > 0xC000) return null;
 
-  // Decode sub-blocks: each is 256 data + 1 cs byte = 257 bytes; last
-  // is partial (remaining data + 1 cs). Sub-blocks chain consecutively
-  // on tape — no inter-block sync. We verify each sub-block's XOR cs to
-  // gate against false positives where the header checksum matched by
-  // chance — random data would fail most sub-block checks.
+  // Sub-blocks of 256 data + 1 XOR byte follow back to back, the last one
+  // partial. Checking each XOR weeds out headers that matched by chance.
   var data = new Uint8Array(size);
   var rdErr = 0;
   var dataStart = sod + hSize * 8;
@@ -1035,27 +1031,12 @@ function tryDecodeCyberloadF4(pulses, ctx, sof, sod, sp, lp, tp) {
 }
 
 // ── Cyberload F1-F4 heuristic scanner ────────────────────────────────
-// Cyberload uses per-tape variable thresholds + sync values that FT
-// extracts by interpreting the F2 loader's 6502 code (set-threshold +
-// set-pilot patterns). Without a 6502 interpreter we approximate:
-//   1. Auto-detect short/long pulse widths from the global histogram.
-//   2. Scan for runs of identical bytes (≥7) that look like a pilot.
-//   3. Check the next byte against known sync values:
-//        $CC = F3 sub-block (unencrypted, decodable)
-//        $F0 = F1/F2 (encrypted, detection only)
-//        $AA, $96, $99 = F4 (multiload, decoded inline)
-//   4. F3: decode header (load addr, size, checksum, 4 internals) + data,
-//      verify XOR checksum. Group adjacent sub-blocks by load address.
-//   5. F4: dispatch to tryDecodeCyberloadF4 — auto-detects sub-type via
-//      header XOR checksum, decodes header + sub-block chain.
+// Thresholds come from the chain decoder when it succeeds, else from the
+// pulse histogram. Pilot = 7+ identical bytes; the sync byte after it picks
+// the stage: $CC = F3 sub-block, $F0 = F1/F2 (detected only),
+// $AA/$96/$99 = F4 multiload.
 function scanCyberload(pulses, ctx) {
-  // Phase 1: try the chained decoder (CBM boot → F1 → F2) for
-  // deterministic param extraction. F3 sub-blocks remain detected
-  // by the heuristic phase below — chain just adds F1/F2 entries.
   var chainParams = runCyberloadChain(pulses, ctx);
-
-  // Phase 2: heuristic detection. Uses chain-extracted params if
-  // available, otherwise falls back to histogram peak detection.
   var th = chainParams || autoDetectTurboThresholds(pulses);
   if (!th) return;
   var sp = th.sp, lp = th.lp, tp = th.tp;
@@ -1230,10 +1211,8 @@ function scanCyberload(pulses, ctx) {
 }
 
 // ── Claimed-range tracking ───────────────────────────────────────────
-// Scanners record the pulse ranges they successfully decoded so later
-// scanners (specifically the permissive Cyberload heuristic) can skip
-// over them. Without this, byte runs that look like pilots inside real
-// game data trigger spurious detections.
+// Decoded pulse ranges, so the permissive Cyberload heuristic doesn't mistake
+// pilot-like runs inside real game data for new blocks.
 function claimRange(ctx, start, end) {
   ctx.claims.push([start, end]);
 }

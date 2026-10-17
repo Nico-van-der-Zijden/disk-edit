@@ -11,11 +11,8 @@ var selectedEntries = []; // multi-select: array of entryOff values
 var showAddresses = localStorage.getItem('cbm-showAddresses') !== 'false';
 var showTrackSector = localStorage.getItem('cbm-showTrackSector') !== 'false';
 var hexColoring = localStorage.getItem('cbm-hexColoring') || 'none'; // none | hexyl | rgb | nybble
-// Toggle: render partition sizes in container views (CMD HD / RAMLink /
-// FD2000-4000 / IDE64 .hdd) as MiB / KiB instead of CBM block counts.
-// Default on — every native tool that touches these containers sizes them
-// in MiB anyway, and a 512 MiB CFS partition is 2,097,148 CBM blocks
-// (7 digits) which doesn't fit the directory's block column.
+// Container partition sizes in MiB / KiB rather than blocks (default on:
+// native tools size them in MiB, and block counts outgrow the column).
 var partitionSizeInMib = localStorage.getItem('cbm-partitionSizeMib') !== 'false';
 function formatPartitionSize(sizeBytes, sizeBlocks) {
   if (!partitionSizeInMib) {
@@ -34,12 +31,8 @@ function setHexColoring(name) {
     el.setAttribute('data-coloring', name);
   });
 }
-// Inject 256 per-byte rules for the xcd-rgb scheme. Done in JS so the
-// static CSS file stays readable. Each byte gets one hue (i/256 * 360),
-// brighter L on dark theme, darker on light. Bytes $80-$FF (which the
-// hex viewer always renders with .petscii-rev — see buildScreencodeMap)
-// also get a background-flip rule that uses the same hue, matching the
-// hexyl/nybble overrides in hex-coloring.css.
+// Per-byte hue rules for the "rgb" hex colouring; reversed bytes $80-$FF
+// get the hue as background instead.
 (function injectHexColoringRgbRules() {
   if (typeof document === 'undefined' || !document.head) return;
   if (document.getElementById('hex-coloring-rgb')) return;
@@ -52,8 +45,6 @@ function setHexColoring(name) {
     dark  += '.hex-editor[data-coloring="rgb"] [data-byte="' + hex + '"]{color:' + darkColor + ';}';
     light += '[data-theme="light"] .hex-editor[data-coloring="rgb"] [data-byte="' + hex + '"]{color:' + lightColor + ';}';
     if (i >= 0x80) {
-      // Shared `color: var(--bg)` for all reversed cells lives in
-      // hex-coloring.css; only background needs the per-byte override.
       dark  += '.hex-editor[data-coloring="rgb"] .hex-char.petscii-rev[data-byte="' + hex + '"]{background:' + darkColor + ' !important;}';
       light += '[data-theme="light"] .hex-editor[data-coloring="rgb"] .hex-char.petscii-rev[data-byte="' + hex + '"]{background:' + lightColor + ' !important;}';
     }
@@ -66,13 +57,9 @@ function setHexColoring(name) {
 var currentPartition = null; // null = root, or { entryOff, startTrack, partSize, name }
 
 // ── CMD container state (RAMLink, D1M/D2M/D4M, …) ───────────────────
-// When the active tab is a CMD-style container (.rml/.rl/.d1m/.d2m/.d4m/.dhd),
-// we keep the full container buffer here and let the user move between
-// the partition list and any individual partition. currentBuffer /
-// currentFormat reflect whatever view is active: when cmdcPartitionIdx
-// === -1 we're on the list (currentBuffer = the full container);
-// otherwise currentBuffer is a slice of that partition (DNP / D64 /
-// D71 / D81). Edits inside a partition are spliced back into cmdcBuffer
+// cmdcBuffer holds the whole container. cmdcPartitionIdx -1 = partition
+// list (currentBuffer is the container); otherwise currentBuffer is that
+// partition's slice, and edits are spliced back into cmdcBuffer
 // on exit / save.
 var cmdcBuffer = null;          // full container ArrayBuffer or null
 var cmdcFileName = null;        // original container file name
@@ -80,55 +67,33 @@ var cmdcPartitions = null;      // parsed partition list (from readCmdContainerP
 var cmdcPartitionIdx = -1;      // -1 = partition-list view, else index into cmdcPartitions
 var cmdcContainerKey = null;    // 'ramlink' / 'd1m' / 'd2m' / 'd4m' / 'dhd' — picks the CMD_CONTAINERS descriptor
 
-// IDE64 .hdd container state (parallel to the CMD container globals
-// above). CFS is a separate filesystem so the rest of the editor
-// branches on hddPartitions / currentFormat.filesystem rather than
-// reusing the CMD plumbing.
+// IDE64 .hdd container state, parallel to the CMD container globals.
 var hddBuffer = null;
 var hddFileName = null;
 var hddBootInfo = null;
 var hddPartitions = null;
 
-// CFS-inside-HDD view state. cfsPartitionIdx >= 0 means we're showing a
-// CFS partition's directory (instead of the HDD partition-list); the
-// rest pin which directory sector is displayed (root or a subdir LBA)
-// and the parsed entries for the render path. cfsDirStack is the
-// breadcrumb of parent dirs when the user has drilled into subdirs.
+// CFS view: cfsPartitionIdx >= 0 shows that partition's directory at
+// cfsDirLba; cfsDirStack is the breadcrumb of parent dirs.
 var cfsPartitionIdx = -1;
 var cfsDirLba = 0;
 var cfsDirEntries = null;
 var cfsDirStack = []; // array of { dirLba, name, enteredAs }
-var cfsEnteredAs = null; // name the current dir was opened *as* — the
-                         // parent's outgoing-entry name. Stays canonical
-                         // even if the dir's self-ref carries a different
-                         // label (which can happen if a rename only
-                         // touched the parent entry).
+var cfsEnteredAs = null; // parent entry's name for the current dir (may differ from its self-ref)
 
-// True when the active tab is a CMD container and we're showing the
-// partition list (not inside any partition). Disk-edit operations don't
-// apply at this level — we're on a container, not a filesystem — so
-// menu state queries this to grey them out.
+// On a CMD container's partition list, where disk-edit operations don't apply.
 function isCmdContainerListView() {
   return !!cmdcBuffer && cmdcPartitions && cmdcPartitionIdx === -1;
 }
 
-// Reset the CMD container globals back to "no container active". Called
-// from every non-container load / new-tab path: createTab / loadTab only
-// update per-tab fields, not the globals, so without an explicit reset
-// the previous tab's container state would leak into a freshly-opened
-// D64 (renderDisk would still see cmdcPartitions and draw the partition
-// list).
+// Reset the CMD and IDE64 container globals; every non-container load /
+// new-tab path calls this, since createTab / loadTab don't touch them.
 function clearCmdContainerState() {
   cmdcBuffer = null;
   cmdcFileName = null;
   cmdcPartitions = null;
   cmdcPartitionIdx = -1;
   cmdcContainerKey = null;
-  // IDE64 .hdd container state lives in parallel globals — clear it
-  // here too so every load path that drops out of a container view
-  // also drops the HDD one. Without this, opening a D64 on top of an
-  // HDD tab left hddPartitions set and renderDisk kept drawing the
-  // partition list instead of the new disk's directory.
   hddBuffer = null;
   hddFileName = null;
   hddBootInfo = null;
@@ -138,9 +103,7 @@ function clearCmdContainerState() {
   cfsDirEntries = null;
   cfsDirStack = [];
 }
-// Per-track physical sector layout captured by decodeG64toD64 when the
-// active tab was opened from a .g64. null on D64/D71/D81 etc. — the G64
-// Layout viewer reads this and is greyed out when null.
+// Per-track physical sector layout of a tab opened from .g64/.nib; null otherwise.
 var currentG64Layout = null;
 var clipboard = []; // array of { typeIdx, nameBytes, geosBytes, geosInfoBlock, data, vlirRecords }
                     // data is null for GEOS VLIR files; vlirRecords is null for everything else.
@@ -149,34 +112,10 @@ var clipboard = []; // array of { typeIdx, nameBytes, geosBytes, geosInfoBlock, 
 var dirInterleave = 3;   // directory sector interleave
 var fileInterleave = 10; // file data sector interleave
 
-// Speeder-DOS variant detection lives in cbm-format.js as
-// getSpeederVariant — uses data-presence heuristics (not header-ID
-// sniffing) and is consulted from the D64 descriptor's BAM helpers
-// to read tracks 36-40 from the correct offset.
-
-// ── DiskCtx: explicit disk context (refactor groundwork) ─────────────
-// Many helpers currently read CBM-DOS state implicitly from globals:
-// currentBuffer, currentPartition, currentFormat, currentTracks,
-// dirInterleave, fileInterleave. That makes it impossible to write into
-// a directory other than the user's current view — which we need for
-// recursive cross-partition dir copy/paste.
-//
-// DiskCtx makes that state explicit. Phase 1 introduces the shape +
-// builder + stash/restore wrapper here without changing any helper
-// signatures yet — call sites and helpers migrate to ctx-aware versions
-// in later phases. While the migration is in progress, helpers will
-// accept an optional ctx and fall back to getCurrentCtx() when omitted,
-// so partial migration is safe.
-//
-// Shape:
-//   {
-//     buffer:        ArrayBuffer | null,           // the active disk image
-//     partition:     object | null,                // currentPartition snapshot
-//     format:        DISK_FORMATS.xxx | null,      // descriptor
-//     tracks:        number,                       // disk track count
-//     dirInterleave: number,                       // directory interleave
-//     fileInterleave: number,                      // file interleave
-//   }
+// ── DiskCtx: explicit disk context ───────────────────────────────────
+// { buffer, partition, format, tracks, dirInterleave, fileInterleave } —
+// lets helpers work on a view other than the current one (e.g. pasting
+// into another partition). getCurrentCtx() snapshots the globals.
 function getCurrentCtx() {
   return {
     buffer: typeof currentBuffer !== 'undefined' ? currentBuffer : null,
@@ -188,17 +127,8 @@ function getCurrentCtx() {
   };
 }
 
-// Run `fn` with the globals temporarily set to `ctx`. Restores prior
-// values in a finally block so a throw inside `fn` can't leave globals
-// in an inconsistent state. Single-threaded JS makes this safe; the
-// caller doesn't need to worry about reentrancy from event handlers
-// while `fn` is running synchronously. For async `fn`, the caller is
-// responsible for awaiting it INSIDE the wrapper — passing an async
-// function and not awaiting will release globals before the work runs.
-//
-// Used as a bridge during the refactor: helpers that haven't been
-// ctx-threaded yet can still be called against a non-current context
-// via withDiskCtx(otherCtx, function() { oldHelper(args); }).
+// Run a synchronous `fn` with the globals set to `ctx`, restoring them
+// afterwards; for helpers that still read the globals.
 function withDiskCtx(ctx, fn) {
   var saved = getCurrentCtx();
   try {
@@ -231,11 +161,8 @@ var MAX_UNDO = 20;
 var tabDirty = false;
 var cleanStackLength = 0;
 
+// `snapshot`: a pre-change copy the caller already took; default copies currentBuffer.
 function pushUndo(snapshot) {
-  // Callers that already hold a pre-change snapshot (e.g. validate,
-  // which may turn out to be a no-op and only wants to commit if a
-  // byte actually changed) pass it in. Default: take a fresh copy of
-  // the current buffer.
   if (snapshot) {
     undoStack.push(snapshot);
   } else {
@@ -279,6 +206,25 @@ function popRedo() {
     else if (cleanStackLength === 0) cleanStackLength = -1;
   }
   currentBuffer = redoStack.pop();
+  var tab = getActiveTab();
+  if (tab) tab.buffer = currentBuffer;
+  var shouldBeDirty = (undoStack.length !== cleanStackLength);
+  if (tabDirty !== shouldBeDirty) {
+    tabDirty = shouldBeDirty;
+    if (typeof renderTabs === 'function') renderTabs();
+  }
+  return true;
+}
+
+// Rolls back a failed operation to its pushUndo snapshot. Unlike popUndo
+// it leaves no redo step, and it keeps the container views' buffers
+// pointing at the restored buffer so a batch can carry on.
+function discardUndo() {
+  if (undoStack.length === 0) return false;
+  var old = currentBuffer;
+  currentBuffer = undoStack.pop();
+  if (hddBuffer === old) hddBuffer = currentBuffer;
+  if (cmdcBuffer === old) cmdcBuffer = currentBuffer;
   var tab = getActiveTab();
   if (tab) tab.buffer = currentBuffer;
   var shouldBeDirty = (undoStack.length !== cleanStackLength);
@@ -422,12 +368,7 @@ function closeTab(tabId) {
   tabs.splice(idx, 1);
 
   if (tabs.length === 0) {
-    activeTabId = null;
-    currentBuffer = null;
-    currentFileName = null;
-    selectedEntryIndex = -1;
-    currentPartition = null;
-    clearCmdContainerState();
+    resetNoTabState();
     showEmptyState();
     renderTabs();
     updateMenuState();
@@ -443,6 +384,19 @@ function closeTab(tabId) {
   renderTabs();
   updateMenuState();
   updateEntryMenuState();
+}
+
+// Globals for "no tab open" (last tab closed / Close All).
+function resetNoTabState() {
+  activeTabId = null;
+  currentBuffer = null;
+  currentFileName = null;
+  selectedEntryIndex = -1;
+  currentPartition = null;
+  currentG64Layout = null;
+  tabDirty = false;
+  clearCmdContainerState();
+  clearUndo();
 }
 
 function getActiveTab() {
@@ -471,21 +425,25 @@ function updateTabName() {
 }
 
 // ── BAM integrity check (read-only, doesn't modify disk) ─────────────
+// Inside a D81 sub-partition this checks the partition against its own
+// BAM; a DNP subdir view checks the whole image (one BAM for all dirs).
 /** @param {ArrayBuffer} buffer @returns {BAMIntegrityResult} */
 function checkBAMIntegrity(buffer, ctx) {
+  if (ctx.partition && ctx.partition.dnpDir) ctx = Object.assign({}, ctx, { partition: null });
   var data = new Uint8Array(buffer);
   var fmt = ctx.format;
-  var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, ctx);
+  var part = ctx.partition;
+  var dirCtx = getDirContext(ctx);
+  var bamOff = dirCtx.bamOff;
   var bamTracks = fmt.bamTracksRange(ctx.tracks);
+  var sysTrack = part ? part.startTrack : fmt.dirTrack;
 
-  // Follow all file chains to build sector ownership map
   var sectorOwner = {};
 
-  // Walk a directory chain, processing file entries and recursing into linked subdirs
+  // Walk a directory chain, recursing into linked subdirs.
   function walkIntegrityDir(dirT, dirS, parentName) {
     var dirVisited = {};
-    while (dirT !== 0 && dirT <= ctx.tracks) {
-      if (dirS >= fmt.sectorsPerTrack(dirT)) break;
+    while (dirT !== 0 && isValidChainLink(dirT, dirS, ctx)) {
       var dk = dirT + ':' + dirS;
       if (dirVisited[dk]) break;
       dirVisited[dk] = true;
@@ -495,16 +453,15 @@ function checkBAMIntegrity(buffer, ctx) {
 
       for (var i = 0; i < fmt.entriesPerSector; i++) {
         var entOff = doff + i * fmt.entrySize;
-        var tb = data[entOff + 2];
+        var tb = data[entOff + DIRENT_TYPE];
         var typeIdx = tb & 0x07;
         var closed = (tb & 0x80) !== 0;
         if (typeIdx === 0 && !closed) continue;
-        var eName = readPetsciiString(data, entOff + 5, 16);
+        var eName = readPetsciiString(data, entOff + DIRENT_NAME, 16);
         if (!eName.trim() && typeIdx === 0) continue;
-        var et = data[entOff + 3], es = data[entOff + 4];
+        var et = data[entOff + DIRENT_TRACK], es = data[entOff + DIRENT_SECTOR];
         var ownerName = eName || '?';
 
-        // Linked subdirectory: mark header + recurse
         if (fmt.subdirLinked && typeIdx === fmt.subdirType && closed) {
           sectorOwner[et + ':' + es] = ownerName;
           var hOff = sectorOffset(et, es, ctx);
@@ -512,21 +469,15 @@ function checkBAMIntegrity(buffer, ctx) {
           continue;
         }
 
-        // CBM partition: mark entire contiguous block
         if (!fmt.subdirLinked && typeIdx === fmt.subdirType && closed) {
-          var partStart = et;
-          var partSize = data[entOff + 30] | (data[entOff + 31] << 8);
-          var partTracks = Math.floor(partSize / fmt.partitionSpt);
-          for (var pt = partStart; pt < partStart + partTracks && pt <= ctx.tracks; pt++) {
+          var partTracks = Math.floor(direntBlocks(data, entOff) / fmt.partitionSpt);
+          for (var pt = et; pt < et + partTracks && pt <= ctx.tracks; pt++) {
             var pspt = fmt.sectorsPerTrack(pt);
-            for (var ps = 0; ps < pspt; ps++) {
-              sectorOwner[pt + ':' + ps] = ownerName;
-            }
+            for (var ps = 0; ps < pspt; ps++) sectorOwner[pt + ':' + ps] = ownerName;
           }
           continue;
         }
 
-        // Regular file: follow all sector chains (main + REL + GEOS)
         if (closed) {
           forEachFileSector(data, entOff, function(t, s) {
             sectorOwner[t + ':' + s] = ownerName;
@@ -538,74 +489,72 @@ function checkBAMIntegrity(buffer, ctx) {
     }
   }
 
-  // Start from root directory
-  walkIntegrityDir(fmt.dirTrack, fmt.dirSector, 'Directory');
+  walkIntegrityDir(dirCtx.dirTrack, dirCtx.dirSector, 'Directory');
 
-  // Mark format-specific system sectors as owned. Skip "BAM-omitted" sectors —
-  // these are protected from allocation but intentionally marked *free* in the main
-  // BAM (e.g. CMD FD system partition on the last track of D1M/D2M/D4M). Owning them
-  // here would falsely trigger allocMismatch because BAM-free + owned = mismatch.
-  for (var pst = 1; pst <= ctx.tracks; pst++) {
-    if (pst === fmt.dirTrack) continue; // dir track already skipped in orphan check
-    var protSecs = fmt.getProtectedSectors(pst);
-    var bamOmitted = fmt.getBamOmittedSectors ? fmt.getBamOmittedSectors(pst) : [];
-    for (var psi2 = 0; psi2 < protSecs.length; psi2++) {
-      if (bamOmitted.indexOf(protSecs[psi2]) !== -1) continue;
-      sectorOwner[pst + ':' + protSecs[psi2]] = 'System';
-    }
-  }
-
-  // Check free count vs bitmap bits
-  var bamErrors = [];
-  var errorTracks = {};
-  for (var t = 1; t <= bamTracks; t++) {
-    var spt = fmt.sectorsPerTrack(t);
-    var storedFree = fmt.readTrackFree(data, bamOff, t);
-    // Skip count comparison for formats without per-track free counts
-    if (!fmt.hasBamFreeCounts) continue;
-    var actualFree = 0;
-    var bbBase = getBamBitmapBase(t, bamOff, ctx);
-    var numBytes = Math.ceil(spt / 8);
-    for (var bi = 0; bi < numBytes; bi++) {
-      var bval = data[bbBase + bi];
-      var maxBit = Math.min(8, spt - bi * 8);
-      for (var bit = 0; bit < maxBit; bit++) {
-        if (bval & (1 << bit)) actualFree++;
+  // System sectors are owned, except "BAM-omitted" ones: protected from
+  // allocation but legitimately free in the BAM (CMD FD system partition).
+  if (part) {
+    for (var ss = 0; ss < fmt.partitionDirSector; ss++) sectorOwner[part.startTrack + ':' + ss] = 'System';
+  } else {
+    for (var pst = 1; pst <= ctx.tracks; pst++) {
+      if (pst === fmt.dirTrack) continue;
+      var protSecs = fmt.getProtectedSectors(pst);
+      var bamOmitted = fmt.getBamOmittedSectors ? fmt.getBamOmittedSectors(pst) : [];
+      for (var psi2 = 0; psi2 < protSecs.length; psi2++) {
+        if (bamOmitted.indexOf(protSecs[psi2]) !== -1) continue;
+        sectorOwner[pst + ':' + protSecs[psi2]] = 'System';
       }
     }
+  }
 
-    if (storedFree !== actualFree) {
-      bamErrors.push('T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
-        ' count=' + storedFree + ' actual=' + actualFree);
-      errorTracks[t] = true;
+  // Track range checked, and its BAM coordinates (the FD formats' BAM
+  // uses logical 256-sector tracks).
+  var firstTrack = 1;
+  var lastTrack = fmt.getBamIterTracks ? fmt.getBamIterTracks(data) : bamTracks;
+  var iterSptFn = fmt.getBamIterSectorsPerTrack || fmt.sectorsPerTrack;
+  if (part) {
+    firstTrack = part.startTrack;
+    lastTrack = part.startTrack + Math.floor(part.partSize / fmt.partitionSpt) - 1;
+  }
+
+  var bamErrors = [];
+  var errorTracks = {};
+  if (fmt.hasBamFreeCounts) {
+    for (var t = firstTrack; t <= (part ? lastTrack : bamTracks); t++) {
+      var spt = fmt.sectorsPerTrack(t);
+      var storedFree = fmt.readTrackFree(data, bamOff, t);
+      var actualFree = 0;
+      var bbBase = getBamBitmapBase(t, bamOff, ctx);
+      for (var s = 0; s < spt; s++) {
+        if (data[bbBase + (s >> 3)] & fmt.bamBitMask(s)) actualFree++;
+      }
+      if (storedFree !== actualFree) {
+        bamErrors.push('T:$' + t.toString(16).toUpperCase().padStart(2, '0') +
+          ' count=' + storedFree + ' actual=' + actualFree);
+        errorTracks[t] = true;
+      }
     }
   }
 
-  // Check for sectors used by files but marked free in BAM (byte-level)
-  // Also detect orphaned sectors: marked used but not owned by any file.
-  //
-  // Formats may override getBamIterTracks / getBamIterSectorsPerTrack on
-  // the descriptor when the BAM uses a different coordinate space than
-  // the physical geometry (e.g. D1M/D2M/D4M are LBA-indexed in BAM).
-  var iterTracks = fmt.getBamIterTracks ? fmt.getBamIterTracks(data) : bamTracks;
-  var iterSptFn = fmt.getBamIterSectorsPerTrack || fmt.sectorsPerTrack;
+  // Used-by-a-file but free in the BAM, and allocated but owned by nothing.
   var allocMismatch = 0;
   var orphanCount = 0;
-  var errorSectors = {}; // "t:s" → true (free but used by file)
-  var orphanSectors = {}; // "t:s" → true (used but not owned by any file)
-  for (t = 1; t <= iterTracks; t++) {
-    if (t === fmt.dirTrack) continue;
+  var errorSectors = {};
+  var orphanSectors = {};
+  for (t = firstTrack; t <= lastTrack; t++) {
+    if (t === sysTrack) continue;
     var spt2 = iterSptFn.call(fmt, t);
     for (var s2 = 0; s2 < spt2; s2++) {
+      var key = t + ':' + s2;
       var isFree = checkSectorFree(data, bamOff, t, s2, ctx);
-      var isUsed = sectorOwner[t + ':' + s2] !== undefined;
+      var isUsed = sectorOwner[key] !== undefined;
       if (isFree && isUsed) {
         allocMismatch++;
-        errorSectors[t + ':' + s2] = true;
+        errorSectors[key] = true;
       }
       if (!isFree && !isUsed) {
         orphanCount++;
-        orphanSectors[t + ':' + s2] = true;
+        orphanSectors[key] = true;
       }
     }
   }
@@ -616,91 +565,119 @@ function checkBAMIntegrity(buffer, ctx) {
 }
 
 // ── Optimize Disk ────────────────────────────────────────────────────
-// Rewrite all file sector chains with a chosen interleave, optionally
-// defragmenting (packing files onto consecutive tracks).
-// Returns { filesOptimized, sectorsRewritten, log[] }
+// Rewrite the chain of every plain root-dir file with `interleave`, packed
+// from track 1 when `defragment`, then rebuild the BAM. REL and VLIR
+// files, partitions and whole subdirectory trees stay where they are.
+// Whole-disk only: refused inside a partition or subdirectory view.
+// Returns { filesOptimized, sectorsRewritten, log[], error? }.
 function optimizeDisk(buffer, interleave, defragment, ctx) {
+  if (ctx.partition) {
+    var refusal = 'Optimize Disk works on the whole disk. Leave the partition or subdirectory first.';
+    return { filesOptimized: 0, sectorsRewritten: 0, log: [refusal], error: refusal };
+  }
   var data = new Uint8Array(buffer);
   var fmt = ctx.format;
   var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, ctx);
-  var bamTracks = fmt.bamTracksRange(ctx.tracks);
+  var bamTracks = fmt.getBamIterTracks ? fmt.getBamIterTracks(data) : fmt.bamTracksRange(ctx.tracks);
+  var bamSptFn = fmt.getBamIterSectorsPerTrack || fmt.sectorsPerTrack;
   var log = [];
 
-  // Phase 1: Read all file data into memory
-  var info = parseDisk(buffer);
-  var files = [];
-  for (var fi = 0; fi < info.entries.length; fi++) {
-    var entry = info.entries[fi];
-    if (entry.deleted) continue;
-    var typeByte = data[entry.entryOff + 2];
-    var typeIdx = typeByte & 0x07;
+  var protectedSectors = {};
+  function protect(t, s) { protectedSectors[t + ':' + s] = true; }
+  for (var pt = 1; pt <= ctx.tracks; pt++) {
+    var ps = fmt.getProtectedSectors(pt);
+    for (var psi = 0; psi < ps.length; psi++) protect(pt, ps[psi]);
+  }
+  // In use without a dir entry: C128 boot block, GEOS border sector.
+  if (hasC128BootSignature(buffer, ctx)) protect(1, 0);
+  if (hasGeosSignature(buffer, ctx)) {
+    var border = readGeosBorderRef(buffer, ctx);
+    if (border && isValidChainLink(border.track, border.sector, ctx)) protect(border.track, border.sector);
+  }
 
-    // Skip CBM partitions — they are contiguous track blocks
-    if (!fmt.subdirLinked && typeIdx === fmt.subdirType) {
-      log.push('Skipped partition: "' + petsciiToReadable(entry.name) + '"');
-      continue;
+  function forEachClosedEntry(dirOff, fn) {
+    for (var i = 0; i < fmt.entriesPerSector; i++) {
+      var eo = dirOff + i * fmt.entrySize;
+      if (data[eo + DIRENT_TYPE] & 0x80) fn(eo, data[eo + DIRENT_TYPE] & 0x07);
     }
-
-    // Skip REL files — side-sector chains have internal T/S pointers
-    // Their sectors will be protected via the protectedSectors map below
-    if (typeIdx === FILE_TYPE.REL) {
-      log.push('Skipped REL file: "' + petsciiToReadable(entry.name) + '"');
-      continue;
+  }
+  function entryLabel(eo) {
+    return '"' + petsciiToReadable(readPetsciiString(data, eo + DIRENT_NAME, 16)) + '"';
+  }
+  function protectLinkedSubdir(hdrT, hdrS) {
+    if (!isValidChainLink(hdrT, hdrS, ctx) || protectedSectors[hdrT + ':' + hdrS]) return;
+    protect(hdrT, hdrS);
+    var hOff = sectorOffset(hdrT, hdrS, ctx);
+    var t = data[hOff], s = data[hOff + 1];
+    while (t !== 0 && isValidChainLink(t, s, ctx) && !protectedSectors[t + ':' + s]) {
+      protect(t, s);
+      var off = sectorOffset(t, s, ctx);
+      forEachClosedEntry(off, function(eo, typeIdx) {
+        if (typeIdx === fmt.subdirType) protectLinkedSubdir(data[eo + DIRENT_TRACK], data[eo + DIRENT_SECTOR]);
+        else forEachFileSector(data, eo, protect, ctx);
+      });
+      t = data[off]; s = data[off + 1];
     }
-
-    // Skip GEOS VLIR files — record chains inside the index sector can't be
-    // reallocated by the linear-chain optimizer. Their sectors are protected below.
-    if (isVlirFile(data, entry.entryOff)) {
-      log.push('Skipped GEOS VLIR file: "' + petsciiToReadable(entry.name) + '"');
-      continue;
-    }
-
-    var ft = data[entry.entryOff + 3];
-    var fs = data[entry.entryOff + 4];
-    if (ft === 0) continue; // empty file
-
-    // Read all raw sector data (preserving bytes 0-255 of each sector)
+  }
+  // A file's sectors and GEOS info block, or null when its chain is broken.
+  function readChain(eo) {
+    var t = data[eo + DIRENT_TRACK], s = data[eo + DIRENT_SECTOR];
     var sectorData = [];
-    var t = ft, s = fs;
     var visited = {};
+    var lastByte = 0;
     while (t !== 0) {
-      if (t < 1 || t > ctx.tracks) break;
-      if (s >= fmt.sectorsPerTrack(t)) break;
-      var key = t + ':' + s;
-      if (visited[key]) break;
-      visited[key] = true;
+      if (!isValidChainLink(t, s, ctx) || visited[t + ':' + s]) return null;
+      visited[t + ':' + s] = true;
       var soff = sectorOffset(t, s, ctx);
-      if (soff < 0) break;
-      // Save data payload (bytes 2-255)
-      var payload = new Uint8Array(254);
-      for (var b = 0; b < 254; b++) payload[b] = data[soff + 2 + b];
-      // Save the last-sector byte count for final sector
-      var nextT = data[soff], nextS = data[soff + 1];
-      sectorData.push({ payload: payload, nextT: nextT, nextS: nextS });
-      t = nextT; s = nextS;
+      sectorData.push(data.slice(soff + 2, soff + 256));
+      if (data[soff] === 0) lastByte = data[soff + 1];
+      t = data[soff]; s = data[soff + 1];
     }
-
-    if (sectorData.length === 0) continue;
-
-    // Check for GEOS info block at entry+0x15/0x16
-    var geosInfoT = data[entry.entryOff + 0x15];
-    var geosInfoS = data[entry.entryOff + 0x16];
     var geosInfoData = null;
-    if (geosInfoT > 0 && geosInfoT <= ctx.tracks && data[entry.entryOff + 0x18] > 0) {
-      var giOff = sectorOffset(geosInfoT, geosInfoS, ctx);
-      if (giOff >= 0) {
-        geosInfoData = new Uint8Array(256);
-        for (var gi = 0; gi < 256; gi++) geosInfoData[gi] = data[giOff + gi];
-      }
+    var infoT = data[eo + DIRENT_GEOS_INFO_TRACK], infoS = data[eo + DIRENT_GEOS_INFO_SECTOR];
+    if (data[eo + DIRENT_GEOS_TYPE] > 0 && isValidChainLink(infoT, infoS, ctx)) {
+      var giOff = sectorOffset(infoT, infoS, ctx);
+      geosInfoData = data.slice(giOff, giOff + 256);
     }
+    return { entryOff: eo, label: entryLabel(eo), sectorData: sectorData, geosInfoData: geosInfoData, lastByte: lastByte };
+  }
 
-    files.push({
-      entryOff: entry.entryOff,
-      name: entry.name,
-      sectorData: sectorData,
-      geosInfoData: geosInfoData,
-      lastSectorEnd: sectorData[sectorData.length - 1].nextS // byte count in last sector
+  var files = [];
+  var dirT = fmt.dirTrack, dirS = fmt.dirSector;
+  while (dirT !== 0 && isValidChainLink(dirT, dirS, ctx) && !protectedSectors[dirT + ':' + dirS]) {
+    protect(dirT, dirS);
+    var doff = sectorOffset(dirT, dirS, ctx);
+    forEachClosedEntry(doff, function(eo, typeIdx) {
+      if (fmt.supportsSubdirs && typeIdx === fmt.subdirType) {
+        if (fmt.subdirLinked) {
+          protectLinkedSubdir(data[eo + DIRENT_TRACK], data[eo + DIRENT_SECTOR]);
+          log.push('Skipped directory: ' + entryLabel(eo));
+        } else {
+          var start = data[eo + DIRENT_TRACK];
+          var partTracks = Math.floor(direntBlocks(data, eo) / fmt.partitionSpt);
+          for (var t = start; t < start + partTracks && t <= ctx.tracks; t++) {
+            for (var s = 0; s < fmt.sectorsPerTrack(t); s++) protect(t, s);
+          }
+          log.push('Skipped partition: ' + entryLabel(eo));
+        }
+        return;
+      }
+      // Side-sector and VLIR record chains hold T/S pointers of their own.
+      if (typeIdx === FILE_TYPE.REL || isVlirFile(data, eo)) {
+        forEachFileSector(data, eo, protect, ctx);
+        log.push('Skipped ' + (typeIdx === FILE_TYPE.REL ? 'REL' : 'GEOS VLIR') + ' file: ' + entryLabel(eo));
+        return;
+      }
+      if (data[eo + DIRENT_TRACK] === 0) return;
+      var f = readChain(eo);
+      if (f) {
+        files.push(f);
+      } else {
+        forEachFileSector(data, eo, protect, ctx);
+        log.push('Skipped file with a broken chain: ' + entryLabel(eo));
+      }
     });
+    dirT = data[doff]; dirS = data[doff + 1];
   }
 
   if (files.length === 0) {
@@ -708,84 +685,21 @@ function optimizeDisk(buffer, interleave, defragment, ctx) {
     return { filesOptimized: 0, sectorsRewritten: 0, log: log };
   }
 
-  // Phase 2: Clear all non-system sectors in BAM (mark as free)
-  // Build set of protected sectors (BAM + directory chain)
-  var protectedSectors = {};
-  for (var bsi = 0; bsi < fmt.bamSectors.length; bsi++) {
-    protectedSectors[fmt.bamSectors[bsi][0] + ':' + fmt.bamSectors[bsi][1]] = true;
-  }
-  // Walk directory chain
-  var dirT = fmt.dirTrack, dirS = fmt.dirSector;
-  var dirVisited = {};
-  while (dirT !== 0) {
-    var dkey = dirT + ':' + dirS;
-    if (dirVisited[dkey]) break;
-    dirVisited[dkey] = true;
-    protectedSectors[dkey] = true;
-    var doff = sectorOffset(dirT, dirS, ctx);
-    if (doff < 0) break;
-    dirT = data[doff]; dirS = data[doff + 1];
-  }
+  var allocated = {};
+  for (var pk in protectedSectors) allocated[pk] = true;
 
-  // Also protect CBM partition sectors (contiguous block subdirs)
-  if (fmt.supportsSubdirs && !fmt.subdirLinked) {
-    for (fi = 0; fi < info.entries.length; fi++) {
-      var pe = info.entries[fi];
-      if (pe.deleted) continue;
-      var ptb = data[pe.entryOff + 2] & 0x07;
-      if (ptb === FILE_TYPE.CBM) {
-        var partStart = data[pe.entryOff + 3];
-        var partSize = data[pe.entryOff + 30] | (data[pe.entryOff + 31] << 8);
-        var partTracks = Math.floor(partSize / fmt.partitionSpt);
-        for (var pt = partStart; pt < partStart + partTracks && pt <= ctx.tracks; pt++) {
-          var pspt = fmt.sectorsPerTrack(pt);
-          for (var ps = 0; ps < pspt; ps++) {
-            protectedSectors[pt + ':' + ps] = true;
-          }
-        }
-      }
-    }
-  }
-
-  // Protect REL and GEOS VLIR file sectors (skipped during optimization)
-  for (fi = 0; fi < info.entries.length; fi++) {
-    var pe2 = info.entries[fi];
-    if (pe2.deleted) continue;
-    var ptb2 = data[pe2.entryOff + 2] & 0x07;
-    if (ptb2 === FILE_TYPE.REL || isVlirFile(data, pe2.entryOff)) {
-      forEachFileSector(data, pe2.entryOff, function(t, s) {
-        protectedSectors[t + ':' + s] = true;
-      }, ctx);
-    }
-  }
-
-  // Mark all non-protected sectors as free
-  var allocated = {}; // our working allocation map
-  for (var tk = 1; tk <= bamTracks; tk++) {
-    var spt = fmt.sectorsPerTrack(tk);
-    for (var sk = 0; sk < spt; sk++) {
-      if (protectedSectors[tk + ':' + sk]) {
-        allocated[tk + ':' + sk] = true;
-      }
-    }
-  }
-
-  // Phase 3: Build track order and reallocate each file
-  var dirTrack = fmt.dirTrack;
   var trackOrder = [];
   var skipTracks = fmt.getSkipTracks();
-
   if (defragment) {
-    // Sequential from track 1, skipping system tracks
     for (var td = 1; td <= bamTracks; td++) {
       if (!skipTracks[td]) trackOrder.push(td);
     }
   } else {
-    // CBM drive order: below dir track descending, then above ascending
-    for (var tb = dirTrack - 1; tb >= 1; tb--) {
+    // Drive order: below the dir track descending, then above ascending.
+    for (var tb = fmt.dirTrack - 1; tb >= 1; tb--) {
       if (!skipTracks[tb]) trackOrder.push(tb);
     }
-    for (var ta = dirTrack + 1; ta <= bamTracks; ta++) {
+    for (var ta = fmt.dirTrack + 1; ta <= bamTracks; ta++) {
       if (!skipTracks[ta]) trackOrder.push(ta);
     }
   }
@@ -793,88 +707,76 @@ function optimizeDisk(buffer, interleave, defragment, ctx) {
   var filesOptimized = 0;
   var sectorsRewritten = 0;
 
+  // Plan every file before writing anything: old chains are already
+  // counted free, so a partial run would leave files pointing at reused sectors.
+  for (var pIdx = 0; pIdx < files.length; pIdx++) {
+    var need = files[pIdx].sectorData.length + (files[pIdx].geosInfoData ? 1 : 0);
+    files[pIdx].sectorList = allocateSectorsFromTrackOrder(allocated, need, trackOrder, interleave, ctx);
+    if (files[pIdx].sectorList.length < need) {
+      var noRoom = 'Not enough free sectors to relocate ' + files[pIdx].label + '; nothing was changed.';
+      log.push('ERROR: ' + noRoom);
+      return { filesOptimized: 0, sectorsRewritten: 0, log: log, error: noRoom };
+    }
+  }
+
   for (var fIdx = 0; fIdx < files.length; fIdx++) {
     var file = files[fIdx];
-    var numSectors = file.sectorData.length;
-    var needExtra = file.geosInfoData ? 1 : 0;
-    var totalNeed = numSectors + needExtra;
-
-    // Allocate sectors with chosen interleave
-    var sectorList = allocateSectorsFromTrackOrder(allocated, totalNeed, trackOrder, interleave, ctx);
-
-    if (sectorList.length < totalNeed) {
-      log.push('ERROR: Not enough free sectors for "' + petsciiToReadable(file.name) + '"');
-      continue;
-    }
-
-    // Write GEOS info block if present (first allocated sector)
+    var sectorList = file.sectorList;
     var dataSectorStart = 0;
     if (file.geosInfoData) {
       var infoSec = sectorList[0];
       var infoOff = sectorOffset(infoSec.track, infoSec.sector, ctx);
-      for (var ib = 0; ib < 256; ib++) data[infoOff + ib] = file.geosInfoData[ib];
+      data.set(file.geosInfoData, infoOff);
       data[infoOff] = 0x00;
       data[infoOff + 1] = 0xFF;
-      data[file.entryOff + 0x15] = infoSec.track;
-      data[file.entryOff + 0x16] = infoSec.sector;
+      data[file.entryOff + DIRENT_GEOS_INFO_TRACK] = infoSec.track;
+      data[file.entryOff + DIRENT_GEOS_INFO_SECTOR] = infoSec.sector;
       dataSectorStart = 1;
       sectorsRewritten++;
     }
 
-    // Write file data sectors with new chain links
     var fileSectors = sectorList.slice(dataSectorStart);
     for (var si = 0; si < fileSectors.length; si++) {
       var sec = fileSectors[si];
       var soff2 = sectorOffset(sec.track, sec.sector, ctx);
-
       if (si < fileSectors.length - 1) {
-        var nextSec = fileSectors[si + 1];
-        data[soff2] = nextSec.track;
-        data[soff2 + 1] = nextSec.sector;
+        data[soff2] = fileSectors[si + 1].track;
+        data[soff2 + 1] = fileSectors[si + 1].sector;
       } else {
-        // Last sector
         data[soff2] = 0x00;
-        data[soff2 + 1] = file.lastSectorEnd;
+        data[soff2 + 1] = file.lastByte;
       }
-      // Write payload
-      var payload = file.sectorData[si].payload;
-      for (var pb = 0; pb < 254; pb++) data[soff2 + 2 + pb] = payload[pb];
+      data.set(file.sectorData[si], soff2 + 2);
       sectorsRewritten++;
     }
 
-    // Update directory entry to point to new first sector
-    data[file.entryOff + 3] = fileSectors[0].track;
-    data[file.entryOff + 4] = fileSectors[0].sector;
-
+    data[file.entryOff + DIRENT_TRACK] = fileSectors[0].track;
+    data[file.entryOff + DIRENT_SECTOR] = fileSectors[0].sector;
     filesOptimized++;
   }
 
-  // Phase 4: Rebuild BAM from final allocation state
+  // Rebuild the BAM from the final allocation (BAM-omitted sectors stay free).
   for (var bt = 1; bt <= bamTracks; bt++) {
-    var bspt = fmt.sectorsPerTrack(bt);
+    var bspt = bamSptFn.call(fmt, bt);
     var numBytes = Math.ceil(bspt / 8);
     var bbBase = getBamBitmapBase(bt, bamOff, ctx);
+    var omitted = fmt.getBamOmittedSectors ? fmt.getBamOmittedSectors(bt) : [];
     var free = 0;
     var newBytes = new Uint8Array(numBytes);
     for (var bs = 0; bs < bspt; bs++) {
-      if (!allocated[bt + ':' + bs]) {
-        free++;
-        newBytes[Math.floor(bs / 8)] |= (1 << (bs % 8));
-      }
+      if (allocated[bt + ':' + bs] && omitted.indexOf(bs) === -1) continue;
+      free++;
+      newBytes[bs >> 3] |= fmt.bamBitMask(bs);
     }
     fmt.writeTrackFree(data, bamOff, bt, free);
-    for (var bi = 0; bi < numBytes; bi++) {
-      data[bbBase + bi] = newBytes[bi];
-    }
+    data.set(newBytes, bbBase);
   }
 
-  // Phase 5: Verify all files can still be read correctly
   var verifyErrors = 0;
   for (fIdx = 0; fIdx < files.length; fIdx++) {
-    var vf = files[fIdx];
-    var verify = readFileData(buffer, vf.entryOff, ctx);
+    var verify = readFileData(buffer, files[fIdx].entryOff, ctx);
     if (verify.error) {
-      log.push('VERIFY ERROR: "' + petsciiToReadable(vf.name) + '": ' + verify.error);
+      log.push('VERIFY ERROR: ' + files[fIdx].label + ': ' + verify.error);
       verifyErrors++;
     }
   }
@@ -896,12 +798,12 @@ function validateDisk(buffer, ctx) {
   const numTracks = ctx.tracks;
   const log = [];
 
+  // Chain links on the FD formats are logical (S 0-255), hence the 256.
   const allocated = [];
   for (let t = 0; t <= numTracks; t++) {
-    allocated[t] = new Uint8Array(fmt.sectorsPerTrack(Math.max(t, 1)));
+    allocated[t] = new Uint8Array(fmt.lbaAddressing ? 256 : fmt.sectorsPerTrack(Math.max(t, 1)));
   }
 
-  // Mark all system sectors (BAM + header + format-specific) as allocated
   for (var stk = 1; stk <= numTracks; stk++) {
     var ps = fmt.getProtectedSectors(stk);
     for (var psi = 0; psi < ps.length; psi++) allocated[stk][ps[psi]] = 1;
@@ -912,11 +814,11 @@ function validateDisk(buffer, ctx) {
     let t = startTrack, s = startSector;
     let blocks = 0;
     while (t !== 0) {
-      if (t < 1 || t > numTracks) {
+      if (t < 1 || t > chainTrackCount(ctx)) {
         log.push(`  ERROR: ${label}: illegal track ${t}`);
         return { blocks, error: true };
       }
-      if (s < 0 || s >= fmt.sectorsPerTrack(t)) {
+      if (s < 0 || s >= chainSectorsPerTrack(t, ctx)) {
         log.push(`  ERROR: ${label}: illegal sector ${s} on track ${t}`);
         return { blocks, error: true };
       }
@@ -947,7 +849,7 @@ function validateDisk(buffer, ctx) {
       const key = `${dTrack}:${dSector}`;
       if (dirVisited.has(key)) { log.push('ERROR: circular directory chain'); break; }
       dirVisited.add(key);
-      if (dTrack < 1 || dTrack > numTracks || dSector < 0 || dSector >= fmt.sectorsPerTrack(dTrack)) {
+      if (!isValidChainLink(dTrack, dSector, ctx)) {
         log.push(`ERROR: illegal directory sector track ${dTrack} sector ${dSector}`);
         break;
       }
@@ -975,8 +877,8 @@ function validateDisk(buffer, ctx) {
         // Linked subdirectory: mark header + recurse into its dir chain
         if (fmt.subdirLinked && fileType === fmt.subdirType) {
           var sdLabel = 'Directory "' + rname + '"';
-          if (fileTrack < 1 || fileTrack > numTracks) {
-            log.push(`  ERROR: ${sdLabel}: invalid header track ${fileTrack}`);
+          if (!isValidChainLink(fileTrack, fileSector, ctx)) {
+            log.push(`  ERROR: ${sdLabel}: invalid header track ${fileTrack} sector ${fileSector}`);
             continue;
           }
           if (allocated[fileTrack][fileSector]) {
@@ -991,10 +893,9 @@ function validateDisk(buffer, ctx) {
           continue;
         }
 
-        // CBM partition: mark the entire contiguous block as allocated (don't follow chain)
+        // CBM partition: the whole contiguous block, no chain.
         if (!fmt.subdirLinked && fileType === fmt.subdirType) {
-          const partSize = data[entryOff + 30] | (data[entryOff + 31] << 8);
-          const partTracks = Math.floor(partSize / fmt.partitionSpt);
+          const partTracks = Math.floor(direntBlocks(data, entryOff) / fmt.partitionSpt);
           var label = 'Partition "' + rname + '"';
           if (fileTrack < 1 || fileTrack > numTracks || fileSector !== 0) {
             log.push(`  ERROR: ${label}: invalid start track ${fileTrack} sector ${fileSector}`);
@@ -1018,7 +919,7 @@ function validateDisk(buffer, ctx) {
 
         forEachGeosAuxSector(data, entryOff,
           function(infoT, infoS) {
-            if (infoT < 1 || infoT > numTracks || infoS >= fmt.sectorsPerTrack(infoT)) return;
+            if (!isValidChainLink(infoT, infoS, ctx)) return;
             if (allocated[infoT][infoS]) {
               log.push(`  ERROR: ${label}: cross-linked info block at track ${infoT} sector ${infoS}`);
             } else {
@@ -1030,7 +931,7 @@ function validateDisk(buffer, ctx) {
             totalBlocks += followChain(recT, recS, label + ' record ' + recIdx).blocks;
           }, ctx);
 
-        const expectedBlocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
+        const expectedBlocks = direntBlocks(data, entryOff);
         if (totalBlocks !== expectedBlocks && !result.error) {
           log.push(`  Warning: ${label}: block count ${expectedBlocks} in directory, actual ${totalBlocks}`);
         }
@@ -1043,18 +944,16 @@ function validateDisk(buffer, ctx) {
 
   walkValidateDir(fmt.dirTrack, fmt.dirSector, new Set());
 
-  // Rebuild BAM (byte-level to handle D81's 40 sectors per track)
-  const bamTracks = fmt.bamTracksRange(numTracks);
+  // Rebuild the BAM. The FD formats' BAM is in logical 256-sector tracks;
+  // BAM-omitted sectors (CMD FD system partition) stay free, as VICE has them.
+  const bamTracks = fmt.getBamIterTracks ? fmt.getBamIterTracks(data) : fmt.bamTracksRange(numTracks);
+  const bamSptFn = fmt.getBamIterSectorsPerTrack || fmt.sectorsPerTrack;
   let bamErrors = 0;
   for (let t = 1; t <= bamTracks; t++) {
-    const spt = fmt.sectorsPerTrack(t);
+    const spt = bamSptFn.call(fmt, t);
     const numBytes = Math.ceil(spt / 8);
-    // BAM-omitted sectors (e.g. CMD FD system partition on last track) are
-    // protected from allocation but must remain marked *free* in the main BAM
-    // to stay consistent with VICE/DirMaster output.
     const bamOmitted = fmt.getBamOmittedSectors ? fmt.getBamOmittedSectors(t) : [];
 
-    // Build new bitmap bytes and free count from allocation table
     let free = 0;
     const newBytes = new Uint8Array(numBytes);
     for (let s = 0; s < spt; s++) {
@@ -1065,17 +964,16 @@ function validateDisk(buffer, ctx) {
       }
     }
 
-    let bamByteBase = getBamBitmapBase(t, bamOff, getCurrentCtx());
+    let bamByteBase = getBamBitmapBase(t, bamOff, ctx);
 
-    // Check if anything changed
-    const oldFree = fmt.readTrackFree(data, bamOff, t);
-    let bitmapChanged = oldFree !== free;
+    // CMD formats store no free count (readTrackFree derives one), so only
+    // the bitmap is compared there.
+    let bitmapChanged = fmt.hasBamFreeCounts && fmt.readTrackFree(data, bamOff, t) !== free;
     for (let bi = 0; bi < numBytes && !bitmapChanged; bi++) {
       if (data[bamByteBase + bi] !== newBytes[bi]) bitmapChanged = true;
     }
     if (bitmapChanged) bamErrors++;
 
-    // Write new values
     fmt.writeTrackFree(data, bamOff, t, free);
     for (let bi = 0; bi < numBytes; bi++) {
       data[bamByteBase + bi] = newBytes[bi];
@@ -1094,36 +992,31 @@ function validateDisk(buffer, ctx) {
   return log;
 }
 
-// Validate a D81 partition's contents and rebuild its internal BAM
+// Validate a D81 sub-partition's contents and rebuild its own BAM.
+// `allocated` is indexed by track relative to the partition (1 = first).
 function validatePartition(buffer, startTrack, partSize, ctx) {
   const data = new Uint8Array(buffer);
   const fmt = ctx.format;
-  const numPartTracks = Math.floor(partSize / fmt.partitionSpt);
+  const pSpt = fmt.partitionSpt;
+  const numPartTracks = Math.floor(partSize / pSpt);
   const partBamOff = sectorOffset(startTrack, 1, ctx);
   const log = [];
 
-  // Build allocation table for partition tracks (relative: 1..numPartTracks)
   const allocated = [];
-  for (let t = 0; t <= numPartTracks; t++) {
-    allocated[t] = new Uint8Array(40); // D81: 40 sectors per track
-  }
-  // System sectors on track 1: header(0), BAM1(1), BAM2(2)
-  allocated[1][0] = 1;
-  allocated[1][1] = 1;
-  allocated[1][2] = 1;
+  for (let t = 0; t <= numPartTracks; t++) allocated[t] = new Uint8Array(pSpt);
+  for (let ss = 0; ss < fmt.partitionDirSector; ss++) allocated[1][ss] = 1; // header + 2 BAM
 
   function followChain(startT, startS, label) {
     const visited = new Set();
     let t = startT, s = startS;
     let blocks = 0;
     while (t !== 0) {
-      // Convert absolute track to relative
       const relT = t - startTrack + 1;
       if (relT < 1 || relT > numPartTracks) {
         log.push(`  ERROR: ${label}: illegal track ${t} (outside partition)`);
         return { blocks, error: true };
       }
-      if (s < 0 || s >= 40) {
+      if (s < 0 || s >= pSpt) {
         log.push(`  ERROR: ${label}: illegal sector ${s} on track ${t}`);
         return { blocks, error: true };
       }
@@ -1145,8 +1038,7 @@ function validatePartition(buffer, startTrack, partSize, ctx) {
     return { blocks, error: false };
   }
 
-  // Walk partition directory chain (starts at startTrack, sector 3)
-  let dirTrack = startTrack, dirSector = 3;
+  let dirTrack = startTrack, dirSector = fmt.partitionDirSector;
   const dirVisited = new Set();
   const dirSectors = [];
   while (dirTrack !== 0) {
@@ -1203,28 +1095,31 @@ function validatePartition(buffer, startTrack, partSize, ctx) {
           totalBlocks += followChain(recT, recS, label + ' record ' + recIdx).blocks;
         }, ctx);
 
-      const expectedBlocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
+      const expectedBlocks = direntBlocks(data, entryOff);
       if (totalBlocks !== expectedBlocks && !result.error) {
         log.push(`  Warning: ${label}: block count ${expectedBlocks} in directory, actual ${totalBlocks}`);
       }
     }
   }
 
-  // Rebuild partition BAM
+  // Rebuild the partition's BAM, which covers every track of the disk:
+  // tracks outside the partition are all allocated (D81.TXT).
   let bamErrors = 0;
-  for (let t = 1; t <= numPartTracks; t++) {
+  for (let at = 1; at <= ctx.tracks; at++) {
+    const t = at - startTrack + 1;
+    const inside = t >= 1 && t <= numPartTracks;
     const spt = fmt.partitionSpt;
     const numBytes = Math.ceil(spt / 8);
     let free = 0;
     const newBytes = new Uint8Array(numBytes);
-    for (let s = 0; s < spt; s++) {
+    for (let s = 0; s < spt && inside; s++) {
       if (!allocated[t][s]) {
         free++;
-        newBytes[Math.floor(s / 8)] |= (1 << (s % 8));
+        newBytes[s >> 3] |= fmt.bamBitMask(s);
       }
     }
 
-    const bamBase = d81PartitionBamBase(partBamOff, t);
+    const bamBase = d81BamEntryBase(partBamOff, at);
     const oldFree = data[bamBase];
     let bitmapChanged = oldFree !== free;
     for (let bi = 0; bi < numBytes && !bitmapChanged; bi++) {
@@ -1261,11 +1156,14 @@ function scanOrphanedChains(buffer, ctx) {
   // Step 1: Build set of all owned sectors
   var owned = buildTrueAllocationMap(buffer, ctx);
 
-  // Determine scan range (partition-aware)
-  var minTrack = 1, maxTrack = ctx.tracks;
-  if (ctx.partition) {
+  var minTrack = 1, maxTrack = chainTrackCount(ctx);
+  if (fmt.getBamIterTracks) maxTrack = Math.min(maxTrack, fmt.getBamIterTracks(data));
+  if (ctx.partition && !ctx.partition.dnpDir) {
     minTrack = ctx.partition.startTrack;
     maxTrack = ctx.partition.startTrack + Math.floor(ctx.partition.partSize / fmt.partitionSpt) - 1;
+  }
+  function linkInRange(t, s) {
+    return t >= minTrack && t <= maxTrack && s < chainSectorsPerTrack(t, ctx);
   }
 
   // Step 2: Classify unowned sectors
@@ -1273,7 +1171,7 @@ function scanOrphanedChains(buffer, ctx) {
   var pointedTo = {}; // "t:s" -> true
 
   for (var t = minTrack; t <= maxTrack; t++) {
-    var spt = fmt.sectorsPerTrack(t);
+    var spt = chainSectorsPerTrack(t, ctx);
     for (var s = 0; s < spt; s++) {
       var key = t + ':' + s;
       if (owned[key]) continue;
@@ -1294,8 +1192,7 @@ function scanOrphanedChains(buffer, ctx) {
       if (nextT === 0 && nextS >= 2) {
         // End-of-chain marker
         unowned[key] = { nextT: 0, nextS: nextS, isEnd: true };
-      } else if (nextT >= minTrack && nextT <= maxTrack &&
-                 nextS < fmt.sectorsPerTrack(nextT)) {
+      } else if (linkInRange(nextT, nextS)) {
         // Valid chain link
         unowned[key] = { nextT: nextT, nextS: nextS, isEnd: false };
         // Only build pointedTo from unowned→unowned links (for chain start detection)
@@ -1362,16 +1259,14 @@ function scanOrphanedChains(buffer, ctx) {
       var ns = data[coff + 1];
 
       if (nt === 0) {
-        // Last sector: collect bytes 2..ns-1
-        for (var i = 2; i < ns && i < 256; i++) bytes.push(data[coff + i]);
+        // Last sector: ns is the index of the last data byte (as readFileData)
+        for (var i = 2; i <= ns && i < 256; i++) bytes.push(data[coff + i]);
         break;
       } else {
-        // Full sector: collect bytes 2-255
         for (var j = 2; j < 256; j++) bytes.push(data[coff + j]);
       }
 
-      // Validate next link
-      if (nt < minTrack || nt > maxTrack || ns >= fmt.sectorsPerTrack(nt)) {
+      if (!linkInRange(nt, ns)) {
         integrity = 'broken';
         break;
       }

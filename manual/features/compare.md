@@ -1,54 +1,46 @@
 # Compare disks
 
-**Disk → Disk Tools → Compare with...** runs a side-by-side diff of the current disk against a second disk. Useful for spotting differences between two versions, two backups, or for verifying that a copy round-tripped correctly.
+**Disk → Disk Tools → Compare with...** diffs the current disk against a second disk. Useful for spotting differences between two versions, two backups, or for verifying that a copy round-tripped correctly.
+
+Compare works on CBM-DOS disk images (D64 / D71 / D81 / D80 / D82 / DNP, including G64 / NIB opened as D64). It's disabled for tape images, partition lists and IDE64 `.hdd` images.
 
 ## How it works
 
-1. Pick the second disk via the prompt — either an already-open tab or an external file.
-2. The editor walks both disks' directories + file contents.
-3. Results are organised into four sections:
-   - **Differ** — files with the same name on both sides but different content
-   - **Only in A** — files only on the active disk
-   - **Only in B** — files only on the compared disk
-   - **Identical** — files with the same name + same bytes
+1. Pick the second disk — another open tab of a comparable format, or a file from disk.
+2. The editor reads both directories and every file's data.
+3. Files are paired **by name and occurrence**: the second `----` separator on A meets the second `----` on B, so directories with duplicate names (dir art, separators) line up instead of all matching the first one.
 
-## UI
+## Files tab
 
-Each section is a collapsible group. The "Identical" section is collapsed by default (it's usually the biggest and least interesting); the other three start expanded.
+Results are organised into four sections:
 
-**Filter box** above the file list — type to narrow the list by filename across all sections. Matching sections auto-expand.
+- **Differ** — same name on both sides, but different type or different bytes
+- **Only in A** — files only on the active disk
+- **Only in B** — files only on the compared disk
+- **Identical** — same name, same type, same bytes
 
-**Summary cards** at the top show the count per section. Click a card to jump to that section.
+Each section is a collapsible group; **Identical** starts collapsed (usually the biggest and least interesting). The **summary cards** at the top show the count per section — click one to jump to that section. The **Filter by filename…** box narrows the list across all sections, expanding the ones with matches.
 
-**Column headers** stay visible while you scroll the file list.
+## Directory tab
 
-## Sector-level diff
+Both directories side by side, row by row, with a marker per pair.
 
-Click a file in the **Differ** section to open the sector-level drill-down: side-by-side hex view of the two files' bytes, highlighted at each differing byte.
+## Sectors tab
 
-`◀ / ▶` buttons step through every differing sector with a "5 / 23" position label. Useful for spotting where two versions diverged.
+Only when both disks are the same format. A map of every track / sector, identical vs differing, with a count of differing sectors and bytes. Click a sector for a side-by-side hex view with the differing bytes highlighted; the ◀ / ▶ buttons step through every differing sector with an "n / total" position label.
 
 ## What's compared
 
-- **Filename + type** — for matching
-- **File content** — every byte of every file's data sectors
-- **Block count** — informational
-- **GEOS INFO blocks** — included in the byte comparison
-- **REL side-sectors** — included
+- **Filename** — for pairing
+- **File type + file content** — every byte of every file
 
-What's NOT compared:
+What's NOT compared on the Files tab:
 
-- **Directory order** — two disks with the same files in different orders both match
+- **Directory order** — two disks with the same files in different orders still match
 - **BAM allocation** — only file content matters, not where on disk it lives
 - **Disk header / name / ID** — these can differ without files being different
 
-## CFS (.hdd) limitations
-
-Compare is **disabled** for `.hdd` disks today. Needs per-file content compare (which means byte-slice decoding) and ideally also per-LBA structural diff. On the TODO list.
-
-## Compare two RAMLink containers
-
-Compare can handle containers — it descends into each partition and diffs them in turn. Result groups by partition.
+The Sectors tab is purely positional, so it does see all of the above.
 
 ## Useful comparisons
 

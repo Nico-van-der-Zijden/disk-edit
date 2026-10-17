@@ -202,7 +202,7 @@
           <div class="option disabled" id="opt-export-html-dir">Export as HTML</div>
           <div class="option disabled" id="opt-export-png-dir">Export Directory as PNG</div>
           <div class="separator"></div>
-          <div class="option disabled" id="opt-md5">Show MD5 Hash</div>
+          <div class="option disabled" id="opt-md5">Show Disk Hash</div>
           <div class="option disabled" id="opt-base64">Show as Base64 Data URI</div>
         </div>
       </div>
@@ -382,7 +382,7 @@
   <div class="theme-toggle" id="theme-toggle" title="Toggle theme"></div>
 </div>
 
-<input type="file" id="file-input" accept=".d64,.d71,.d81,.d80,.d82,.t64,.tap,.x64,.g64,.d1m,.d2m,.d4m,.dnp,.nib,.nb2,.nbz,.p00,.s00,.u00,.r00,.lnx,.zip,.gz,.rml,.rl,.dhd" multiple>
+<input type="file" id="file-input" accept=".d64,.d71,.d81,.d80,.d82,.t64,.tap,.x64,.g64,.dnp,.nib,.nb2,.nbz,.d1m,.d2m,.d4m,.dhd,.rml,.rl,.hdd,.lnx,.zip,.gz,.tgz,.tar,.lha,.lzh,.lzs,.prg,.seq,.usr,.rel,.p00,.s00,.u00,.r00,.cvt,.txt" multiple>
 
 <div class="toolbar" id="toolbar">
   <div class="toolbar-group">
@@ -444,7 +444,7 @@
 <div class="menu-dropdown context-menu" id="context-menu"></div>
 
 <div class="modal-overlay" id="input-modal-overlay">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="input-modal-title">
     <button class="modal-close-x" id="input-modal-close-x" aria-label="Close" type="button"><i class="fa-solid fa-xmark"></i></button>
     <div class="modal-title" id="input-modal-title"></div>
     <div class="modal-body">
@@ -458,7 +458,7 @@
 </div>
 
 <div class="modal-overlay" id="modal-overlay">
-  <div class="modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <button class="modal-close-x" id="modal-close-x" aria-label="Close" type="button"><i class="fa-solid fa-xmark"></i></button>
     <div class="modal-title" id="modal-title"></div>
     <div class="modal-body" id="modal-body"></div>
@@ -528,8 +528,8 @@
 <script src="assets/js/ui/ui-help.js"></script>
 <script src="assets/js/ui/ui-mobile-menu.js"></script>
 
-<!-- Matomo (excluded from dist builds) -->
-<script src="assets/js/matomo.js"></script>
+<!-- Optional, server-only (gitignored, excluded from dist builds) -->
+<script src="assets/js/site-local.js"></script>
 
 </body>
 </html>

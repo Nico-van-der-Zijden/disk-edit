@@ -66,17 +66,27 @@
  * @property {Object<string, boolean>} orphanSectors - Sectors used but not owned
  */
 
+// ── Directory-entry field offsets (32-byte CBM-DOS entry) ────────────
+var DIRENT_TYPE = 0x02;
+var DIRENT_TRACK = 0x03;
+var DIRENT_SECTOR = 0x04;
+var DIRENT_NAME = 0x05;
+var DIRENT_GEOS_INFO_TRACK = 0x15;  // REL: side-sector T/S
+var DIRENT_GEOS_INFO_SECTOR = 0x16;
+var DIRENT_GEOS_STRUCT = 0x17;      // REL: record length
+var DIRENT_GEOS_TYPE = 0x18;
+var DIRENT_BLOCKS_LO = 0x1E;        // file size in blocks / partition size in sectors
+var DIRENT_BLOCKS_HI = 0x1F;
+
+function direntBlocks(data, entryOff) {
+  return data[entryOff + DIRENT_BLOCKS_LO] | (data[entryOff + DIRENT_BLOCKS_HI] << 8);
+}
+
 // ── CMD native-partition BAM helpers (DNP / D1M / D2M / D4M) ─────────
-// All four formats share the same on-disk BAM layout:
-//   - Header at track 1 sector 2 (32 bytes), then 32-byte slots for tracks 1-7.
-//   - Sectors 3, 4, ... hold 8 tracks each (32 bytes per track, no header).
-//   - Bitmap is MSB-first (opposite of D64/D71/D81).
-// The only difference between formats is sectorsPerTrack, so read/write BAM
-// helpers can be shared.
+// DNP BAM: header at T1/S2, then one 32-byte MSB-first slot per track
+// (8 per sector). Track 1 starts the image, so T1/Sn is always at n*256.
 function _cmdBamBase(track) {
-  var bamSec = 2 + (track >> 3);
-  var bamByteOff = (track & 7) * 32;
-  return sectorOffset(1, bamSec, getCurrentCtx()) + bamByteOff;
+  return (2 + (track >> 3)) * 256 + (track & 7) * 32;
 }
 function _cmdIsSectorFree(data, bamOff, track, sector) {
   var base = this._bamBase(track);
@@ -94,13 +104,8 @@ function _cmdReadTrackFree(data, bamOff, track) {
   }
   return free;
 }
-// DNP dir-track free-blocks: skip the first 8 BAM bytes (sectors 0-63 of
-// the dir track). The CMD HD ROM treats those 64 sectors as reserved
-// regardless of bitmap state — 35 of them are bitmap-marked used (boot,
-// T1/S1 header, 32 BAM sectors, first dir) and the remaining 29 are
-// pre-reserved for dir-chain growth. Real hardware reports `(tracks × 256) − 64`
-// free on a fresh-formatted Native; we have to subtract the same 29
-// invisible reserved sectors to match.
+// The CMD ROM treats T1 sectors 0-63 as reserved regardless of bitmap
+// state, so "blocks free" skips the first 8 bitmap bytes of the dir track.
 function _dnpReadTrackFree(data, bamOff, track) {
   var base = this._bamBase(track);
   if (base < 0 || base + 32 > data.length) return 0;
@@ -120,31 +125,17 @@ function _cmdReadTrackBitmap(data, bamOff, track) {
 function _cmdNoop() {}
 
 // ── CMD FD BAM helpers (D1M/D2M/D4M) ──────────────────────────────────
-// FD2000/FD4000 native filesystems use a more compact BAM than DNP —
-// instead of one 32-byte slot per *physical* track, one slot per
-// *logical* 256-LBA track is packed contiguously from T1/S2 +0x20,
-// with byte +0x08 of T1/S2 holding the logical-track count.
-//
-// Free-block calculation, verified against five samples (empty d1m/
-// d2m/d4m + game(d2m)/game(d4m)):
-//   1. effective_slots: usually equals byte +0x08, but a half-formatted
-//      disk (game(d2m).d2m) can carry a "system marker" slot at the end
-//      with 16 FF + 16 zero — that slot is excluded.
-//   2. First 8 bytes of slot 0 are skipped — sectors 0..63 of T1 are
-//      reserved overhead (header / BAM / dir-start), exactly mirroring
-//      DNP's _dnpReadTrackFree convention.
+// One 32-byte slot per *logical* 256-sector track, packed from T1/S2
+// +$20; T1/S2 +$08 holds the slot count. A trailing slot of 16×$FF +
+// 16×$00 is a half-formatted disk's system marker and isn't counted.
+var _FD_BAM_HDR = 2 * 256; // T1/S2
 function _fdBamBase(track) {
-  return sectorOffset(1, 2, getCurrentCtx()) + 32 + (track - 1) * 32;
+  return _FD_BAM_HDR + 32 + (track - 1) * 32;
 }
 function _fdLogicalTrackCount(data) {
-  var hdr = sectorOffset(1, 2, getCurrentCtx());
-  if (hdr < 0 || hdr + 0x09 > data.length) return 0;
-  return data[hdr + 0x08];
+  if (_FD_BAM_HDR + 0x09 > data.length) return 0;
+  return data[_FD_BAM_HDR + 0x08];
 }
-// "System marker" detection: a slot of 16 0xFF bytes followed by 16 0x00
-// bytes signals a half-formatted disk's reserved tail. Only the last
-// slot is checked; regular data slots can never have this exact shape
-// for a fresh disk, and a used disk's last slot is unlikely to as well.
 function _fdLastSlotIsSystemMarker(data, hdrOff, n) {
   var off = hdrOff + 0x20 + (n - 1) * 32;
   if (off + 32 > data.length) return false;
@@ -153,10 +144,9 @@ function _fdLastSlotIsSystemMarker(data, hdrOff, n) {
   return true;
 }
 function _fdEffectiveSlots(data) {
-  var hdr = sectorOffset(1, 2, getCurrentCtx());
   var n = _fdLogicalTrackCount(data);
-  if (n === 0 || hdr < 0) return 0;
-  return _fdLastSlotIsSystemMarker(data, hdr, n) ? n - 1 : n;
+  if (n === 0) return 0;
+  return _fdLastSlotIsSystemMarker(data, _FD_BAM_HDR, n) ? n - 1 : n;
 }
 function _fdIsSectorFree(data, bamOff, track, sector) {
   if (track > _fdEffectiveSlots(data)) return false;
@@ -168,9 +158,7 @@ function _fdReadTrackFree(data, bamOff, track) {
   if (track > _fdEffectiveSlots(data)) return 0;
   var base = this._bamBase(track);
   if (base < 0 || base + 32 > data.length) return 0;
-  // Track 1 (slot 0): skip first 8 bytes (sectors 0..63 are reserved
-  // T1 overhead — header / BAM / dir-start — matching DNP convention).
-  var startByte = (track === 1) ? 8 : 0;
+  var startByte = (track === 1) ? 8 : 0; // T1 sectors 0-63 reserved, as on DNP
   var free = 0;
   for (var i = startByte; i < 32; i++) {
     var b = data[base + i];
@@ -235,19 +223,19 @@ const DISK_FORMATS = {
       if (numTracks <= 35) return numTracks;
       return (currentBuffer && getSpeederVariant(currentBuffer, getCurrentCtx())) ? numTracks : 35;
     },
-    getBamBitmapBase(bamOff, track) { return _d64BamEntry(bamOff, track, getCurrentCtx()) + 1; },
+    getBamBitmapBase(bamOff, track) { return _d64BamEntry(bamOff, track, null) + 1; },
     readTrackFree(data, bamOff, track) {
-      return data[_d64BamEntry(bamOff, track, getCurrentCtx())];
+      return data[_d64BamEntry(bamOff, track, data)];
     },
     writeTrackFree(data, bamOff, track, free) {
-      data[_d64BamEntry(bamOff, track, getCurrentCtx())] = free;
+      data[_d64BamEntry(bamOff, track, data)] = free;
     },
     readTrackBitmap(data, bamOff, track) {
-      const base = _d64BamEntry(bamOff, track, getCurrentCtx());
+      const base = _d64BamEntry(bamOff, track, data);
       return data[base + 1] | (data[base + 2] << 8) | (data[base + 3] << 16);
     },
     writeTrackBitmap(data, bamOff, track, bm) {
-      const base = _d64BamEntry(bamOff, track, getCurrentCtx());
+      const base = _d64BamEntry(bamOff, track, data);
       data[base + 1] = bm & 0xFF;
       data[base + 2] = (bm >> 8) & 0xFF;
       data[base + 3] = (bm >> 16) & 0xFF;
@@ -438,23 +426,16 @@ const DISK_FORMATS = {
       data[bamOff + 0xA6] = this.dosType.charCodeAt(1);
       for (let i = 0xA7; i <= 0xAA; i++) data[bamOff + i] = 0xA0;
 
-      // Side 2 BAM: free counts at T18/S0 $DD-$FF (35 bytes, tracks 36-70)
-      // Bitmaps at T53/S0 $00-$68 (105 bytes, tracks 36-70)
-      // Tracks 71-80 on extended disks are outside the BAM
+      // Side 2: free counts at T18/S0 +$DD, bitmaps at T53/S0. The 1571
+      // allocates all of T53 (D71.TXT), so it counts 0 free. Tracks
+      // 71-80 of extended images are outside the BAM.
       const bam2Off = this._bam2Off(bamOff);
       const maxBamTrack = Math.min(numTracks, 70);
       for (let t = 36; t <= maxBamTrack; t++) {
         const spt = this.sectorsPerTrack(t);
-        // Free count at T18/S0 byte $DD + (t - 36)
-        if (t === 53) {
-          data[bamOff + 0xDD + (t - 36)] = spt - 1;
-        } else {
-          data[bamOff + 0xDD + (t - 36)] = spt;
-        }
-        // Bitmap at T53/S0 byte (t - 36) * 3
         const bmBase = bam2Off + (t - 36) * 3;
-        let bm = (1 << spt) - 1;
-        if (t === 53) bm &= ~(1 << 0); // T53/S0 used for BAM2
+        const bm = t === 53 ? 0 : (1 << spt) - 1;
+        data[bamOff + 0xDD + (t - 36)] = t === 53 ? 0 : spt;
         data[bmBase] = bm & 0xFF;
         data[bmBase + 1] = (bm >> 8) & 0xFF;
         data[bmBase + 2] = (bm >> 16) & 0xFF;
@@ -513,15 +494,7 @@ const DISK_FORMATS = {
     // Tracks 1-40 in BAM sector 1 (T40/S1) starting at offset 0x10
     // Tracks 41-80 in BAM sector 2 (T40/S2) starting at offset 0x10
     bamTracksRange(numTracks) { return numTracks; }, // all 80 tracks are in BAM
-    _bamBase(bamOff, track) {
-      // bamOff points to T40/S1
-      if (track <= 40) {
-        return bamOff + 0x10 + (track - 1) * 6;
-      } else {
-        // BAM sector 2 is at T40/S2 (256 bytes after T40/S1)
-        return bamOff + 256 + 0x10 + (track - 41) * 6;
-      }
-    },
+    _bamBase(bamOff, track) { return d81BamEntryBase(bamOff, track); },
     getBamBitmapBase(bamOff, track) { return this._bamBase(bamOff, track) + 1; },
     readTrackFree(data, bamOff, track) {
       return data[this._bamBase(bamOff, track)];
@@ -548,63 +521,28 @@ const DISK_FORMATS = {
       var headerOff = bamOff - this.bamSector * 256 + this.headerSector * 256; // T40/S0
       data[headerOff + 0x00] = this.dirTrack;
       data[headerOff + 0x01] = this.dirSector;
-      data[headerOff + 0x02] = this.dosVersion; // 'D'
-      data[headerOff + 0x03] = 0xBB;
-
-      // Disk name at header offset 0x04: 0xA0 padding
+      data[headerOff + 0x02] = this.dosVersion;
+      data[headerOff + 0x03] = 0x00;
       for (var i = 0; i < 16; i++) data[headerOff + this.nameOffset + i] = 0xA0;
-      // Fill bytes
       data[headerOff + 0x14] = 0xA0;
       data[headerOff + 0x15] = 0xA0;
-      // Disk ID: 0xA0
-      data[headerOff + 0x16] = 0xA0;
+      data[headerOff + 0x16] = 0xA0; // disk ID
       data[headerOff + 0x17] = 0xA0;
-      // Fill
       data[headerOff + 0x18] = 0xA0;
-      // DOS type
       data[headerOff + 0x19] = this.dosType.charCodeAt(0);
       data[headerOff + 0x1A] = this.dosType.charCodeAt(1);
-      // Fill
-      for (i = 0x1B; i < 0x100; i++) data[headerOff + i] = 0x00;
+      data[headerOff + 0x1B] = 0xA0;
+      data[headerOff + 0x1C] = 0xA0;
+      for (i = 0x1D; i < 0x100; i++) data[headerOff + i] = 0x00;
 
-      // BAM sector 1 (T40/S1) — BAM for tracks 1-40
-      data[bamOff + 0x00] = this.dirTrack;
-      data[bamOff + 0x01] = 2; // link to BAM sector 2
-      data[bamOff + 0x02] = this.dosVersion;
-      data[bamOff + 0x03] = 0xBB;
-      // Disk ID copy in BAM sectors
-      data[bamOff + 0x04] = 0xA0;
-      data[bamOff + 0x05] = 0xA0;
-
-      // BAM sector 2 (T40/S2) — BAM for tracks 41-80
+      // BAM sectors: T40/S1 covers tracks 1-40 and links to T40/S2 (41-80).
       var bam2Off = bamOff + 256;
-      data[bam2Off + 0x00] = 0x00;
-      data[bam2Off + 0x01] = 0xFF;
-      data[bam2Off + 0x02] = this.dosVersion;
-      data[bam2Off + 0x03] = 0xBB;
-      data[bam2Off + 0x04] = 0xA0;
-      data[bam2Off + 0x05] = 0xA0;
+      _d81WriteBamHeader(data, bamOff, this.dirTrack, 2, 0xA0, 0xA0);
+      _d81WriteBamHeader(data, bam2Off, 0x00, 0xFF, 0xA0, 0xA0);
 
-      // Init BAM entries for all tracks
       for (var t = 1; t <= numTracks; t++) {
-        var spt = this.sectorsPerTrack(t);
-        var base = this._bamBase(bamOff, t);
-        if (t === this.dirTrack) {
-          // Track 40: sectors 0,1,2,3 used (header, BAM1, BAM2, first dir sector)
-          data[base] = spt - 4;
-          // Set all bits free, then clear bits 0,1,2,3
-          for (var b = 0; b < 5; b++) data[base + 1 + b] = 0xFF;
-          data[base + 1] &= ~(1 << 0); // sector 0 (header)
-          data[base + 1] &= ~(1 << 1); // sector 1 (BAM1)
-          data[base + 1] &= ~(1 << 2); // sector 2 (BAM2)
-          data[base + 1] &= ~(1 << 3); // sector 3 (first dir)
-        } else {
-          data[base] = spt; // all free
-          for (var b = 0; b < 5; b++) data[base + 1 + b] = 0xFF;
-        }
+        _d81WriteBamEntry(data, this._bamBase(bamOff, t), t === this.dirTrack ? 'system' : 'free');
       }
-
-      // Directory sector init is handled by createEmptyDisk
     },
   },
   // D80 format descriptor (8050 drive, single-sided)
@@ -670,7 +608,7 @@ const DISK_FORMATS = {
       data[b+2] = (bm >> 16) & 0xFF; data[b+3] = (bm >> 24) & 0xFF;
     },
     initBAM(data, bamOff, numTracks) {
-      var headerOff = sectorOffset(this.headerTrack, this.headerSector, getCurrentCtx());
+      var headerOff = getTrackOffsets(this, numTracks)[this.headerTrack] + this.headerSector * 256;
 
       // Header sector T39/S0: points to first BAM sector
       data[headerOff + 0] = this.bamTrack; // 38
@@ -684,6 +622,7 @@ const DISK_FORMATS = {
       data[headerOff + 0x1A] = 0xA0;
       data[headerOff + 0x1B] = this.dosType.charCodeAt(0);
       data[headerOff + 0x1C] = this.dosType.charCodeAt(1);
+      for (var fi = 0x1D; fi <= 0x20; fi++) data[headerOff + fi] = 0xA0;
 
       // BAM sector 1 (T38/S0): covers tracks 1-50
       data[bamOff + 0] = 38; data[bamOff + 1] = 3; // chain to BAM2
@@ -708,7 +647,7 @@ const DISK_FORMATS = {
       }
 
       // First dir sector T39/S1
-      var dirOff = sectorOffset(this.dirTrack, this.dirSector, getCurrentCtx());
+      var dirOff = getTrackOffsets(this, numTracks)[this.dirTrack] + this.dirSector * 256;
       data[dirOff + 0] = 0x00; data[dirOff + 1] = 0xFF;
     },
   },
@@ -777,7 +716,7 @@ const DISK_FORMATS = {
       data[b+2] = (bm >> 16) & 0xFF; data[b+3] = (bm >> 24) & 0xFF;
     },
     initBAM(data, bamOff, numTracks) {
-      var headerOff = sectorOffset(this.headerTrack, this.headerSector, getCurrentCtx());
+      var headerOff = getTrackOffsets(this, numTracks)[this.headerTrack] + this.headerSector * 256;
 
       // Header sector T39/S0
       data[headerOff + 0] = this.bamTrack;
@@ -790,6 +729,7 @@ const DISK_FORMATS = {
       data[headerOff + 0x1A] = 0xA0;
       data[headerOff + 0x1B] = this.dosType.charCodeAt(0);
       data[headerOff + 0x1C] = this.dosType.charCodeAt(1);
+      for (var fi = 0x1D; fi <= 0x20; fi++) data[headerOff + fi] = 0xA0;
 
       // BAM sectors with chain and track range headers
       var bamSectors = [
@@ -817,7 +757,7 @@ const DISK_FORMATS = {
         this.writeTrackBitmap(data, bamOff, t, bm);
       }
 
-      var dirOff = sectorOffset(this.dirTrack, this.dirSector, getCurrentCtx());
+      var dirOff = getTrackOffsets(this, numTracks)[this.dirTrack] + this.dirSector * 256;
       data[dirOff + 0] = 0x00; data[dirOff + 1] = 0xFF;
     },
   },
@@ -1082,13 +1022,8 @@ const DISK_FORMATS = {
     writeTrackBitmap: function() {},
     initBAM: function() {},
   },
-  // CFS 0.11 filesystem inside an IDE64 partition. Becomes currentFormat
-  // on entering a CFS partition so menu-state queries that read
-  // currentFormat.filesystem branch to CFS-aware code without touching
-  // the CBM-DOS path. Geometry differs from CBM-DOS in every dimension —
-  // 512-byte sectors, LBA addressing, 16-byte filenames, 16 dir entries
-  // per sector. The placeholder CBM-DOS hooks below are never invoked
-  // because dispatch happens earlier (cfsPartitionIdx >= 0).
+  // CFS 0.11 inside an IDE64 partition: currentFormat while one is open,
+  // so code can branch on .filesystem. The CBM-DOS hooks are placeholders.
   cfs: {
     name: 'CFS',
     ext: '.hdd',
@@ -1222,10 +1157,9 @@ var _cmdGetBamBitmapBase = function(bamOff, track) { return this._bamBase(track)
   DISK_FORMATS[k].getBamBitmapBase = _cmdGetBamBitmapBase;
 });
 
-// D1M/D2M/D4M: also protect CMD FD system partition sectors on the last track
-// (signature sector 5 + partition directory chain sectors 8-11, per VICE fsimage-create.c).
-// These sectors are protected from file allocation but VICE leaves them marked *free*
-// in the main BAM — see getBamOmittedSectors below so the integrity checker matches.
+// D1M/D2M/D4M system partition on the last track (signature sector 5,
+// partition dir 8-11, per VICE fsimage-create.c): never allocated to
+// files, yet VICE leaves it free in the BAM (getBamOmittedSectors).
 var _CMD_FD_SYS_SECTORS = [5, 8, 9, 10, 11];
 var _cmdFdGetProtectedSectors = function(track) {
   var secs = _cmdGetProtectedSectors.call(this, track);
@@ -1237,12 +1171,8 @@ var _cmdFdGetProtectedSectors = function(track) {
 var _cmdFdGetBamOmittedSectors = function(track) {
   return track === currentTracks ? _CMD_FD_SYS_SECTORS.slice() : [];
 };
-// BAM iteration extent for D1M/D2M/D4M. The BAM is LBA-indexed (one slot
-// per 256-sector logical track) while the format descriptor declares
-// physical SPT (40/80/160). Validators iterating the bitmap need LBA
-// coords; without this override they'd visit physical tracks past the
-// effective slot count, where _fdIsSectorFree returns false for every
-// sector and produces phantom orphans (e.g. 4960 on a fresh D4M).
+// The FD BAM is indexed by logical 256-sector track, not by the physical
+// SPT the descriptor declares; BAM walkers iterate with these.
 var _cmdFdGetBamIterTracks = function(data) {
   return _fdEffectiveSlots(data);
 };
@@ -1254,16 +1184,19 @@ var _cmdFdGetBamIterSectorsPerTrack = function(track) {
   DISK_FORMATS[k].getBamOmittedSectors = _cmdFdGetBamOmittedSectors;
   DISK_FORMATS[k].getBamIterTracks = _cmdFdGetBamIterTracks;
   DISK_FORMATS[k].getBamIterSectorsPerTrack = _cmdFdGetBamIterSectorsPerTrack;
-  // LBA addressing: dir/file-chain T:S use sector_idx = (T-1)*256 + S
-  // regardless of physical SPT. Consumed by sectorOffset().
+  // Dir and file-chain T:S are logical: LBA = (T-1)*256 + S, whatever the physical SPT.
   DISK_FORMATS[k].lbaAddressing = true;
 });
 
-// CMD RAMLink — image is a raw RAM dump (1–8 MiB typical, up to 64 MiB)
-// laid out internally as a single DNP. We register it as a DNP alias
-// with a distinct name and .rml extension so the editor labels the
-// format correctly and saves with the original suffix; everything else
-// (BAM walk, directory parse, subdir navigation) is plain DNP.
+// D71: the 1571 allocates all of T53 (side-2 BAM track), not just 53/0.
+DISK_FORMATS.d71.getProtectedSectors = function(track) {
+  if (track !== 53) return _defaultGetProtectedSectors.call(this, track);
+  var secs = [];
+  for (var s = 0; s < this.sectorsPerTrack(track); s++) secs.push(s);
+  return secs;
+};
+
+// A flat RAMLink dump is a DNP; the alias only keeps the name and .rml suffix.
 DISK_FORMATS.ramlink = Object.assign({}, DISK_FORMATS.dnp, {
   name: 'RAMLink',
   ext: '.rml',
@@ -1292,28 +1225,39 @@ function sectorsPerTrack(t, ctx) {
   return ctx.format.sectorsPerTrack(t);
 }
 
-
-
-// ── BAM byte-level helpers (partition-aware, handles D81 >32 sectors) ─
-// Partition BAM: returns byte offset for a track's BAM entry (free count byte)
-// relTrack is 1-based relative to partition start
-function getPartitionBamEntry(bamOff, relTrack, ctx) {
-  var fmt = ctx.format;
-  var spt = fmt.partitionSpt;
-  var off = fmt.partitionBamOffset;
-  var esz = fmt.partitionBamEntrySize;
-  if (relTrack <= spt) return bamOff + off + (relTrack - 1) * esz;
-  return bamOff + 256 + off + (relTrack - spt - 1) * esz;
+// Bounds for T/S links in dir and file chains. On lbaAddressing formats
+// (D1M/D2M/D4M) links are logical: S runs 0-255 on every track and the
+// last logical track may be partial.
+function _lbaSectorCount(ctx) {
+  var n = ctx.tracks * ctx.format.sectorsPerTrack(1);
+  if (ctx.buffer) n = Math.min(n, Math.floor(ctx.buffer.byteLength / 256));
+  return n;
+}
+function chainTrackCount(ctx) {
+  if (!ctx.format.lbaAddressing) return ctx.tracks;
+  return Math.ceil(_lbaSectorCount(ctx) / 256);
+}
+function chainSectorsPerTrack(track, ctx) {
+  if (!ctx.format.lbaAddressing) return ctx.format.sectorsPerTrack(track);
+  return Math.max(0, Math.min(256, _lbaSectorCount(ctx) - (track - 1) * 256));
+}
+function isValidChainLink(track, sector, ctx) {
+  return track >= 1 && track <= chainTrackCount(ctx) &&
+         sector >= 0 && sector < chainSectorsPerTrack(track, ctx);
 }
 
-// Returns the byte offset of the bitmap bytes for a given track.
-// For partitions, track is absolute (disk-level) and bamOff is the partition BAM offset.
+// ── BAM byte-level helpers (partition-aware, handles D81 >32 sectors) ─
+// Entry (free-count byte) of a D81 sub-partition's BAM for a track given
+// relative to the partition start (1 = its first track).
+function getPartitionBamEntry(bamOff, relTrack, ctx) {
+  return d81BamEntryBase(bamOff, ctx.partition.startTrack + relTrack - 1);
+}
+
+// Byte offset of a track's bitmap bytes. Inside a D81 sub-partition,
+// bamOff is the partition's own BAM and track is absolute.
 function getBamBitmapBase(track, bamOff, ctx) {
   var partition = ctx.partition;
-  if (partition && !partition.dnpDir) {
-    var relTrack = track - partition.startTrack + 1;
-    return getPartitionBamEntry(bamOff, relTrack, ctx) + 1;
-  }
+  if (partition && !partition.dnpDir) return d81BamEntryBase(bamOff, track) + 1;
   return ctx.format.getBamBitmapBase(bamOff, track);
 }
 
@@ -1321,7 +1265,7 @@ function getBamBitmapBase(track, bamOff, ctx) {
 function checkSectorFree(data, bamOff, track, sector, ctx) {
   if (ctx.format.isSectorFree) return ctx.format.isSectorFree(data, bamOff, track, sector);
   var base = getBamBitmapBase(track, bamOff, ctx);
-  return (data[base + Math.floor(sector / 8)] & (1 << (sector % 8))) !== 0;
+  return (data[base + (sector >> 3)] & ctx.format.bamBitMask(sector)) !== 0;
 }
 
 /** @param {Uint8Array} data @param {number} track @param {number} sector @param {number} bamOff */
@@ -1353,10 +1297,8 @@ function bamRecalcFree(data, track, bamOff, ctx) {
       if (bval & (1 << bit)) free++;
     }
   }
-  // Write free count
   if (partition && !partition.dnpDir) {
-    var relTrack = track - partition.startTrack + 1;
-    data[getPartitionBamEntry(bamOff, relTrack, ctx)] = free;
+    data[d81BamEntryBase(bamOff, track)] = free;
   } else {
     fmt.writeTrackFree(data, bamOff, track, free);
   }
@@ -1403,8 +1345,8 @@ function readFileData(buffer, entryOff, ctx) {
   var bytes = [];
   var visited = {};
   while (t !== 0) {
-    if (t < 1 || t > ctx.tracks) return { data: new Uint8Array(bytes), error: 'Illegal track ' + t };
-    if (s < 0 || s >= ctx.format.sectorsPerTrack(t)) return { data: new Uint8Array(bytes), error: 'Illegal sector ' + s + ' on track ' + t };
+    if (t < 1 || t > chainTrackCount(ctx)) return { data: new Uint8Array(bytes), error: 'Illegal track ' + t };
+    if (s < 0 || s >= chainSectorsPerTrack(t, ctx)) return { data: new Uint8Array(bytes), error: 'Illegal sector ' + s + ' on track ' + t };
     var key = t + ':' + s;
     if (visited[key]) return { data: new Uint8Array(bytes), error: 'Circular reference at T:' + t + ' S:' + s };
     visited[key] = true;
@@ -1416,10 +1358,9 @@ function readFileData(buffer, entryOff, ctx) {
     var nextS = disk[off + 1];
 
     if (nextT === 0) {
-      // Last sector: nextS = index of last data byte, data is bytes 2..nextS
+      // Last sector: nextS = index of the last data byte
       for (var i = 2; i <= nextS && i < 256; i++) bytes.push(disk[off + i]);
     } else {
-      // Full sector: data is bytes 2-255 (254 bytes)
       for (var j = 2; j < 256; j++) bytes.push(disk[off + j]);
     }
 
@@ -1497,30 +1438,25 @@ var ERROR_CODES = {
 
 // ── D64-specific spec features (D64.TXT rev 1.11) ────────────────────
 
-// Resolve the BAM entry start (free-count byte) for D64 track N.
-// Tracks 1-35: standard 4-byte entries starting at +$04. Tracks 36-40:
-// speeder-DOS extended BAM at the variant's offset, or -1 when no
-// variant is detected (the caller shouldn't reach here in that case
-// because bamTracksRange caps at 35).
-function _d64BamEntry(bamOff, track, ctx) {
+// BAM entry (free-count byte) for D64 track N. Tracks 36-40 live in the
+// speeder-DOS extended BAM; -1 when neither variant is present. `data`
+// may be null for callers without the image (falls back to the globals).
+function _d64BamEntry(bamOff, track, data) {
   if (track <= 35) return bamOff + 4 * track;
-  var v = ctx.buffer ? getSpeederVariant(ctx.buffer, ctx) : null;
-  if (v === 'SpeedDOS') return bamOff + 0xC0 + (track - 36) * 4;
-  if (v === 'DolphinDOS') return bamOff + 0xAC + (track - 36) * 4;
+  if (!data) {
+    var cur = getCurrentCtx();
+    if (!cur.buffer) return -1;
+    data = new Uint8Array(cur.buffer);
+  }
+  if (_hasFdEntries(data, bamOff + 0xC0)) return bamOff + 0xC0 + (track - 36) * 4; // SpeedDOS
+  if (_hasFdEntries(data, bamOff + 0xAC)) return bamOff + 0xAC + (track - 36) * 4; // DolphinDOS
   return -1;
 }
 
 
-// D64.TXT lines 233-242 / D71.TXT lines 248-251 / D81.TXT lines 117-120:
-// BAM +$02 ("DOS version") that isn't the format's expected byte or $00
-// triggers a "DOS Version" error 73 on every write — a "soft write protect".
-// Expected byte: $41 ('A') for D64/D71, $44 ('D') for D81, $43 ('C') for
-// D80/D82 — pulled from the format descriptor's `dosVersion` field.
-// Gated by `fmt.hasSoftWriteProtect` so any future format that grows the
-// same semantic is covered by setting the flag on its descriptor.
-// We don't block writes (the user knows what they're doing); we just
-// surface the state in the health-dot tooltip and the BAM-view banner.
-// Returns the offending byte value, or null when the disk is writable.
+// BAM +$02 other than the format's dosVersion or $00 makes the drive fail
+// every write with error 73 (D64/D71/D81 specs). Returns that byte, or
+// null when writable. Reported only; writes aren't blocked.
 function isSoftWriteProtected(buffer, ctx) {
   if (!buffer || !ctx.format.hasSoftWriteProtect) return null;
   var data = new Uint8Array(buffer);
@@ -1530,16 +1466,9 @@ function isSoftWriteProtected(buffer, ctx) {
   return (v === ctx.format.dosVersion || v === 0x00) ? null : v;
 }
 
-// Spec lines 327-364: 40-track speeder-DOS variants store the extra
-// BAM entries for tracks 36-40 at non-standard offsets. We identify
-// the variant by the *presence of plausible BAM data* at the known
-// offsets, NOT by the DOS-type field at +$A5/+$A6 — that byte pair is
-// user-editable and unreliable as a format signal (see PrologicDOS /
-// ProfDOS "2P"/"4A" which are deliberately not supported here).
-//
-// Returns 'SpeedDOS' | 'DolphinDOS' | null. Gated by
-// `fmt.supportsSpeederBam` so the check stays inert on formats that
-// don't define the speeder-BAM layout (D71/D80/D82/D81/CMD native).
+// 40-track speeder DOSes keep the tracks 36-40 BAM at +$C0 (SpeedDOS) or
+// +$AC (DolphinDOS). Identified by plausible BAM data there, not by the
+// user-editable DOS-type bytes. Returns 'SpeedDOS' | 'DolphinDOS' | null.
 function getSpeederVariant(buffer, ctx) {
   if (!buffer || !ctx.format.supportsSpeederBam) return null;
   if (ctx.tracks < 40) return null;
@@ -1551,9 +1480,7 @@ function getSpeederVariant(buffer, ctx) {
   return null;
 }
 
-// 5 entries × 4 bytes (free-count + 3 bitmap bytes) — require free
-// counts <= 17 (max SPT on tracks 36-40) and at least one bitmap byte
-// non-zero. Pure padding / all-zero ranges → no extended BAM there.
+// 5 four-byte entries: free counts <= 17 and at least one non-zero bitmap byte.
 function _hasFdEntries(data, off) {
   var anyBitmap = false;
   for (var i = 0; i < 5; i++) {
@@ -1565,9 +1492,7 @@ function _hasFdEntries(data, off) {
   return anyBitmap;
 }
 
-// C128 auto-boot disks have the literal bytes 'CBM' at T1/S0 +$00..+$02
-// (C128BOOT.TXT rev 1.1). Routed through sectorOffset so the check
-// also works on D71/D81 if anyone ever stamps a boot block there.
+// C128 auto-boot: 'CBM' at T1/S0 +$00 (C128BOOT.TXT).
 function hasC128BootSignature(buffer, ctx) {
   if (!buffer) return false;
   var data = new Uint8Array(buffer);
@@ -1576,11 +1501,7 @@ function hasC128BootSignature(buffer, ctx) {
   return data[off] === 0x43 && data[off + 1] === 0x42 && data[off + 2] === 0x4D;
 }
 
-// D81-specific auto-boot loader flag (D81.TXT lines 497-510). When BAM
-// (T40/S1) +$07 is non-zero the 1581 ROM looks for a USR file named
-// "COPYRIGHT CBM 86" on reset and executes it. Independent of the C128
-// boot-block signature above. Gated by `fmt.hasAutoBootFlag` so any
-// future format that grows the same convention can opt in.
+// 1581 auto-boot: BAM +$07 non-zero makes the drive run USR "COPYRIGHT CBM 86".
 function hasD81AutoBootLoader(buffer, ctx) {
   if (!buffer || !ctx.format.hasAutoBootFlag) return false;
   var data = new Uint8Array(buffer);
@@ -1615,62 +1536,56 @@ function fileTypeName(typeByte) {
 }
 
 
+function _isKnownImageSize(size) {
+  for (var key in DISK_FORMATS) {
+    var sizes = DISK_FORMATS[key].sizes;
+    for (var i = 0; i < sizes.length; i++) if (sizes[i].bytes === size) return true;
+  }
+  return false;
+}
+
+// X64: $43 $15 $41 $64 magic + 64-byte header in front of a regular image.
+function isX64Buffer(data) {
+  return data.length > 64 && data[0] === 0x43 && data[1] === 0x15 &&
+         data[2] === 0x41 && data[3] === 0x64 && _isKnownImageSize(data.length - 64);
+}
+
 function parseDisk(buffer, formatHint) {
   var data = new Uint8Array(buffer);
 
-  // X64 format: 64-byte header starting with "C1541" — strip header
-  if (data.length > 64 && data[0] === 0x43 && data[1] === 0x31 && data[2] === 0x35 &&
-      data[3] === 0x34 && data[4] === 0x31) {
-    buffer = buffer.slice(64);
-    data = new Uint8Array(buffer);
-    currentBuffer = buffer;
-  }
-
-  // G64 format: decode GCR to D64 sectors. The decoder also captures the
-  // physical sector order per track (for the G64 Layout viewer) — stash
-  // that on the global currentG64Layout, parallel to currentBuffer.
-  // We only WRITE the layout here, never reset it: parseDisk gets called
-  // again from parseCurrentDir on every dir refresh with the already-
-  // decoded D64 buffer, which would clobber the layout. The file-open
-  // handler is responsible for clearing currentG64Layout when opening a
-  // fresh file, same pattern as clearCmdContainerState.
-  if (data.length > 12 && data[0] === 0x47 && data[1] === 0x43 && data[2] === 0x52 && data[3] === 0x2D) {
-    var g64Result = decodeG64toD64(data);
-    buffer = g64Result.d64;
-    data = new Uint8Array(buffer);
-    currentBuffer = buffer;
-    currentG64Layout = g64Result.layout;
-  }
-  // NIB / NB2 (raw nibble dumps from a 1541, magic "MNIB-1541-RAW").
-  // We convert into the same { d64 buffer + g64Layout } shape as G64 so
-  // the rest of the editor sees a normal D64 with raw GCR available;
-  // saving the tab will encode it back as a real .g64.
-  else if (isNibBuffer(data)) {
-    var nibResult = parseNibFile(data);
-    buffer = nibResult.d64;
-    data = new Uint8Array(buffer);
-    currentBuffer = buffer;
-    currentG64Layout = nibResult.layout;
-    // We don't write .nib files — flip the working filename to .g64 so
-    // Save / Save As naturally produce a GCR-encoded G64. Tab labels
-    // pick this up via the file-open handlers (which read currentFileName
-    // for the createTab call after parseDisk runs).
-    if (currentFileName) {
-      currentFileName = currentFileName.replace(/\.(nib|nb2)$/i, '.g64');
-      if (!/\.g64$/i.test(currentFileName)) currentFileName += '.g64';
+  // Container sniffing only applies to a freshly opened file: an already
+  // decoded image (re-parsed on every dir refresh) has a known image size,
+  // and its first sector may happen to start with one of these magics.
+  // currentG64Layout is only ever set here; file-open handlers clear it.
+  if (!formatHint && !_isKnownImageSize(data.length)) {
+    if (isX64Buffer(data)) {
+      // The header is dropped, so the tab saves as a plain .d64.
+      buffer = buffer.slice(64);
+      data = new Uint8Array(buffer);
+      currentBuffer = buffer;
+      if (currentFileName) currentFileName = currentFileName.replace(/\.x64$/i, '.d64');
+    } else if (data.length > 12 && data[0] === 0x47 && data[1] === 0x43 && data[2] === 0x52 && data[3] === 0x2D) {
+      var g64Result = decodeG64toD64(data);
+      buffer = g64Result.d64;
+      data = new Uint8Array(buffer);
+      currentBuffer = buffer;
+      currentG64Layout = g64Result.layout;
+    } else if (isNibBuffer(data)) {
+      // NIB/NB2 decode like a G64 and are saved back as .g64.
+      var nibResult = parseNibFile(data);
+      buffer = nibResult.d64;
+      data = new Uint8Array(buffer);
+      currentBuffer = buffer;
+      currentG64Layout = nibResult.layout;
+      if (currentFileName) {
+        currentFileName = currentFileName.replace(/\.(nib|nb2)$/i, '.g64');
+        if (!/\.g64$/i.test(currentFileName)) currentFileName += '.g64';
+      }
     }
   }
 
-  // formatHint is used when the buffer is a CMD-container partition slice
-  // whose size doesn't match any standard disk format (e.g., an FD Native
-  // partition). Caller passes the format key directly so detectFormat is
-  // skipped. tracks falls back to the format's first declared size.
-  //
-  // DNP is variable-size — sizes[] is empty — so derive track count from
-  // the slice itself (one track = 256 sectors × 256 bytes = 64 KiB).
-  // Without this, parseDisk would fall through to the hardcoded "81"
-  // default and a 16 MiB Native partition would mis-report itself as an
-  // 81-track DNP, showing 20,672 free instead of 65,216.
+  // formatHint: a CMD-container partition slice whose size needn't match
+  // a standard image. DNP is variable-size, so its tracks come from the slice.
   if (formatHint && DISK_FORMATS[formatHint]) {
     currentFormat = DISK_FORMATS[formatHint];
     if (formatHint === 'dnp') {
@@ -1687,18 +1602,12 @@ function parseDisk(buffer, formatHint) {
     currentTracks = detected.tracks;
   }
 
-  // Flat .rml-as-DNP fallback: when a file ending in .rml/.rl turns
-  // out to be a plain DNP (no RAMLink partition table), label it as
-  // RAMLink so save-as keeps the .rml extension. Skipped inside a real
-  // CMD container (cmdcBuffer set) — there the slice is a genuine
-  // DNP/D64/D81 and shouldn't be relabelled.
+  // A standalone .rml/.rl without a partition table is a flat DNP dump.
   if (!cmdcBuffer && currentFormat === DISK_FORMATS.dnp && currentFileName && /\.(rml|rl)$/i.test(currentFileName)) {
     currentFormat = DISK_FORMATS.ramlink;
   }
 
-  // Reset interleave to format defaults. dirInterleave is per-format:
-  // D64/D71/D80/D82 use 3; D81 and the CMD native formats (DNP/D1M/D2M/D4M)
-  // buffer a whole track at once so they use 1 for both files and dir.
+  // Directory interleave is 3 unless the descriptor says otherwise.
   if (currentFormat.defaultInterleave) {
     fileInterleave = currentFormat.defaultInterleave;
     dirInterleave = (currentFormat.dirInterleave != null)
@@ -1721,10 +1630,8 @@ function parseDisk(buffer, formatHint) {
   const diskName = readPetsciiString(data, headerOff + fmt.nameOffset, fmt.nameLength);
   const diskId = readPetsciiString(data, headerOff + fmt.idOffset, fmt.idLength, false);
 
-  // Count free blocks from BAM. CBM formats (D64/D71/D81) exclude the dir
-  // track from "blocks free" by convention; CMD native formats (DNP/D1M/D2M/
-  // D4M) include it because their bitmap is exhaustive and dir-track sectors
-  // genuinely available for files are reported as free.
+  // CBM formats leave the dir track out of "blocks free"; the CMD native
+  // formats count it (their dir track also holds file data).
   let freeBlocks = 0;
   const bamTracks = fmt.bamTracksRange(currentTracks);
   const skipDirTrack = !fmt.isSectorFree;
@@ -1733,159 +1640,114 @@ function parseDisk(buffer, formatHint) {
     freeBlocks += fmt.readTrackFree(data, bamOffset, t);
   }
 
-  // Read directory chain
-  const entries = [];
-  let dirTrack = fmt.dirTrack;
-  let dirSector = fmt.dirSector;
-  const visited = new Set();
-
-  while (dirTrack !== 0) {
-    const key = `${dirTrack}:${dirSector}`;
-    if (visited.has(key)) break;
-    visited.add(key);
-
-    // Dir chain uses physical T:S even on FD (file chain bytes use LBA,
-    // but dir-chain bytes don't). Validate against physical SPT so
-    // garbage chain pointers (e.g., game(d2m).d2m's leftover `03 e0` at
-    // the end of an 8-entry dir) terminate cleanly instead of being
-    // followed via sectorOffset's LBA fallback into file content.
-    if (dirSector < 0 || dirSector >= fmt.sectorsPerTrack(dirTrack)) break;
-    const off = sectorOffset(dirTrack, dirSector, getCurrentCtx());
-    if (off < 0) break;
-
-    for (let i = 0; i < fmt.entriesPerSector; i++) {
-      const entryOff = off + i * fmt.entrySize;
-      const typeByte = data[entryOff + 2];
-
-      if (typeByte === 0x00) {
-        const fileTrack = data[entryOff + 3];
-        const fileSector = data[entryOff + 4];
-        const blocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
-        let hasName = false;
-        for (let j = 0; j < 16; j++) {
-          if (data[entryOff + 5 + j] !== 0x00 && data[entryOff + 5 + j] !== 0xA0) {
-            hasName = true; break;
-          }
-        }
-        if (!hasName && fileTrack === 0 && fileSector === 0 && blocks === 0) continue;
-      }
-
-      const name = readPetsciiString(data, entryOff + 5, 16);
-      const blocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
-      const closed = (typeByte & 0x80) !== 0;
-      const deleted = !closed;
-
-      if (deleted) {
-        const idx = typeByte & 0x07;
-        const typeName = FILE_TYPES[idx] || 'DEL';
-        const locked = (typeByte & 0x40) !== 0;
-        entries.push({ name, type: '*' + typeName + (locked ? '<' : ' '), blocks, deleted: true, entryOff });
-      } else {
-        entries.push({ name, type: fileTypeName(typeByte), blocks, deleted: false, entryOff });
-      }
-    }
-
-    dirTrack = data[off + 0];
-    dirSector = data[off + 1];
-  }
-
+  const dctx = Object.assign(getCurrentCtx(), { buffer: buffer });
+  const entries = readDirChainEntries(data, fmt.dirTrack, fmt.dirSector, dctx);
   return { diskName, diskId, freeBlocks, entries, format: fmt.name, tracks: currentTracks };
 }
 
-// Byte offset of a track's BAM slot inside a D81 partition. Each slot is
-// 6 bytes (1 free-count byte + 5 bitmap bytes). Tracks 1-40 live in the
-// first BAM sector after a 16-byte header; tracks 41-80 live in the second
-// BAM sector with the same layout.
-function d81PartitionBamBase(partBamOff, track) {
-  if (track <= 40) return partBamOff + 0x10 + (track - 1) * 6;
-  return partBamOff + 256 + 0x10 + (track - 41) * 6;
+// Directory listing entries for the dir chain starting at dirTrack/dirSector.
+// Never-used slots are skipped; scratched ones are returned as deleted.
+function readDirChainEntries(data, dirTrack, dirSector, ctx) {
+  var fmt = ctx.format;
+  var entries = [];
+  var visited = {};
+  while (dirTrack !== 0) {
+    var key = dirTrack + ':' + dirSector;
+    if (visited[key] || !isValidChainLink(dirTrack, dirSector, ctx)) break;
+    visited[key] = true;
+    var off = sectorOffset(dirTrack, dirSector, ctx);
+    if (off < 0) break;
+
+    for (var i = 0; i < fmt.entriesPerSector; i++) {
+      var entryOff = off + i * fmt.entrySize;
+      var typeByte = data[entryOff + DIRENT_TYPE];
+      var blocks = direntBlocks(data, entryOff);
+      if (typeByte === 0x00 && blocks === 0 &&
+          data[entryOff + DIRENT_TRACK] === 0 && data[entryOff + DIRENT_SECTOR] === 0) {
+        var hasName = false;
+        for (var j = 0; j < 16; j++) {
+          var nb = data[entryOff + DIRENT_NAME + j];
+          if (nb !== 0x00 && nb !== 0xA0) { hasName = true; break; }
+        }
+        if (!hasName) continue;
+      }
+      var name = readPetsciiString(data, entryOff + DIRENT_NAME, 16);
+      if (typeByte & 0x80) {
+        entries.push({ name: name, type: fileTypeName(typeByte), blocks: blocks, deleted: false, entryOff: entryOff });
+      } else {
+        var typeName = FILE_TYPES[typeByte & 0x07] || 'DEL';
+        var locked = (typeByte & 0x40) !== 0;
+        entries.push({ name: name, type: '*' + typeName + (locked ? '<' : ' '), blocks: blocks, deleted: true, entryOff: entryOff });
+      }
+    }
+    dirTrack = data[off];
+    dirSector = data[off + 1];
+  }
+  return entries;
 }
 
-// ── Parse a D81 partition/subdirectory ────────────────────────────────
-// startTrack = first track of the partition (header at sector 0, BAM at 1-2, dir at 3+)
-// partSize = size in sectors from directory entry bytes 30-31
+// ── D81 BAM layout (root and sub-partition) ──────────────────────────
+// A sub-partition's BAM pair "has the same layout as the disk BAM on
+// track 40" (D81.TXT): entries are indexed by ABSOLUTE track 1-80 and
+// every sector outside the partition is marked allocated.
+var _D81_TRACKS_PER_BAM_SECTOR = 40;
+
+// Byte offset of an absolute track's 6-byte entry (free count + 5 bitmap
+// bytes) in the BAM pair whose first sector is at bam1Off.
+function d81BamEntryBase(bam1Off, track) {
+  var f = DISK_FORMATS.d81;
+  var sec = track > _D81_TRACKS_PER_BAM_SECTOR ? 1 : 0;
+  var idx = (track - 1) % _D81_TRACKS_PER_BAM_SECTOR;
+  return bam1Off + sec * 256 + f.partitionBamOffset + idx * f.partitionBamEntrySize;
+}
+
+// BAM sector bytes $00-$0F: link, version, complement, ID, I/O byte ($C0
+// as the 1581 formats it), auto-boot flag.
+function _d81WriteBamHeader(data, off, linkT, linkS, id0, id1) {
+  var f = DISK_FORMATS.d81;
+  data[off + 0x00] = linkT;
+  data[off + 0x01] = linkS;
+  data[off + 0x02] = f.dosVersion;
+  data[off + 0x03] = (~f.dosVersion) & 0xFF;
+  data[off + 0x04] = id0;
+  data[off + 0x05] = id1;
+  data[off + 0x06] = 0xC0;
+  for (var i = 0x07; i < f.partitionBamOffset; i++) data[off + i] = 0x00;
+}
+
+// kind: 'free' (all 40 free), 'used' (all allocated), 'system' (sectors
+// 0-3 = header, 2 BAM, first dir allocated).
+function _d81WriteBamEntry(data, base, kind) {
+  var spt = DISK_FORMATS.d81.partitionSpt;
+  var fill = kind === 'used' ? 0x00 : 0xFF;
+  for (var b = 1; b <= 5; b++) data[base + b] = fill;
+  if (kind === 'system') data[base + 1] &= ~0x0F;
+  data[base] = kind === 'used' ? 0 : kind === 'system' ? spt - 4 : spt;
+}
+
+// ── Parse a D81 sub-partition ─────────────────────────────────────────
+// Header at startTrack/0, BAM at /1-/2, directory from /3. partSize is
+// the dir entry's size in sectors. The system track isn't counted free.
 function parsePartition(buffer, startTrack, partSize, ctx) {
   const data = new Uint8Array(buffer);
   const fmt = ctx.format;
 
-  // Partition header is at (startTrack, 0) — same layout as D81 root header
   const headerOff = sectorOffset(startTrack, 0, ctx);
   if (headerOff < 0) return null;
 
   const diskName = readPetsciiString(data, headerOff + fmt.nameOffset, fmt.nameLength);
   const diskId = readPetsciiString(data, headerOff + fmt.idOffset, fmt.idLength, false);
 
-  // Partition BAM is at (startTrack, 1) and (startTrack, 2)
-  // Count free blocks from the partition's own BAM
   const partBamOff = sectorOffset(startTrack, 1, ctx);
-  const numPartTracks = Math.floor(partSize / fmt.partitionSpt);
+  const lastTrack = startTrack + Math.floor(partSize / fmt.partitionSpt) - 1;
   let freeBlocks = 0;
-  for (let t = 1; t <= numPartTracks; t++) {
-    // Skip the partition's own system track (track 1 = first track of partition)
-    if (t === 1) continue;
-    freeBlocks += data[d81PartitionBamBase(partBamOff, t)];
+  for (let t = startTrack + 1; t <= lastTrack; t++) {
+    freeBlocks += data[d81BamEntryBase(partBamOff, t)];
   }
 
-  // Directory chain starts at (startTrack, 3)
-  const entries = [];
-  let dirTrack = startTrack;
-  let dirSector = 3;
-  const visited = new Set();
-
-  while (dirTrack !== 0) {
-    const key = `${dirTrack}:${dirSector}`;
-    if (visited.has(key)) break;
-    visited.add(key);
-
-    // Dir chain uses physical T:S even on FD (file chain bytes use LBA,
-    // but dir-chain bytes don't). Validate against physical SPT so
-    // garbage chain pointers (e.g., game(d2m).d2m's leftover `03 e0` at
-    // the end of an 8-entry dir) terminate cleanly instead of being
-    // followed via sectorOffset's LBA fallback into file content.
-    if (dirSector < 0 || dirSector >= fmt.sectorsPerTrack(dirTrack)) break;
-    const off = sectorOffset(dirTrack, dirSector, ctx);
-    if (off < 0) break;
-
-    for (let i = 0; i < fmt.entriesPerSector; i++) {
-      const entryOff = off + i * fmt.entrySize;
-      const typeByte = data[entryOff + 2];
-
-      if (typeByte === 0x00) {
-        const fileTrack = data[entryOff + 3];
-        const fileSector = data[entryOff + 4];
-        const blocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
-        let hasName = false;
-        for (let j = 0; j < 16; j++) {
-          if (data[entryOff + 5 + j] !== 0x00 && data[entryOff + 5 + j] !== 0xA0) {
-            hasName = true; break;
-          }
-        }
-        if (!hasName && fileTrack === 0 && fileSector === 0 && blocks === 0) continue;
-      }
-
-      const name = readPetsciiString(data, entryOff + 5, 16);
-      const blocks = data[entryOff + 30] | (data[entryOff + 31] << 8);
-      const closed = (typeByte & 0x80) !== 0;
-      const deleted = !closed;
-
-      if (deleted) {
-        const idx = typeByte & 0x07;
-        const typeName = FILE_TYPES[idx] || 'DEL';
-        const locked = (typeByte & 0x40) !== 0;
-        entries.push({ name, type: '*' + typeName + (locked ? '<' : ' '), blocks, deleted: true, entryOff });
-      } else {
-        entries.push({ name, type: fileTypeName(typeByte), blocks, deleted: false, entryOff });
-      }
-    }
-
-    dirTrack = data[off + 0];
-    dirSector = data[off + 1];
-  }
-
+  const entries = readDirChainEntries(data, startTrack, fmt.partitionDirSector, ctx);
   return { diskName, diskId, freeBlocks, entries, format: fmt.name, tracks: ctx.tracks, isPartition: true };
 }
-
-
 
 // ── Create empty disk image ──────────────────────────────────────────
 function createEmptyDisk(formatKey, numTracks) {
@@ -1944,21 +1806,14 @@ const SAFE_PETSCII = new Set([
 ]);
 
 // ── CBM-DOS dir-tree paste (cross-family writer) ─────────────────────
-// Mirrors cfsPasteDirTree, but writes to a CBM-DOS partition (D81 / DNP
-// / D1M-D2M-D4M Native). Uses the ctx-aware writeFileToDisk so the
-// target dir is determined by `diskCtx` (typically pointing at a
-// non-current partition).
-//
-// First-pass MVP: pastes files only. Subdir creation in the destination
-// is deferred to a follow-up — when the source tree carries subdirs
-// they're skipped and reported in skippedDirs.
+// Mirrors cfsPasteDirTree for D81 / DNP / D1M-D4M Native destinations,
+// writing through the ctx-aware writers so the target dir comes from
+// `diskCtx`. Subdirs become DNP subdirs or D81 sub-partitions.
 
-// Map a CFS file's ftype/typeSuffix to a CBM-DOS typeIdx (1=SEQ 2=PRG
-// 3=USR 4=REL). CFS-typed files (NORMAL with a "TXT" / "PRG" suffix
-// string) collapse to PRG unless they explicitly declare SEQ / USR.
+// CFS ftype/typeSuffix → CBM typeIdx; anything not SEQ/USR/REL is PRG.
+// The CFS_FTYPE values (NORMAL=1, REL=2) are inlined to avoid a dependency
+// on cbm-format-ide64.js.
 function cfsToCbmTypeIdx(ftype, typeSuffix) {
-  // CFS_FTYPE.REL (the format-ide64.js constant) is 2. Use the numeric
-  // value directly so this helper has no dependency on cbm-format-ide64.js
   if (ftype === 2) return 4; // REL
   if (typeSuffix === 'SEQ') return 1;
   if (typeSuffix === 'USR') return 3;
@@ -1966,43 +1821,27 @@ function cfsToCbmTypeIdx(ftype, typeSuffix) {
   return 2; // default PRG
 }
 
-// Resolve the effective CBM typeIdx for a generic-tree file entry —
-// prefers file.cbmTypeIdx when the collector set it, falls back to the
-// CFS mapping otherwise. Returns 2 (PRG) for fully untyped entries.
 function resolveFileCbmTypeIdx(file) {
   if (file.cbmTypeIdx) return file.cbmTypeIdx;
   return cfsToCbmTypeIdx(file.ftype, file.typeSuffix);
 }
 
-// Inverse of cfsToCbmTypeIdx — map a CBM-DOS typeIdx (1=SEQ, 2=PRG,
-// 3=USR, 4=REL) onto CFS file fields. Used by cfsPasteDirTree when a
-// file in the source tree came from a CBM-DOS collector (cbmTypeIdx
-// set, ftype/typeSuffix unset). Returned typeSuffix matches what
-// cfsImportFile expects to land in the dir entry's $19..$1B "PRG" /
-// "SEQ" / "USR" / "REL" suffix bytes.
+// Inverse of cfsToCbmTypeIdx, for CBM-collected files pasted into CFS.
 function cbmToCfsTypeFields(cbmTypeIdx) {
-  // CFS_FTYPE constants (NORMAL=1, REL=2) are defined in cbm-format-ide64.js.
-  // Use the numeric values directly so this helper has no cross-file dep.
-  if (cbmTypeIdx === 4) return { ftype: 2, typeSuffix: 'REL' }; // REL
+  if (cbmTypeIdx === 4) return { ftype: 2, typeSuffix: 'REL' };
   if (cbmTypeIdx === 1) return { ftype: 1, typeSuffix: 'SEQ' };
   if (cbmTypeIdx === 3) return { ftype: 1, typeSuffix: 'USR' };
-  return { ftype: 1, typeSuffix: 'PRG' }; // 2 PRG and any unknown default
+  return { ftype: 1, typeSuffix: 'PRG' };
 }
 
-// Resolve the effective CFS ftype/typeSuffix for a generic-tree file —
-// mirrors resolveFileCbmTypeIdx. Prefers the source-set CFS fields,
-// falls back to the CBM mapping, then to NORMAL/PRG.
 function resolveFileCfsTypeFields(file) {
   if (file.ftype && file.typeSuffix) return { ftype: file.ftype, typeSuffix: file.typeSuffix };
   if (file.cbmTypeIdx) return cbmToCfsTypeFields(file.cbmTypeIdx);
   return { ftype: 1, typeSuffix: 'PRG' };
 }
 
-// Find a CBM-DOS dir entry by raw 16-byte PETSCII name in the current
-// directory referenced by diskCtx. Uses effective-length comparison
-// (trim $A0 / $00 / trailing-space padding) so a space-padded name
-// matches an $A0-padded one when the visible prefix agrees. Returns
-// the entry offset or -1.
+// Entry offset of the name in diskCtx's current dir, or -1. Padding
+// ($A0 / $00 / trailing spaces) is ignored on both sides.
 function _cbmFindDirEntryByNameBytes(diskCtx, nameBytes) {
   var buffer = diskCtx.buffer;
   var data = new Uint8Array(buffer);
@@ -2045,12 +1884,8 @@ function _cbmFindDirEntryByNameBytes(diskCtx, nameBytes) {
   return -1;
 }
 
-// Find a non-colliding name in the current directory by appending " (N)"
-// for N = 2..99. Truncates the base so the full name still fits in 16
-// bytes (suffix " (2)".." (9)" = 4 bytes → base ≤ 12; " (10)".." (99)"
-// = 5 bytes → base ≤ 11). Returns a fresh 16-byte Uint8Array padded
-// with $A0, or null if all 98 candidates are taken. Mirrors the
-// CFS-side _cfsAutoRenameInDir helper.
+// First free "NAME (N)" for N = 2..99, base truncated to fit 16 bytes.
+// Returns $A0-padded name bytes, or null when all are taken.
 function _cbmAutoRenameInDir(diskCtx, baseNameBytes) {
   if (!diskCtx || !diskCtx.buffer) return null;
   var baseLen = 16;
@@ -2073,29 +1908,10 @@ function _cbmAutoRenameInDir(diskCtx, baseNameBytes) {
   return null;
 }
 
-// Walk a CBM-DOS directory and collect every file + nested subdir into
-// the generic tree shape that cbmPasteDirTree / cfsPasteDirTree consume.
-// `diskCtx` selects the partition / root (via diskCtx.partition). The
-// returned tree carries CBM-DOS-typed file entries (cbmTypeIdx +
-// optional geosBytes/geosInfoBlock/vlirRecords) that the paster's
-// type-translation layer maps onto CFS when crossing families.
-//
-// Subdir traversal:
-//   - DNP / CMD Native (subdirLinked:true): DIR entries point at the
-//     subdir's header sector. Recurse with a {dnpDir:true, ...} child
-//     partition.
-//   - D81 (subdirLinked:false): a $05 PARTITION entry points at the
-//     sub-disk's start track. Recurse with a {startTrack, partSize}
-//     child partition.
-//
-// VLIR GEOS files are captured (geosBytes + geosInfoBlock + a marker)
-// but a `vlirRecords: { skipped: true }` flag is set so the CBM-DOS
-// paster knows to skip them rather than corrupt the destination with
-// a flat-byte-stream rewrite. The CFS paster also skips VLIR for the
-// same reason.
-//
-// Returns { ok, tree, error? }. The tree shape matches what
-// cfsCollectDirTree emits, so paste targets stay symmetric.
+// Collect diskCtx's current dir (files + DNP subdirs / D81 sub-partitions,
+// recursively) into the generic tree shape cfsCollectDirTree also emits.
+// GEOS files carry geosBytes/geosInfoBlock; VLIR files their records.
+// Returns { ok, tree, error? }.
 function cbmCollectDirTree(diskCtx, sourceNameBytes) {
   if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return { ok: false, error: 'invalid disk context' };
   var data = new Uint8Array(diskCtx.buffer);
@@ -2150,10 +1966,9 @@ function cbmCollectDirTree(diskCtx, sourceNameBytes) {
           continue;
         }
 
-        // D81 sub-partition (file type $05, but format is not subdirLinked)
+        // D81 sub-partition
         if (typeIdx === localFmt.subdirType && !localFmt.subdirLinked) {
-          // entry[30..31] = partition size in sectors (LE)
-          var partSize = localData[entryOff + 30] | (localData[entryOff + 31] << 8);
+          var partSize = direntBlocks(localData, entryOff);
           if (!partSize) continue;
           var partKey = 'p' + fileT;
           if (visited[partKey]) continue;
@@ -2166,23 +1981,19 @@ function cbmCollectDirTree(diskCtx, sourceNameBytes) {
           continue;
         }
 
-        // Regular file (PRG / SEQ / USR / REL). Skip the type-$00 DEL
-        // case (already filtered above by typeByte === 0 / closed bit).
-        if (typeIdx < 1 || typeIdx > 4) continue;
+        if (typeIdx < 1 || typeIdx > 4) continue; // SEQ/PRG/USR/REL only
         var fileName = readNameBytes(entryOff);
-        // GEOS metadata: bytes 21-29 of dir entry. Capture as-is.
+        // Entry bytes $15-$1D (GEOS info T/S, structure, type, date) as-is.
         var hasGeos = false;
         var geosBytes = new Uint8Array(9);
         for (var gi = 0; gi < 9; gi++) {
-          geosBytes[gi] = localData[entryOff + 21 + gi];
+          geosBytes[gi] = localData[entryOff + DIRENT_GEOS_INFO_TRACK + gi];
           if (geosBytes[gi] !== 0) hasGeos = true;
         }
-        // Read info block (at entry $15/$16) if it points at a real
-        // sector — GEOS sequential + VLIR files both carry this.
         var geosInfoBlock = null;
         if (hasGeos) {
-          var infoT = localData[entryOff + 0x15];
-          var infoS = localData[entryOff + 0x16];
+          var infoT = localData[entryOff + DIRENT_GEOS_INFO_TRACK];
+          var infoS = localData[entryOff + DIRENT_GEOS_INFO_SECTOR];
           if (infoT > 0) {
             var infoOff = sectorOffset(infoT, infoS, ctx);
             if (infoOff >= 0 && infoOff + 256 <= localData.length) {
@@ -2191,10 +2002,7 @@ function cbmCollectDirTree(diskCtx, sourceNameBytes) {
             }
           }
         }
-        // VLIR detection: entry byte $17 = 0x01 means VLIR file. Capture
-        // the flag so the paster can skip with a clear warning instead
-        // of writing the VLIR index sector as a flat byte stream.
-        var isVlir = (hasGeos && localData[entryOff + 0x17] === 0x01);
+        var isVlir = (hasGeos && localData[entryOff + DIRENT_GEOS_STRUCT] === 0x01);
 
         var fileEntry = {
           nameBytes: fileName,
@@ -2207,16 +2015,11 @@ function cbmCollectDirTree(diskCtx, sourceNameBytes) {
           fileEntry.geosInfoBlock = geosInfoBlock;
         }
         if (isVlir) {
-          // Read VLIR records into the format writeVlirFileToDisk
-          // expects (end marker / empty slot / populated record), so
-          // tree-paste can re-create the VLIR file on the destination.
           fileEntry.vlirRecords = readVLIRRecordsForCopy(ctx.buffer, entryOff, ctx);
           fileEntry.payload = new Uint8Array(0);
         } else {
           var rd = readFileData(ctx.buffer, entryOff, ctx);
           if (rd.error) {
-            // Unreadable chain — surface in skippedLnks-style list so
-            // the caller's summary can note it.
             node.skippedLnks.push('(unreadable file)');
             continue;
           }
@@ -2245,13 +2048,9 @@ function cbmCollectDirTree(diskCtx, sourceNameBytes) {
   return { ok: true, tree: tree };
 }
 
-// Create a DNP-style linked subdir (subdirLinked formats: CMD Native,
-// D1M/D2M/D4M Native partitions). Allocates 2 sectors (header + first
-// dir sector), wires up the parent/child pointers per the format
-// descriptor's subdir* offsets, and creates a DIR entry in the current
-// parent. Returns { ok, error?, partition } where `partition` is a
-// {dnpDir:true, dnpHeaderT, dnpHeaderS, dnpDirT, dnpDirS, name} shape
-// suitable for building a child diskCtx to recurse into.
+// Create a DNP / FD Native linked subdir (header + first dir sector) with
+// a DIR entry in diskCtx's current dir. Returns { ok, error?, partition }
+// with a {dnpDir:true, ...} partition for a child diskCtx.
 function _cbmCreateDnpSubdir(diskCtx, name) {
   if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return { ok: false, error: 'invalid disk context' };
   if (!name) return { ok: false, error: 'empty name' };
@@ -2263,15 +2062,16 @@ function _cbmCreateDnpSubdir(diskCtx, name) {
 
   var bamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, diskCtx);
 
-  // Allocate 2 sectors: header + first dir sector
   var allocated = buildTrueAllocationMap(buffer, diskCtx);
   var sectorList = allocateSectors(allocated, 2, diskCtx);
   if (sectorList.length < 2) return { ok: false, error: 'Not enough free sectors for a new subdir' };
-
   var hdrSec = sectorList[0];
   var dirSec = sectorList[1];
 
-  // Parent header T/S for back-navigation (root vs nested subdir)
+  // Pass the map so a parent-dir extension can't reuse the two sectors above.
+  var entryOff = findFreeDirEntry(buffer, allocated, diskCtx);
+  if (entryOff < 0) return { ok: false, error: 'No free directory entry available' };
+
   var parentHeaderT = fmt.headerTrack;
   var parentHeaderS = fmt.headerSector;
   if (partition && partition.dnpHeaderT !== undefined) {
@@ -2279,7 +2079,6 @@ function _cbmCreateDnpSubdir(diskCtx, name) {
     parentHeaderS = partition.dnpHeaderS;
   }
 
-  // Header sector
   var hdrOff = sectorOffset(hdrSec.track, hdrSec.sector, diskCtx);
   for (var hi = 0; hi < 256; hi++) data[hdrOff + hi] = 0x00;
   data[hdrOff + 0x00] = dirSec.track;
@@ -2287,60 +2086,47 @@ function _cbmCreateDnpSubdir(diskCtx, name) {
   data[hdrOff + 0x02] = fmt.dosVersion;
   for (var ni = 0; ni < fmt.nameLength; ni++) {
     if (ni < name.length) {
-      // Accept any printable PETSCII byte (0x20-0x7E covers letters,
-      // digits, space, punctuation including ( ) for rename suffixes).
-      // Out-of-range bytes collapse to space rather than corrupting the
-      // header — same fallback the older A-Z/0-9-only filter used.
       var ch = name.charCodeAt(ni);
       data[hdrOff + fmt.nameOffset + ni] = (ch >= 0x20 && ch <= 0x7E) ? ch : 0x20;
     } else {
       data[hdrOff + fmt.nameOffset + ni] = 0xA0;
     }
   }
-  // ID region from the root header (preserves disk ID + DOS-type bytes)
+  // Disk ID + DOS type copied from the root header, then $A0 $A0.
   var rootHdrOff = sectorOffset(fmt.headerTrack, fmt.headerSector, diskCtx);
   for (var idi = 0; idi < fmt.idLength; idi++) {
     data[hdrOff + fmt.idOffset + idi] = data[rootHdrOff + fmt.idOffset + idi];
   }
-  // Self-reference + parent-header pointers
+  data[hdrOff + fmt.idOffset + fmt.idLength] = 0xA0;
+  data[hdrOff + fmt.idOffset + fmt.idLength + 1] = 0xA0;
   data[hdrOff + fmt.subdirSelfRef] = hdrSec.track;
   data[hdrOff + fmt.subdirSelfRef + 1] = hdrSec.sector;
   data[hdrOff + fmt.subdirParentRef] = parentHeaderT;
   data[hdrOff + fmt.subdirParentRef + 1] = parentHeaderS;
 
-  // First dir sector: 00 FF + zeroes
   var dirOff = sectorOffset(dirSec.track, dirSec.sector, diskCtx);
   for (var di = 0; di < 256; di++) data[dirOff + di] = 0x00;
-  data[dirOff + 0x00] = 0x00;
   data[dirOff + 0x01] = 0xFF;
 
   bamMarkSectorUsed(data, hdrSec.track, hdrSec.sector, bamOff, diskCtx);
   bamMarkSectorUsed(data, dirSec.track, dirSec.sector, bamOff, diskCtx);
 
-  // Create DIR entry in the parent
-  var entryOff = findFreeDirEntry(buffer, null, diskCtx);
-  if (entryOff < 0) return { ok: false, error: 'No free directory entry available' };
-  data[entryOff + 2] = 0x80 | fmt.subdirType;
-  data[entryOff + 3] = hdrSec.track;
-  data[entryOff + 4] = hdrSec.sector;
+  data[entryOff + DIRENT_TYPE] = 0x80 | fmt.subdirType;
+  data[entryOff + DIRENT_TRACK] = hdrSec.track;
+  data[entryOff + DIRENT_SECTOR] = hdrSec.sector;
   for (var eni = 0; eni < fmt.nameLength; eni++) {
-    data[entryOff + 5 + eni] = data[hdrOff + fmt.nameOffset + eni];
+    data[entryOff + DIRENT_NAME + eni] = data[hdrOff + fmt.nameOffset + eni];
   }
-  for (var eu = 21; eu < 30; eu++) data[entryOff + eu] = 0x00;
-  data[entryOff + 30] = 2;
-  data[entryOff + 31] = 0;
+  for (var eu = DIRENT_GEOS_INFO_TRACK; eu < DIRENT_BLOCKS_LO; eu++) data[entryOff + eu] = 0x00;
+  data[entryOff + DIRENT_BLOCKS_LO] = 2;
+  data[entryOff + DIRENT_BLOCKS_HI] = 0;
 
-  // Parent dir-entry reference per D2M-DNP.TXT (rev 1.3):
-  //   +$24/$25 = T/S of the parent dir block holding our entry
-  //   +$26    = entry index within that block (0..7)
-  // For LBA-addressed formats (DNP / D1M / D2M / D4M), sectorOffset uses
-  //   ((T-1)*256 + S)*256, so the inverse is straightforward.
-  var parentDirT = (entryOff >>> 16) + 1;
-  var parentDirS = (entryOff >>> 8) & 0xFF;
-  var parentIdx = (entryOff >>> 5) & 0x07;
-  data[hdrOff + fmt.subdirParentEntry] = parentDirT;
-  data[hdrOff + fmt.subdirParentEntry + 1] = parentDirS;
-  data[hdrOff + fmt.subdirParentEntry + 2] = parentIdx;
+  // +$24/$25: T/S of the parent dir block holding our entry; +$26: offset
+  // of the entry's type byte in that block (D2M-DNP.TXT: $02, $22, ...).
+  // Chain T/S on these formats is (offset >> 16) + 1 / (offset >> 8) & $FF.
+  data[hdrOff + fmt.subdirParentEntry] = (entryOff >>> 16) + 1;
+  data[hdrOff + fmt.subdirParentEntry + 1] = (entryOff >>> 8) & 0xFF;
+  data[hdrOff + fmt.subdirParentEntry + 2] = (entryOff & 0xFF) + DIRENT_TYPE;
 
   return {
     ok: true,
@@ -2353,21 +2139,9 @@ function _cbmCreateDnpSubdir(diskCtx, name) {
   };
 }
 
-// Create a D81-style CBM partition (file type $05) for formats with
-// supportsSubdirs && !subdirLinked. Allocates a contiguous run of
-// tracks, formats the run as a self-contained sub-disk (header +
-// 2 BAM sectors + first dir sector), then writes a partition entry
-// in the current root dir + marks the allocated tracks as used in
-// the root BAM. Returns { ok, error?, partition } where `partition`
-// is a {startTrack, partSize, name} shape suitable for building a
-// child diskCtx.
-//
-// `totalSectors` is the on-disk partition size — the same number that
-// ends up in the parent dir entry +30/+31. Spec rules from D81.TXT
-// lines 433-435 are enforced here: rounded up to the next multiple of
-// 40 (partitionSpt), floored at 120 (3-track minimum). The first 4
-// sectors of the partition's first track are reserved for header +
-// 2 BAM + first dir, so usable space is `totalSectors - 4`.
+// Create and format a D81 sub-partition (type $05) of totalSectors in a
+// free contiguous track run, entry in the root dir. Size follows D81.TXT:
+// a multiple of 40, at least 120. Returns { ok, error?, partition }.
 function _cbmCreateD81Partition(diskCtx, name, totalSectors) {
   if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return { ok: false, error: 'invalid disk context' };
   if (!name) return { ok: false, error: 'empty name' };
@@ -2376,20 +2150,14 @@ function _cbmCreateD81Partition(diskCtx, name, totalSectors) {
     return { ok: false, error: 'format does not support D81-style CBM partitions' };
   }
   if (diskCtx.partition && diskCtx.partition.startTrack) {
-    // Already inside a sub-partition — 1581 firmware refuses further nesting.
     return { ok: false, error: 'D81 sub-partitions cannot be nested' };
   }
   var data = new Uint8Array(diskCtx.buffer);
   var pSpt = fmt.partitionSpt;
-
-  // Enforce D81.TXT spec rules (lines 433-435): partition size is a
-  // multiple of 40 sectors with a 120-sector (3-track) minimum.
-  var partSectors = Math.max(120, Math.ceil((totalSectors || 0) / pSpt) * pSpt);
+  var partSectors = Math.max(3 * pSpt, Math.ceil((totalSectors || 0) / pSpt) * pSpt);
   var numTracks = partSectors / pSpt;
 
-  // Find a contiguous free track run that doesn't include the dir
-  // track. Search via the live allocation map so the result respects
-  // file chains the BAM might not yet reflect.
+  // Must not include the dir track (D81.TXT rule 4).
   var allocated = buildTrueAllocationMap(diskCtx.buffer, diskCtx);
   var startTrack = -1;
   for (var t = 1; t <= diskCtx.tracks - numTracks + 1; t++) {
@@ -2409,92 +2177,62 @@ function _cbmCreateD81Partition(diskCtx, name, totalSectors) {
     return { ok: false, error: 'no contiguous free space for ' + numTracks + ' tracks' };
   }
 
-  // Allocate the parent dir entry for the partition.
   var entryOff = findFreeDirEntry(diskCtx.buffer, allocated, diskCtx);
   if (entryOff < 0) return { ok: false, error: 'no free directory entry' };
 
-  // Write the parent dir entry: type = $80 | subdirType, T/S = startTrack/0.
-  data[entryOff + 2] = 0x80 | fmt.subdirType;
-  data[entryOff + 3] = startTrack;
-  data[entryOff + 4] = 0;
+  data[entryOff + DIRENT_TYPE] = 0x80 | fmt.subdirType;
+  data[entryOff + DIRENT_TRACK] = startTrack;
+  data[entryOff + DIRENT_SECTOR] = 0;
   for (var ni = 0; ni < 16; ni++) {
     if (ni < name.length) {
       var ch = name.charCodeAt(ni);
-      data[entryOff + 5 + ni] = (ch >= 0x20 && ch <= 0x7E) ? ch : 0x20;
+      data[entryOff + DIRENT_NAME + ni] = (ch >= 0x20 && ch <= 0x7E) ? ch : 0x20;
     } else {
-      data[entryOff + 5 + ni] = 0xA0;
+      data[entryOff + DIRENT_NAME + ni] = 0xA0;
     }
   }
-  for (var ui = 21; ui < 30; ui++) data[entryOff + ui] = 0x00;
-  data[entryOff + 30] = partSectors & 0xFF;
-  data[entryOff + 31] = (partSectors >> 8) & 0xFF;
+  for (var ui = DIRENT_GEOS_INFO_TRACK; ui < DIRENT_BLOCKS_LO; ui++) data[entryOff + ui] = 0x00;
+  data[entryOff + DIRENT_BLOCKS_LO] = partSectors & 0xFF;
+  data[entryOff + DIRENT_BLOCKS_HI] = (partSectors >> 8) & 0xFF;
 
-  // Header sector at (startTrack, 0). Layout mirrors the D81 root.
+  // Header at startTrack/0, laid out like the root header, with the root's disk ID.
+  var rootHdrOff = sectorOffset(fmt.headerTrack, fmt.headerSector, diskCtx);
+  var id0 = data[rootHdrOff + fmt.idOffset], id1 = data[rootHdrOff + fmt.idOffset + 1];
   var headerOff = sectorOffset(startTrack, 0, diskCtx);
   for (var hz = 0; hz < 256; hz++) data[headerOff + hz] = 0x00;
   data[headerOff + 0x00] = startTrack;
-  data[headerOff + 0x01] = 3;
-  data[headerOff + 0x02] = 0x44; // 'D'
-  data[headerOff + 0x03] = 0xBB;
-  for (var hni = 0; hni < 16; hni++) data[headerOff + 0x04 + hni] = data[entryOff + 5 + hni];
+  data[headerOff + 0x01] = fmt.partitionDirSector;
+  data[headerOff + 0x02] = fmt.dosVersion;
+  for (var hni = 0; hni < 16; hni++) data[headerOff + fmt.nameOffset + hni] = data[entryOff + DIRENT_NAME + hni];
   data[headerOff + 0x14] = 0xA0;
   data[headerOff + 0x15] = 0xA0;
-  data[headerOff + 0x16] = 0x31; // ID '1'
-  data[headerOff + 0x17] = 0x41; // ID 'A'
+  data[headerOff + fmt.idOffset] = id0;
+  data[headerOff + fmt.idOffset + 1] = id1;
   data[headerOff + 0x18] = 0xA0;
-  data[headerOff + 0x19] = 0x33; // DOS type '3'
-  data[headerOff + 0x1A] = 0x44; // DOS type 'D'
+  data[headerOff + 0x19] = fmt.dosType.charCodeAt(0);
+  data[headerOff + 0x1A] = fmt.dosType.charCodeAt(1);
+  data[headerOff + 0x1B] = 0xA0;
+  data[headerOff + 0x1C] = 0xA0;
 
-  // BAM sector 1 — covers tracks 1..40 of the partition (relative).
+  // Own BAM pair, absolute-track indexed: everything outside the partition
+  // allocated, its first track holding header + BAM + first dir.
   var bam1Off = sectorOffset(startTrack, 1, diskCtx);
-  for (var bz = 0; bz < 256; bz++) data[bam1Off + bz] = 0x00;
-  data[bam1Off + 0x00] = startTrack;
-  data[bam1Off + 0x01] = 2;
-  data[bam1Off + 0x02] = 0x44;
-  data[bam1Off + 0x03] = 0xBB;
-  data[bam1Off + 0x04] = 0x31;
-  data[bam1Off + 0x05] = 0x41;
-
-  // BAM sector 2 — covers tracks 41..80.
   var bam2Off = sectorOffset(startTrack, 2, diskCtx);
-  for (var bz2 = 0; bz2 < 256; bz2++) data[bam2Off + bz2] = 0x00;
-  data[bam2Off + 0x00] = 0x00;
-  data[bam2Off + 0x01] = 0xFF;
-  data[bam2Off + 0x02] = 0x44;
-  data[bam2Off + 0x03] = 0xBB;
-  data[bam2Off + 0x04] = 0x31;
-  data[bam2Off + 0x05] = 0x41;
-
-  for (var pt = 1; pt <= numTracks; pt++) {
-    var base;
-    if (pt <= 40) base = bam1Off + 0x10 + (pt - 1) * 6;
-    else base = bam2Off + 0x10 + (pt - 41) * 6;
-    if (pt === 1) {
-      // System track: sectors 0..3 used (header + 2 BAM + first dir).
-      data[base] = pSpt - 4;
-      for (var bb = 0; bb < 5; bb++) data[base + 1 + bb] = 0xFF;
-      data[base + 1] &= ~0x0F; // clear bits for sectors 0..3
-    } else {
-      data[base] = pSpt;
-      for (var bb2 = 0; bb2 < 5; bb2++) data[base + 1 + bb2] = 0xFF;
-    }
+  for (var bz = 0; bz < 256; bz++) { data[bam1Off + bz] = 0x00; data[bam2Off + bz] = 0x00; }
+  _d81WriteBamHeader(data, bam1Off, startTrack, 2, id0, id1);
+  _d81WriteBamHeader(data, bam2Off, 0x00, 0xFF, id0, id1);
+  for (var at = 1; at <= _D81_TRACKS_PER_BAM_SECTOR * 2; at++) {
+    var kind = at === startTrack ? 'system' : (at > startTrack && at < startTrack + numTracks) ? 'free' : 'used';
+    _d81WriteBamEntry(data, d81BamEntryBase(bam1Off, at), kind);
   }
 
-  // First dir sector at (startTrack, 3) — empty.
-  var dirOff = sectorOffset(startTrack, 3, diskCtx);
+  var dirOff = sectorOffset(startTrack, fmt.partitionDirSector, diskCtx);
   for (var di = 0; di < 256; di++) data[dirOff + di] = 0x00;
-  data[dirOff + 0] = 0x00;
   data[dirOff + 1] = 0xFF;
 
-  // Mark all partition tracks as fully allocated in the ROOT BAM, so
-  // the root's free-block accounting reflects the new partition.
   var rootBamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, diskCtx);
   for (var rt = startTrack; rt < startTrack + numTracks; rt++) {
-    var rbase;
-    if (rt <= 40) rbase = rootBamOff + 0x10 + (rt - 1) * 6;
-    else rbase = rootBamOff + 256 + 0x10 + (rt - 41) * 6;
-    data[rbase] = 0;
-    for (var rb = 0; rb < 5; rb++) data[rbase + 1 + rb] = 0x00;
+    _d81WriteBamEntry(data, d81BamEntryBase(rootBamOff, rt), 'used');
   }
 
   return {
@@ -2503,23 +2241,10 @@ function _cbmCreateD81Partition(diskCtx, name, totalSectors) {
   };
 }
 
-// Grow an existing D81 sub-partition by extending it into free root
-// tracks immediately after its current end. Returns { ok, addedSectors,
-// newPartSize, error? }. Used by the paste pre-check so a subsequent
-// paste into a tight-fit partition reclaims adjacent free space rather
-// than refusing outright.
-//
-// diskCtx must point at the sub-partition itself (diskCtx.partition has
-// startTrack + partSize set). The function locates the parent dir entry
-// in the root, scans root BAM for free tracks beyond the partition end,
-// extends partSize, updates the partition's own BAM to mark the new
-// tracks free internally, marks them used in the root BAM, and rewrites
-// the partSize bytes (+30/+31) in the parent dir entry.
-//
-// Refuses when: not inside a sub-partition; the parent entry can't be
-// located; no contiguous free root tracks immediately after the
-// partition; or growth would push past partition track 80 (1581 BAM
-// can only address 80 tracks worth of bitmap).
+// Grow the D81 sub-partition diskCtx points into by claiming the fully
+// free root tracks right after its end (never the dir track), enough for
+// extraSectorsNeeded. opts.dryRun only reports. Returns { ok, error?,
+// addedSectors, addedTracks, newPartSize }.
 function _cbmGrowD81Partition(diskCtx, extraSectorsNeeded, opts) {
   opts = opts || {};
   var dryRun = !!opts.dryRun;
@@ -2538,16 +2263,6 @@ function _cbmGrowD81Partition(diskCtx, extraSectorsNeeded, opts) {
   var curNumTracks = Math.floor(curPartSize / pSpt);
   var partEndTrack = startTrack + curNumTracks - 1;
 
-  // Cap: a D81 sub-partition's BAM (2 sectors at startTrack/1 + /2)
-  // only covers 80 partition tracks. Refuse growth that would exceed
-  // that, even if root tracks are still free.
-  var maxPartTracks = 80;
-  var headroomTracks = maxPartTracks - curNumTracks;
-  if (headroomTracks <= 0) return { ok: false, error: 'partition is already at its 80-track limit' };
-
-  // Locate the parent dir entry in the root. We have to do this here
-  // (not pass it through) because diskCtx.partition doesn't carry an
-  // entryOff. Construct a root-view diskCtx for the dir walk.
   var rootCtx = Object.assign({}, diskCtx, { partition: null });
   var rootDir = getDirContext(rootCtx);
   var entryOff = -1;
@@ -2561,10 +2276,10 @@ function _cbmGrowD81Partition(diskCtx, extraSectorsNeeded, opts) {
     if (off < 0) break;
     for (var i = 0; i < fmt.entriesPerSector; i++) {
       var eo = off + i * fmt.entrySize;
-      var typeByte = data[eo + 2];
+      var typeByte = data[eo + DIRENT_TYPE];
       if ((typeByte & 0x80) === 0) continue;
       if ((typeByte & 0x07) !== fmt.subdirType) continue;
-      if (data[eo + 3] === startTrack && data[eo + 4] === 0) { entryOff = eo; break; }
+      if (data[eo + DIRENT_TRACK] === startTrack && data[eo + DIRENT_SECTOR] === 0) { entryOff = eo; break; }
     }
     t = data[off + 0]; s = data[off + 1];
   }
@@ -2572,28 +2287,15 @@ function _cbmGrowD81Partition(diskCtx, extraSectorsNeeded, opts) {
     return { ok: false, error: 'parent dir entry for the partition not found in the root' };
   }
 
-  // Scan root BAM for free tracks immediately after the partition end.
-  // Stops on the first occupied track — partitions are contiguous and
-  // we can't leapfrog a used track.
   var rootBamOff = sectorOffset(fmt.bamTrack, fmt.bamSector, rootCtx);
-  function rootBamBaseFor(track) {
-    if (track <= 40) return rootBamOff + 0x10 + (track - 1) * 6;
-    return rootBamOff + 256 + 0x10 + (track - 41) * 6;
-  }
   function trackIsFreeInRoot(track) {
-    if (track === fmt.dirTrack) return false; // never claim the root dir track
-    if (track < 1 || track > diskCtx.tracks) return false;
-    var base = rootBamBaseFor(track);
-    var spt = fmt.sectorsPerTrack(track);
-    var freeBits = data[base];
-    return freeBits >= spt; // all sectors free
+    if (track === fmt.dirTrack || track < 1 || track > diskCtx.tracks) return false;
+    return data[d81BamEntryBase(rootBamOff, track)] >= fmt.sectorsPerTrack(track);
   }
 
   var addableTracks = 0;
   var trackCursor = partEndTrack + 1;
-  var neededTracks = Math.max(1, Math.ceil(extraSectorsNeeded / pSpt));
-  // Limit growth by: per-paste need, BAM-coverage cap, and root layout.
-  var maxAddable = Math.min(neededTracks, headroomTracks);
+  var maxAddable = Math.max(1, Math.ceil(extraSectorsNeeded / pSpt));
   while (addableTracks < maxAddable && trackIsFreeInRoot(trackCursor)) {
     addableTracks++;
     trackCursor++;
@@ -2612,31 +2314,16 @@ function _cbmGrowD81Partition(diskCtx, extraSectorsNeeded, opts) {
     };
   }
 
-  // 1) Mark the new tracks free in the partition's own BAM.
-  var bam1Off = sectorOffset(startTrack, 1, diskCtx);
-  var bam2Off = sectorOffset(startTrack, 2, diskCtx);
-  for (var n = 0; n < addableTracks; n++) {
-    // Partition-local track index (1-based): old data covered 1..curNumTracks,
-    // new tracks are curNumTracks + 1 .. curNumTracks + addableTracks.
-    var pt = curNumTracks + n + 1;
-    var base;
-    if (pt <= 40) base = bam1Off + 0x10 + (pt - 1) * 6;
-    else base = bam2Off + 0x10 + (pt - 41) * 6;
-    data[base] = pSpt;                          // free-count = full track
-    for (var bb = 0; bb < 5; bb++) data[base + 1 + bb] = 0xFF;  // all sector bits set
-  }
-
-  // 2) Mark the new root tracks as fully used in the root BAM.
+  // New tracks: free in the partition's own BAM, used in the root BAM.
+  var partBamOff = sectorOffset(startTrack, 1, diskCtx);
   for (var rt = partEndTrack + 1; rt <= partEndTrack + addableTracks; rt++) {
-    var rbase = rootBamBaseFor(rt);
-    data[rbase] = 0;
-    for (var rb = 0; rb < 5; rb++) data[rbase + 1 + rb] = 0x00;
+    _d81WriteBamEntry(data, d81BamEntryBase(partBamOff, rt), 'free');
+    _d81WriteBamEntry(data, d81BamEntryBase(rootBamOff, rt), 'used');
   }
 
-  // 3) Rewrite partSize in the parent dir entry.
   var newPartSize = curPartSize + addableTracks * pSpt;
-  data[entryOff + 30] = newPartSize & 0xFF;
-  data[entryOff + 31] = (newPartSize >>> 8) & 0xFF;
+  data[entryOff + DIRENT_BLOCKS_LO] = newPartSize & 0xFF;
+  data[entryOff + DIRENT_BLOCKS_HI] = (newPartSize >>> 8) & 0xFF;
 
   return {
     ok: true,
@@ -2646,18 +2333,9 @@ function _cbmGrowD81Partition(diskCtx, extraSectorsNeeded, opts) {
   };
 }
 
-// Estimate how many CBM-DOS sectors are needed at the destination to
-// write `tree`. Used by the paste pre-check so the UI can refuse
-// before any write if the destination doesn't have room. Conservative
-// upper bound:
-//   * data sectors per file: ceil(size / 254)
-//   * 1 extra sector per GEOS file (info block)
-//   * 2 sectors per subdir (header + first dir sector) for
-//     subdirLinked formats; non-linked formats can't host nested
-//     subdirs from this path so they count zero (the paster reports
-//     them in skippedDirs instead)
-//   * +1 spare per dir node for chain growth headroom (each dir
-//     sector holds 8 entries; safe margin for the parent + new dir)
+// Upper-bound sector count for pasting `tree` (paste pre-check): file
+// blocks + GEOS info blocks, 2 + 1 spare per DNP subdir, whole tracks
+// (plus a system track, min 3) per D81 sub-partition.
 function cbmEstimateTreeSectors(tree, fmt) {
   if (!tree) return 0;
   var supportsSubdirs = fmt && fmt.supportsSubdirs;
@@ -2676,15 +2354,9 @@ function cbmEstimateTreeSectors(tree, fmt) {
     for (var s = 0; s < node.subdirs.length; s++) {
       var sub = node.subdirs[s];
       if (subdirLinked) {
-        // DNP / CMD Native — 2 sectors per subdir + 1 dir-chain margin
-        total += 2;
-        total += 1;
+        total += 3;
         visit(sub);
       } else {
-        // D81 sub-partition — sums sub's sectors first, rounds up to
-        // a full partition-track count, then adds the system track
-        // (header + 2 BAM + first dir). Inside the partition there's
-        // no further nesting, so we don't recurse into subdirs.
         var inner = 0;
         for (var fi = 0; fi < sub.files.length; fi++) {
           var sf = sub.files[fi];
@@ -2703,36 +2375,33 @@ function cbmEstimateTreeSectors(tree, fmt) {
   return total;
 }
 
-// Sum free sectors in the current CBM-DOS partition (per the BAM).
-// For the root or a DNP subdir, scans all bitmap tracks. For a D81
-// sub-partition, scans the partition's track range only.
+// "Blocks free" of diskCtx's current view, counted like parseDisk /
+// parsePartition: the (partition) dir track is left out where files
+// can't go.
 function cbmCountFreeSectors(diskCtx) {
   if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return 0;
   var data = new Uint8Array(diskCtx.buffer);
   var fmt = diskCtx.format;
   var partition = diskCtx.partition;
-  var dctx = getDirContext(diskCtx);
-  var bamOff = dctx.bamOff;
+  var bamOff = getDirContext(diskCtx).bamOff;
   if (!fmt.readTrackFree) return 0;
-  var startTrack = 1, endTrack = diskCtx.tracks || 1;
+  var startTrack = 1, endTrack = fmt.bamTracksRange(diskCtx.tracks || 1);
+  var skipTrack = fmt.isSectorFree ? -1 : fmt.dirTrack;
   if (partition && !partition.dnpDir && partition.startTrack) {
-    // D81 CBM partition: tracks partition.startTrack..end
     startTrack = partition.startTrack;
-    var numPartTracks = Math.floor(partition.partSize / fmt.partitionSpt);
-    endTrack = partition.startTrack + numPartTracks - 1;
+    endTrack = partition.startTrack + Math.floor(partition.partSize / fmt.partitionSpt) - 1;
+    skipTrack = partition.startTrack;
   }
   var total = 0;
   for (var t = startTrack; t <= endTrack; t++) {
+    if (t === skipTrack) continue;
     total += fmt.readTrackFree(data, bamOff, t) | 0;
   }
   return total;
 }
 
-// Decode a raw 16-byte PETSCII name into a printable JS string. Used
-// by cbmFindTreeConflicts and cbmPasteDirTree's _displayName / by any
-// paste/conflict-message code that needs to show a name to the user.
-// Stops on $A0 or $00 padding; converts shifted letters $C1-$DA back
-// to ASCII A-Z; drops anything outside the printable PETSCII range.
+// 16 raw name bytes → printable string (shifted letters as A-Z, padding
+// and non-printables dropped) for messages.
 function decodePetsciiNameForDisplay(nameBytes) {
   var s = '';
   if (!nameBytes) return s;
@@ -2745,22 +2414,9 @@ function decodePetsciiNameForDisplay(nameBytes) {
   return s.replace(/ +$/, '');
 }
 
-// Inspect a tree against a CBM-DOS destination to enumerate name
-// collisions BEFORE writing. Returns:
-//   {
-//     topLevel: display-name string or null,  // wrap-mode dir collision
-//     files: [display-name, ...],             // immediate file conflicts
-//     subdirs: [display-name, ...],           // immediate subdir conflicts
-//     total: count of all of the above
-//   }
-// The walk follows cbmPasteDirTree's decision tree:
-//   * If the destination hosts subdirs AND tree.nameBytes is non-empty,
-//     a top-level wrapper would be created; check that name.
-//   * Otherwise the tree's files / subdirs land directly at the current
-//     dir level; check each of them.
-// Conflicts inside an existing-overwritten subdir aren't enumerated
-// (the recursion is intentionally one level deep — overwriting an
-// existing dir is the user's explicit "merge" intent).
+// Name collisions cbmPasteDirTree would hit at the destination's top
+// level: { topLevel, files[], subdirs[], total }. In wrap mode only the
+// wrapper name is checked; merges into an existing dir aren't descended.
 function cbmFindTreeConflicts(diskCtx, tree) {
   var out = { topLevel: null, files: [], subdirs: [], total: 0 };
   if (!diskCtx || !diskCtx.buffer || !diskCtx.format || !tree) return out;
@@ -2796,64 +2452,50 @@ function cbmFindTreeConflicts(diskCtx, tree) {
   return out;
 }
 
-// Paste a generic dir tree into a CBM-DOS partition. opts.onConflict
-// behaves like cfsPasteDirTree: 'overwrite' removes the existing file
-// before writing, 'rename' auto-suffixes via _cbmAutoRenameInDir,
-// 'cancel' refuses on first conflict.
+// Paste a generic dir tree into diskCtx's current dir, wrapped in a new
+// subdir named tree.nameBytes unless opts.flat. opts.onConflict:
+// 'overwrite' replaces same-named files (freeing their sectors) and merges
+// into same-named dirs, 'rename' auto-suffixes, 'cancel' refuses.
+// A file never replaces a dir/partition or vice versa.
 // Returns { ok, error?, copiedFiles, copiedDirs, skippedLnks, skippedDirs }.
 function cbmPasteDirTree(diskCtx, tree, opts) {
   if (!diskCtx || !diskCtx.buffer || !diskCtx.format) return { ok: false, error: 'invalid disk context' };
   if (!tree) return { ok: false, error: 'invalid tree' };
   opts = opts || {};
   var onConflict = opts.onConflict || 'cancel';
-  // opts.flat = true skips the top-level wrapper dir and pastes
-  // tree.files + tree.subdirs directly into diskCtx's current dir.
-  // Default is wrap-by-default, mirroring cfsPasteDirTree.
   var wrap = !opts.flat;
 
   var copiedFiles = 0;
   var copiedDirs = 0;
   var skippedLnks = (tree.skippedLnks || []).slice();
   var skippedDirs = [];
-
-  // Local alias for the module-level decoder so the loops below read
-  // tightly. Same as decodePetsciiNameForDisplay.
   var _displayName = decodePetsciiNameForDisplay;
 
-  // When wrap is on and the format supports subdirs, create (or reuse
-  // on overwrite) a top-level subdir for tree.nameBytes and recurse
-  // with a diskCtx pointing into it. When the format doesn't support
-  // subdirs (D64/D71/D81 root etc.), fall back to flat-paste at the
-  // current dir but tag any source-tree subdirs as unsupported.
   var fmt = diskCtx.format;
   var targetCtx = diskCtx;
-  // Pick the subdir-creator that fits the format:
-  //   subdirLinked → DNP / CMD Native — call _cbmCreateDnpSubdir
-  //   supportsSubdirs && !subdirLinked → D81 CBM partitions — call
-  //     _cbmCreateD81Partition (1-level nesting only)
+  // DNP-style subdirs nest freely; D81 sub-partitions only at the root.
   function _hostsSubdirs(ctx) {
     var f = ctx.format;
     if (f.subdirLinked) return true;
-    // D81-style: only at the root, not nested inside a sub-partition.
     return !!f.supportsSubdirs && !(ctx.partition && ctx.partition.startTrack);
+  }
+  function _isDirEntry(ctx, entryOff) {
+    var tb = new Uint8Array(ctx.buffer)[entryOff + DIRENT_TYPE];
+    return !!ctx.format.supportsSubdirs && (tb & 0x07) === ctx.format.subdirType;
   }
   function _createSubdir(ctx, subName, dataSectors) {
     var f = ctx.format;
     if (f.subdirLinked) return _cbmCreateDnpSubdir(ctx, subName);
-    // D81: caller passes data-sector demand; size the partition to fit
-    // it plus a reserved system track, then let _cbmCreateD81Partition
-    // apply the spec floor (min 120) and multiple-of-40 alignment.
-    var pSpt = (f.partitionSpt || 40);
+    // Data demand plus a system track; the creator applies the spec minimum.
+    var pSpt = f.partitionSpt;
     var totalSectors = (Math.ceil((dataSectors || 0) / pSpt) + 1) * pSpt;
     return _cbmCreateD81Partition(ctx, subName, totalSectors);
   }
   function _childCtxForExisting(ctx, existingEntryOff) {
-    // Build a child ctx that points INTO the existing subdir referenced
-    // by the dir entry at existingEntryOff. Differs by format family.
     var f = ctx.format;
     var d = new Uint8Array(ctx.buffer);
-    var hdrT = d[existingEntryOff + 3];
-    var hdrS = d[existingEntryOff + 4];
+    var hdrT = d[existingEntryOff + DIRENT_TRACK];
+    var hdrS = d[existingEntryOff + DIRENT_SECTOR];
     if (f.subdirLinked) {
       var hOff = sectorOffset(hdrT, hdrS, ctx);
       if (hOff < 0) return null;
@@ -2866,8 +2508,7 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
         },
       });
     }
-    // D81 sub-partition: read size from entry bytes 30/31.
-    var pSize = d[existingEntryOff + 30] | (d[existingEntryOff + 31] << 8);
+    var pSize = direntBlocks(d, existingEntryOff);
     return Object.assign({}, ctx, {
       partition: { startTrack: hdrT, partSize: pSize, name: '' },
     });
@@ -2879,30 +2520,23 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
       if (existing >= 0 && onConflict !== 'overwrite' && onConflict !== 'rename') {
         return { ok: false, error: 'A "' + topName + '" already exists; choose Overwrite or Rename.' };
       }
-      // 'rename' mode: auto-suffix " (N)" with name truncation so the
-      // new top-level name doesn't collide. Falls through to the
-      // fresh-create branch with the renamed bytes.
       var createNameStr = topName;
-      var renamedBytes = null;
       if (existing >= 0 && onConflict === 'rename') {
-        renamedBytes = _cbmAutoRenameInDir(diskCtx, tree.nameBytes);
+        var renamedBytes = _cbmAutoRenameInDir(diskCtx, tree.nameBytes);
         if (!renamedBytes) return { ok: false, error: 'All " (N)" rename suffixes 2..99 are taken; choose a different destination.' };
         createNameStr = _displayName(renamedBytes);
-        existing = -1; // pretend no conflict so we take the create path below
+        existing = -1;
       }
-      if (existing >= 0 && onConflict === 'overwrite') {
-        // Reuse the existing subdir — file conflicts inside still go
-        // through the per-file overwrite path below. _childCtxForExisting
-        // builds the right partition shape for this format family.
+      if (existing >= 0) {
+        if (!_isDirEntry(diskCtx, existing)) {
+          return { ok: false, error: 'A file named "' + topName + '" already exists; a directory can\'t replace it.' };
+        }
         var reuseCtx = _childCtxForExisting(diskCtx, existing);
         if (!reuseCtx) {
           return { ok: false, error: 'Existing "' + topName + '" entry points at an invalid sector.' };
         }
         targetCtx = reuseCtx;
       } else {
-        // Estimate space needed inside the new subdir so D81-partition
-        // creation picks an adequate track count. For DNP/Native, the
-        // helper allocates exactly 2 sectors and ignores this hint.
         var needed = cbmEstimateTreeSectors(tree, fmt);
         var created = _createSubdir(diskCtx, createNameStr, needed);
         if (!created.ok) {
@@ -2913,31 +2547,19 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
       }
     }
   }
-  // From here on, write into targetCtx (which is either the wrapper
-  // we just created/reused, or the original diskCtx for flat mode).
   diskCtx = targetCtx;
 
   for (var i = 0; i < tree.files.length; i++) {
     var file = tree.files[i];
-    // VLIR files have payload = empty Uint8Array (truthy) but their
-    // real content is in vlirRecords. Plain files need a payload to
-    // copy. Skip files with no payload data of either kind.
+    // VLIR files carry an empty payload; their content is in vlirRecords.
     if (!file.vlirRecords && (!file.payload || file.payload.length === 0)) continue;
     var typeIdx = resolveFileCbmTypeIdx(file);
-    // Conflict check on the file name. We may rewrite writeNameBytes for
-    // rename mode without mutating the caller's tree.
     var writeNameBytes = file.nameBytes;
     var existing = _cbmFindDirEntryByNameBytes(diskCtx, file.nameBytes);
     if (existing >= 0) {
+      var fileName = _displayName(file.nameBytes);
       if (onConflict === 'cancel') {
-        var displayName = '';
-        for (var dn = 0; dn < 16; dn++) {
-          var dnb = file.nameBytes[dn];
-          if (dnb === 0xA0 || dnb === 0x00) break;
-          if (dnb >= 0xC1 && dnb <= 0xDA) displayName += String.fromCharCode(dnb - 0x80);
-          else if (dnb >= 0x20 && dnb <= 0x7E) displayName += String.fromCharCode(dnb);
-        }
-        return { ok: false, error: 'File "' + displayName.trim() + '" already exists; choose Overwrite or Rename.' };
+        return { ok: false, error: 'File "' + fileName + '" already exists; choose Overwrite or Rename.' };
       }
       if (onConflict === 'rename') {
         var renamedFile = _cbmAutoRenameInDir(diskCtx, file.nameBytes);
@@ -2945,13 +2567,17 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
           return { ok: false, error: 'All " (N)" rename suffixes 2..99 are taken for a colliding file.' };
         }
         writeNameBytes = renamedFile;
-      } else { // overwrite
-        // Scratch the existing entry first (closed bit cleared makes
-        // the slot reusable on next write). Wipe other bytes too so
-        // findFreeDirEntry treats the slot as empty on its scan.
+      } else {
+        if (_isDirEntry(diskCtx, existing)) {
+          return { ok: false, error: '"' + fileName + '" is a directory or partition here; a file can\'t replace it.' };
+        }
+        // Free the old file's sectors, then clear the slot so it's reused.
         var dataBefore = new Uint8Array(diskCtx.buffer);
-        dataBefore[existing + 2] = 0x00;
-        for (var w = 3; w < 32; w++) dataBefore[existing + w] = 0x00;
+        var oldBamOff = getDirContext(diskCtx).bamOff;
+        forEachFileSector(dataBefore, existing, function(t, s) {
+          bamMarkSectorFree(dataBefore, t, s, oldBamOff, diskCtx);
+        }, diskCtx);
+        for (var w = DIRENT_TYPE; w < 32; w++) dataBefore[existing + w] = 0x00;
       }
     }
     var geosData = null;
@@ -2963,10 +2589,7 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
     }
     var ok;
     if (file.vlirRecords && Array.isArray(file.vlirRecords)) {
-      // GEOS VLIR file: writeVlirFileToDisk handles the index sector +
-      // record chain layout. typeByte = 0x80 | typeIdx (Closed + type).
-      // diskCtx routes the writes into the target partition.
-      ok = writeVlirFileToDisk(0x80 | typeIdx, writeNameBytes, file.vlirRecords,
+      ok =writeVlirFileToDisk(0x80 | typeIdx, writeNameBytes, file.vlirRecords,
         geosData ? geosData.geosBytes : null,
         geosData ? geosData.geosInfoBlock : null,
         true, diskCtx);
@@ -2979,10 +2602,6 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
     copiedFiles++;
   }
 
-  // Subdirectories — DNP / CMD Native via linked subdirs;  D81 via
-  // a fresh sub-partition (file type $05). _hostsSubdirs decides which
-  // path applies based on format flags + whether we're already inside
-  // a D81 sub-partition (no second level allowed there).
   if (tree.subdirs && tree.subdirs.length > 0) {
     for (var di = 0; di < tree.subdirs.length; di++) {
       var sub = tree.subdirs[di];
@@ -2995,7 +2614,9 @@ function cbmPasteDirTree(diskCtx, tree, opts) {
       var existing = _cbmFindDirEntryByNameBytes(diskCtx, sub.nameBytes);
       var subCtx = null;
       if (existing >= 0 && onConflict === 'overwrite') {
-        // Same-name subdir already exists — recurse into it.
+        if (!_isDirEntry(diskCtx, existing)) {
+          return { ok: false, error: 'A file named "' + subName + '" already exists; a directory can\'t replace it.' };
+        }
         subCtx = _childCtxForExisting(diskCtx, existing);
         if (!subCtx) {
           skippedDirs.push(subName + ' (existing dir entry points at an invalid sector)');

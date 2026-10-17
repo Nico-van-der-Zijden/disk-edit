@@ -1,146 +1,92 @@
 # Viewers
 
-Every "View as …" option, what it does, and when to use it.
+Every "View As" option, what it does, and when to use it. Viewers open in the docked side pane next to the directory (Escape closes it), so you can keep the listing in view.
 
 ## Hex
 
-**File → View As ▸ Hex** opens a hex + PETSCII dump:
+**File → View As ▸ Hex** (Ctrl+Alt+H) opens a hex + PETSCII dump, 8 bytes per row:
 
 ```
-Offset   00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  ASCII / PETSCII
-$0000    A2 41 8E 8C 02 A9 0C 8D F5 02 A9 22 8D F6 02 60  .A.................".......`
-$0010    ...
+0801  0B 08 0A 00 9E 32 30 36  ......
+0809  31 00 00 00 A2 41 8E 8C  1....A..
 ```
 
-- For PRG files, the first 2 bytes show the load address (e.g., `$0801` for BASIC).
-- The PETSCII column renders chars in screen-code form via `SCREENCODE_MAP`. Reversed bytes (`$80-$FF`) show with inverted background.
+- For PRG files the 2-byte load address is stripped from the dump and used to label the rows instead, so the row addresses match C64 memory. The title shows the load address and the payload size.
+- Other file types are labelled from offset `0000`.
+- The PETSCII column follows the current charset mode (Ctrl+Shift). Reversed characters render with inverted background.
 - **Options → Hex Coloring** adds per-byte colouring (None / hexyl / xcd-rgb / Nybble).
-- **Search → Go to Sector...** (Ctrl+Shift+G) jumps to a specific position.
 
-Best for inspecting raw bytes — debugging file structure, finding magic numbers, etc.
+To edit bytes, use the sector editor (**Edit → Edit File Sector**), not this view.
 
 ## Disassembly
 
-**File → View As ▸ Disassembly** runs the PRG through a 6502 disassembler starting at the load address. Each line shows:
+**File → View As ▸ Disassembly** (Ctrl+Alt+D) disassembles the file from its load address:
 
 ```
-$0801  0C 08  ...           ; BASIC line ptr
-$0803  0A 00  ...           ; line number 10
-$0805  9E 32 30 36 31 00 00 ; SYS 2061
-$080D  A2 41  LDX #$41
+$080D  A2 41     LDX #$41
 $080F  8E 8C 02  STX $028C
-$0812  A9 0C  LDA #$0C
-$0814  8D F5 02  STA $02F5
-...
+$0812  A9 0C     LDA #$0C
 ```
 
-The decoder handles standard NMOS 6502 opcodes. Illegal opcodes (CMOS / 65C02 / 65816 variants) decode as `???`. Branch targets are computed; absolute addresses are shown raw.
+- Every byte decodes linearly — there's no code / data separation, so a BASIC stub at `$0801` shows up as instructions.
+- Undocumented opcodes are decoded with the oxyron.de mnemonics (`SLO`, `LAX`, `DCP`, …) and highlighted; the unstable ones (`XAA`, `AHX`, `TAS`, …) and `KIL` get their own colour.
+- If the file starts with a recognisable `SYS` (packer / BASIC stub detection), the title shows the SYS address and the view scrolls to that line.
 
-Best for reverse-engineering a PRG. For serious work, export to a real disassembler.
+Up to 5000 lines are shown.
 
 ## PETSCII
 
-**File → View As ▸ PETSCII** shows the whole file as PETSCII glyphs in a 40-column screen-style layout. Useful for inspecting text files or PETSCII art.
+**File → View As ▸ PETSCII** (Ctrl+Alt+P) prints the file through an emulated CHROUT onto a 40×25 screen: colour codes, cursor movement, HOME, RVS ON/OFF, DEL and the case-switch codes are honoured. Useful for text files and PETSCII art.
 
-Reversed bytes render with inverted background. The current charset mode (View → Switch to Uppercase / Lowercase) determines the glyph set.
+The current charset mode (View → Switch to Uppercase / Lowercase, or Ctrl+Shift) picks the glyph set.
 
 ## BASIC
 
-**File → View As ▸ BASIC** detokenizes a BASIC PRG into readable source. Auto-detects the dialect:
+**File → View As ▸ BASIC** (Ctrl+Alt+B) detokenizes a BASIC program. The dialect is picked from the load address:
 
-- **V2** — Commodore 64 / VIC-20 (default)
-- **V3.5** — Commodore 16 / Plus/4
-- **V7** — Commodore 128
-- **V10** — Commodore 65 / MEGA65 prototype
+- `$0801` (C64), `$0401` / `$1201` (VIC-20) — **BASIC V2**
+- `$1001` — **BASIC V3.5** (C16 / Plus/4)
+- `$1C01` — **BASIC V7** (C128)
 
-Use the dialect dropdown above the listing to switch manually if auto-detect picks wrong.
+For V2 programs a **Dialect** bar above the listing switches between **BASIC V2**, **Simons' BASIC** and **Final Cartridge III**. `$1001` is ambiguous (it's also an unexpanded VIC-20), so there the bar offers **V3.5** and **V2 (VIC-20)**.
 
-Tokens are rendered as their PETSCII keywords (e.g., `PRINT`, `INPUT#`). Line numbers + indentation are preserved.
+Control codes inside strings render reversed, the way `LIST` shows them.
 
-## TASS (Turbo Assembler)
+## Turbo Assembler
 
-**File → View As ▸ TASS** decodes a Turbo Assembler V5 / V6 source file. The source has its own binary format with tokens, expressions, labels, and label-references.
-
-Output is rendered as an assembler listing matching what TASS shows on a real C64:
-
-- 40 chars wide × 23 rows visible (matches the C64 screen)
-- Comments aligned to a fixed column
-- Label-defs share lines with their instruction where TASS does
-
-This is the most accurate part of the editor — the viewer was built by diffing against VICE rendering of many V5 / V6 sources.
+**File → View As ▸ Turbo Assembler** decodes a TASS V5 / V6 source file (tokens, expressions, labels, label references) and renders it the way TASS shows it on a real C64. The viewer was built by diffing against VICE renderings of many V5 / V6 sources.
 
 ## Graphics
 
-**File → View As ▸ Graphics** auto-detects the bitmap format and renders the file as an image. Recognises:
+**File → View As ▸ Graphics** (Ctrl+Alt+G) detects the bitmap format from load address + size and renders the file. A selector above the image lists every format that fits, so you can override the guess. Recognised:
 
-- **Hires** (8000 bytes) — standard C64 320×200 bitmap
-- **Multicolor** (8000 + 1000 + 1000 bytes) — bitmap + color RAM + screen RAM
-- **Koala** — 10003 bytes with the koala 2-byte header
-- **Doodle** — 9216 bytes
-- **AmicaPaint** — 10018 bytes
-- **GunPaint** — multi-part
-- **Funpaint II** — multi-part
-- **FLI** (Flexible Line Interpretation) — variable layout
-- **Sprite sheets** — 64-byte sprites in a grid
-
-The viewer picks the most likely format based on size + content. If you have a file the auto-detect gets wrong, use the format dropdown in the viewer to override.
+- **Named formats** — Koala Painter, Gun Paint, Zoomatic, Micro Illustrator, Amica Paint, Run Paint, PMC, CDU-Paint, Pixel Perfect, Advanced Art Studio, Saracen Paint, Drazpaint, Vidcom 64, Art Studio, Hires Manager, Blazing Paddles, Face Painter, Doodle, Artist 64, FLI (Blackmail), FLI Graph 2.2, AFLI, Drazlace, ECI
+- **Generic layouts by size** — hires (bitmap only / bitmap+screen / screen+bitmap), multicolour (Koala- and AAS-style), FLI, AFLI, interlace, IFLI
+- **Sprites** — hires and multicolour
+- **Charsets** — 1×1, 1×2, 2×1, 2×2, hires and multicolour
+- **Print Shop** graphics
+- **GEOS** — geoPaint, Photo Scrap, Photo Album, GEOS fonts, images embedded in geoWrite documents
 
 ### Export
 
-Save the rendered image as **PNG**, **JPG**, **GIF**, or **SVG** via the Save dropdown in the viewer footer.
+Save the rendered image as **PNG**, **JPG**, **GIF** or **SVG** via the Save button in the viewer.
 
-## GEOS
+## geoWrite
 
-**File → View As ▸ GEOS** opens GEOS-specific viewers for GEOS files. Handles:
+**File → View As ▸ geoWrite** renders a geoWrite document as formatted text. To get it out of the editor, use **File → Export ▸ Export as RTF / PDF / Text (geoWrite)**.
 
-### INFO block
+## VLIR Layout
 
-Every GEOS file has a 256-byte INFO block. The viewer shows:
+**File → View As ▸ VLIR Layout** shows the record table of a GEOS VLIR file: one row per used slot with its start T/S, block and byte count, runs of empty slots collapsed. Click a row to expand that record's sector chain.
 
-- Icon (24×21 hires bitmap) rendered visually
-- Description text (up to 96 chars)
-- Class / Author / Permanent name string
-- Creation date
-- For VLIR files: the record index + sizes
+## REL Records
 
-### geoWrite documents
+**File → View As ▸ REL Records** splits a relative file's data into records using the record length from byte `$17` of the dir entry, and lists each record as hex + text. The title shows the record length and record count.
 
-geoWrite files (.geoWrite extension, MEGA "type 13") get rendered on a paper-white background with dark ink — looks like a real GEOS printout. Supports text formatting, page breaks, font references.
+## GEOS File Info
 
-Font preview shows the font's bitmap glyphs at the right size.
-
-### Other GEOS structures
-
-VLIR record viewer for any VLIR file. Shows record index, lets you click into individual records for hex view.
-
-## REL
-
-**File → View As ▸ REL** decodes a Relative file record-by-record. Shows record length (from byte `$17` of the dir entry), record count, and per-record content.
-
-REL files use a side-sector chain that the standard file walker can follow.
-
-## VLIR
-
-**File → View As ▸ VLIR** shows the record index for a GEOS VLIR file:
-
-```
-Record 0:  T 18 S  5   17 sectors
-Record 1:  T 18 S 22   12 sectors
-Record 2:  -- empty --
-Record 3:  T 19 S  3    8 sectors
-...
-```
-
-Click a record to view its content as Hex.
+**View → GEOS File Info** (or the GEOS icon on a directory row) shows the GEOS header of the selected file: the INFO-block icon, GEOS type, structure (sequential / VLIR), date, class, author, created-by, load / end / init addresses, description, and where the INFO block sits.
 
 ## File info
 
-**View → GEOS File Info** is a minimal modal showing:
-
-- Filename, file type, block count
-- First track/sector
-- Total sectors used (walking the chain)
-- For GEOS: the INFO block summary
-- For REL: record length + record count
-
-Quicker than opening a viewer if you just want size info.
+The info icon on a directory row shows a short summary: type (with scratched / locked flags), blocks, size in bytes, start T/S, load range, plus BASIC / graphics / packer / SYS hints when detected.

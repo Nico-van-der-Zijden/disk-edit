@@ -117,7 +117,7 @@
     max-width: min(360px, calc(100vw - 16px));
     max-height: 70vh;
     overflow-y: auto;
-    z-index: 200;
+    z-index: var(--z-overlay);
   }
   .tab-list-dropdown-item {
     display: flex;
@@ -227,7 +227,7 @@
      it doesn't depend on .menu-item.open / .menu-active state. */
   .tab-context-menu {
     position: fixed;
-    z-index: 200;
+    z-index: var(--z-overlay);
     background: var(--bg-panel);
     border: 1px solid var(--accent);
     border-radius: 4px;

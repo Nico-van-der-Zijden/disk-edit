@@ -1,16 +1,18 @@
 # Keyboard shortcuts
 
-Grouped by what you'd be doing when you'd reach for the shortcut. **Ctrl** here means Cmd on macOS unless noted.
+Grouped by what you'd be doing when you'd reach for the shortcut. The handlers check the **Ctrl** key only — on macOS that means the Control key, not Cmd.
+
+Shortcuts are ignored while you're typing in a text field, so Ctrl+A / Ctrl+C / Ctrl+V keep their normal text-editing meaning there. **AltGr** combinations (which browsers report as Ctrl+Alt) type characters and never trigger a Ctrl+Alt shortcut.
 
 ## Disk
 
 | Shortcut | Action |
 |---|---|
-| **Ctrl+Alt+O** | Open file (disk picker) |
-| **Ctrl+Alt+S** | Save current disk |
-| **Ctrl+Alt+N** | New disk (opens Disk → New submenu) |
-| **Ctrl+Alt+W** | Close current tab |
+| **Ctrl+Alt+O** | Open file (same routing as drag-and-drop) |
+| **Ctrl+Alt+S** | Save current disk (Save As if it has no file name yet) |
 | **Ctrl+Shift+S** | Save As |
+| **Ctrl+Alt+N** | New disk (opens the Disk → New submenu) |
+| **Ctrl+Alt+W** | Close current tab |
 | **Ctrl+Alt+V** | Validate disk |
 | **Ctrl+Shift+B** | View BAM |
 
@@ -22,11 +24,11 @@ Grouped by what you'd be doing when you'd reach for the shortcut. **Ctrl** here 
 | **Ctrl+Y** / **Ctrl+Shift+Z** | Redo |
 | **Ctrl+C** | Copy selected file(s) |
 | **Ctrl+V** | Paste clipboard contents |
-| **Ctrl+A** | Select all entries |
-| **Delete** | Scratch selected file(s) |
-| **Enter** / **F2** | Start renaming the selected entry |
-| **Escape** | Cancel an active rename / close a modal |
-| **Ctrl+Shift+I** | Insert file |
+| **Ctrl+A** | Select all entries (or all partitions on a partition list) |
+| **Delete** | Remove Entry — works on a multi-selection and asks first about 1581 partitions that still contain files. On a partition list: delete the selected partition(s), with confirmation |
+| **Enter** / **F2** | Rename the selected entry (or partition) |
+| **Escape** | Cancel an active rename / close a dialog, the context menu or the side pane |
+| **Ctrl+Shift+I** | Insert File (empty directory entry) |
 | **Ctrl+Alt+E** | Export selected file(s) — on a CMD container partition list, exports the selected partition |
 | **Ctrl+Shift+D** | Add directory inside a dir view; new partition on a partition list view |
 | **Ctrl+Shift+H** | Edit disk name |
@@ -53,6 +55,8 @@ Grouped by what you'd be doing when you'd reach for the shortcut. **Ctrl** here 
 | **Double-click filename** | Inline rename |
 | **Double-click block-count column** | Edit block count |
 | **Double-click type column** | Type dropdown |
+| **Double-click T/S column** | Edit start track / sector |
+| **Double-click partition / sub-directory row** | Open it |
 
 ## Entry-specific actions
 
@@ -61,7 +65,7 @@ Grouped by what you'd be doing when you'd reach for the shortcut. **Ctrl** here 
 | **Ctrl+Shift+L** | Name to lowercase |
 | **Ctrl+Shift+U** | Name to UPPERCASE |
 | **Ctrl+Shift+T** | Toggle name case |
-| **Ctrl+Alt+L** / **R** / **C** / **J** | Align Left / Right / Centre / Justify |
+| **Ctrl+Alt+L** / **R** / **C** / **J** | Align Left / Right / Center / Justify |
 | **Ctrl+<** | Lock / unlock toggle |
 | **Ctrl+\*** | Splat / unsplat toggle |
 
@@ -75,16 +79,28 @@ Grouped by what you'd be doing when you'd reach for the shortcut. **Ctrl** here 
 | **Ctrl+Alt+B** | View as BASIC |
 | **Ctrl+Alt+G** | View as Graphics |
 
-GEOS / VLIR / REL / TASS viewers don't have dedicated shortcuts — open them via **File → View As**.
+geoWrite / VLIR Layout / REL Records / Turbo Assembler don't have dedicated shortcuts — open them via **File → View As**.
 
-Inside a viewer modal:
+Viewers open in the docked side pane, not a modal. While the pane is open the arrow keys keep driving the directory list; scroll the pane with the mouse or touchpad. **Escape** closes the pane.
+
+Inside a modal dialog:
 
 | Shortcut | Action |
 |---|---|
-| **Arrow / Page keys** | Scroll the viewer body (instead of moving the selection) |
+| **↑ / ↓ / Page Up / Page Down** | Scroll the dialog body (instead of moving the selection) |
 | **Home / End** | Jump to top / bottom |
-| **Escape** | Close the modal |
-| **Enter** | Trigger the modal's primary button (bright one) |
+| **Escape** | Close the dialog |
+| **Enter** | Trigger the dialog's primary button (bright one) |
+
+## Sector editor
+
+| Shortcut | Action |
+|---|---|
+| **Click a hex byte** | Start editing that byte; type two hex digits |
+| **Tab / Shift+Tab** | Next / previous byte |
+| **← / →** | Previous / next byte (before you've typed a digit) |
+| **Escape** | Cancel the byte edit only — press again to close the editor |
+| **Ctrl+J** | Follow the chain link (T/S in bytes 0-1) |
 
 ## PETSCII charset toggle
 
@@ -96,7 +112,7 @@ This is the only "CBM-like" shortcut in the app — every other Ctrl combo is a 
 
 ## Editing inside the filename rename editor
 
-When you start an inline rename (double-click or Enter on selection):
+When you start an inline rename (double-click, Enter or F2 on selection):
 
 | Shortcut | Action |
 |---|---|
@@ -112,14 +128,14 @@ When you start an inline rename (double-click or Enter on selection):
 | Action | Effect |
 |---|---|
 | **Drop a disk file onto the page** | Opens as a new tab |
-| **Drop a `.prg` etc. onto the page** | Imports into the active disk |
+| **Drop `.prg` / `.seq` / etc. onto the page** | Imports into the active disk (several at once: one summary at the end) |
 | **Drop an `.lnx`** | Extracts to a new D64 |
 | **Drop a ZipCode set (`1!`…`4!`)** | Reassembles it into a new D64 tab |
 | **Drop a SixPack set (`1!!`…`6!!`)** | Rebuilds the disk from GCR, keeping read errors |
 | **Drop a FilePacked set (`a!`…`x!`)** | Extracts its files onto a new D64 |
-| **Drop a `.tar` / `.tgz` / `.lha` / `.lzh`** | Opens the container and picks members |
-| **Drop a `.dhd` / `.rml`** | Opens as partition list |
-| **Drag a file out of the editor** | Saves to your OS |
+| **Drop a `.zip` / `.tar` / `.tgz` / `.lha` / `.lzh`** | Opens the container and picks members |
+| **Drop a `.dhd` / `.rml` / `.d1m` / `.d2m` / `.d4m`** | Opens as partition list |
+| **Drag a file out of the editor** | Saves to your OS (Chrome / Edge) |
 | **Drag a row within the directory** | Reorders |
 
 ## Mobile / touch

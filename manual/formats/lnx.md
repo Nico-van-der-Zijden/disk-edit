@@ -8,6 +8,7 @@ The editor reads LNX archives by **extracting all files into a fresh D64**. Ther
 
 - **Open** a `.lnx` — the editor extracts all entries into a fresh in-memory D64 and opens it as a tab. The original `.lnx` is not modified.
 - From the resulting D64 you can do everything: edit, save (as `.d64`), copy/paste to other disks.
+- REL files are skipped and listed with the reason: their side sectors aren't rebuilt.
 - If the LNX contains GEOS files in CVT-wrapped form, the editor recognises them and writes proper GEOS dir entries (with INFO block + VLIR records) instead of opaque blobs.
 
 ## Limitations

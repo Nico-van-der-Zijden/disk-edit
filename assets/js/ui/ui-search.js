@@ -29,26 +29,23 @@ function searchDisk(buffer, format, numTracks, term, scope) {
     termBytes = hexBytes;
     termPetscii = hexBytes; // exact byte match for hex
   } else {
-    // Convert search term to byte array (try PETSCII and ASCII)
-    var termUpper = term.toUpperCase();
+    // Match either the ASCII bytes or the unshifted-PETSCII (uppercase) bytes
     termBytes = [];
     for (var ti = 0; ti < term.length; ti++) termBytes.push(term.charCodeAt(ti));
+    var termUpper = term.toUpperCase();
     termPetscii = [];
-    for (var tp = 0; tp < termUpper.length; tp++) {
-      var ch = termUpper.charCodeAt(tp);
-      if (ch >= 0x41 && ch <= 0x5A) termPetscii.push(ch);
-      else if (ch >= 0x20 && ch <= 0x3F) termPetscii.push(ch);
-      else termPetscii.push(ch);
-    }
+    for (var tp = 0; tp < termUpper.length; tp++) termPetscii.push(termUpper.charCodeAt(tp));
   }
 
-  // Determine which sectors to search based on scope
   var dirTrack = format.dirTrack || format.bamTrack;
+  var hdrTrack = format.headerTrack != null ? format.headerTrack : format.bamTrack;
+  var hdrSector = format.headerSector != null ? format.headerSector : format.bamSector;
+  var trackOffsets = getTrackOffsets(format, numTracks);
 
   for (var t = 1; t <= numTracks; t++) {
     var spt = format.sectorsPerTrack(t);
     for (var s = 0; s < spt; s++) {
-      var off = getTrackOffsets(format, numTracks)[t] + s * 256;
+      var off = trackOffsets[t] + s * 256;
       if (off < 0 || off + 256 > data.length) continue;
 
       if (scope === 'filename') {
@@ -63,7 +60,7 @@ function searchDisk(buffer, format, numTracks, term, scope) {
           }
         }
       } else if (scope === 'header') {
-        if (t !== format.bamTrack) continue;
+        if (t !== hdrTrack || s !== hdrSector) continue;
         var hOff = off + format.nameOffset;
         var mPos2 = matchBytesAt(data, hOff, format.nameLength, termBytes, termPetscii);
         if (mPos2 >= 0) {
@@ -71,7 +68,7 @@ function searchDisk(buffer, format, numTracks, term, scope) {
           results.push({ track: t, sector: s, offset: format.nameOffset + mPos2, petParts: cp2.petParts });
         }
       } else if (scope === 'id') {
-        if (t !== format.bamTrack) continue;
+        if (t !== hdrTrack || s !== hdrSector) continue;
         var idOff = off + format.idOffset;
         var mPos3 = matchBytesAt(data, idOff, format.idLength, termBytes, termPetscii);
         if (mPos3 >= 0) {
@@ -79,10 +76,9 @@ function searchDisk(buffer, format, numTracks, term, scope) {
           results.push({ track: t, sector: s, offset: format.idOffset + mPos3, petParts: cp3.petParts });
         }
       } else {
-        // Search all bytes in sector
         var matches = findAllInSector(data, off, 256, termBytes, termPetscii);
         for (var mi = 0; mi < matches.length; mi++) {
-          results.push({ track: t, sector: s, offset: matches[mi].offset, context: matches[mi].context });
+          results.push({ track: t, sector: s, offset: matches[mi].offset, petParts: matches[mi].petParts });
         }
       }
     }
@@ -136,9 +132,7 @@ function findAllInSector(data, sectorOff, len, termAscii, termPetscii) {
 // Convert byte to a displayable character (ASCII-safe, no PUA/C64 glyphs)
 function byteToDisplayChar(b) {
   if (b >= 0x20 && b <= 0x7E) return String.fromCharCode(b); // printable ASCII
-  if (b >= 0x41 && b <= 0x5A) return String.fromCharCode(b); // A-Z
   if (b >= 0xC1 && b <= 0xDA) return String.fromCharCode(b - 0x80); // PETSCII uppercase → A-Z
-  if (b >= 0x61 && b <= 0x7A) return String.fromCharCode(b - 0x20); // PETSCII shifted lowercase → A-Z
   return '\u00B7'; // middle dot for non-printable
 }
 
@@ -155,6 +149,7 @@ function buildContextParts(data, startOff, len, matchOff, matchLen) {
 
 function showSearchModal(title, allTabs) {
   closeMenus();
+  setModalSize(null);
   document.getElementById('modal-title').textContent = title;
   var body = document.getElementById('modal-body');
   body.innerHTML = '';
@@ -348,6 +343,7 @@ function showSearchModal(title, allTabs) {
   });
 
   var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.className = 'modal-footer';
   footer.innerHTML = '<button id="modal-close">OK</button>';
   document.getElementById('modal-close').addEventListener('click', function() {
     hidePetsciiPicker();
@@ -374,6 +370,7 @@ document.getElementById('opt-find-tabs').addEventListener('click', function(e) {
 // ── Go to Sector (Ctrl+G) ────────────────────────────────────────────
 function showGoToSector() {
   closeMenus();
+  setModalSize(null);
   document.getElementById('modal-title').textContent = 'Go to Sector';
   var body = document.getElementById('modal-body');
   body.innerHTML = '';
@@ -413,6 +410,7 @@ function showGoToSector() {
   trackInput.addEventListener('input', function() { sectorInput.isValid(); });
 
   var footer = document.querySelector('#modal-overlay .modal-footer');
+  footer.className = 'modal-footer';
   footer.innerHTML =
     '<button class="modal-btn-secondary" id="goto-cancel">Cancel</button>' +
     '<button id="goto-ok">Go</button>';
@@ -430,9 +428,11 @@ function showGoToSector() {
     document.getElementById('modal-overlay').classList.remove('open');
   });
 
-  // Enter to confirm
-  trackInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') doGo(); });
-  sectorInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') doGo(); });
+  function onEnter(e) {
+    if (e.key === 'Enter') { e.preventDefault(); doGo(); }
+  }
+  trackInput.addEventListener('keydown', onEnter);
+  sectorInput.addEventListener('keydown', onEnter);
 
   document.getElementById('modal-overlay').classList.add('open');
   trackInput.focus();
@@ -547,16 +547,20 @@ document.getElementById('opt-edit-free').addEventListener('click', (e) => {
   if (footerBlocks) startEditFreeBlocks(footerBlocks);
 });
 
-
-
 document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
+  // The walk below only sees the current directory's files, so inside a
+  // partition / subdir it would undercount what the root BAM must hold.
+  if (currentPartition) {
+    showModal('Recalculate Blocks Free', ['Only available in the root directory.']);
+    return;
+  }
   pushUndo();
 
-  // Recalculate by following all file sector chains to find used sectors,
-  // then rebuild the BAM free counts from scratch. Don't trust the existing BAM.
+  // Rebuild the per-track free counts from the file sector chains; the
+  // existing BAM counts are not trusted.
   const data = new Uint8Array(currentBuffer);
   const bamOff = sectorOffset(currentFormat.bamTrack, currentFormat.bamSector, getCurrentCtx());
 
@@ -576,7 +580,7 @@ document.getElementById('opt-recalc-free').addEventListener('click', (e) => {
     const key = `${dirT}:${dirS}`;
     if (dirVisited.has(key)) break;
     dirVisited.add(key);
-    if (dirT < 1 || dirT > currentTracks || dirS < 0 || dirS >= sectorsPerTrack(dirT, getCurrentCtx())) break;
+    if (!isValidChainLink(dirT, dirS, getCurrentCtx())) break;
     used[dirT][dirS] = 1;
     const off = sectorOffset(dirT, dirS, getCurrentCtx());
     dirT = data[off];

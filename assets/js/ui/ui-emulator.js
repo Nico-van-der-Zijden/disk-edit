@@ -45,11 +45,14 @@ function openInEmulator(bytes, suggestedName) {
     var msg = event.data;
     if (!msg || typeof msg.type !== 'string') return;
     if (msg.type === 'cbm-disk-editor:ready') {
+      // Transfer a private copy: the caller's bytes may be cached (e.g. TAP
+      // entry data) and transferring would detach them.
+      var sendBytes = u8.slice();
       try {
         win.postMessage({
           type: 'cbm-disk-editor:open-file',
-          payload: { name: suggestedName || 'disk.d64', bytes: u8 },
-        }, EMULATOR_ORIGIN, [u8.buffer]);
+          payload: { name: suggestedName || 'disk.d64', bytes: sendBytes },
+        }, EMULATOR_ORIGIN, [sendBytes.buffer]);
       } catch (err) {
         // Transferable failed (e.g. shared buffer) — retry without transfer
         win.postMessage({

@@ -154,7 +154,7 @@ function showFilePetsciiViewer(entryOff, preloaded) {
       var bg = 'transparent';
       if (cell.reverse) {
         bg = fg;
-        fg = '#352879'; // screen background color (C64 blue)
+        fg = C64_COLORS[6]; // screen background (blue)
       }
       // Use the appropriate PETSCII map character
       var displayChar;
@@ -178,16 +178,7 @@ function showFilePetsciiViewer(entryOff, preloaded) {
   var titleText = 'PETSCII View \u2014 "' + name + '"';
   if (result.error) titleText += ' \u2014 ' + result.error;
 
-  document.getElementById('modal-title').textContent = titleText;
-  var body = document.getElementById('modal-body');
-  body.innerHTML = html;
-
-  var footer = document.querySelector('#modal-overlay .modal-footer');
-  footer.innerHTML = '<button id="modal-close">OK</button>';
-  document.getElementById('modal-close').addEventListener('click', function() {
-    document.getElementById('modal-overlay').classList.remove('open');
-  });
-  document.getElementById('modal-overlay').classList.add('open');
+  showViewerModal(titleText, html, null, true);
 }
 
 // ── Per-byte CSS classes for the Hex Coloring schemes ────────────────
@@ -342,7 +333,6 @@ function showFileDisasmViewer(entryOff, preloaded) {
   if (sysEl) sysEl.scrollIntoView({ block: 'start' });
 }
 
-// ── Hex sector editor ─────────────────────────────────────────────────
 // ── 6502 Disassembler ─────────────────────────────────────────────────
 // 6502 opcode table: [mnemonic, addressing mode, type]
 // type: 0=legal, 1=illegal (stable), 2=illegal (unstable)
@@ -415,6 +405,7 @@ function disassemble6502(data, startAddr, maxLines) {
   return lines;
 }
 
+// ── Hex sector editor ─────────────────────────────────────────────────
 var sectorClipboard = null;
 
 function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
@@ -477,7 +468,15 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
   }
   html += '</div>';
 
-  // Show modal with editable T/S in title and custom footer
+  // Every listener of this editor session is registered with `signal`, so
+  // any way of leaving the editor (buttons, navigation, Esc/X/backdrop, or
+  // another dialog replacing the body) drops them all.
+  var session = new AbortController();
+  var signal = session.signal;
+  var overlay = document.getElementById('modal-overlay');
+  overlay.addEventListener('modaldismiss', function() { session.abort(); }, { signal: signal });
+
+  setModalSize(null);
   var titleEl = document.getElementById('modal-title');
   titleEl.innerHTML = 'Sector Editor \u2014 T:$' +
     '<span class="hex-nav-group">' +
@@ -498,6 +497,13 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
 
   var body = document.getElementById('modal-body');
   body.innerHTML = html;
+  var editorRoot = body.firstElementChild;
+  // False once another dialog has replaced this editor's content.
+  function alive() {
+    if (body.contains(editorRoot) && overlay.classList.contains('open')) return true;
+    session.abort();
+    return false;
+  }
 
   // Repaint just the PETSCII (.hex-char) cells when the user toggles
   // charset — leaves the hex byte cells (which may have an in-progress
@@ -550,9 +556,7 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
       for (var c2 = 0; c2 < 256; c2++) data[off + c2] = working[c2];
       renderTabs();
     }
-    document.removeEventListener('keydown', onKeyDown);
-    var prevMore = document.getElementById('hex-more-menu');
-    if (prevMore && prevMore._cleanup) prevMore._cleanup();
+    session.abort();
     document.getElementById('modal-overlay').classList.remove('open');
     footer.className = origFooterClass;
     footer.innerHTML = origFooter;
@@ -576,6 +580,7 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
       input.focus();
       input.select();
       function commit() {
+        if (signal.aborted) return; // editor closed before the blur timer ran
         if (input.isValid()) {
           onCommit(input.getValue());
         } else {
@@ -708,18 +713,21 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     editBuffer = '';
   }
 
-  // Click to start editing a byte
   body.addEventListener('click', function(e) {
+    if (!alive()) return;
     var byteEl = e.target.closest('.hex-byte');
     if (byteEl) {
       var idx = parseInt(byteEl.getAttribute('data-idx'), 10);
       startEdit(idx);
     }
-  });
+  }, { signal: signal });
 
-  // Keyboard input for hex editing
+  // Capture phase, so Esc during a byte edit is consumed before the modal's
+  // own Esc handler closes the whole editor.
   function onKeyDown(e) {
-    // J key: follow chain when not editing
+    if (!alive()) return;
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     if (editingByte === null && e.ctrlKey && (e.key === 'j' || e.key === 'J')) {
       e.preventDefault();
       followChain();
@@ -750,8 +758,9 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
         }
       }
     } else if (e.key === 'Escape') {
+      // Cancel just the byte edit, not the editor
       e.preventDefault();
-      // Revert current byte to working value
+      e.stopPropagation();
       var el2 = body.querySelector('.hex-byte[data-idx="' + editingByte + '"]');
       if (el2) {
         el2.textContent = working[editingByte].toString(16).toUpperCase().padStart(2, '0');
@@ -778,26 +787,24 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     }
   }
 
-  document.addEventListener('keydown', onKeyDown);
+  document.addEventListener('keydown', onKeyDown, { capture: true, signal: signal });
 
-  // Highlight on hover
   body.addEventListener('mouseover', function(e) {
+    if (!alive()) return;
     var t = e.target.closest('[data-idx]');
     if (!t) return;
     var idx = t.getAttribute('data-idx');
     body.querySelectorAll('.highlight').forEach(function(el) { el.classList.remove('highlight'); });
     body.querySelectorAll('[data-idx="' + idx + '"]').forEach(function(el) { el.classList.add('highlight'); });
-  });
+  }, { signal: signal });
   body.addEventListener('mouseout', function(e) {
+    if (!alive()) return;
     var t = e.target.closest('[data-idx]');
     if (t) body.querySelectorAll('.highlight').forEach(function(el) { el.classList.remove('highlight'); });
-  });
+  }, { signal: signal });
 
-  // Close handlers
   function closeEditor(save) {
-    document.removeEventListener('keydown', onKeyDown);
-    var moreEl = document.getElementById('hex-more-menu');
-    if (moreEl && moreEl._cleanup) moreEl._cleanup();
+    session.abort();
     if (save) {
       pushUndo();
       // Write working copy back to disk buffer
@@ -853,17 +860,13 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     hexMoreMenu.classList.toggle('open');
   });
   function closeHexMoreMenu() { hexMoreMenu.classList.remove('open'); }
-  document.addEventListener('click', closeHexMoreMenu);
-  // Clean up the document listener when the editor closes
-  hexMoreMenu._cleanup = function() {
-    document.removeEventListener('click', closeHexMoreMenu);
-  };
+  document.addEventListener('click', closeHexMoreMenu, { signal: signal });
 
   // Fill sector with a byte value
   document.getElementById('hex-fill-sec').addEventListener('click', async function() {
     closeHexMoreMenu();
     var val = await showInputModal('Fill sector with hex byte (00-FF)', '00');
-    if (val === null) return;
+    if (val === null || signal.aborted) return;
     var byte = parseInt(val.replace(/[\s\$]/g, ''), 16);
     if (isNaN(byte) || byte < 0 || byte > 255) return;
     for (var fi = 0; fi < 256; fi++) { updateByte(fi, byte); }
@@ -892,12 +895,15 @@ document.getElementById('opt-edit-sector').addEventListener('click', function(e)
   if (!currentBuffer || selectedEntryIndex < 0) return;
   closeMenus();
 
-  // Find which directory sector this entry is in
+  // Walk the current view's dir chain (root, partition or subdir) to the
+  // sector holding the selected slot.
   var slots = getDirSlotOffsets(currentBuffer);
   var slotIdx = slots.indexOf(selectedEntryIndex);
+  if (slotIdx < 0) return;
   var dirSectorIdx = Math.floor(slotIdx / currentFormat.entriesPerSector);
   var data = new Uint8Array(currentBuffer);
-  var dt = currentFormat.dirTrack, ds = currentFormat.dirSector;
+  var dctx = getDirContext();
+  var dt = dctx.dirTrack, ds = dctx.dirSector;
   var visited = new Set();
   for (var i = 0; i < dirSectorIdx && dt !== 0; i++) {
     var key = dt + ':' + ds;

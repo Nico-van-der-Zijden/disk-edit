@@ -213,13 +213,16 @@ var TASS_OPERAND_PFX = {
 
 // Decode a single TASS "primary" value at `pos`: a value-prefix + value bytes,
 // or a unary operator + primary, or a parenthesized sub-expression.
-// Returns { text, n }.
-function tassDecodePrimary(data, pos, end, labels) {
+// Returns { text, n }. `depth` bounds recursion on runs of $4A / unary ops.
+var TASS_MAX_EXPR_DEPTH = 32;
+function tassDecodePrimary(data, pos, end, labels, depth) {
   if (pos >= end) return { text: '?', n: 0 };
+  depth = (depth || 0) + 1;
+  if (depth > TASS_MAX_EXPR_DEPTH) return { text: '?', n: 1 };
   var pfx = data[pos];
   // Open paren: parse the inner expression, expect $4B or $5B close.
   if (pfx === 0x4A) {
-    var inner = tassDecodeValue(data, pos + 1, end, labels);
+    var inner = tassDecodeValue(data, pos + 1, end, labels, depth);
     var after = pos + 1 + inner.n;
     var nClose = (after < end && (data[after] === 0x4B || data[after] === 0x5B)) ? 1 : 0;
     return { text: '(' + inner.text + ')', n: 1 + inner.n + nClose };
@@ -227,7 +230,7 @@ function tassDecodePrimary(data, pos, end, labels) {
   // Unary operator (>, <, !, etc.): operator byte then sub-primary. Skip
   // close-paren bytes ($4B/$5B) since they're not unary.
   if (TASS_OPERATORS[pfx] && pfx !== 0x4B && pfx !== 0x5B) {
-    var sub = tassDecodePrimary(data, pos + 1, end, labels);
+    var sub = tassDecodePrimary(data, pos + 1, end, labels, depth);
     return { text: TASS_OPERATORS[pfx] + sub.text, n: 1 + sub.n };
   }
   // Value prefixes
@@ -257,7 +260,7 @@ function tassDecodePrimary(data, pos, end, labels) {
     // control codes ($00-$1F, $80-$9F) render as inverse, like `.text`.
     var cb = (data[pos+1]||0);
     var glyph = petsciiToAscii(cb);
-    var rev = (cb <= 0x1F) || (cb >= 0x80 && cb <= 0x9F);
+    var rev = isPetsciiReversed(cb);
     var txt = '"' + glyph + '"';
     var html = rev
       ? '"<span class="petscii-rev">' + escHtml(glyph) + '</span>"'
@@ -279,8 +282,8 @@ function tassDecodePrimary(data, pos, end, labels) {
 // EXPRESSION context (started by $20-$22/$25/$30/$4A or unary op) —
 // otherwise an operator byte after a plain value-prefix is the start
 // of the NEXT instruction, not a chain operator.
-function tassDecodeValue(data, pos, end, labels) {
-  var result = tassDecodePrimary(data, pos, end, labels);
+function tassDecodeValue(data, pos, end, labels, depth) {
+  var result = tassDecodePrimary(data, pos, end, labels, depth);
   var firstByte = data[pos];
   var inExpression = firstByte === 0x20 || firstByte === 0x21 || firstByte === 0x22 ||
                      firstByte === 0x25 || firstByte === 0x30 || firstByte === 0x4A ||
@@ -296,7 +299,7 @@ function tassDecodeValue(data, pos, end, labels) {
     // address operand is exotic; `eor #$NN` is the everyday
     // interpretation. Break to let the main loop pick it up.
     if (op === 0x49 && nextPos + 1 < end && TASS_OPERAND_PFX[data[nextPos + 1]]) break;
-    var rhs = tassDecodePrimary(data, nextPos + 1, end, labels);
+    var rhs = tassDecodePrimary(data, nextPos + 1, end, labels, depth);
     var newText = result.text + TASS_OPERATORS[op] + rhs.text;
     // Carry html when either side needs it (`.text`-style reversed-char
     // spans); plain sides get escaped.
@@ -449,6 +452,11 @@ function tassDecodeOperand(data, pos, opInfo, labels) {
   return withSuffix('', ''); // abs / zp
 }
 
+// Bytes that make up user-drawn rule lines / padding, and the run length
+// from which such a run is rendered as a `;---` separator.
+var TASS_PAD_BYTES = { 0x00: true, 0x2D: true, 0x3D: true, 0x5F: true, 0xC0: true };
+var TASS_RULE_MIN_RUN = 30;
+
 function tassTokenizeBlock(data, start, end, labels) {
   var lines = [];
   var cur = { label: null, instr: null, operand: null, comment: null, commentCol: -1, isData: false };
@@ -473,11 +481,8 @@ function tassTokenizeBlock(data, start, end, labels) {
   var i = start;
   while (i < end) {
     var b = data[i];
-    // Comment column markers: $80-$A7 = `;` at column 0-39. Many bytes
-    // in this range are also 6502 opcodes — disambiguate by the next
-    // byte, with extra peek-ahead logic for the implied-opcode bytes
-    // ($88/$8A/$98/$9A) and label-ref-operand opcodes (which back-to-
-    // back `jsr label ;comment` rows can mimic).
+    // $80-$A7 = `;` at column 0-39, but most are also opcodes: decide by
+    // the next byte, peeking further for implied ops and label-ref operands.
     var commentCol = -1;
     if (b >= 0x80 && b <= 0xA7) {
       var validOpHere = tassIsValidOpcodeStart(data, i, end, labels);
@@ -500,7 +505,7 @@ function tassTokenizeBlock(data, start, end, labels) {
       // Trailing `;` at column N belongs on the same row only when N is
       // past where existing content ends; otherwise it's a new row.
       if (cur.label || cur.instr) {
-        var curEnd = (cur.label ? 9 : 9);
+        var curEnd = 9; // instruction column
         if (cur.instr) curEnd += cur.instr.length;
         if (cur.operand) curEnd += 1 + cur.operand.length;
         if (commentCol < curEnd) flush();
@@ -529,22 +534,14 @@ function tassTokenizeBlock(data, start, end, labels) {
         }
         return null;
       }
-      // A comment occupies the row from `;` to col 39 (the C64 screen edge),
-      // so its body is at most (40 - commentCol - 1) chars wide. This stops
-      // a col-0 rule line from absorbing the next instruction byte (e.g.
-      // $60 RTS = '`' backtick) after exactly the screen-width worth of
-      // content has been read.
+      // A comment ends at col 39, so a full-width rule line can't swallow
+      // the next instruction byte (e.g. $60 RTS = '`').
       var maxCommentLen = 40 - commentCol - 1;
       while (i < end) {
         if (text.length >= maxCommentLen) break;
         var c = data[i];
-        // $A0 inside comment text is usually the PETSCII shifted-space
-        // (NBSP) — but it's ALSO LDY-imm opcode. Disambiguate the same way
-        // as the outer $80-$A7 check: if it's followed by a valid TASS
-        // operand prefix, it's a real instruction starting after the
-        // comment, so break. Otherwise treat as space and continue. This
-        // stops `sta ($ae),y ;NAME(NBSP)$A0 $28 $00` (= `ldy #$00`) from
-        // appending " (" to the previous comment.
+        // $A0 is shifted space in text but also LDY #imm: a valid operand
+        // after it means an instruction starts here.
         if (c === 0xA0) {
           if (tassIsValidOpcodeStart(data, i, end, labels)) break;
           text += ' '; i++; continue;
@@ -780,7 +777,7 @@ function tassTokenizeBlock(data, start, end, labels) {
           for (var tk2 = 0; tk2 < tlen; tk2++) {
             var bb = data[i + 2 + tk2];
             var glyph = petsciiToAscii(bb);
-            var rev = (bb <= 0x1F) || (bb >= 0x80 && bb <= 0x9F);
+            var rev = isPetsciiReversed(bb);
             tplain += glyph;
             if (rev) thtml += '<span class="petscii-rev">' + escHtml(glyph) + '</span>';
             else thtml += escHtml(glyph);
@@ -845,10 +842,17 @@ function tassTokenizeBlock(data, start, end, labels) {
     // another $C0; solo $C0 falls through to opcode handling.)
     var isPad = (b === 0x00 || b === 0x2D || b === 0x3D || b === 0x5F) ||
                 (b === 0xC0 && i + 1 < end && data[i + 1] === 0xC0);
+    // A short run that starts with a real instruction ($2D/$3D = AND abs /
+    // abs,X) is decoded as code instead of being dropped.
+    if (isPad && b !== 0x00 && TASS_OPCODES[b] && tassIsValidOpcodeStart(data, i, end, labels)) {
+      var pScan = i;
+      while (pScan < end && pScan - i < TASS_RULE_MIN_RUN && TASS_PAD_BYTES[data[pScan]]) pScan++;
+      if (pScan - i < TASS_RULE_MIN_RUN) isPad = false;
+    }
     if (isPad) {
       var pStart0 = i;
-      while (i < end && (data[i] === 0xC0 || data[i] === 0x00 || data[i] === 0x2D || data[i] === 0x3D || data[i] === 0x5F)) i++;
-      if (i - pStart0 >= 30) {
+      while (i < end && TASS_PAD_BYTES[data[i]]) i++;
+      if (i - pStart0 >= TASS_RULE_MIN_RUN) {
         flushData();
         if (cur.label || cur.instr || cur.comment) flush();
         var cStr = '';
@@ -957,7 +961,7 @@ function showFileTassViewer(entryOff, preloaded) {
   if (!isTassSource(fileData)) {
     showViewerModal(
       'Turbo Assembler \u2014 "' + name + '"',
-      '<div class="basic-listing"><div class="basic-line">Not recognized as a TASS V5.x source file (missing $09 $FF magic at offset $0E).</div></div>'
+      '<div class="basic-listing"><div class="basic-line">Not recognized as a TASS V5.x source file (expected $FF at offset $0F and a byte below $20 at $0E).</div></div>'
     );
     return;
   }

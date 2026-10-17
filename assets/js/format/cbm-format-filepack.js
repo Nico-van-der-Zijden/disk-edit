@@ -295,6 +295,7 @@ function compressFilePack(files, baseName) {
   // 166 sectors per data file is the format's maximum.
   var parts = [];
   for (var i = 0; i < entries.length; i += 166) {
+    if (parts.length >= FILEPACK_LETTERS.length) return { error: 'Too many files for one set.' };
     var slice = entries.slice(i, i + 166);
     var out = [0xFF, 0x03, slice.length];
     for (var s = 0; s < slice.length; s++) {
@@ -305,7 +306,6 @@ function compressFilePack(files, baseName) {
       name: FILEPACK_LETTERS.charAt(parts.length) + '!' + base,
       data: Uint8Array.from(out),
     });
-    if (parts.length >= FILEPACK_LETTERS.length) return { error: 'Too many files for one set.' };
   }
 
   var dir = new Uint8Array(FILEPACK_DIR_START + files.length * FILEPACK_DIR_ENTRY);

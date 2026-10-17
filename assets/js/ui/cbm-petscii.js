@@ -7,7 +7,7 @@
 var petsciiPicker = {
   target: null,
   clicking: false,
-  modifier: 'normal', // 'normal', 'shift', 'cbm', 'all'
+  modifier: 'normal', // 'normal', 'shift', 'cbm'
   reverse: false,
   defaultAll: localStorage.getItem('cbm-pickerAll') === 'true',
   stick: localStorage.getItem('cbm-pickerStick') === 'true',
@@ -17,9 +17,10 @@ var petsciiPicker = {
   floatTab: localStorage.getItem('cbm-pickerFloatTab') || 'hex'
 };
 
-// PETSCII byte ranges that render reversed (white-on-text vs text-on-background)
-const PETSCII_REV_LO_START = 0x00, PETSCII_REV_LO_END = 0x1F;
-const PETSCII_REV_HI_START = 0x80, PETSCII_REV_HI_END = 0x9F;
+// PETSCII byte ranges that render reversed: the control-code ranges
+// (cbm-format-petscii.js).
+const PETSCII_REV_LO_START = PETSCII_CTRL_LO_START, PETSCII_REV_LO_END = PETSCII_CTRL_LO_END;
+const PETSCII_REV_HI_START = PETSCII_CTRL_HI_START, PETSCII_REV_HI_END = PETSCII_CTRL_HI_END;
 // Picker's RVS button toggles the "normal" $40-$5F range to its reversed
 // $00-$1F counterpart, and the shifted $C0-$DF range to $80-$9F.
 const PETSCII_NORM_RANGE_START = 0x40, PETSCII_NORM_RANGE_END = 0x5F;
@@ -31,8 +32,7 @@ const PETSCII_LC_LETTER_START = 0x61, PETSCII_LC_LETTER_END = 0x7A;
 const PETSCII_SHIFTED_LETTER_START = 0xC1;
 
 function isPetsciiReversed(code) {
-  return (code >= PETSCII_REV_LO_START && code <= PETSCII_REV_LO_END) ||
-         (code >= PETSCII_REV_HI_START && code <= PETSCII_REV_HI_END);
+  return isPetsciiControlCode(code);
 }
 
 // C64 keyboard layout: [label, normal, shift, cbm] per key
@@ -123,7 +123,7 @@ function _chartScToPetscii(sc) {
   if (sc <= 0x7F) return sc + 0x40;          // graphics B → $A0-$BF
   if (sc <= 0x9F) return sc - 0x80;          // reversed letters → $00-$1F (real reversed byte)
   if (sc <= 0xBF) return sc - 0x80;          // reversed punct/digits → $20-$3F (lossy: filename won't actually render reversed)
-  if (sc <= 0xDF) return sc - 0x20;          // reversed graphics A → $A0-$BF (lossy)
+  if (sc <= 0xDF) return sc - 0x40;          // reversed graphics A → $80-$9F (real reversed byte)
   return sc - 0x40;                           // reversed graphics B → $A0-$BF (lossy)
 }
 
@@ -164,49 +164,42 @@ function renderPicker() {
   html += '<div class="petscii-mod' + (petsciiPicker.modifier === 'shift' ? ' active' : '') + '" data-mod="shift">SHIFT</div>';
   html += '<div class="petscii-mod' + (petsciiPicker.modifier === 'cbm' ? ' active' : '') + '" data-mod="cbm">CBM</div>';
   html += '<div class="petscii-mod' + (petsciiPicker.reverse ? ' active' : '') + '" data-mod="rev">RVS</div>';
-  html += '<div class="petscii-mod' + (petsciiPicker.modifier === 'all' ? ' active' : '') + '" data-mod="all">ALL</div>';
+  html += '<div class="petscii-mod" data-mod="all">ALL</div>';
   html += '</div>';
 
-  if (petsciiPicker.modifier === 'all') {
-    // Legacy in-place 16x16 grid — unreachable in normal flow now that the
-    // ALL button switches to the floating window, but kept as a backup.
-    html += buildAllGridHtml();
-  } else {
-    // Standard keyboard layout
-    for (var r = 0; r < KB_ROWS.length; r++) {
-      var rowData = KB_ROWS[r];
-      html += '<div class="petscii-kb-row">';
-      for (var k = 0; k < rowData.length; k++) {
-        var entry = rowData[k];
-        var label = entry[0], normal = entry[1], shift = entry[2], cbm = entry[3];
-        var code;
-        if (petsciiPicker.modifier === 'shift') code = shift;
-        else if (petsciiPicker.modifier === 'cbm') code = cbm;
-        else code = normal;
+  for (var r = 0; r < KB_ROWS.length; r++) {
+    var rowData = KB_ROWS[r];
+    html += '<div class="petscii-kb-row">';
+    for (var k = 0; k < rowData.length; k++) {
+      var entry = rowData[k];
+      var label = entry[0], normal = entry[1], shift = entry[2], cbm = entry[3];
+      var code;
+      if (petsciiPicker.modifier === 'shift') code = shift;
+      else if (petsciiPicker.modifier === 'cbm') code = cbm;
+      else code = normal;
 
-        if (code === -1) {
-          html += '<div class="petscii-key empty"></div>';
-        } else {
-          var actualCode = code;
-          if (petsciiPicker.reverse) {
-            if (code >= PETSCII_NORM_RANGE_START && code <= PETSCII_NORM_RANGE_END) actualCode = code - PETSCII_NORM_RANGE_START;
-            else if (code >= PETSCII_SHIFTED_RANGE_START && code <= PETSCII_SHIFTED_RANGE_END) actualCode = code - PETSCII_SHIFTED_RANGE_START + PETSCII_REV_HI_START;
-          }
-          var isSafe = SAFE_PETSCII.has(actualCode);
-          var disabled = !isSafe && !allowUnsafeChars;
-          var ch = PETSCII_MAP[code];
-          var title = label + ' $' + code.toString(16).toUpperCase().padStart(2, '0');
-          html += '<div class="petscii-key' +
-            (petsciiPicker.reverse ? ' rev-char' : '') +
-            (disabled ? ' disabled' : (!isSafe ? ' unsafe' : '')) +
-            '" data-code="' + code + '" title="' + title + '">' + escHtml(ch) + '</div>';
+      if (code === -1) {
+        html += '<div class="petscii-key empty"></div>';
+      } else {
+        var actualCode = code;
+        if (petsciiPicker.reverse) {
+          if (code >= PETSCII_NORM_RANGE_START && code <= PETSCII_NORM_RANGE_END) actualCode = code - PETSCII_NORM_RANGE_START;
+          else if (code >= PETSCII_SHIFTED_RANGE_START && code <= PETSCII_SHIFTED_RANGE_END) actualCode = code - PETSCII_SHIFTED_RANGE_START + PETSCII_REV_HI_START;
         }
+        var isSafe = SAFE_PETSCII.has(actualCode);
+        var disabled = !isSafe && !allowUnsafeChars;
+        var ch = PETSCII_MAP[code];
+        var title = label + ' $' + code.toString(16).toUpperCase().padStart(2, '0');
+        html += '<div class="petscii-key' +
+          (petsciiPicker.reverse ? ' rev-char' : '') +
+          (disabled ? ' disabled' : (!isSafe ? ' unsafe' : '')) +
+          '" data-code="' + code + '" title="' + title + '">' + escHtml(ch) + '</div>';
       }
-      html += '</div>';
     }
-
-    html += '<div class="petscii-kb-row"><div class="petscii-key space" data-code="32">SPACE</div></div>';
+    html += '</div>';
   }
+
+  html += '<div class="petscii-kb-row"><div class="petscii-key space" data-code="32">SPACE</div></div>';
   el.innerHTML = html;
 }
 
@@ -307,16 +300,8 @@ function insertCharAtCursor(input, ch, petsciiCode) {
 }
 
 // ── PETSCII contenteditable editor ────────────────────────────────────
-// A lossless replacement for <input> when editing PETSCII strings.
-// Tracks a shadow Uint8Array so bytes round-trip losslessly — editing a
-// name containing $01 $02 (which render as reversed A, B) preserves those
-// bytes on commit instead of collapsing them to $41 $42 via the display
-// map's aliasing (where $01 and $41 both map to the same PUA glyph).
-//
-// Reversed bytes ($00-$1F, $80-$9F) render with the .pe-rev class so
-// they're visible as such during editing, matching the listing's
-// readPetsciiRich behavior.
-//
+// Lossless <input> replacement: a shadow Uint8Array keeps e.g. $01 distinct
+// from $41 (same PUA glyph); reversed bytes render with .pe-rev.
 // Returns a div with:
 //   .getBytes(padLen, padByte) → Uint8Array of current bytes
 //   .getLength()                → current byte count
@@ -677,12 +662,8 @@ function positionPicker(isInitial) {
   var inModal = !!petsciiPicker.target.closest('.modal-overlay');
 
   if (petsciiPicker.stick && !inModal) {
-    // Sticky on the main page: input scrolls with the page, so place the
-    // picker at a document-Y = rect.bottom + scrollY. When the page scrolls,
-    // both rect.bottom and scrollY shift by the same amount in opposite
-    // directions, so the picker visually tracks the input with no handler
-    // intervention required (the scroll handler just re-asserts the same
-    // value — harmless).
+    // Document-Y anchoring: page scrolls move rect.bottom and scrollY in
+    // opposite directions, so the picker tracks the input by itself.
     el.style.position = 'absolute';
     var top = rect.bottom + window.scrollY + 4;
     var left = rect.left + window.scrollX;
@@ -702,12 +683,8 @@ function positionPicker(isInitial) {
       }
     });
   } else if (petsciiPicker.stick && inModal) {
-    // Sticky inside a modal: same absolute+scrollY math as the main-page
-    // case. We also flip the modal overlay to position:absolute (via a body
-    // class toggled by showPetsciiPicker) so the modal scrolls with the
-    // document. With that, rect.bottom tracks scrollY (input is in doc
-    // flow-ish), the scrollIntoView reveal on initial scrolls both modal and
-    // picker together, and later positionPicker calls compute the same top.
+    // Same math as above; showPetsciiPicker flips the overlay to
+    // position:absolute so modal and picker scroll together.
     el.style.position = 'absolute';
     el.style.top = (rect.bottom + window.scrollY + 4) + 'px';
     el.style.left = (rect.left + window.scrollX) + 'px';
@@ -953,10 +930,8 @@ function showPetsciiPicker(targetEl, maxLen) {
   el.classList.add('open');
   // Always appear above any open modal
   if (typeof modalZCounter !== 'undefined') el.style.zIndex = modalZCounter + 5;
-  // Sticky-in-modal: flip the modal overlay to position:absolute so the
-  // page can be scrolled to reveal the picker (modal scrolls with it). Save
-  // and reset page scroll first so the modal doesn't jump off-screen when
-  // the overlay leaves viewport-relative positioning.
+  // Sticky-in-modal: overlay goes position:absolute so the page can scroll to
+  // the picker; reset scroll first so the modal doesn't jump off-screen.
   var hostModalOverlay = (petsciiPicker.stick && targetEl.closest) ? targetEl.closest('.modal-overlay') : null;
   if (hostModalOverlay) {
     pickerSavedScrollY = window.scrollY;
@@ -964,10 +939,7 @@ function showPetsciiPicker(targetEl, maxLen) {
     if (window.scrollY !== 0) window.scrollTo(0, 0);
   }
   positionPicker(true);
-  // After positioning, stretch the modal overlay to cover the picker so the
-  // backdrop continues past the modal even when the picker extends the doc.
-  // Absolutely-positioned children don't grow their parent; this sets the
-  // overlay's height explicitly.
+  // Absolute children don't grow their parent: stretch the backdrop to the picker.
   if (hostModalOverlay) {
     requestAnimationFrame(function() {
       var pickerRect = el.getBoundingClientRect();
@@ -976,20 +948,13 @@ function showPetsciiPicker(targetEl, maxLen) {
     });
   }
 
-  // In sticky mode, follow the input when any scrollable ancestor scrolls.
-  // Scroll events don't bubble, so register in the capture phase on document —
-  // that fires for scrolls on #content, .modal-body, or any future scroll
-  // container without having to locate the right ancestor.
+  // Scroll doesn't bubble: capture on document catches any inner scroll
+  // container. Document scrolls are skipped, or the picker would chase its
+  // own scrollIntoView target.
   if (petsciiPicker.stick) {
     if (pickerScrollHandler) {
       document.removeEventListener('scroll', pickerScrollHandler, true);
     }
-    // Skip window/document scrolls — those can't move an input that lives in
-    // a position:fixed modal, and re-positioning the picker on them would
-    // chase its own scrollIntoView target (doc-Y grows with scrollY, which
-    // grows the document, which lets scrollY grow further, ...).
-    // Inner scroll containers (modal bodies, scrollable lists) still fire
-    // this handler so the picker follows an input that actually moves.
     pickerScrollHandler = function(e) {
       var t = e.target;
       if (t === document || t === document.documentElement || t === document.body) return;
@@ -1022,8 +987,6 @@ function hidePetsciiPicker() {
   hidePetsciiFloat();
   petsciiPicker.target = null;
 }
-
-// Old name compatibility
 
 // Initialize
 initPicker();

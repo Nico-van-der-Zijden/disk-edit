@@ -6,7 +6,7 @@ CBM Disk Editor is a single HTML page hosted at <https://d64.sannic.nl>. There i
 
 Three ways to load a disk:
 
-1. **Disk → Open** — opens your OS file picker. Pick a disk image (`.d64`, `.d71`, `.d81`, `.hdd`, etc.) and the editor will detect the format from the file size + magic bytes.
+1. **Disk → Open...** — opens your OS file picker. Pick one or more disk images (`.d64`, `.d71`, `.d81`, `.hdd`, etc.) and the editor detects the format from the file size + container headers. Open takes the same route as drag-and-drop, so everything in the next point works here too.
 2. **Drag and drop** — drop one or more files onto the page. Disks open as tabs; files (`.prg`, `.cvt`, etc.) get imported into the *currently active* disk tab; archives (`.lnx`) extract to a new D64; ZipCode sets (`1!NAME`…`4!NAME`) are reassembled into a D64; CMD-container files (`.dhd`, `.rml`) open as partition lists.
 3. **Disk → Recent** — your last opened disks (stored in browser localStorage; nothing leaves your computer).
 
@@ -44,7 +44,7 @@ Most edits are inline:
 - **Double-click a filename** to rename. Type the new name; press Enter to commit, Escape to cancel.
 - **Double-click the block-count column** to edit a file's block count.
 - **Double-click the type column** to change file type (PRG ↔ SEQ ↔ USR ↔ REL ↔ DEL).
-- **Drag rows** to reorder. Hold Ctrl while dragging to copy instead of move (where it makes sense).
+- **Drag rows** to reorder.
 - **Drag a file out of the browser** to export it to your OS.
 - **Drag a file into the browser** to import it into the current disk.
 
@@ -56,7 +56,7 @@ The editor never writes to your disk automatically. To save:
 
 - **Disk → Save** writes the current disk image to your Downloads folder, with the file extension the format expects.
 - **Disk → Save As...** lets you change the extension or filename.
-- **Disk → Export Disk** can produce a zip with the disk + a Text / CSV / HTML directory listing.
+- **Disk → Export Disk** can produce a ZIP of all files, or the directory listing as Text / CSV / HTML / PNG.
 - **File → Export ▸ Export File** writes the selected file(s) to your OS as raw bytes.
 
 The tab title shows a `●` next to the disk name when there are unsaved changes. Closing a tab with unsaved changes brings up a confirmation prompt.
@@ -74,7 +74,7 @@ Switch via **View → Switch to Uppercase / Lowercase** (the label flips to show
 
 - Writing TAP / T64 — read-only (tape image producers are rare in practice).
 - Writing NIB / NBZ — these are raw nibble dumps; the editor converts them to G64 in memory so saving produces a proper `.g64`.
-- Archive containers (LNX) — read by extracting all files into a fresh D64. There's no LNX writer.
+- Writing LNX, tar or LHA — these are read by extracting their contents. (ZipCode sets, by contrast, can be created: **Disk → Disk Tools → Create ZipCode…**.)
 - Real-hardware drive emulation — this isn't an emulator; it edits *images* of disks. Pair it with VICE / EmulatorJS / real hardware to test the disks.
 
 ## Next steps

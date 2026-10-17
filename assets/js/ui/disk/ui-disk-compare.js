@@ -5,10 +5,20 @@ compareInput.accept = '.d64,.d71,.d81,.d80,.d82';
 compareInput.style.display = 'none';
 document.body.appendChild(compareInput);
 
+// Compare walks CBM-DOS directories and T/S geometry, which tapes and
+// the IDE64 / CFS views don't have.
+function isComparableFormat(fmt) {
+  return !!(fmt && !fmt.isTape && !fmt.filesystem && typeof fmt.sectorsPerTrack === 'function');
+}
+
 document.getElementById('opt-compare').addEventListener('click', function(e) {
   e.stopPropagation();
   if (!currentBuffer) return;
   closeMenus();
+  if (!isComparableFormat(currentFormat)) {
+    showModal('Compare With...', ['Compare works on CBM-DOS disk images only.']);
+    return;
+  }
   showCompareSourcePicker();
 });
 
@@ -18,21 +28,31 @@ compareInput.addEventListener('change', function() {
   compareInput.value = '';
   var reader = new FileReader();
   reader.onload = function() {
-    runCompareWith(reader.result, file.name);
+    var buf = reader.result;
+    var det = detectFormat(buf.byteLength, buf);
+    var sizeKnown = det.format === DISK_FORMATS.dnp ||
+      (det.format.sizes || []).some(function(s) { return s.bytes === buf.byteLength; });
+    if (!sizeKnown || !isComparableFormat(det.format)) {
+      showModal('Compare Error', ['"' + file.name + '" is not a CBM-DOS disk image.']);
+      return;
+    }
+    runCompareWith(buf, file.name);
   };
   reader.readAsArrayBuffer(file);
 });
 
 // Step 1: pick a source for the comparison — another open tab or a file.
 function showCompareSourcePicker() {
-  var otherTabs = tabs.filter(function(t) { return t.id !== activeTabId; });
+  var others = tabs.filter(function(t) { return t.id !== activeTabId; });
+  var otherTabs = others.filter(function(t) { return isComparableFormat(t.format); });
+  var skipped = others.length - otherTabs.length;
 
   document.getElementById('modal-title').textContent = 'Compare With...';
   var body = document.getElementById('modal-body');
   var html = '';
 
   if (otherTabs.length === 0) {
-    html += '<div class="text-base text-muted">No other tabs open &mdash; use "From file&hellip;" to load a disk image.</div>';
+    html += '<div class="text-base text-muted">No other disk tabs open &mdash; use "From file&hellip;" to load a disk image.</div>';
   } else {
     html += '<div class="text-base text-muted mb-md">Pick another open tab to compare against:</div>';
     html += '<div class="cmp-tab-list" style="display:flex;flex-direction:column;gap:4px">';
@@ -42,6 +62,10 @@ function showCompareSourcePicker() {
         '<b>' + escHtml(t.name) + '</b></button>';
     });
     html += '</div>';
+  }
+  if (skipped > 0) {
+    html += '<div class="text-md text-muted mb-md" style="margin-top:8px">' + skipped +
+      ' tab(s) not listed: tape, IDE64 and other non-CBM-DOS images can\'t be compared.</div>';
   }
 
   setModalSize('md');
@@ -71,12 +95,8 @@ function showCompareSourcePicker() {
   document.getElementById('modal-overlay').classList.add('open');
 }
 
-// Build a {buffer, format, tracks, ...} snapshot of arbitrary disk image
-// data without using global state. Walks directory + file chains in
-// a self-contained way by temporarily swapping the relevant globals
-// (currentBuffer / currentFormat / currentTracks / parsedT64Entries /
-// parsedTAPEntries / parsedTapeDir / currentPartition) around the
-// existing parseDisk + readFileData calls. Restores everything on exit.
+// Parse an arbitrary image into a compare snapshot. parseDisk/readFileData
+// work on globals, so those are swapped in and restored on exit.
 function readDiskForCompare(buffer) {
   var savedBuffer = currentBuffer;
   var savedFormat = currentFormat;
@@ -153,26 +173,48 @@ function bytesEqual(a, b) {
   return true;
 }
 
-// Match files by trimmed name; classify each pair into identical /
-// differs / only in A / only in B. Same-name-different-type is treated
-// as "differs" (rare but possible).
-function computeCompareDiff(diskA, diskB) {
-  var byName = {};
-  diskA.files.forEach(function(f) { byName[f.name] = { a: f, b: null }; });
-  diskB.files.forEach(function(f) {
-    if (byName[f.name]) byName[f.name].b = f;
-    else byName[f.name] = { a: null, b: f };
+// Pair files by name + occurrence, so the 2nd "----" in A meets the 2nd
+// "----" in B. A's order first, then B-only files in B's order.
+function pairCompareFiles(filesA, filesB) {
+  function keyed(files) {
+    var seen = {};
+    return files.map(function(f) {
+      var n = seen[f.name] = (seen[f.name] || 0) + 1;
+      return { key: f.name + '\u0000' + n, file: f };
+    });
+  }
+  var bByKey = {};
+  keyed(filesB).forEach(function(k) { bByKey[k.key] = k.file; });
+  var pairs = [];
+  var usedB = {};
+  keyed(filesA).forEach(function(k) {
+    var b = Object.prototype.hasOwnProperty.call(bByKey, k.key) ? bByKey[k.key] : null;
+    if (b) usedB[k.key] = true;
+    pairs.push({ a: k.file, b: b });
   });
+  keyed(filesB).forEach(function(k) {
+    if (!usedB[k.key]) pairs.push({ a: null, b: k.file });
+  });
+  return pairs;
+}
+
+function compareFilesEqual(a, b) {
+  return a.type === b.type && bytesEqual(a.data, b.data);
+}
+
+// Same name but different type counts as "differs".
+function computeCompareDiff(diskA, diskB) {
+  var pairs = pairCompareFiles(diskA.files, diskB.files);
   var identical = [], differ = [], onlyA = [], onlyB = [];
-  Object.keys(byName).forEach(function(n) {
-    var p = byName[n];
+  pairs.forEach(function(p) {
     if (p.a && p.b) {
-      if (p.a.type === p.b.type && bytesEqual(p.a.data, p.b.data)) identical.push(p);
+      if (compareFilesEqual(p.a, p.b)) identical.push(p);
       else differ.push(p);
     } else if (p.a) onlyA.push(p);
     else onlyB.push(p);
   });
   return {
+    pairs: pairs,
     identical: identical,
     differ: differ,
     onlyA: onlyA,
@@ -226,7 +268,7 @@ function setupSectorMapCanvas(body, diskA, diskB, sd) {
   sd.diffs.forEach(function(d) { diffMap[d.track + ':' + d.sector] = d.byteCount; });
 
   for (var t = 1; t <= sd.tracks; t++) {
-    var spt = diskA.formatRef.sectorsPerTrack(t);
+    var spt = sd.sptByTrack[t];
     var y = (t - 1) * stepY + gap;
     ctx.fillStyle = labelColor;
     ctx.fillText('$' + t.toString(16).toUpperCase().padStart(2, '0'), 2, y + cellH / 2);
@@ -252,7 +294,7 @@ function setupSectorMapCanvas(body, diskA, diskB, sd) {
   canvas.addEventListener('mousemove', function(e) {
     var p = coordsFromEvent(e);
     if (p.track < 1 || p.track > sd.tracks) { canvas.title = ''; return; }
-    var spt = diskA.formatRef.sectorsPerTrack(p.track);
+    var spt = sd.sptByTrack[p.track];
     if (p.sector < 0 || p.sector >= spt) { canvas.title = ''; return; }
     var n = diffMap[p.track + ':' + p.sector] || 0;
     canvas.title = 'T:$' + p.track.toString(16).toUpperCase().padStart(2, '0') +
@@ -263,7 +305,7 @@ function setupSectorMapCanvas(body, diskA, diskB, sd) {
   canvas.addEventListener('click', function(e) {
     var p = coordsFromEvent(e);
     if (p.track < 1 || p.track > sd.tracks) return;
-    var spt = diskA.formatRef.sectorsPerTrack(p.track);
+    var spt = sd.sptByTrack[p.track];
     if (p.sector < 0 || p.sector >= spt) return;
     showSectorHexDiff(body, diskA, diskB, p.track, p.sector, sd);
   });
@@ -321,11 +363,7 @@ function showSectorHexDiff(body, diskA, diskB, track, sector, sd) {
       posLabel +
     '</div>';
 
-  // Reuse the standard hex-viewer layout (.hex-editor / .hex-row /
-  // .hex-offset / .hex-bytes / .hex-byte / .hex-separator / .hex-ascii)
-  // so the look matches the file Hex View. Each row of 8 bytes is shown
-  // twice — once for A, once for B — with differing bytes highlighted
-  // via .cmp-hex-diff on the byte cell and the matching ASCII char.
+  // Standard hex-viewer markup; each 8-byte row shown for A then B.
   html += '<div class="hex-editor cmp-hex-editor" data-coloring="' + hexColoring + '">';
   for (var row = 0; row < 32; row++) {
     var rowOff = row * 8;
@@ -401,12 +439,17 @@ function computeSectorDiff(diskA, diskB) {
     var perTrack = {};
     var totalSectors = 0;
     var maxSpt = 0;
-    for (var t = 1; t <= currentTracks; t++) {
-      var spt = currentFormat.sectorsPerTrack(t);
+    // Logical T/S, as sectorOffset addresses it (256-sector tracks on D1M/D2M/D4M).
+    var ctx = getCurrentCtx();
+    var numTracks = chainTrackCount(ctx);
+    var sptByTrack = [0];
+    for (var t = 1; t <= numTracks; t++) {
+      var spt = chainSectorsPerTrack(t, ctx);
+      sptByTrack[t] = spt;
       if (spt > maxSpt) maxSpt = spt;
       for (var s = 0; s < spt; s++) {
         totalSectors++;
-        var off = sectorOffset(t, s, getCurrentCtx());
+        var off = sectorOffset(t, s, ctx);
         if (off < 0 || off + 256 > dataA.length || off + 256 > dataB.length) continue;
         var n = 0;
         for (var i = 0; i < 256; i++) if (dataA[off + i] !== dataB[off + i]) n++;
@@ -420,7 +463,8 @@ function computeSectorDiff(diskA, diskB) {
     diffs.forEach(function(d) { totalBytes += d.byteCount; });
     return {
       compatible: true,
-      tracks: currentTracks,
+      tracks: numTracks,
+      sptByTrack: sptByTrack,
       maxSpt: maxSpt,
       totalSectors: totalSectors,
       diffs: diffs,
@@ -562,24 +606,10 @@ function showCompareResultModal(diskA, diskB, diff, labelA, labelB) {
       sectionTbody('identical', 'Identical', nEq,   diff.identical, ICON_EQ,    'cmp-marker-eq',     true) +
     '</table>';
 
-  // Directory tab — side-by-side listing.
-  // Build a merged ordered list: walk diskA in order, for each file also
-  // emit its B counterpart (or empty if missing); then append B-only.
-  var dirRows = [];
-  var seenB = {};
-  diskA.files.forEach(function(fa) {
-    var fb = diskB.files.find(function(f) { return f.name === fa.name; });
-    var status;
-    if (!fb) status = 'only-a';
-    else {
-      seenB[fb.name] = true;
-      if (fa.type === fb.type && bytesEqual(fa.data, fb.data)) status = 'eq';
-      else status = 'ne';
-    }
-    dirRows.push({ a: fa, b: fb || null, status: status });
-  });
-  diskB.files.forEach(function(fb) {
-    if (!seenB[fb.name]) dirRows.push({ a: null, b: fb, status: 'only-b' });
+  // Directory tab: side-by-side, same pairing as the Files tab.
+  var dirRows = diff.pairs.map(function(p) {
+    var status = !p.b ? 'only-a' : !p.a ? 'only-b' : compareFilesEqual(p.a, p.b) ? 'eq' : 'ne';
+    return { a: p.a, b: p.b, status: status };
   });
 
   var dirTabHtml = '<div class="cmp-side-by-side">';

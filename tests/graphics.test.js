@@ -164,21 +164,23 @@ describe('GFX_PARSERS — drp/vidcom/drazlace layouts', () => {
     assert.strictEqual(g.rowBg[0], 0x0F);
   });
 
-  it('vidcom: screen, bitmap, color regions at the correct offsets', () => {
-    // Size 10050 matches the format definition. The parser reads bg from
-    // d[10050] which is one past the end of a 10050-byte file; not asserting
-    // that value here — the region offsets are what this test covers.
+  it('vidcom: colour, screen, bg, bitmap at the BITMAP.TXT offsets', () => {
+    // BITMAP.TXT (offsets after the load address): bitmap 2048, screen 1024,
+    // colour 0, bg 2024.
     var d = mkBuf(0x5800, 10050);
-    fill(d, 2, 1002, 0xBB);
-    fill(d, 1026, 9026, 0xAA);
-    fill(d, 9026, 10026, 0xCC);
+    fill(d, 2, 1002, 0xCC);
+    fill(d, 1026, 2026, 0xBB);
+    d[2026] = 0x03;
+    fill(d, 2050, 10050, 0xAA);
     var g = GFX_PARSERS.vidcom(d);
     assert.strictEqual(g.scr.length, 1000);
     assert.strictEqual(g.bm.length, 8000);
     assert.strictEqual(g.col.length, 1000);
     assert.strictEqual(g.scr[0], 0xBB);
     assert.strictEqual(g.bm[0], 0xAA);
+    assert.strictEqual(g.bm[7999], 0xAA);
     assert.strictEqual(g.col[0], 0xCC);
+    assert.strictEqual(g.bg, 0x03);
   });
 
   it('drazlace: same layout as drp, size 18242', () => {

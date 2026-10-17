@@ -95,13 +95,13 @@ $html =~ s{<link rel="stylesheet" href="(assets/css/[^"]+)">}{
 $html = inline_fonts($html);
 note('Inlined C64 Pro Mono fonts');
 
-# 4. Inline JS files (skip matomo.js)
-$html =~ s{(?:<!-- Matomo[^>]*-->\s*)?<script src="([^"]+)"></script>}{
+# 4. Inline JS files (skip the server-only site-local.js)
+$html =~ s{(?:<!-- Optional, server-only[^>]*-->\s*)?<script src="([^"]+)"></script>}{
     my $rel = $1;
     my $path = "$srcdir/$rel";
-    if ($rel =~ /matomo/) {
-        warn_note("Skipped $rel (analytics)");
-        '<!-- Matomo excluded from dist build -->';
+    if ($rel =~ /site-local\.js$/) {
+        warn_note("Skipped $rel (server-only)");
+        '';
     } elsif (-f $path) {
         note("Inlined $rel");
         "<script>\n" . slurp($path) . "\n</script>";

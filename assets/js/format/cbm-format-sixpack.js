@@ -124,9 +124,6 @@ function _sixpackMasterId(files, ranges, spt) {
   return null;
 }
 
-// `files` is six Uint8Arrays in 1!!..6!! order. Returns { buffer, tracks,
-// errors, errorCount, missing } or { error }; `errors` is one CBM error
-// code per sector (1 = OK), for writing a "+Errors" D64.
 // Validate the six parts and read the track count. Shared by the D64 and G64
 // paths so they can't disagree on what a valid set looks like.
 function _sixpackHeader(files) {
@@ -147,6 +144,9 @@ function _sixpackHeader(files) {
   return { error: '1!! has track-count byte $' + hex8(sizeByte) + ' (expected $24 or $29).' };
 }
 
+// `files` is six Uint8Arrays in 1!!..6!! order. Returns { buffer, tracks,
+// errors, errorCount, missing } or { error }; `errors` is one CBM error
+// code per sector (1 = OK), for writing a "+Errors" D64.
 function decompressSixPack(files) {
   var head = _sixpackHeader(files);
   if (head.error) return { error: head.error };
@@ -264,25 +264,11 @@ function sixPackToImage(res) {
 
 // ── Encoding ─────────────────────────────────────────────────────────
 
-// 4 plain bytes -> 5 GCR bytes, the inverse of decodeGCR5.
-function _sixpackEnc4(b0, b1, b2, b3) {
-  var n = [(b0 >> 4) & 15, b0 & 15, (b1 >> 4) & 15, b1 & 15,
-           (b2 >> 4) & 15, b2 & 15, (b3 >> 4) & 15, b3 & 15];
-  for (var i = 0; i < 8; i++) n[i] = GCR_ENCODE[n[i]];
-  return [
-    (n[0] << 3) | (n[1] >> 2),
-    ((n[1] & 3) << 6) | (n[2] << 1) | (n[3] >> 4),
-    ((n[3] & 15) << 4) | (n[4] >> 1),
-    ((n[4] & 1) << 7) | (n[5] << 2) | (n[6] >> 3),
-    ((n[6] & 7) << 5) | n[7],
-  ];
-}
-
 // Build the 326 stored bytes for one sector. Because we control the GCR, the
 // data-side error codes are expressible: 22 by spoiling the $07 marker, 23 by
 // writing a checksum that doesn't match.
 function _sixpackEncodeSector(payload, err) {
-  var raw = new Uint8Array(260);
+  var raw = new Uint8Array(GCR_DATA_PLAIN);
   raw[0] = err === SIXPACK_ERR_NO_DATA ? 0x00 : 0x07;
   raw.set(payload, 1);
   var csum = 0;
@@ -290,17 +276,9 @@ function _sixpackEncodeSector(payload, err) {
   raw[257] = err === SIXPACK_ERR_DATA_CSUM ? (csum ^ 0xFF) : csum;
 
   var gcr = new Uint8Array(SIXPACK_SECTOR_GCR);
-  for (var g = 0; g < 65; g++) {
-    var q = _sixpackEnc4(raw[g * 4], raw[g * 4 + 1], raw[g * 4 + 2], raw[g * 4 + 3]);
-    for (var k = 0; k < 5; k++) gcr[g * 5 + k] = q[k];
-  }
-  gcr[325] = 0x55;                       // the byte the reader drops
-
-  // Stored form: final 70 GCR bytes first, then the leading 256.
-  var out = new Uint8Array(SIXPACK_SECTOR_GCR);
-  out.set(gcr.subarray(256, SIXPACK_SECTOR_GCR), 0);
-  out.set(gcr.subarray(0, 256), 70);
-  return out;
+  gcr.set(encodeGCRDataBlock(raw), 0);
+  gcr[GCR_DATA_BYTES] = 0x55;            // the byte the reader drops
+  return _sixpackStoreOrder(gcr);
 }
 
 // Read `n` bytes from a raw GCR track, wrapping at the end — a track is a
@@ -336,10 +314,8 @@ function _sixpackLayoutByTrack(layout) {
 // Returns { parts, tracks } or { error }.
 function compressSixPack(buffer, baseName, errors, layout) {
   var all = new Uint8Array(buffer);
-  var tracks = 0;
-  if (all.length === 174848 || all.length === 175531) tracks = 35;
-  else if (all.length === 196608 || all.length === 197376) tracks = 40;
-  else return { error: 'SixPack needs a 35- or 40-track D64.' };
+  var tracks = d64TracksForSize(all.length);
+  if (tracks !== 35 && tracks !== 40) return { error: 'SixPack needs a 35- or 40-track D64.' };
 
   // A +Errors image carries its table after the sector data.
   var spt = DISK_FORMATS.d64.sectorsPerTrack;
@@ -391,8 +367,8 @@ function compressSixPack(buffer, baseName, errors, layout) {
         var hId2 = e === SIXPACK_ERR_ID_MISMATCH ? (id2 ^ 0xFF) : id2;
         var chk = g ^ track ^ hId2 ^ hId1;
         if (e === SIXPACK_ERR_HEADER_CSUM) chk ^= 0xFF;
-        var a = _sixpackEnc4(e === SIXPACK_ERR_NO_HEADER ? 0x00 : 0x08, chk, g, track);
-        var b = _sixpackEnc4(hId2, hId1, 0x0F, 0x0F);
+        var a = encodeGCR4(e === SIXPACK_ERR_NO_HEADER ? 0x00 : 0x08, chk, g, track);
+        var b = encodeGCR4(hId2, hId1, 0x0F, 0x0F);
         desc.set(a.concat(b), g * 10);
       }
       desc[0xFF] = n;
@@ -446,14 +422,6 @@ function compressSixPack(buffer, baseName, errors, layout) {
 var SIXPACK_G64_SYNC = 0xFF;
 var SIXPACK_G64_GAP = 0x55;
 var SIXPACK_G64_STRIDE = 360;                            // 5+10+9+5+326+5
-var SIXPACK_G64_TRACK_LEN = [6250, 6666, 7142, 7692];    // by density zone
-
-function _sixpackDensity(track) {
-  if (track <= 17) return 3;
-  if (track <= 24) return 2;
-  if (track <= 30) return 1;
-  return 0;
-}
 
 // Walk the six parts, handing each track's descriptor and raw sector blocks to
 // `cb(track, desc, blocks, count)`. Returns an error string or null.
@@ -503,7 +471,7 @@ function sixPackToG64(files) {
 
     var n = spt(track);
     var order = _sixpackInterleave(track);
-    var len = SIXPACK_G64_TRACK_LEN[_sixpackDensity(track)];
+    var len = GCR_ZONE_CAPACITY[gcrSpeedZone(track)];
     var raw = new Uint8Array(len).fill(SIXPACK_G64_GAP);
 
     // Headers are linear in the descriptor but need not start at sector 0, so

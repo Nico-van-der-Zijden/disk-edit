@@ -7,7 +7,7 @@
     position: fixed;
     inset: 0;
     background: rgba(0, 0, 0, .5);
-    z-index: 200;
+    z-index: var(--z-overlay);
     /* Anchor the modal horizontally centered and at a fixed top offset so it
        doesn't visually re-center when its content changes size. Height grows
        downward from a stable top edge. */
@@ -200,7 +200,7 @@
     border-radius: 3px;
     padding: 4px 0;
     margin-bottom: 4px;
-    z-index: 210;
+    z-index: var(--z-overlay-menu);
     min-width: 100%;
     box-shadow: 0 -4px 16px rgba(0,0,0,.4);
   }

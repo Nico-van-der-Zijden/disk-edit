@@ -1,36 +1,13 @@
-// ── CMD container partition tables (RAMLink, FD2000/FD4000, future…) ──
+// ── CMD container partition tables (RAMLink, FD2000/FD4000, CMD HD) ──
 //
-// Several CMD-style devices store a 32-byte-per-slot partition table
-// with slot 0 reserved for SYSTEM (type 0xFF) and the remaining slots
-// holding user partitions of types Native (DNP), 1541, 1571, 1581. The
-// total slot count varies — 32 for RAMLink and FD2000/4000, 255 for
-// CMD HD (sectors 1024-1054 carry 8 slots each, sector 1055 carries 7
-// more; max user slot index is 254). The on-disk table location and
-// start-address encoding also differ by container:
-//
-//   RAMLink — contiguous 1024-byte block at (end - 2048).
-//             Start address is a 32-bit big-endian byte address at
-//             slot offset +0x15..+0x18.
-//   D1M/D2M/D4M — split across sectors 8-11 of the last track (8
-//             entries each). Start address is a 16-bit big-endian
-//             value at +0x16..+0x17, in 512-byte units (D2M-DNP.TXT
-//             rev 1.3). Byte +0x15 is documented as unknown/zero.
-//
-// Common per-slot layout (32 bytes):
-//   +0x00..+0x01  flags: 01 01 on SYSTEM, 00 00 elsewhere. On FD-style
-//                 sectored tables these bytes overlap chain-link bytes
-//                 at the start of each sector, so the writer leaves
-//                 them untouched (it only zeroes 0x02..0x1F).
-//   +0x02         type code: 0x00 empty/DEL, 0x01 Native, 0x02 1541,
-//                 0x03 1571, 0x04 1581, 0x05 CMD81, 0x06 Print,
-//                 0x07 Foreign, 0xFF System.
-//   +0x05..+0x14  16-byte name, 0xA0-padded.
-//   +0x15..+0x18  start address — encoding per CMD_CONTAINERS.startEnc.
-//   +0x1D..+0x1F  size — encoding per CMD_CONTAINERS.sizeUnit
-//                 (RAMLink: 24-bit BE × 256; FD: 24-bit BE × 512).
-//
-// CMD_CONTAINERS describes the per-type quirks; the generic helpers
-// below drive the UI uniformly.
+// 32-byte slots, slot 0 = SYSTEM (type 0xFF). Per slot:
+//   +0x00..+0x01  flags (01 01 on SYSTEM); on sectored tables these are
+//                 the sector's chain link, so writers leave them alone
+//   +0x02         type: 00 empty, 01 Native, 02 1541, 03 1571, 04 1581,
+//                 05 CMD81, 06 Print, 07 Foreign, FF System
+//   +0x05..+0x14  name, $A0-padded
+//   +0x15..+0x18  start (CMD_CONTAINERS.startEnc)
+//   +0x1D..+0x1F  size, 24-bit BE in CMD_CONTAINERS.sizeUnit bytes
 
 var CMD_PART_TYPE_NAMES = {
   0x00: 'Empty',
@@ -53,13 +30,21 @@ var CMD_PART_TYPE_FORMAT = {
   0x04: 'd81',
 };
 
-// FD2000/FD4000 share the same on-disk layout — only disk geometry
-// differs. Built once per format key during CMD_CONTAINERS init below.
-//
-// Important: FD partition entries store size in *512-byte clusters* at
-// +0x1D..+0x1F (verified against the FD-Tools v1.05 BASIC source — its
-// `bx=2` multiplier converts stored value to displayed 256-byte blocks).
-// RAMLink uses 256-byte units. CMD_CONTAINERS.sizeUnit captures this.
+var CMD_PART_TYPE_NATIVE = 0x01;
+var CMD_PART_TYPE_SYSTEM = 0xFF;
+function isCmdSystemPartition(part) {
+  return part.type === CMD_PART_TYPE_SYSTEM;
+}
+// Native or a type with an image format (1541/1571/1581 → .d64/.d71/.d81).
+function isCmdExportablePartition(part) {
+  return part.type === CMD_PART_TYPE_NATIVE || !!CMD_PART_TYPE_FORMAT[part.type];
+}
+
+var DHD_PART_TABLE_OFFSET = 0x40000; // sector 1024, fixed regardless of image size
+
+// FD2000/FD4000 descriptor; only the disk geometry differs. Table lives on
+// last-track sectors 8-11, start is 16-bit BE × 512 at +0x16, size is in
+// 512-byte clusters (FD-Tools v1.05's `bx=2` multiplier).
 function _makeCmdFdContainer(formatKey) {
   return {
     name: formatKey.toUpperCase(),
@@ -90,11 +75,13 @@ function _makeCmdFdContainer(formatKey) {
       return true;
     },
     startEnc: 'block16x512',
-    sizeUnit: 512, // partition size stored in 512-byte clusters
+    sizeUnit: 512,
+    // D2M-DNP.TXT: an FD 1571 partition is 684 clusters (the 1541's 342
+    // doubled), one cluster more than its 1366 blocks need.
+    fixedTypeUnits: { 0x03: 684 },
     diskIdLabel: formatKey.toUpperCase(),
     nativeFormatKey: formatKey, // Native partition slices parse as the parent FD format
-    // The whole last track is reserved for the system partition + chain
-    getReservedRanges: function(buffer) {
+    getReservedRanges: function(buffer) { // the whole last track
       var fmt = DISK_FORMATS[formatKey];
       var spt = fmt.sectorsPerTrack(1);
       var tracks = fmt.sizes[0].tracks;
@@ -112,43 +99,36 @@ var CMD_CONTAINERS = {
     getTableLayout: function(buffer) {
       return [{ off: buffer.byteLength - 2048, slots: 32 }];
     },
-    // Container present when slot 0 has type byte = 0xFF (SYSTEM record)
     isSignaturePresent: function(data, layout) {
       var off = layout[0].off + 2;
       return off < data.length && data[off] === 0xFF;
     },
     startEnc: 'byte32',
-    sizeUnit: 256, // partition size stored in 256-byte blocks
+    sizeUnit: 256,
     diskIdLabel: 'RML',
     partitionIdBytes: [0x52, 0x4C], // "RL" — stamped into freshly-built partitions
-    nativeFormatKey: 'dnp', // RAMLink Native partitions are standard DNP filesystems
-    // SYSTEM region = final 16 sectors (4 KiB)
-    getReservedRanges: function(buffer) {
+    nativeFormatKey: 'dnp',
+    getReservedRanges: function(buffer) { // SYSTEM = final 16 sectors
       return [{ start: buffer.byteLength - 16 * 256, end: buffer.byteLength }];
     },
   },
   d1m: _makeCmdFdContainer('d1m'),
   d2m: _makeCmdFdContainer('d2m'),
   d4m: _makeCmdFdContainer('d4m'),
-  // CMD HD. SYSTEM partition spans sectors 768-1055 and contains the
-  // HD-DOS shadow plus the partition table itself; the table is at
-  // fixed offset 0x40000 regardless of image size. Start/size are
-  // 24-bit BE 512-byte clusters at +0x15..+0x17 / +0x1D..+0x1F —
-  // 32-bit byte addresses or 16-bit clusters mis-read partitions
-  // above the 16 MiB mark.
+  // CMD HD. SYSTEM spans sectors 768-1055 (HD-DOS shadow + table). Start
+  // and size are 24-bit BE 512-byte clusters; 16-bit readers mis-read
+  // partitions above the 16 MiB mark.
   dhd: {
     name: 'CMD HD',
     formatKey: 'dhd',
     extensions: ['.dhd'],
-    // 32 sectors × 8 slots = 255 valid slot indices (slot 255's row
-    // overlaps the chain terminator's reserved bytes and is unused);
-    // CMD's HD-Tools populates up to 252 user partitions.
+    // 32 sectors × 8 slots, minus slot 255 (overlaps the chain terminator).
     getTableLayout: function(buffer) {
       var sections = [];
       for (var sec = 0; sec < 31; sec++) {
-        sections.push({ off: 0x40000 + sec * 256, slots: 8 });
+        sections.push({ off: DHD_PART_TABLE_OFFSET + sec * 256, slots: 8 });
       }
-      sections.push({ off: 0x40000 + 31 * 256, slots: 7 });
+      sections.push({ off: DHD_PART_TABLE_OFFSET + 31 * 256, slots: 7 });
       return sections;
     },
     isSignaturePresent: function(data, layout) {
@@ -161,18 +141,12 @@ var CMD_CONTAINERS = {
     partitionIdBytes: [0x48, 0x44], // "HD" — what HD-Tools / DirMaster stamp
     nativeFormatKey: 'dnp',
     getReservedRanges: function(buffer) {
-      return []; // no end-of-disk reservation
+      return [];
     },
     getMinPartitionStart: function(buffer) {
-      return 0x42000; // sector 1056: just past the SYSTEM partition (which
-                      // ends at sector 1055 and contains the table at 1024)
+      return DHD_MIN_SIZE; // first sector past SYSTEM
     },
-    // CMD HD is grow-as-needed — the buffer can expand up to the V8
-    // ArrayBuffer ceiling rather than being capped at its current size.
-    // findCmdContainerFreeSpace uses this to report the partition budget,
-    // and addCmdContainerPartition grows the buffer when the allocation
-    // extends past the current end. Other CMD containers (RAMLink, FD)
-    // omit this hook and remain fixed-size.
+    // Grow-as-needed: the only container with this hook; the others are fixed-size.
     getMaxGrownSize: function(buffer) { return 0xFFFFFFFF; },
   },
 };
@@ -307,21 +281,17 @@ function findCmdContainerFreeSpace(buffer, containerKey, partitions) {
   var highEnd = 0;
   for (var i = 0; i < partitions.length; i++) {
     var p = partitions[i];
-    if (p.type === 0xFF || p.type === 0x00) continue;
+    if (isCmdSystemPartition(p) || p.type === 0x00) continue;
     var end = p.startByte + p.sizeBytes;
     if (end > highEnd) highEnd = end;
   }
-  if (highEnd & 0xFF) highEnd = (highEnd + 0x100) & ~0xFF;
+  // Starts are stored in sizeUnit granules (512 on FD / CMD HD).
+  var align = ct.sizeUnit || 256;
+  highEnd = Math.ceil(highEnd / align) * align;
 
-  // Floor the allocation at the container's minimum partition-start byte
-  // (CMD HD reserves the first 1028 sectors for system + partition table;
-  // RAMLink/FD have no floor since partitions begin at byte 0).
   var minStart = ct.getMinPartitionStart ? ct.getMinPartitionStart(buffer) : 0;
   if (highEnd < minStart) highEnd = minStart;
 
-  // For grow-as-needed containers (CMD HD), dataEnd is the absolute max
-  // the buffer can grow to, not just its current size. Fixed-size
-  // containers (RAMLink, FD) fall back to buffer.byteLength.
   var dataEnd = ct.getMaxGrownSize ? ct.getMaxGrownSize(buffer) : buffer.byteLength;
   var reserved = ct.getReservedRanges(buffer);
   for (var r = 0; r < reserved.length; r++) {
@@ -330,10 +300,20 @@ function findCmdContainerFreeSpace(buffer, containerKey, partitions) {
   return { start: highEnd, size: Math.max(0, dataEnd - highEnd) };
 }
 
-// Write a 32-byte partition entry. Zeroes bytes 0x02..0x1F (NOT 0x00..0x01)
-// so chain-link bytes that overlap entry-0 flags on FD-style sectored
-// tables survive. The caller stamps the SYSTEM flag pair (01 01) on
-// slot 0 if applicable.
+// Bytes a partition of `sizeBlocks` 256-byte blocks occupies: whole
+// storage units, so a 1541 (683 blocks) on FD / CMD HD takes 342
+// clusters including one filler sector (D2M-DNP.TXT, CMDHD.TXT).
+function cmdContainerPartitionBytes(containerKey, type, sizeBlocks) {
+  var ct = CMD_CONTAINERS[containerKey];
+  var unit = (ct && ct.sizeUnit) || 256;
+  var units = Math.ceil(sizeBlocks * 256 / unit);
+  var fixed = ct && ct.fixedTypeUnits && ct.fixedTypeUnits[type];
+  if (fixed && fixed > units) units = fixed;
+  return units * unit;
+}
+
+// Write a 32-byte partition entry. Bytes 0x00..0x01 are left alone (chain
+// link on sectored tables); the caller stamps SYSTEM's 01 01 flags.
 function writeCmdContainerPartitionEntry(buffer, containerKey, slotIdx, type, name, startByte, sizeBlocks) {
   var ct = CMD_CONTAINERS[containerKey];
   if (!ct) return;
@@ -349,24 +329,16 @@ function writeCmdContainerPartitionEntry(buffer, containerKey, slotIdx, type, na
     data[off + 0x05 + n] = n < upper.length ? upper.charCodeAt(n) : 0xA0;
   }
   _cmdContainerWriteStart(data, off, ct.startEnc, startByte);
-  // Convert from caller's 256-byte-block units to the container's storage
-  // unit. RAMLink stores blocks as-is (sizeUnit=256); FD stores in 512-
-  // byte clusters (sizeUnit=512), so the on-disk value is sizeBlocks/2.
-  var unit = ct.sizeUnit || 256;
-  var stored = Math.floor(sizeBlocks * 256 / unit);
+  var stored = cmdContainerPartitionBytes(containerKey, type, sizeBlocks) / (ct.sizeUnit || 256);
   data[off + 0x1D] = (stored >>> 16) & 0xFF;
   data[off + 0x1E] = (stored >>> 8) & 0xFF;
   data[off + 0x1F] = stored & 0xFF;
 }
 
-// Delete a partition by physically shifting every higher-start-byte
-// partition down by the deleted partition's sizeBytes, updating each
-// shifted entry's startByte field, then zeroing only the deleted slot's
-// type byte (slot numbers stay; byte ranges compact). Matches RAM-Tools
-// v1.02 lines 15350-15740 and the FD2000 ROM's d-p DOS command.
-//
-// Both BASIC tools zero only the type byte (line 15445 / line 15330),
-// leaving the slot's name/start/size as residue.
+// Delete a partition: shift every partition above it down by its size,
+// zero the freed tail, and clear only the slot's type byte (name/start/
+// size stay as residue). Matches RAM-Tools v1.02 and the FD2000 ROM's
+// d-p command.
 function clearCmdContainerPartitionEntry(buffer, containerKey, slotIdx) {
   var ct = CMD_CONTAINERS[containerKey];
   if (!ct) return;
@@ -377,50 +349,34 @@ function clearCmdContainerPartitionEntry(buffer, containerKey, slotIdx) {
 
   var info = readCmdContainerPartitions(buffer, containerKey);
   var deleted = info && info.partitions.filter(function(p) { return p.index === slotIdx; })[0];
-  if (deleted && deleted.type !== 0xFF) {
+  if (deleted && !isCmdSystemPartition(deleted)) {
     var delStart = deleted.startByte;
     var delSize = deleted.sizeBytes;
-    // Partitions whose data lives above the gap, ascending by start.
-    // Processing in order means each move's destination is into freed
-    // bytes (the deleted region, or where the previous shift moved out).
+    // Ascending order: each move lands in bytes the previous one freed.
     var toShift = info.partitions
-      .filter(function(p) { return p.index !== slotIdx && p.type !== 0xFF && p.type !== 0x00 && p.startByte > delStart; })
+      .filter(function(p) { return p.index !== slotIdx && !isCmdSystemPartition(p) && p.type !== 0x00 && p.startByte > delStart; })
       .sort(function(a, b) { return a.startByte - b.startByte; });
     var maxEndBefore = delStart + delSize;
     for (var i = 0; i < toShift.length; i++) {
       var p = toShift[i];
-      // Uint8Array.set with a subarray source handles overlapping ranges.
       data.set(data.subarray(p.startByte, p.startByte + p.sizeBytes), p.startByte - delSize);
       var entryOff = _cmdContainerSlotOffset(layout, p.index);
       if (entryOff >= 0) _cmdContainerWriteStart(data, entryOff, ct.startEnc, p.startByte - delSize);
       var end = p.startByte + p.sizeBytes;
       if (end > maxEndBefore) maxEndBefore = end;
     }
-    // Zero the freed tail [maxEndBefore - delSize, maxEndBefore) so
-    // stale partition data doesn't leak past the new allocation end.
     for (var z = Math.max(0, maxEndBefore - delSize); z < maxEndBefore && z < buffer.byteLength; z++) data[z] = 0;
   }
 
   data[off + 0x02] = 0x00;
 }
 
-// Build a fresh RAMLink container of `sizeMiB` megabytes that matches
-// VICE's "empty RAMCard" output. The system partition (last 16 sectors
-// = 4 KiB) carries three things the RAMLink firmware looks for:
-//
-//   • A bookkeeping/signature block at offset +0x500..+0x5FF, ending
-//     with the ASCII string "RAMLINK     " followed by 0xAA × 4. Without
-//     this block VICE treats the container as uninitialised RAM and the
-//     file shows up as empty.
-//   • Chain markers `01 02` / `01 03` / `00 FF` at the start of sectors
-//     9 / 10 / 11 (the partition table itself sits at sector 8).
-//   • The partition table at sector 8: slot 0 = SYSTEM (flags `01 01`,
-//     type 0xFF), slot 1 = default Native partition "RAMLINK  1"
-//     spanning [0, size − 64 KiB).
-//
-// Everything else in the system partition is zeros. The 64 KiB tail
-// (= SYSTEM 16 blocks + 240-block reserved gap) matches VICE; the gap
-// is what RAMLink firmware uses for its own scratch space.
+// Build a fresh RAMLink container matching VICE's "empty RAMCard" output:
+// one Native partition "RAMLINK  1" over [0, size − 64 KiB), then the
+// firmware's 240-block scratch gap and the 16-sector SYSTEM partition
+// (bookkeeping block at +0x500, partition table at sector 8, chain
+// markers on sectors 9-11). Without the bookkeeping block VICE treats
+// the container as uninitialised RAM.
 function createEmptyRamLink(sizeMiB) {
   var size = sizeMiB * 1024 * 1024;
   var totalBlocks = size / 256;
@@ -457,20 +413,11 @@ function createEmptyRamLink(sizeMiB) {
   // 2. System partition (last 4 KiB).
   var sysStart = size - 4096;
 
-  // 2a. Firmware bookkeeping block at +0x500..+0x5FF — verbatim from
-  //     VICE's empty 8/16 MiB output. Most bytes are 0xFF; specific
-  //     `00 00` gap pairs at +0x538, +0x570 (size marker), +0x5A8, the
-  //     RAMLink ID block at +0x5E0, the "RAMLINK     " signature at
-  //     +0x5F0, then 0xAA × 4 at +0x5FC.
-  // Size-dependent bytes — derived from VICE-formatted samples at 1, 8,
-  // and 16 MiB:
-  //   +0x571 = (sizeMiB << 4) & 0xFF
-  //   +0x5EB = (sizeMiB << 4) & 0xFF        (same encoding as 0x571)
-  //   +0x5EE = ((sizeMiB - 1) << 4) & 0xF0
-  // Everything else in this 256-byte block is constant: a 0x80 marker
-  // at +0x500, 0xFF filler with `00 00` gap pairs at +0x538, +0x570,
-  // +0x5A8, the RAMLink ID block at +0x5E0, the literal "RAMLINK     "
-  // signature at +0x5F0, and 0xAA × 4 at +0x5FC.
+  // 2a. Bookkeeping block +0x500..+0x5FF, verbatim from VICE: 0x80 marker,
+  //     0xFF filler with `00 00` pairs at +0x538/+0x570/+0x5A8, ID block at
+  //     +0x5E0, "RAMLINK     " at +0x5F0, 0xAA × 4 at +0x5FC. Size-dependent
+  //     (from VICE 1/8/16 MiB samples): +0x571 and +0x5EB = sizeMiB << 4,
+  //     +0x5EE = (sizeMiB - 1) << 4.
   var byteSizeMark1 = (sizeMiB << 4) & 0xFF;
   var byteSizeMark2 = ((sizeMiB - 1) << 4) & 0xF0;
 
@@ -498,7 +445,7 @@ function createEmptyRamLink(sizeMiB) {
   data[sysStart + 0xB00] = 0x00; data[sysStart + 0xB01] = 0xFF;
 
   // 2c. Partition table at sector 8.
-  writeCmdContainerPartitionEntry(buf, 'ramlink', 0, 0xFF, 'SYSTEM', sysStart, 16);
+  writeCmdContainerPartitionEntry(buf, 'ramlink', 0, CMD_PART_TYPE_SYSTEM, 'SYSTEM', sysStart, 16);
   // SYSTEM record's flag bytes are `01 01` (the generic writer leaves
   // bytes 0/1 untouched; stamp afterwards).
   data[sysStart + 0x800 + 0] = 0x01;
@@ -509,18 +456,13 @@ function createEmptyRamLink(sizeMiB) {
 }
 
 // ── CMD HD DOS shadow ────────────────────────────────────────────────
-// The drive firmware ("HD-DOS", © 1990 Creative Micro Designs) lives on
-// the disk itself at a fixed offset; the boot ROM loads it at power-on.
-// Without it a generated DHD won't be bootable. We don't ship the bytes —
-// they're captured at runtime from any DHD that contains them, persisted
-// in localStorage, and re-used when generating new images.
+// HD-DOS lives on the disk itself; without it a DHD won't boot. We don't
+// ship it — it's captured from any opened DHD and cached in localStorage.
 var DHD_DOS_OFFSET = 0x30400;  // sector 772
 var DHD_DOS_SIZE   = 0x7C00;   // 31 KiB
 var DHD_DOS_LS_KEY = 'cbm-dhd-hddos-shadow-v2';
 
-// True when the buffer carries a non-trivial DOS region (≥256 non-zero
-// bytes). Freshly-allocated buffers are all zero, so this also screens
-// out the "no DOS yet" case.
+// True when the DOS region holds ≥256 non-zero bytes.
 function dhdHasDosShadow(buffer) {
   if (!buffer || buffer.byteLength < DHD_DOS_OFFSET + DHD_DOS_SIZE) return false;
   var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
@@ -616,33 +558,27 @@ function extractDhdDosVersion(buffer) {
   return null;
 }
 
-// Fresh CMD HD container — minimal 264 KiB image holding just the
-// SYSTEM partition. Grown lazily as the user adds partitions; this
-// matches CMD's own tools, which don't pre-allocate the drive capacity.
+// Fresh CMD HD: just the SYSTEM partition, grown as partitions are added
+// (CMD's tools don't pre-allocate either).
 var DHD_MIN_SIZE = 0x42000; // sectors 0..1055, ending where SYSTEM ends
 
 function createEmptyDhd() {
   var buf = new ArrayBuffer(DHD_MIN_SIZE);
   var data = new Uint8Array(buf);
 
-  // Bytes are zero-initialised by the runtime, matching the factory
-  // pattern. HD-DOS goes in only if the user has previously cached one.
   var dosShadow = loadDhdDosShadow();
   if (dosShadow) installDhdDosShadow(buf, dosShadow);
 
-  // SYSTEM is a CBM-DOS chained-sector list spanning 32 sectors. Sectors
-  // 0..30 chain forward with `01 NN` (NN = 01..1F); sector 31 terminates
-  // with `00 FF`. The first chain pair doubles as slot 0's flag bytes,
-  // which is why writeCmdContainerPartitionEntry only touches +0x02..+0x1F.
+  // Table sectors chain `01 NN` … `00 FF`; slot 0's flags are the first link.
   for (var s = 0; s <= 30; s++) {
-    data[0x40000 + s * 256 + 0] = 0x01;
-    data[0x40000 + s * 256 + 1] = (s + 1) & 0xFF;
+    data[DHD_PART_TABLE_OFFSET + s * 256 + 0] = 0x01;
+    data[DHD_PART_TABLE_OFFSET + s * 256 + 1] = (s + 1) & 0xFF;
   }
-  data[0x40000 + 31 * 256 + 0] = 0x00;
-  data[0x40000 + 31 * 256 + 1] = 0xFF;
+  data[DHD_PART_TABLE_OFFSET + 31 * 256 + 0] = 0x00;
+  data[DHD_PART_TABLE_OFFSET + 31 * 256 + 1] = 0xFF;
 
   // SYSTEM record: starts at sector 768, 144 × 512-byte clusters.
-  writeCmdContainerPartitionEntry(buf, 'dhd', 0, 0xFF, 'SYSTEM', 0x30000, 288);
+  writeCmdContainerPartitionEntry(buf, 'dhd', 0, CMD_PART_TYPE_SYSTEM, 'SYSTEM', 0x30000, 288);
 
   return buf;
 }
@@ -695,29 +631,18 @@ function detectFormat(bufferSize, buffer) {
     if (bufferSize >= 64 && data[0] === 0x43 && data[1] === 0x36 && data[2] === 0x34) {
       return { format: DISK_FORMATS.t64, tracks: 0 };
     }
-    // IDE64 .hdd — CFS 0.11 boot-sector magic at $0008. Images are
-    // arbitrary user-chosen sizes (typically 8 MiB-128 GiB), so the
-    // size table can't catch them; the magic at this fixed offset is
-    // the only reliable signal. The boot sector isn't a user-editable
-    // surface in this app, so it passes the size-first detection rule.
+    // IDE64 .hdd: any size, so only the boot-sector magic identifies it.
     if (typeof isIde64Hdd === 'function' && isIde64Hdd(data)) {
       return { format: DISK_FORMATS.hdd, tracks: 0 };
     }
   }
-  // Size-based detection. Run the size table first so any disk whose size
-  // uniquely identifies it (D64/D71/D81/D80/D2M/D1M/D4M/...) wins regardless
-  // of what bytes the user has put in the filesystem header — disk IDs,
-  // names, and DOS-type bytes are all user-editable and can't be trusted
-  // as a format signal.
+  // Size first: header bytes (IDs, names, DOS type) are user-editable.
   for (const [key, fmt] of Object.entries(DISK_FORMATS)) {
     for (const size of fmt.sizes) {
       if (bufferSize === size.bytes) return { format: fmt, tracks: size.tracks };
     }
   }
-  // DNP fallback: any multiple of 65536 up to the 16 MiB ceiling that didn't
-  // match a sized format is treated as a DNP / Native partition. The only
-  // collision in this range would be 196608 bytes (D64 40-track vs a 3-track
-  // DNP); the size table handles that case above.
+  // Any other 64 KiB multiple up to 255 tracks is a DNP.
   if (bufferSize >= 65536 && bufferSize % 65536 === 0 && bufferSize <= 16711680) {
     return { format: DISK_FORMATS.dnp, tracks: bufferSize / 65536 };
   }
@@ -851,10 +776,7 @@ function createCmdNativeImage(formatKey, numTracks) {
   data[hdrOff + 0x01] = fmt.dirSector;
   data[hdrOff + 0x02] = fmt.dosVersion;
   for (var i = 0; i < fmt.nameLength; i++) data[hdrOff + fmt.nameOffset + i] = 0xA0;
-  // CBM-standard 0xA0 padding between the name end (0x13) and the ID (0x16),
-  // and between DOS-type end (0x1A) and the trailing zeros (0x1D). Both pairs
-  // are part of every VICE-formatted DNP/CMD-native header; without them the
-  // 0x00 fillers can confuse stricter readers (real CMD ROM, RAMLink mount).
+  // $A0 pads at $14-$15 and $1B-$1C, as in every VICE-formatted header.
   data[hdrOff + 0x14] = 0xA0;
   data[hdrOff + 0x15] = 0xA0;
   data[hdrOff + fmt.idOffset + 0] = 0xA0;
@@ -877,21 +799,13 @@ function createCmdNativeImage(formatKey, numTracks) {
 
   var fdCfg = _CMD_FD_SIG[formatKey];
   if (fdCfg) {
-    // FD2000/FD4000 native: BAM is N logical tracks of 256 sectors each,
-    // all data slots (no separate system slot), 32 bytes per slot,
-    // packed contiguously from T1/S2 +0x20. byte +0x08 = logical-track
-    // count, +0x04..+0x05 = density mark (TT / T2 / T3). Verified
-    // byte-exact against empty d1m/d2m/d4m references. The first 35 LBAs
-    // of slot 0 are header / BAM / dir-start overhead — but the FD ROM
-    // additionally treats sectors 0..63 as always-reserved (matching
-    // DNP's "first 8 BAM bytes skipped" convention), so the directory
-    // free count subtracts that range.
+    // FD native BAM: one 32-byte slot per 256-LBA logical track from
+    // T1/S2 +0x20, +0x08 = slot count, +0x04/5 = density mark.
     data[bam0Off + 0x04] = fdCfg.bamMark[0];
     data[bam0Off + 0x05] = fdCfg.bamMark[1];
     var fdLogicalTracks = fdCfg.logicalTracks;
     data[bam0Off + 0x08] = fdLogicalTracks;
     var bitmapStart = bam0Off + 0x20;
-    // All slots: bits free (0xFF)
     for (var i = 0; i < fdLogicalTracks * 32; i++) {
       data[bitmapStart + i] = 0xFF;
     }
@@ -900,14 +814,10 @@ function createCmdNativeImage(formatKey, numTracks) {
       data[bitmapStart + (us >> 3)] &= ~(0x80 >> (us & 7));
     }
   } else {
-    // DNP: BAM header bytes +0x04..+0x05 are 0xA0 (padding)
+    // DNP BAM: one 32-byte slot per physical track across T1/S2..S33.
     data[bam0Off + 0x04] = 0xA0; data[bam0Off + 0x05] = 0xA0;
-    // DNP: BAM is one 32-byte slot per *physical* track, indexed via
-    // _cmdBamBase across S2..S33.
     data[bam0Off + 0x08] = numTracks;
-    // Slots 1-7 (offset 32-255): tracks 1-7 bitmap, all free
     for (var b = 32; b < 256; b++) data[bam0Off + b] = 0xFF;
-    // Track 1, Sectors 3-33: remaining BAM sectors (8 tracks each, no header)
     for (var s = 3; s <= 33; s++) {
       var sOff = s * 256;
       for (var b2 = 0; b2 < 256; b2++) data[sOff + b2] = 0xFF;
@@ -923,10 +833,8 @@ function createCmdNativeImage(formatKey, numTracks) {
   var dirOff = 34 * 256;
   data[dirOff + 0] = 0x00; data[dirOff + 1] = 0xFF;
 
-  // D1M/D2M/D4M: write CMD FD system partition on the last track.
-  // Note: VICE intentionally leaves t_last s5 & s8-11 marked free in the main BAM —
-  // allocation is prevented via fmt.getProtectedSectors(), not via BAM bits. Matching
-  // that behaviour keeps the free-block count consistent with VICE/DirMaster.
+  // VICE leaves the system sectors free in the BAM; getProtectedSectors()
+  // keeps them from being allocated instead.
   if (formatKey !== 'dnp' && _CMD_FD_SIG[formatKey]) {
     writeCmdFdSystemPartition(data, formatKey, numTracks);
   }

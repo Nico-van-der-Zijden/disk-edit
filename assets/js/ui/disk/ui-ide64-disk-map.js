@@ -219,7 +219,7 @@ function _renderDiskMapHtml(ctx) {
     return '';
   }
   function fmtSize(sectors) {
-    var bytes = sectors * 512;
+    var bytes = sectors * IDE64_SECTOR_SIZE;
     if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1) + ' MiB';
     if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KiB';
     return bytes + ' B';
@@ -232,7 +232,7 @@ function _renderDiskMapHtml(ctx) {
   lines.push('<div class="hdd-map-wrap">');
 
   lines.push('<div class="hdd-map-stats">' +
-    '<span><b>' + (boot.label || '(no label)') + '</b></span> ' +
+    '<span><b>' + escHtml(boot.label || '(no label)') + '</b></span> ' +
     '<span>' + totalLbas.toLocaleString() + ' sectors</span> ' +
     '<span>' + fmtSize(totalLbas) + '</span> ' +
     '<span style="color:var(--text-muted)">default partition: slot ' + boot.defaultPart + '</span>' +
@@ -284,7 +284,7 @@ function _renderDiskMapHtml(ctx) {
 
 function _wireDiskMapHandlers(body, ctx, onPartitionDblClick) {
   function fmtSize(sectors) {
-    var bytes = sectors * 512;
+    var bytes = sectors * IDE64_SECTOR_SIZE;
     if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1) + ' MiB';
     if (bytes >= 1024) return (bytes / 1024).toFixed(0) + ' KiB';
     return bytes + ' B';
@@ -361,6 +361,8 @@ function _wireDiskMapHandlers(body, ctx, onPartitionDblClick) {
 
 // ── Partition heat-map tab (CFS bitmap) ──────────────────────────────
 
+// Owner of every LBA ('system' or a file key), from the same walk the
+// bitmap validator uses, so "lost" here means the same as there.
 function _cfsBuildLbaOwnership(buffer, partition) {
   var data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
   var partStart = partition.startLba;
@@ -373,86 +375,22 @@ function _cfsBuildLbaOwnership(buffer, partition) {
     '#a85060', '#3897c0', '#9a8030', '#4a7050',
     '#8c5f9a', '#c87878', '#5078a8', '#d09030'
   ];
-  function markSystem(lba) {
-    if (lba < partStart || lba > partEnd) return;
-    if (owners[lba] === undefined) owners[lba] = 'system';
-  }
-  function markFile(lba, key) {
-    if (lba < partStart || lba > partEnd) return;
-    if (owners[lba] === undefined) owners[lba] = key;
-  }
-  // System sectors at the start of each 4096-LBA bitmap chunk: the bitmap
-  // itself (offset 0) plus the reserved companion sector right after it
-  // (offset 1). cfsfdisk leaves the companion zero-filled but bitmap-used
-  // on every chunk, not just the first — so on a multi-MiB partition we'd
-  // flag dozens of false LOST sectors if we only marked partStart+1.
-  for (var bm = 0; partStart + bm <= partEnd; bm += 4096) {
-    markSystem(partStart + bm);
-    markSystem(partStart + bm + 1);
-  }
-  // cfsfdisk reserves the partition's last LBA in the bitmap. When the
-  // partition spans the .hdd's backup partition-table LBA this is what
-  // protects the backup; either way the bitmap reports it used, so the
-  // ownership map must call it system or it gets flagged as LOST.
-  markSystem(partEnd);
-  if (partition.cfsDeletedDir && partition.cfsDeletedDir.lba) markSystem(partition.cfsDeletedDir.addr);
-  var dirVisited = {};
-  function walkTree(treeRoot, fileSize, key) {
-    if (!treeRoot || treeRoot < partStart || treeRoot > partEnd) return;
-    var depth = _cfsComputeTreeDepth(fileSize);
-    var seen = {};
-    function w(nodeLba, level) {
-      if (!nodeLba || nodeLba < partStart || nodeLba > partEnd) return;
-      if (seen[nodeLba]) return;
-      seen[nodeLba] = true;
-      markFile(nodeLba, key);
-      var nodeBase = nodeLba * IDE64_SECTOR_SIZE;
-      if (nodeBase + IDE64_SECTOR_SIZE > data.length) return;
-      for (var pi = 0; pi < 128; pi++) {
-        var dp = _readIde64Pointer(data, nodeBase + pi * 4);
-        if (dp.lba && dp.addr > 0) markFile(dp.addr, key);
-      }
-      if (level < depth) {
-        for (var s = 0; s < 8; s++) {
-          var link = _cfsReadTreeLink(data, nodeBase + s * 64);
-          if (link.lba && link.addr > 0) w(link.addr, level + 1);
-        }
-      }
+  var lastEntry = null, lastKey = null;
+  cfsWalkPartitionSectors(data, partition, function(lba, kind, entry) {
+    if (owners[lba] !== undefined) return;
+    if (kind !== 'tree' && kind !== 'data') { owners[lba] = 'system'; return; }
+    if (entry !== lastEntry) {
+      lastEntry = entry;
+      lastKey = 'f' + fileList.length;
+      fileList.push({
+        key: lastKey,
+        name: petsciiToReadable(entry.name).trim(),
+        type: entry.typeSuffix || (entry.ftype === CFS_FTYPE.LNK ? 'LNK' : 'PRG'),
+        color: colorPalette[fileList.length % colorPalette.length],
+      });
     }
-    w(treeRoot, 0);
-  }
-  function walkDirChain(firstDirLba) {
-    var lba = firstDirLba;
-    while (lba && !dirVisited[lba]) {
-      if (lba < partStart || lba > partEnd) return;
-      dirVisited[lba] = true;
-      markSystem(lba);
-      var entries = readCfsDirectorySector(data, lba);
-      if (!entries) break;
-      for (var i = 0; i < entries.length; i++) {
-        var en = entries[i];
-        if (en.empty) continue;
-        if (en.ftype === CFS_FTYPE.DEL) continue;
-        if (!en.dataTreePtr || !en.dataTreePtr.lba) continue;
-        var addr = en.dataTreePtr.addr;
-        if (en.ftype === CFS_FTYPE.DIR) {
-          walkDirChain(addr);
-        } else {
-          var fileKey = 'f' + fileList.length;
-          fileList.push({
-            key: fileKey,
-            name: petsciiToReadable(en.name).trim(),
-            type: en.typeSuffix || (en.ftype === CFS_FTYPE.LNK ? 'LNK' : 'PRG'),
-            color: colorPalette[fileList.length % colorPalette.length],
-          });
-          walkTree(addr, en.size || 0, fileKey);
-        }
-      }
-      var nextPtr = _cfsReadDirNext(data, lba * IDE64_SECTOR_SIZE);
-      lba = (nextPtr.lba && nextPtr.addr > 0) ? nextPtr.addr : 0;
-    }
-  }
-  if (partition.cfsRootDir && partition.cfsRootDir.lba) walkDirChain(partition.cfsRootDir.addr);
+    owners[lba] = lastKey;
+  });
 
   var used = {};
   var usedCount = 0, freeCount = 0;

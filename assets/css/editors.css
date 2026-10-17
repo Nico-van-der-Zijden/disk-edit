@@ -72,6 +72,16 @@
   }
 
   .basic-line { white-space: pre-wrap; word-break: break-all; }
+
+  /* BASIC viewer: 40 columns like LIST on a C64 screen, so long lines wrap
+     at column 40 (1 char = 1em in C64 Pro Mono, + padding + scrollbar). */
+  .basic-listing.basic-c64 {
+    width: calc(40em + 24px + 16px);
+    overflow-x: hidden;
+  }
+  .basic-c64 .basic-line { line-break: anywhere; }
+  .modal-body:has(.basic-c64),
+  .detail-pane-body:has(.basic-c64) { overflow-x: auto; }
   .basic-linenum { color: var(--c64-text); }
   .basic-keyword { color: var(--c64-text); }
   .basic-string { color: var(--c64-string); }
@@ -150,7 +160,6 @@
   .search-result:hover { background: var(--hover); }
   .search-result-ts { color: var(--c64-text); }
   .search-result-pet { color: var(--text-muted); }
-  .search-result-match { color: var(--c64-highlight); }
   .search-tab-header { font-weight: bold; padding: 6px 8px; color: var(--c64-sys); font-size: 12px; }
   .search-no-results { color: var(--text-muted); padding: 12px; text-align: center; }
   .search-spinner { text-align: center; padding: 20px; color: var(--text-muted); }

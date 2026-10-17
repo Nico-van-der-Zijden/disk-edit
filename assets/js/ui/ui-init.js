@@ -27,14 +27,15 @@ document.addEventListener('drop', async function(e) {
   e.preventDefault();
   dragCounter = 0;
   document.body.classList.remove('drop-active');
-  var files = Array.from(e.dataTransfer.files);
+  openFiles(Array.from(e.dataTransfer.files));
+});
+
+// Shared by drag-and-drop and File → Open: routes each file by type
+// (disk image, container, archive, ZipCode set, file to import).
+async function openFiles(files) {
   if (files.length === 0) return;
 
-  // expandArchives reads each file once, transparently decompresses .gz,
-  // and pops the picker for .zip — the result is a flat list of
-  // { name, buffer } entries with the user's archive choices already
-  // resolved. Everything below is the existing classify-by-extension
-  // dispatch, just driven by pre-loaded buffers.
+  // Flat [{ name, buffer }], with .gz decompressed and .zip picks resolved.
   var entries = await expandArchives(files);
   if (entries.length === 0) return;
 
@@ -187,15 +188,14 @@ document.addEventListener('drop', async function(e) {
     zipCodeReport(allResults, allFailures, zcExtra);
   }
 
-  // Import PRG/SEQ/USR/REL/CVT files into current disk
-  // Same path as File → Import File (CFS view routes to cfsImportFile).
+  // Files to import go into the open disk (same path as File → Import File).
   if (importEntries.length > 0 && currentBuffer) {
     await importFilesToCurrentDisk(importEntries);
   } else if (importEntries.length > 0 && !currentBuffer) {
-    showModal('Drop Error', ['No disk open to import files into. Open or create a disk first.']);
+    showModal('Import Error', ['No disk open to import files into. Open or create a disk first.']);
   }
 
-  // Say so when a drop did nothing. Only when nothing else happened: there is
+  // Say so when nothing was opened. Only when nothing else happened: there is
   // one shared modal, so a second showModal would overwrite the success one.
   var handledSomething = diskEntries.length || cmdcEntries.length || ide64Entries.length ||
     archiveEntries.length || importEntries.length || zipcodeEntries.length ||
@@ -215,7 +215,7 @@ document.addEventListener('drop', async function(e) {
       'ZipCode sets (1!NAME…5!NAME) and files to import (.prg .seq .usr .rel .p00 .cvt .txt).');
     showModal('Unsupported files', lines);
   }
-});
+}
 
 // Make dir entries draggable to OS (export on drag)
 document.addEventListener('dragstart', function(e) {
@@ -234,7 +234,7 @@ document.addEventListener('dragstart', function(e) {
       if (!ce.dataTreePtr || !ce.dataTreePtr.lba) return null;
       var cRes = readCfsFileData(hddBuffer, ce.dataTreePtr.addr, ce.size);
       if (cRes.error || !cRes.data || cRes.data.length === 0) return null;
-      var cName = petsciiToReadable(ce.name).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+      var cName = safeHostFileName(petsciiToReadable(ce.name).trim());
       return {
         name: cName || 'export',
         ext: exportExtFor(cName, '.' + (ce.typeSuffix || 'PRG').toLowerCase()),
@@ -246,15 +246,14 @@ document.addEventListener('dragstart', function(e) {
       var data = new Uint8Array(currentBuffer);
       var typeByte = data[entryOff + 2];
       var typeIdx = typeByte & 0x07;
-      if (typeIdx < 1 || typeIdx > 4 || !(typeByte & 0x80)) return null;
+      if (typeIdx < FILE_TYPE.SEQ || typeIdx > FILE_TYPE.REL || !(typeByte & 0x80)) return null;
       if (isVlirFile(data, entryOff)) return null; // GEOS VLIR needs Export CVT
       var result = readFileData(currentBuffer, entryOff, getCurrentCtx());
       if (result.error || result.data.length === 0) return null;
-      var extMap = { 1: '.seq', 2: '.prg', 3: '.usr', 4: '.rel' };
-      var rName = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim().replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+      var rName = safeHostFileName(petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim());
       return {
         name: rName || 'export',
-        ext: exportExtFor(rName, extMap[typeIdx] || '.prg'),
+        ext: exportExtFor(rName, '.' + FILE_TYPES[typeIdx].toLowerCase()),
         data: result.data,
       };
     }

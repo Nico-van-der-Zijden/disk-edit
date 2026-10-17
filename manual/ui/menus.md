@@ -11,7 +11,7 @@ Disk-image level operations.
 | Item | Action |
 |---|---|
 | **New** ▸ | Creates a fresh disk. Sub-menus: 1541 (D64 35/40/42), 1571 (D71 70/80), 1581 (D81), 8050 (D80), 8250 (D82), CMD Native (DNP), CMD FD (D1M/D2M/D4M), CMD RAMLink (1/2/4/8/16 MiB), CMD HD (DHD), IDE64 HDD (4/8/16/32/64/128/256/512 MiB) |
-| **Open…** | OS file picker |
+| **Open...** | OS file picker — same routing as drag-and-drop: disk images and containers open as tabs, ZipCode sets and archives are unpacked, `.prg` / `.seq` / etc. are imported into the open disk |
 | **Recent** ▸ | Last-opened disks (localStorage) |
 | **Close** | Closes the active tab (prompts if dirty) |
 | **Close All** | Closes every open tab (one prompt per dirty tab) |
@@ -20,10 +20,10 @@ Disk-image level operations.
 | **Show Deleted Files** | Toggle — when on, scratched-but-recoverable entries are listed |
 | **Sort** ▸ | Name Ascending / Name Descending / Blocks Ascending / Blocks Descending |
 | **Edit Blocks Free** | Manually set the BAM free-block count (CBM-DOS only) |
-| **Recalculate Blocks Free** | Re-derive the count from the BAM bitmap |
+| **Recalculate Blocks Free** | Rebuilds the per-track free counts by following the file chains (the existing BAM bitmap isn't trusted). Root directory only; disabled inside 1581 partitions |
 | **Disk Tools** ▸ | Submenu — see below |
 | **Open in Emulator** | Sends the whole disk to <https://c64.sannic.nl> (VICE x64sc via EmulatorJS) |
-| **Export Disk** ▸ | Export All Files / Export as Text / CSV / HTML / Directory as PNG / Show MD5 Hash / Show as Base64 Data URI |
+| **Export Disk** ▸ | Export All Files / Export as Text / CSV / HTML / Directory as PNG / Show Disk Hash (CRC32 + SHA-256) / Show as Base64 Data URI |
 
 ### Disk → Disk Tools (submenu)
 
@@ -37,8 +37,8 @@ Disk-image level operations.
 | **File Chains** | T:S chain map for every file (CBM-DOS only) |
 | **Decompress ZipCode** | Reassembles a ZipCode set held on the open disk. DiskPacked (`1!`–`4!`, plus `5!` for 40 tracks) and SixPack (`1!!`–`6!!`) rebuild a disk image; FilePacked (`a!`–`w!` + `x!`) extracts its files onto a new D64. Several sets on one disk give a multi-select |
 | **Create ZipCode…** | Packs the open disk as DiskPacked, SixPack or FilePacked. Opens a side pane with a live preview; deliver as a ZIP, a tar.gz, or D64 image(s) (auto-split). 35/40-track D64 only |
-| **Fill Free Sectors** | Writes a fill byte into every unallocated sector |
-| **Optimize Disk...** | Packs files toward the start of the disk |
+| **Fill Free Sectors** | Writes a fill byte into every unallocated sector. Disabled inside 1581 partitions |
+| **Optimize Disk...** | Packs files toward the start of the disk. Disabled inside 1581 partitions |
 | **Resize Image...** | (DNP) grow / shrink the partition. Disabled inside CMD containers — the slot has a fixed allocation |
 | **Convert to GEOS Format** | Adds the GEOS BAM signature so the disk is recognised as GEOS |
 | **View GEOS Border Sector...** | Opens the rarely-used GEOS cross-disk drag-and-drop area |
@@ -58,21 +58,21 @@ Operations on the selected directory entry, plus import / export of individual f
 | **Separator** ▸ | Insert ▸ (pick from saved separators) / Save Current as New / Edit List… |
 | **Copy** | Copies selected file(s) or directory to the clipboard |
 | **Paste** | Pastes clipboard contents into the current dir. Cross-family translation handles type differences |
-| **Remove Entry** | Removes the dir entry (without clearing the data sectors) |
+| **Remove Entry** (Delete) | Removes the dir entry (without freeing the data sectors). Works on a multi-selection; asks first about 1581 partitions that still contain files |
 | **Move Up / Down** | Swap with neighbour |
 | **Add Directory** | (DNP / D81 / IDE64 / DHD / RAMLink) — creates a sub-directory / sub-partition |
 | **New Partition** | (CMD / IDE64 partition list views) — adds a partition into free space |
 | **Rename Partition** | (CMD / IDE64 partition list views) |
 | **Delete Partition** | (CMD / IDE64 partition list views) |
-| **Restore Partition** | (CMD / IDE64) unscratch a deleted partition |
-| **Partition Attributes…** | (CMD / IDE64) edit type / flags |
+| **Restore Partition** | (IDE64 `.hdd` only) unscratch a deleted partition |
+| **Partition Attributes…** | (IDE64 `.hdd` only) edit the HIDDEN / WRITEABLE flags |
 | **Import Partition...** | Pull a partition's data in from an external `.dnp` / `.d64` / etc. |
 | **Export Partition...** | Writes the selected partition out as a standalone file |
 | **Align** ▸ | Align Left / Align Right / Center / Justify / Expand the filename within 16 chars |
-| **Lock File** | Toggles the `<` suffix (write-protect in the directory listing) |
-| **Splat File** | Toggles the `*` prefix (open file, unsafe) |
-| **Scratch File** | Marks file deleted; data sectors are returned to the BAM |
-| **Unscratch File** | Restores a previously scratched file (data sectors must still be unused) |
+| **Lock File** (Ctrl+<) | Toggles the `<` suffix (write-protect in the directory listing) |
+| **Splat File** (Ctrl+*) | Toggles the `*` prefix (open file, unsafe) |
+| **Scratch File** | Marks file(s) deleted; data sectors are returned to the BAM. Not available for locked files |
+| **Unscratch File** | Restores scratched file(s); refused for a file whose sectors now belong to another file |
 | **Name Case** ▸ | UPPERCASE / lowercase / Toggle Case |
 | **Change File Size** | Edit the dir-entry block-count field (does not change the actual chain) |
 | **Edit Track/Sector** | Edit the dir-entry start T:S |
@@ -81,7 +81,7 @@ Operations on the selected directory entry, plus import / export of individual f
 | **View As** ▸ | Hex / Disassembly / PETSCII / BASIC / Graphics / geoWrite / VLIR Layout / REL Records / Turbo Assembler |
 | **Run in Emulator** | Sends the selected PRG to <https://c64.sannic.nl> |
 | **Export** ▸ | Export File / Export as CVT / Export as RTF / Export as PDF / Export as Text (geoWrite) |
-| **Import File** | OS file picker — imports one or more `.prg` / `.seq` / `.usr` / `.rel` / `.p00..r00` / `.cvt` / `.txt` files into the current disk or IDE64 directory |
+| **Import File** | OS file picker — imports one or more `.prg` / `.seq` / `.usr` / `.p00..u00` / `.cvt` / `.txt` files into the current disk or IDE64 directory; one summary at the end, each file its own undo step. `.rel` / `.r00` are refused on CBM-DOS disks (side sectors aren't built) |
 
 ## Edit
 
@@ -98,11 +98,11 @@ Buffer-level undo plus raw sector edit.
 
 | Item | Action |
 |---|---|
-| **Find...** (Ctrl+F) | Search inside the current disk — filenames + file content |
+| **Find...** (Ctrl+F) | Search the current disk — all sectors, filenames, disk name or disk ID |
 | **Find in All Tabs...** (Ctrl+Shift+F) | Same search across every open tab |
-| **Go to Sector...** (Ctrl+Shift+G) | Jump the sector editor / view to a specific T:S (or LBA, depending on format) |
+| **Go to Sector...** (Ctrl+Shift+G) | Open the sector editor at a track / sector |
 
-Find is disabled in IDE64 `.hdd` context (CFS-aware search is on the to-do list).
+Find and Go to Sector are disabled in IDE64 `.hdd` context (CFS-aware search is on the to-do list; `.hdd` has no T/S addressing).
 
 ## View
 
@@ -111,9 +111,9 @@ Display options and disk visualisations.
 | Item | Action |
 |---|---|
 | **Switch to Uppercase / Lowercase** | Toggles PETSCII charset render mode. Label swaps to reflect the *other* mode. Keyboard shortcut: Ctrl+Shift |
-| **Show Addresses** | Toggle — adds byte / track-sector position to the footer while hovering |
-| **Show Track/Sector** | Toggle — track / sector columns in the directory view |
-| **Show Separators** | Toggle — render saved separators in the directory listing |
+| **Show Addresses** | Toggle — adds a load / end address column (`$0801-$xxxx`) to the directory view |
+| **Show Track/Sector** | Toggle — start track / sector column in the directory view |
+| **Show Separators** | Opens / closes the floating separators palette |
 | **View BAM** (Ctrl+Shift+B) | Block Allocation Map viewer (heat map + summary + per-track free counts). For `.hdd` opens a tabbed modal with Partitions + heat map. For G64 opens a multi-tab layout viewer including Raw Tracks |
 | **View Error Bytes** | (D64 +errors variant) shows the 21-byte / 23-byte error map |
 | **GEOS File Info** | Shows the INFO block of a selected GEOS file |
@@ -126,7 +126,7 @@ Persisted in localStorage. Apply across all open tabs.
 |---|---|---|
 | **Theme** ▸ | Dark | Dark / Light |
 | **Hex Coloring** ▸ | None | Per-byte colouring in hex viewers / sector editor / compare. Schemes: None / hexyl / xcd-rgb / Nybble |
-| **Show Toolbar** | On (off on phones) | Toolbar under the menubar |
+| **Show Toolbar** | On | Toolbar under the menubar (always hidden on narrow screens) |
 | **Partition Sizes in MiB** | On | Show partition sizes as MiB instead of CBM blocks |
 | **Allow Unsafe Characters** | Off | Lets you type bytes in the picker that aren't safe in CBM filenames |
 | **Show All Characters by Default** | Off | Opens picker direct to the floating chart instead of the keyboard view |
@@ -145,10 +145,10 @@ Persisted in localStorage. Apply across all open tabs.
 | **Keyboard Shortcuts** | Reference table |
 | **User Manual** | Opens this manual in a new tab |
 | **Changelog** | Per-version notes |
-| **Download Standalone Version** | Save a single-HTML build for offline use |
+| **Download Standalone Version** | Downloads a ZIP of the offline build |
 
 ## Right-click context menu
 
-Right-clicking a directory entry opens a context menu with the **actionable** entries for that file type. Entries that don't apply (e.g. *View as GEOS* on a non-GEOS file) are hidden, not greyed out — typically less than half the entries are live for any given file, so the popup stays short.
+Right-clicking a directory entry opens a copy of the **File** menu with only the **actionable** entries for that file. Entries that don't apply (e.g. *geoWrite* on a non-GEOS file) are hidden, not greyed out, so the popup stays short. Right-clicking inside an existing multi-selection keeps the selection.
 
-Right-clicking on background (no entry selected) shows disk-level actions instead.
+Right-clicking the empty area of the listing clears the selection and shows the same File-menu copy — only the items that need no selection (Insert File, Paste, Import File, …) remain.

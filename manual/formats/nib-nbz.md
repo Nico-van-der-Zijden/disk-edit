@@ -12,10 +12,10 @@ NIB and NBZ are output formats from **nibtools** — a low-level utility that re
 The editor **reads** NIB and NBZ files by:
 
 1. Decompressing NBZ → NIB (transparent).
-2. Converting the NIB to G64 in memory using nibtools' standard alignment logic.
+2. Converting the NIB to G64 in memory. A nibtools capture can hold more than one revolution per track; each track is trimmed to a single revolution (found by where a sector header repeats) so the resulting G64 tracks have a real-drive length.
 3. From there, treating it like a normal G64 — directory listing, file viewing, validate, etc.
 
-**Saving** produces a real `.g64`. The editor doesn't write NIB or NBZ — they're considered an archival input format only. If you opened a `.nib` and want to keep editing it, **Disk → Save As...** writes a `.g64` and the filename gets the new extension.
+**Saving** produces a real `.g64`. The editor doesn't write NIB or NBZ — they're an archival input format only. On open the tab's file name already switches to `.g64`, so **Disk → Save** writes a G64.
 
 ## When to use NIB / NBZ
 

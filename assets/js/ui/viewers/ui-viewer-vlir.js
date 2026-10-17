@@ -9,7 +9,6 @@ function showVlirInspector(entryOff) {
     return;
   }
 
-  var fmt = currentFormat;
   var name = petsciiToReadable(readPetsciiString(data, entryOff + 5, 16)).trim() || '<unnamed>';
   var geos = readGeosInfo(currentBuffer, entryOff, getCurrentCtx());
   var infoBlock = geos.hasInfoBlock ? readGeosInfoBlock(currentBuffer, geos.infoTrack, geos.infoSector, getCurrentCtx()) : null;
@@ -53,7 +52,7 @@ function showVlirInspector(entryOff) {
       slots.push(entry);
       continue;
     }
-    if (recT < 1 || recT > currentTracks || recS >= fmt.sectorsPerTrack(recT)) {
+    if (!isValidChainLink(recT, recS, getCurrentCtx())) {
       entry.status = 'bad-start';
       entry.issue = 'Start T/S out of range';
       chainIssues++;
@@ -67,7 +66,7 @@ function showVlirInspector(entryOff) {
     var bytes = 0;
     var safety = 0;
     while (walkT !== 0) {
-      if (walkT < 1 || walkT > currentTracks || walkS >= fmt.sectorsPerTrack(walkT)) {
+      if (!isValidChainLink(walkT, walkS, getCurrentCtx())) {
         entry.issue = 'Chain leaves valid range at $' + hex8(walkT) + '/$' + hex8(walkS);
         chainIssues++;
         break;

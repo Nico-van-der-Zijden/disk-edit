@@ -88,13 +88,13 @@ $html = [regex]::Replace($html, "url\((['""]?)(?:\.\./|assets/)webfonts/([^'"")]
 })
 Write-Host "  Inlined C64 Pro Mono fonts" -ForegroundColor DarkGray
 
-# 4. Inline JS files (skip matomo.js for dist builds)
-$html = [regex]::Replace($html, '(?:<!-- Matomo[^>]*-->\s*)?<script src="([^"]+)"></script>', {
+# 4. Inline JS files (skip the server-only site-local.js)
+$html = [regex]::Replace($html, '(?:<!-- Optional, server-only[^>]*-->\s*)?<script src="([^"]+)"></script>', {
     param($match)
     $jsFile = $match.Groups[1].Value
-    if ($jsFile -match 'matomo') {
-        Write-Host "  Skipped $jsFile (analytics)" -ForegroundColor DarkYellow
-        return "<!-- Matomo excluded from dist build -->"
+    if ($jsFile -match 'site-local\.js$') {
+        Write-Host "  Skipped $jsFile (server-only)" -ForegroundColor DarkYellow
+        return ""
     }
     $jsPath = Join-Path $srcDir $jsFile
     if (Test-Path $jsPath) {

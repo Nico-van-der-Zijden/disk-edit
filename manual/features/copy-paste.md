@@ -108,5 +108,6 @@ Conflict prompts skip DEL entries — dir art duplicates name bytes by design.
 ## Limitations
 
 - **GEOS files (VLIR or sequential)** can't be pasted into an IDE64 .hdd / CFS partition yet. CFS reserves a GEOS partition type but its on-disk layout isn't documented in the specs we have, so we'd rather refuse the paste than silently corrupt the destination. Use the CVT round-trip (Export as CVT → Import on a CBM-DOS disk).
+- **REL files can't be pasted into a CBM-DOS disk** — the editor doesn't rebuild side sectors yet, so they're skipped and listed in the paste summary. (Importing a `.rel` / `.r00` into a CBM-DOS disk is refused for the same reason.)
 - **REL record length** isn't preserved through cross-family pastes (CFS doesn't have a per-file record-length field). Treat REL files as opaque for now.
 - **Reversed-byte filenames** round-trip correctly. The `$00-$1F` bytes survive the paste.

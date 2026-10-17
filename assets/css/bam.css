@@ -260,13 +260,13 @@
   min-height: 0;
 }
 .cfs-bam-cell:hover {
-  outline: 1px solid #fff;
+  outline: 1px solid var(--outline-hover);
   outline-offset: -1px;
   position: relative;
   z-index: 2;
 }
 .cfs-bam-cell.selected {
-  outline: 2px solid #ffcc00;
+  outline: 2px solid var(--outline-selected);
   outline-offset: -1px;
   position: relative;
   z-index: 3;
@@ -322,7 +322,7 @@
   display: flex;
   width: 100%;
   height: 56px;
-  background: #1c2030;
+  background: var(--map-strip-bg);
   border: 1px solid var(--border);
   border-radius: 4px;
   overflow: hidden;
@@ -358,12 +358,12 @@
   user-select: none;
 }
 .hdd-map-region:hover {
-  outline: 1px solid #fff;
+  outline: 1px solid var(--outline-hover);
   outline-offset: -1px;
   z-index: 2;
 }
 .hdd-map-region.selected {
-  outline: 2px solid #ffcc00;
+  outline: 2px solid var(--outline-selected);
   outline-offset: -2px;
   z-index: 3;
 }

@@ -10,7 +10,7 @@ ExampleDisks/*
 TODO.md
 
 # Analytics (site-specific, not needed for development)
-assets/js/matomo.js
+assets/js/site-local.js
 
 # Web server config files
 web.config

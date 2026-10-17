@@ -21,11 +21,6 @@
     color: var(--bg);
   }
 
-  .error-sector.no-data {
-    background: var(--border);
-    opacity: 0.3;
-  }
-
   /* --- File Viewer --- */
   /* --- Separator Editor --- */
   .sep-editor-layout {
@@ -164,7 +159,7 @@
   }
 
   .hex-highlight {
-    background: rgba(184,199,111,0.3);
+    background: color-mix(in srgb, var(--c64-highlight) 30%, transparent);
     border-radius: 2px;
     outline: 1px solid var(--c64-highlight);
   }
@@ -356,8 +351,7 @@
     padding-left: 4px;
     padding-right: 4px;
   }
-  .cmp-table td.cmp-fname,
-  .cmp-petscii {
+  .cmp-table td.cmp-fname {
     font-family: 'C64 Pro Mono', monospace;
     white-space: nowrap;
   }
@@ -833,10 +827,12 @@
   .g64-tag-protected  { background: var(--color-warn);    color: #0a0a0a; }
   .g64-tag-scrambled  { background: var(--color-error);   color: #fff; }
   .g64-tag-empty      { background: var(--border);        color: var(--text-muted); }
+  /* Matches the faded "sector not found" cells on the Sectors canvas. */
+  .g64-tag-missing    { background: color-mix(in srgb, var(--color-warn) 25%, transparent); color: var(--text); }
   /* Tag swatches for the Raw Tracks legend — match the canvas palette. */
-  .g64-tag-rawred     { background: #dc3c3c; color: #fff; }
+  .g64-tag-rawred     { background: var(--g64-raw-sync); color: #fff; }
   .g64-tag-rawgreen   { background: #5a9050; color: #0a0a0a; }
-  .g64-tag-rawblue    { background: #4858c8; color: #fff; }
+  .g64-tag-rawblue    { background: var(--g64-raw-gap); color: #fff; }
 
   /* Sectors / Raw Tracks tab strip inside the modal. Mirrors the
      Compare modal's tab pattern but kept local to .g64- so styling

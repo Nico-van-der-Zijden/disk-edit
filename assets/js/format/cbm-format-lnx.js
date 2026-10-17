@@ -1,33 +1,19 @@
 // ── LNX (Lynx) archive parser ─────────────────────────────────────────
-// LNX wraps multiple individual C64 files (PRG/SEQ/USR/REL) in a single
-// uncompressed container: ASCII header + CR-delimited directory + sector-
-// aligned concatenated file bytes. No disk geometry.
+// Spec: disks/FORMATS/LNX.TXT. Layout:
+//   [optional $01 $08 load address + self-extracting BASIC stub]
+//   <headerBlocks> "LYNX" <comment> CR  <fileCount> CR
+//   per file: <name> CR <blocks> CR <type> CR [<record size> CR, REL only]
+//             <LSU = bytes in last block + 1> CR
+//   file data from headerBlocks * 254, each file padded to 254-byte blocks.
 //
-// Header layout (Ultra Lynx / UNLYNX compatible):
-//   [optional 2-byte $01 $08 PRG load address + self-extracting BASIC stub]
-//   <headerBlocks decimal> <whitespace/*> "LYNX" <space + comment> <CR>
-//   <fileCount decimal> <CR>
-//   repeat for each file:
-//     <16-byte filename or CR-terminated ASCII> <CR>
-//     <block-count decimal>                     <CR>
-//     <type letter / word: P|S|U|R|DEL|...>     <CR>
-//     <last-sector-bytes decimal, 1..255>       <CR>   // CBM convention: value = bytes_in_last_sector + 1
-//   <padding to next 254-byte block>
-//   <file 1 data> <file 2 data> ...
-//
-// dataStart = headerBlocks * 254 (absolute, header area absorbs any PRG prefix).
-//
-// Returns { files: [{ name, typeIdx, data }], comment } on success or
-// { error } on failure. `name` is a Uint8Array of up to 16 PETSCII bytes.
+// Returns { files: [{ name, typeIdx, blocks, data, recordSize? }], comment }
+// or { error }. `name` is 16 PETSCII bytes, $A0-padded.
 function parseLnxArchive(buffer) {
   var data = new Uint8Array(buffer);
   if (data.length < 32) return { error: 'File is too small to be a LYNX archive.' };
 
-  // Find "LYNX" magic. Self-extracting archives embed a BASIC stub that says
-  // "USE LYNX TO DISSOLVE THIS FILE", so the first occurrence isn't always the
-  // real header. For each candidate, look backward on the same line for the
-  // leading integer (headerBlocks), then forward past the comment's CR to
-  // read another integer (fileCount). Only commit when both parse cleanly.
+  // The BASIC stub says "USE LYNX TO DISSOLVE THIS FILE", so take the first
+  // "LYNX" with a headerBlocks number before it and a fileCount line after.
   var magicOff = -1;
   var headerBlocks = 0;
   var fileCount = -1;
@@ -94,8 +80,7 @@ function parseLnxArchive(buffer) {
   }
   comment = comment.trim();
 
-  // Re-derive `p` — the inner-loop variables are scoped to the iteration.
-  // Walk past: LYNX (4) + comment to CR + fileCount token to CR.
+  // Skip past the comment line and the fileCount line.
   var p = magicOff + 4;
   while (p < data.length && data[p] !== 0x0D) p++; p++; // past comment CR
   while (p < data.length && data[p] !== 0x0D) p++; p++; // past fileCount CR
@@ -114,11 +99,7 @@ function parseLnxArchive(buffer) {
     return s.trim();
   }
 
-  // Read a filename. Handles both common conventions:
-  //   (a) fixed 16 bytes, possibly followed by a CR (older LNX).
-  //   (b) variable-length, CR-terminated (LYNX XV and later).
-  // Detected by scanning forward for a CR within the first 17 bytes.
-  // Returns a 16-byte Uint8Array padded with $A0.
+  // Names are either 16 bytes + CR or shorter and CR-terminated.
   function readFilenameBytes() {
     var crIdx = -1;
     for (var k = p; k < Math.min(p + 17, data.length); k++) {
@@ -133,15 +114,11 @@ function parseLnxArchive(buffer) {
     return name;
   }
 
-  // Header area = headerBlocks * 254 bytes, and absorbs any PRG prefix
-  // that precedes the LYNX text.
   var dataStart = headerBlocks * 254;
   if (dataStart > data.length) return { error: 'LYNX header claims more blocks than the file contains.' };
 
-  // First pass: parse the whole directory so we can pick padded vs compact
-  // storage layout by seeing which one lines up best with the actual buffer
-  // size. Some writers pad each file to a 254-byte block boundary; others
-  // store files back-to-back at their exact data size.
+  // First pass: the whole directory. Some writers pad files to 254-byte
+  // blocks, others store them back to back; the total size tells which.
   var entries = [];
   var idx = 0;
   while (true) {
@@ -154,70 +131,75 @@ function parseLnxArchive(buffer) {
     if (!nameBytes) break;
     var blocksTok = readToken();
     var typeTok = readToken();
+    var typeIdx = typeTok === null ? -1 : _lnxTypeIdx(typeTok);
+    // REL entries carry the record size before the last-block size.
+    var recordTok = typeIdx === FILE_TYPE.REL ? readToken() : '';
     var lastBytesTok = readToken();
-    if (blocksTok === null || typeTok === null || lastBytesTok === null) {
+    if (blocksTok === null || typeTok === null || recordTok === null || lastBytesTok === null) {
       if (fileCount >= 0) return { error: 'Malformed LYNX directory at entry ' + (idx + 1) + '.' };
       break;
     }
     var blocks = parseInt(blocksTok, 10);
     var lastBytes = parseInt(lastBytesTok, 10);
-    if (!isFinite(blocks) || blocks < 1 || !isFinite(lastBytes) || lastBytes < 1 || lastBytes > 255) {
+    // Zero-block entries are legal (directory art); their LSU means nothing.
+    if (!isFinite(blocks) || blocks < 0 ||
+        (blocks > 0 && (!isFinite(lastBytes) || lastBytes < 1 || lastBytes > 255))) {
       if (fileCount >= 0) {
         return { error: 'Malformed LYNX entry at #' + (idx + 1) + '.' };
       }
       break;
     }
-
-    // Type letter: first non-space ASCII alpha. Accepts P, S, U, R, D.
-    var typeIdx = -1;
-    for (var ti = 0; ti < typeTok.length; ti++) {
-      var ch = typeTok.charCodeAt(ti);
-      if (ch === 0x20) continue;
-      if (ch === 0x50 || ch === 0x70) { typeIdx = FILE_TYPE.PRG; break; }
-      if (ch === 0x53 || ch === 0x73) { typeIdx = FILE_TYPE.SEQ; break; }
-      if (ch === 0x55 || ch === 0x75) { typeIdx = FILE_TYPE.USR; break; }
-      if (ch === 0x52 || ch === 0x72) { typeIdx = FILE_TYPE.REL; break; }
-      if (ch === 0x44 || ch === 0x64) { typeIdx = FILE_TYPE.DEL; break; }
-      break;
-    }
-    entries.push({ name: nameBytes, typeIdx: typeIdx, blocks: blocks, lastBytes: lastBytes });
+    var entry = { name: nameBytes, typeIdx: typeIdx, blocks: blocks, lastBytes: lastBytes };
+    if (typeIdx === FILE_TYPE.REL) entry.recordSize = parseInt(recordTok, 10) || 0;
+    entries.push(entry);
     idx++;
   }
 
   if (entries.length === 0) return { error: 'LYNX archive contains no file entries.' };
 
-  // Decide padded vs compact storage: pick whichever predicted end-of-file
-  // lines up better with the actual buffer size. `lastBytes` follows the CBM
-  // disk convention (value = real bytes in last sector + 1), so the file
-  // size is (blocks-1)*254 + (lastBytes-1).
   var paddedTotal = dataStart;
   var compactTotal = dataStart;
   for (var ei = 0; ei < entries.length; ei++) {
     paddedTotal += entries[ei].blocks * 254;
-    compactTotal += (entries[ei].blocks - 1) * 254 + (entries[ei].lastBytes - 1);
+    compactTotal += _lnxRealSize(entries[ei]);
   }
   var usePadded = Math.abs(paddedTotal - data.length) <= Math.abs(compactTotal - data.length);
 
-  // Second pass: slice each file's data, advancing by padded or compact step.
-  // Last file is truncated gracefully if the archive is shorter than declared.
+  // Second pass: slice each file's data. A short archive truncates the tail.
   var files = [];
   var dataOff = dataStart;
   for (var fi = 0; fi < entries.length; fi++) {
     var e = entries[fi];
-    var realSize = (e.blocks - 1) * 254 + (e.lastBytes - 1);
+    var realSize = _lnxRealSize(e);
     var avail = data.length - dataOff;
-    if (avail <= 0) {
-      // Can't fit any data — skip the rest.
-      break;
-    }
-    var take = Math.min(realSize, avail);
+    if (avail <= 0 && realSize > 0) break;
+    var take = Math.min(realSize, Math.max(0, avail));
     var fileData = data.subarray(dataOff, dataOff + take);
     dataOff += usePadded ? (e.blocks * 254) : take;
     if (dataOff > data.length) dataOff = data.length;
-    files.push({ name: e.name, typeIdx: e.typeIdx, blocks: e.blocks, data: fileData });
+    var file = { name: e.name, typeIdx: e.typeIdx, blocks: e.blocks, data: fileData };
+    // REL data still starts with its side-sector blocks, as LNX stores them.
+    if (e.recordSize !== undefined) file.recordSize = e.recordSize;
+    files.push(file);
   }
 
   return { files: files, comment: comment };
+}
+
+// The LSU follows the CBM convention: bytes used in the last block + 1.
+function _lnxRealSize(e) {
+  return e.blocks === 0 ? 0 : (e.blocks - 1) * 254 + (e.lastBytes - 1);
+}
+
+// Type token -> FILE_TYPE index (first letter of P/S/U/R/D), or -1.
+function _lnxTypeIdx(tok) {
+  var c = tok.replace(/^\s+/, '').charAt(0).toUpperCase();
+  if (c === 'P') return FILE_TYPE.PRG;
+  if (c === 'S') return FILE_TYPE.SEQ;
+  if (c === 'U') return FILE_TYPE.USR;
+  if (c === 'R') return FILE_TYPE.REL;
+  if (c === 'D') return FILE_TYPE.DEL;
+  return -1;
 }
 
 /** @param {ArrayBuffer} buffer @returns {DiskInfo} */
