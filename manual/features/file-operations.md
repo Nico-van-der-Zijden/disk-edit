@@ -112,7 +112,7 @@ The recoverability indicator next to a scratched file is a quick guide:
 
 ### Remove Entry
 
-**File → Remove Entry** (or **Delete**) takes the entry out of the directory and closes the gap; the data sectors are **not** freed. Works on a multi-selection. Removing a 1581 sub-partition frees its tracks; if it still contains files you're asked first (**Move to Root** / **Remove All** for a single partition).
+**File → Remove Entry** (or **Delete**) takes the entry out of the directory, closes the gap and frees the file's blocks in the BAM (sectors another file still uses stay allocated; a scratched entry's sectors are left alone). Works on a multi-selection. Removing a 1581 sub-partition frees its tracks; if it still contains files you're asked first (**Move to Root** / **Remove All** for a single partition).
 
 ## Lock / Splat
 

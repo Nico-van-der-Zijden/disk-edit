@@ -134,7 +134,7 @@ function showFilePetsciiViewer(entryOff, preloaded) {
 
     // Grow the virtual screen as needed — a real C64 would scroll old lines
     // off the top, but the viewer keeps history so the whole file is visible
-    // (the modal body scrolls vertically).
+    // (the viewer body scrolls vertically).
     while (curY >= H) {
       for (var cg = 0; cg < W; cg++) {
         screen.push({ ch: 0x20, color: curColor, reverse: false });
@@ -178,7 +178,7 @@ function showFilePetsciiViewer(entryOff, preloaded) {
   var titleText = 'PETSCII View \u2014 "' + name + '"';
   if (result.error) titleText += ' \u2014 ' + result.error;
 
-  showViewerModal(titleText, html, null, true);
+  showViewerModal(titleText, html);
 }
 
 // ── Per-byte CSS classes for the Hex Coloring schemes ────────────────
@@ -554,6 +554,7 @@ function showSectorHexEditor(track, sector, highlightOff, highlightLen) {
     if (hasChanges) {
       pushUndo();
       for (var c2 = 0; c2 < 256; c2++) data[off + c2] = working[c2];
+      renderDisk(parseCurrentDir(currentBuffer));
       renderTabs();
     }
     session.abort();

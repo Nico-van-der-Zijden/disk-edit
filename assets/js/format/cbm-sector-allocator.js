@@ -28,6 +28,12 @@ function buildTrueAllocationMap(buffer, diskCtx) {
       var eps = fmt.getProtectedSectors(et);
       for (var epi = 0; epi < eps.length; epi++) allocated[et + ':' + eps[epi]] = true;
     }
+    // In use without a dir entry: C128 boot block, GEOS border sector.
+    if (hasC128BootSignature(buffer, diskCtx)) allocated['1:0'] = true;
+    if (hasGeosSignature(buffer, diskCtx)) {
+      var border = readGeosBorderRef(buffer, diskCtx);
+      if (border && isValidChainLink(border.track, border.sector, diskCtx)) allocated[border.track + ':' + border.sector] = true;
+    }
   }
 
   // Walk a directory chain, mark its sectors and all file chains as allocated.

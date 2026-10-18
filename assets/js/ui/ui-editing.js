@@ -332,6 +332,9 @@ function setMenuFocus(opt) {
   menuFocused = opt;
   opt.classList.add('menu-focused');
   opt.scrollIntoView({ block: 'nearest' });
+  // A focused submenu item shows its submenu (CSS); place it like hover does.
+  var sub = opt.classList.contains('has-submenu') && opt.querySelector(':scope > .submenu');
+  if (sub) adjustSubmenu(sub);
 }
 
 function getVisibleOptions(container) {
@@ -346,6 +349,8 @@ function openTopMenu(menu) {
   menu.classList.add('open');
   menubarEl.classList.add('menu-active');
   openMenu = menu;
+  var dropdown = menu.querySelector(':scope > .menu-dropdown');
+  if (dropdown) fitMenuHeight(dropdown);
   // When keyboard-driven, disable hover so mouse position doesn't interfere
   if (menuKeyNav) {
     menubarEl.classList.add('menu-keynav');
@@ -391,15 +396,65 @@ document.querySelectorAll('.menu-dropdown .option').forEach(opt => {
   });
 });
 
-// Flip submenus that overflow the viewport
-function adjustSubmenu(sub) {
-  sub.classList.remove('flip-left', 'flip-up');
-  requestAnimationFrame(function() {
-    var rect = sub.getBoundingClientRect();
-    if (rect.right > window.innerWidth) sub.classList.add('flip-left');
-    if (rect.bottom > window.innerHeight) sub.classList.add('flip-up');
-  });
+// Gap kept between a menu and the window edge.
+var MENU_EDGE = 4;
+// A submenu's first option lines up with its parent item (its top padding).
+var SUBMENU_TOP_OFFSET = 4;
+
+// Let a menu that runs past the bottom of the window scroll instead.
+function fitMenuHeight(menuEl) {
+  menuEl.style.maxHeight = '';
+  menuEl.style.overflowY = '';
+  menuEl.style.overflowX = '';
+  var rect = menuEl.getBoundingClientRect();
+  var avail = window.innerHeight - Math.max(rect.top, 0) - MENU_EDGE;
+  if (rect.height > avail) {
+    menuEl.style.maxHeight = avail + 'px';
+    menuEl.style.overflowY = 'auto';
+    menuEl.style.overflowX = 'hidden';
+  }
 }
+
+// Closing a submenu waits a moment after the pointer leaves its item, so
+// the pointer can cross a scrolling menu's scrollbar to reach it.
+var SUBMENU_CLOSE_DELAY = 300;
+function scheduleSubmenuClose(item) {
+  clearTimeout(item._submenuCloseTimer);
+  item._submenuCloseTimer = setTimeout(function() { item.classList.remove('submenu-open'); }, SUBMENU_CLOSE_DELAY);
+}
+function cancelSubmenuClose(item) {
+  clearTimeout(item._submenuCloseTimer);
+}
+
+// Place a submenu next to its parent item, inside the viewport: on the
+// left when it doesn't fit on the right, moved up by just the bottom
+// overflow (never past the top), scrolling when taller than the window.
+// Fixed positioning keeps it from being clipped by a scrolling parent menu.
+function adjustSubmenu(sub) {
+  sub.style.position = 'fixed';
+  sub.style.maxHeight = '';
+  sub.style.overflowY = '';
+  var itemRect = sub.parentElement.getBoundingClientRect();
+  var rect = sub.getBoundingClientRect();
+  var left = itemRect.right;
+  if (left + rect.width > window.innerWidth) left = Math.max(MENU_EDGE, itemRect.left - rect.width);
+  var maxH = window.innerHeight - 2 * MENU_EDGE;
+  if (rect.height > maxH) {
+    sub.style.maxHeight = maxH + 'px';
+    sub.style.overflowY = 'auto';
+  }
+  var height = Math.min(rect.height, maxH);
+  var top = Math.min(itemRect.top - SUBMENU_TOP_OFFSET, window.innerHeight - MENU_EDGE - height);
+  sub.style.left = left + 'px';
+  sub.style.top = Math.max(MENU_EDGE, top) + 'px';
+}
+
+// A fixed submenu doesn't follow its parent menu when that scrolls: close it.
+document.querySelectorAll('.menu-dropdown, .submenu').forEach(function(menuEl) {
+  menuEl.addEventListener('scroll', function() {
+    menuEl.querySelectorAll('.submenu-open').forEach(function(el) { el.classList.remove('submenu-open'); });
+  });
+});
 
 // Drive menubar submenus via JS mouseenter/mouseleave + .submenu-open class
 // rather than CSS :hover. Browser :hover state persists across rapid DOM
@@ -422,10 +477,12 @@ function openMenubarSubmenu(item) {
 
 document.querySelectorAll('.menubar .has-submenu').forEach(function(item) {
   item.addEventListener('mouseenter', function() {
-    openMenubarSubmenu(item);
+    cancelSubmenuClose(item);
+    // Re-entering via its own submenu: it's already open and placed.
+    if (!item.classList.contains('submenu-open')) openMenubarSubmenu(item);
   });
   item.addEventListener('mouseleave', function() {
-    item.classList.remove('submenu-open');
+    scheduleSubmenuClose(item);
   });
   // Click on a has-submenu shouldn't close the menu — submenus are
   // hover-driven, so a click on (say) "Disk Tools" should leave the

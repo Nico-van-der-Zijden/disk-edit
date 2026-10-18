@@ -186,7 +186,8 @@
     min-height: 0;
     overflow: hidden;
   }
-  .modal-body:has(.cmp-layout) {
+  .modal-body:has(.cmp-layout),
+  .detail-pane-body:has(.cmp-layout) {
     overflow-y: hidden;
     display: flex;
     flex-direction: column;

@@ -327,6 +327,12 @@ document.getElementById('opt-changelog').addEventListener('click', function(e) {
   document.getElementById('modal-title').textContent = 'Changelog';
   var body = document.getElementById('modal-body');
   var changes = [
+    { ver: '1.5.2', title: 'Side pane everywhere, safer BAM handling', items: [
+      'Every viewer now opens in the side pane, including BAM, Error Bytes, G64 Layout, Disk Comparison and the IDE64 Disk Map. The pane keeps up with your edits, and each tab remembers its own view',
+      'BAM fixes: Remove Entry frees the blocks it used, Scratch and Validate handle REL side sectors correctly, new files no longer overwrite the GEOS border sector or C128 boot sector, and freeing space on a full 40-track SpeedDOS/DolphinDOS disk no longer damages another file',
+      'Import File can pick several files at once, and SixPack sets with non-standard tracks survive import and re-export',
+      'Smaller polish: long menus scroll in a short window, double-clicking an IDE64 link takes you to its target, geoWrite documents are readable in dark mode, plus many fixes from a full review',
+    ]},
     { ver: '1.5.1', title: 'Create ZipCode sets', items: [
       'Disk → Disk Tools → Create ZipCode… packs the disk you have open into a ZipCode set. Pick DiskPacked, SixPack or FilePacked and a side pane shows exactly what you will get — every part, its size, and how much of the disk it saves — before anything is written',
       'Choose how it arrives: a single ZIP or tar.gz download, or D64 image(s) that open as tabs. A set too big for one disk splits the way real sets do, so a six-part SixPack comes out as NAME-123 and NAME-456',

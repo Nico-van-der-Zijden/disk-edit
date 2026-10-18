@@ -479,7 +479,6 @@ function computeSectorDiff(diskA, diskB) {
 }
 
 function showCompareResultModal(diskA, diskB, diff, labelA, labelB) {
-  document.getElementById('modal-title').textContent = 'Disk Comparison';
 
   var nA = diff.onlyA.length, nB = diff.onlyB.length;
   var nDiff = diff.differ.length, nEq = diff.identical.length;
@@ -693,10 +692,7 @@ function showCompareResultModal(diskA, diskB, diff, labelA, labelB) {
       '</div>' +
     '</div>';
 
-  showModal('Disk Comparison', []);
-  setModalSize('xl');
-  var body = document.getElementById('modal-body');
-  body.innerHTML = html;
+  var body = showViewerModal('Disk Comparison', html);
 
   body.querySelectorAll('.cmp-tab').forEach(function(tab) {
     tab.addEventListener('click', function() {
@@ -771,12 +767,5 @@ function showCompareResultModal(diskA, diskB, diff, labelA, labelB) {
   if (sectorDiff.compatible && sectorDiff.diffs.length > 0) {
     setupSectorMapCanvas(body, diskA, diskB, sectorDiff);
   }
-
-  var footer = document.querySelector('#modal-overlay .modal-footer');
-  footer.innerHTML = '<button id="modal-close">OK</button>';
-  document.getElementById('modal-close').addEventListener('click', function() {
-    document.getElementById('modal-overlay').classList.remove('open');
-  });
-  document.getElementById('modal-overlay').classList.add('open');
 }
 

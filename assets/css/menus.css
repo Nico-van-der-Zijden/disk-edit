@@ -121,16 +121,6 @@
     box-shadow: 0 4px 16px rgba(0,0,0,.4);
   }
 
-  .submenu.flip-left {
-    left: auto;
-    right: 100%;
-  }
-
-  .submenu.flip-up {
-    top: auto;
-    bottom: -4px;
-  }
-
   .menubar .has-submenu.submenu-open > .submenu,
   .has-submenu.menu-focused > .submenu {
     display: block;

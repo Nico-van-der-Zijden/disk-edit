@@ -119,10 +119,11 @@ function showContextMenu(x, y) {
   }
   contextMenu.querySelectorAll('.has-submenu').forEach(function(item) {
     item.addEventListener('mouseenter', function() {
-      openContextSubmenu(item);
+      cancelSubmenuClose(item);
+      if (!item.classList.contains('submenu-open')) openContextSubmenu(item);
     });
     item.addEventListener('mouseleave', function() {
-      item.classList.remove('submenu-open');
+      scheduleSubmenuClose(item);
     });
     item.addEventListener('click', function(e) {
       if (item.classList.contains('disabled')) return;
@@ -149,6 +150,7 @@ function showContextMenu(x, y) {
   if (newY < 0) newY = 0;
   contextMenu.style.left = newX + 'px';
   contextMenu.style.top = newY + 'px';
+  fitMenuHeight(contextMenu);
 }
 
 // Delegate clicks from context menu to the real menu items

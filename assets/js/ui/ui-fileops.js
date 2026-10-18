@@ -732,7 +732,16 @@ async function pasteIntoCbmDos() {
 
   var convertGeos = false;
   var hasGeos = flatItems.some(function(c) { return c.geosInfoBlock != null; });
-  if (hasGeos && !hasGeosSignature(currentBuffer, getCurrentCtx())) {
+  var geosBlocker = geosConversionBlocker(currentBuffer, getCurrentCtx());
+  if (hasGeos && !hasGeosSignature(currentBuffer, getCurrentCtx()) && geosBlocker) {
+    var pasteAnyway = await showChoiceModal('GEOS File',
+      'Clipboard contains GEOS file(s) but the disk is not in GEOS format. ' + geosBlocker + ' Paste without converting?',
+      [
+        { label: 'Cancel', value: false, secondary: true },
+        { label: 'Paste Anyway', value: true }
+      ]);
+    if (!pasteAnyway) return;
+  } else if (hasGeos && !hasGeosSignature(currentBuffer, getCurrentCtx())) {
     var choice = await showChoiceModal(
       'GEOS File',
       'Clipboard contains GEOS file(s) but the disk is not in GEOS format. Convert disk to GEOS format?',
@@ -883,7 +892,7 @@ async function pasteIntoCbmDos() {
     if (success) {
       pasted++;
     } else {
-      skipped.push({ name: fileName, reason: item.kind === 'cbm-del' ? 'No directory space' : 'Disk full or no directory space' });
+      skipped.push({ name: fileName, reason: item.kind === 'cbm-del' ? DIR_CANT_GROW : writeFailureReason() });
       stoppedAt = pi;
       break;
     }
@@ -1009,6 +1018,18 @@ async function importFilesToCurrentDisk(entries) {
   showModal(errors.length > 0 ? 'Import Finished With Errors' : 'Import Complete', lines);
 }
 
+// findFreeDirEntry also needs the new dir sector free in the BAM, so a
+// disk whose BAM marks the whole dir track used can't grow its directory.
+var DIR_CANT_GROW = 'Directory full: no free sector left to extend it (on the directory track, every other sector is used by a file or marked used in the BAM)';
+
+// Why a write into diskCtx's current dir failed: no dir slot, or no data space.
+function writeFailureReason(diskCtx) {
+  diskCtx = diskCtx || getCurrentCtx();
+  var probe = diskCtx.buffer.slice(0);
+  var noSlot = findFreeDirEntry(probe, null, Object.assign({}, diskCtx, { buffer: probe })) < 0;
+  return noSlot ? DIR_CANT_GROW : 'Disk full';
+}
+
 // Core write: writes file data to disk with sector chain, directory entry, BAM update, and verification.
 // nameBytes = 16-byte Uint8Array of PETSCII filename (already padded with $A0)
 // Returns true on success, false on failure (with rollback).
@@ -1043,7 +1064,7 @@ function writeFileToDisk(typeIdx, nameBytes, fileData, geosData, silent, diskCtx
   // Pass allocated map so linked subdir expansion doesn't reuse file sectors
   var entryOff = findFreeDirEntry(buffer, allocated, diskCtx);
   if (entryOff < 0) {
-    if (!silent) showModal('Write Error', ['No free directory entry available.']);
+    if (!silent) showModal('Write Error', [DIR_CANT_GROW + '.']);
     return false;
   }
 
@@ -1229,7 +1250,7 @@ async function importFileToDisk(fileName, fileData, batch) {
   // a successful write gets an undo entry.
   var snap = batch ? currentBuffer.slice(0) : null;
   if (!writeFileToDisk(typeIdx, nameBytes, fileData, null, batch, getCurrentCtx())) {
-    return { error: 'Disk or directory full.' };
+    return { error: writeFailureReason() + '.' };
   }
   if (batch) pushUndo(snap);
   else {
@@ -1466,7 +1487,7 @@ function writeVlirFileToDisk(typeByte, nameBytes, records, geosBytes, infoBlock,
 
   var entryOff = findFreeDirEntry(buffer, allocated, diskCtx);
   if (entryOff < 0) {
-    if (!silent) showModal('Write Error', ['No free directory entry available.']);
+    if (!silent) showModal('Write Error', [DIR_CANT_GROW + '.']);
     return false;
   }
 
@@ -1835,7 +1856,6 @@ document.getElementById('opt-scratch').addEventListener('click', async (e) => {
   }
   var data = new Uint8Array(currentBuffer);
   var ctx = getCurrentCtx();
-  var bamOff = getDirContext(ctx).bamOff;
   // Same rule as the menu: closed, unlocked SEQ/PRG/USR/REL only.
   var scratchTargets = (selectedEntries.length > 0 ? selectedEntries : [selectedEntryIndex])
     .filter(function(off) {
@@ -1845,14 +1865,7 @@ document.getElementById('opt-scratch').addEventListener('click', async (e) => {
     });
   if (scratchTargets.length === 0) return;
   pushUndo();
-  for (var sti = 0; sti < scratchTargets.length; sti++) {
-    var entryOff = scratchTargets[sti];
-    // Like DOS: type $00 hides the entry; the T/S link stays for Unscratch.
-    data[entryOff + 2] = 0x00;
-    forEachFileSector(data, entryOff, function(t, s) {
-      bamMarkSectorFree(data, t, s, bamOff, ctx);
-    }, ctx);
-  }
+  for (var sti = 0; sti < scratchTargets.length; sti++) scratchCbmEntry(currentBuffer, scratchTargets[sti], ctx);
 
   var info = parseCurrentDir(currentBuffer);
   renderDisk(info);
@@ -1927,6 +1940,18 @@ document.getElementById('opt-unscratch').addEventListener('click', async (e) => 
     showModal(restored ? 'Unscratch — partial' : 'Unscratch failed', refused);
   }
 });
+
+// Scratch a CBM-DOS entry like DOS does: free its sectors, then type $00
+// hides the entry while the T/S link stays for Unscratch. Freeing comes
+// first because the walk needs the REL type to find the side sectors.
+function scratchCbmEntry(buffer, entryOff, ctx) {
+  var data = new Uint8Array(buffer);
+  var bamOff = getDirContext(ctx).bamOff;
+  forEachFileSector(data, entryOff, function(t, s) {
+    bamMarkSectorFree(data, t, s, bamOff, ctx);
+  }, ctx);
+  data[entryOff + 2] = 0x00;
+}
 
 // Restore a scratched CBM-DOS entry: set the closed bit (a $00 type byte
 // becomes restoreType, default PRG), mark its sectors used and fix the

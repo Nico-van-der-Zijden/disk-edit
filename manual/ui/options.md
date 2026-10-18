@@ -28,7 +28,7 @@ Per-byte colouring scheme in the hex viewer, sector editor, and side-by-side com
 
 Both hex and PETSCII columns get the scheme's colour. Reversed bytes (`$80-$FF`) keep the scheme hue.
 
-Switching schemes recolours every open hex modal instantly.
+Switching schemes recolours an open hex view instantly.
 
 ## Toolbar / display
 

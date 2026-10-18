@@ -309,7 +309,9 @@ function alignCfsFilename(entry, alignment) {
 // ── Remove directory entry ────────────────────────────────────────────
 // Callers push the undo snapshot. Removing a 1581 partition frees its
 // tracks in the root BAM, except sectors listed in keepSectors ("t:s")
-// — the data of files moved out to the root.
+// — the data of files moved out to the root. Any other entry frees the
+// sectors only it owned (file, REL side sectors, GEOS records, a DNP
+// subdir with its contents); cross-linked sectors stay allocated.
 function removeFileEntry(buffer, entryOff, keepSectors) {
   const data = new Uint8Array(buffer);
   const slots = getDirSlotOffsets(buffer);
@@ -317,8 +319,10 @@ function removeFileEntry(buffer, entryOff, keepSectors) {
   if (idx < 0) return false;
 
   var typeByte = data[entryOff + 2];
-  if (currentFormat.supportsSubdirs && !currentFormat.subdirLinked &&
-      (typeByte & 0x07) === currentFormat.subdirType) {
+  var isCbmPartition = currentFormat.supportsSubdirs && !currentFormat.subdirLinked &&
+    (typeByte & 0x07) === currentFormat.subdirType;
+  var ownedBefore = isCbmPartition ? null : buildTrueAllocationMap(buffer, getCurrentCtx());
+  if (isCbmPartition) {
     var fmt = currentFormat;
     var ctx = getCurrentCtx();
     var bamOff = getDirContext(ctx).bamOff;
@@ -349,7 +353,39 @@ function removeFileEntry(buffer, entryOff, keepSectors) {
   for (let j = 2; j < 32; j++) {
     data[lastSlot + j] = 0x00;
   }
+
+  if (ownedBefore) {
+    var rmCtx = getCurrentCtx();
+    var rmBamOff = getDirContext(rmCtx).bamOff;
+    var ownedAfter = buildTrueAllocationMap(buffer, rmCtx);
+    Object.keys(ownedBefore).forEach(function(k) {
+      if (ownedAfter[k]) return;
+      var ts = k.split(':');
+      bamMarkSectorFree(data, +ts[0], +ts[1], rmBamOff, rmCtx);
+    });
+  }
   return true;
+}
+
+// How many of a 1581 partition's files Move to Root can place: a trial
+// run on a copy, so a directory track the BAM marks used is accounted for.
+function countMoveToRootSlots(partEntryOff, files) {
+  var probe = currentBuffer.slice(0);
+  var pdata = new Uint8Array(probe);
+  var ctx = Object.assign({}, getCurrentCtx(), { buffer: probe });
+  var keep = {};
+  var saved = files.map(function(f) {
+    forEachFileSector(pdata, f.entryOff, function(t, s) { keep[t + ':' + s] = true; }, ctx);
+    return pdata.slice(f.entryOff, f.entryOff + 32);
+  });
+  removeFileEntry(probe, partEntryOff, keep);
+  var placed = 0;
+  for (; placed < saved.length; placed++) {
+    var off = findFreeDirEntry(probe, null, ctx);
+    if (off < 0) break;
+    for (var j = 2; j < 32; j++) pdata[off + j] = saved[placed][j];
+  }
+  return placed;
 }
 
 // ── Insert file entry ─────────────────────────────────────────────────
@@ -1381,8 +1417,7 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
     if (choice !== 'move' && choice !== 'remove') return;
 
     if (choice === 'move') {
-      // +1: the partition's own entry is removed first.
-      var freeSlots = getMaxDirEntries() - countDirEntries() + 1;
+      var freeSlots = countMoveToRootSlots(fullParts[0].off, fileEntries1);
       if (freeSlots < fileEntries1.length) {
         var cantMove = fileEntries1.slice(freeSlots);
         var lostNames = cantMove.map(function(en) {
@@ -1426,7 +1461,13 @@ document.getElementById('opt-remove').addEventListener('click', async (e) => {
   for (var ri = targets.length - 1; ri >= 0; ri--) removeFileEntry(currentBuffer, targets[ri], keepSectors);
   for (var mi = 0; mi < movedEntries.length; mi++) {
     var dstOff = findFreeDirEntry(currentBuffer, null, getCurrentCtx());
-    if (dstOff < 0) break;
+    if (dstOff < 0) {
+      // countMoveToRootSlots said it fits; never drop a file silently.
+      discardUndo();
+      renderDisk(parseCurrentDir(currentBuffer));
+      showModal('Remove Directory', ['Not all files could be moved to the root. Nothing was changed.']);
+      return;
+    }
     var moveData = new Uint8Array(currentBuffer);
     for (var j = 2; j < 32; j++) moveData[dstOff + j] = movedEntries[mi][j];
   }

@@ -2118,7 +2118,8 @@ function cfsPasteDirTree(buffer, partitionStart, partitionEndLba, destDirLba, tr
 }
 
 // Resolve a slash-separated path from startDirLba to its entry, or null.
-function cfsResolvePath(buffer, startDirLba, path) {
+// trail (optional array): receives the DIR entries walked through, in order.
+function cfsResolvePath(buffer, startDirLba, path, trail) {
   if (!buffer || !path) return null;
   var parts = path.split('/').filter(function(p) { return p.length > 0; });
   if (parts.length === 0) return null;
@@ -2140,6 +2141,7 @@ function cfsResolvePath(buffer, startDirLba, path) {
       if (match.ftype !== CFS_FTYPE.DIR) return null;
       if (!match.dataTreePtr || !match.dataTreePtr.lba) return null;
       dirLba = match.dataTreePtr.addr;
+      if (trail) trail.push(match);
     } else {
       found = match;
     }

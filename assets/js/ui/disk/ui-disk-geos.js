@@ -103,6 +103,11 @@ document.getElementById('opt-convert-geos').addEventListener('click', function(e
   e.stopPropagation();
   if (!currentBuffer || hasGeosSignature(currentBuffer, getCurrentCtx())) return;
   closeMenus();
+  var blocker = geosConversionBlocker(currentBuffer, getCurrentCtx());
+  if (blocker) {
+    showModal('Convert to GEOS', [blocker]);
+    return;
+  }
   pushUndo();
   writeGeosSignature(currentBuffer, getCurrentCtx());
   updateMenuState();

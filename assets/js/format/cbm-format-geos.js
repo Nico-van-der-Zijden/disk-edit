@@ -53,17 +53,28 @@ function hasGeosSignature(buffer, ctx) {
   return true;
 }
 
-/** @param {ArrayBuffer} buffer */
+// Why the disk can't be marked as GEOS, or null. The signature and border
+// pointer ($AB-$BC) sit on DolphinDOS's tracks 36-40 BAM ($AC-$BF).
+function geosConversionBlocker(buffer, ctx) {
+  if (getSpeederVariant(buffer, ctx) === 'DolphinDOS') {
+    return 'This disk has a DolphinDOS 40-track BAM where GEOS keeps its signature; marking it as GEOS would destroy the BAM for tracks 36-40.';
+  }
+  return null;
+}
+
+/** @param {ArrayBuffer} buffer @returns {boolean} false when refused (see geosConversionBlocker) */
 function writeGeosSignature(buffer, ctx) {
+  if (geosConversionBlocker(buffer, ctx)) return false;
   var data = new Uint8Array(buffer);
   var hdrOff = sectorOffset(ctx.format.headerTrack, ctx.format.headerSector, ctx);
-  if (hdrOff < 0) return;
+  if (hdrOff < 0) return false;
   for (var i = 0; i < GEOS_SIGNATURE.length; i++) {
     data[hdrOff + GEOS_SIG_OFFSET + i] = GEOS_SIGNATURE.charCodeAt(i);
   }
   // Also set the "border" byte at 0xAB to 0x00 (GEOS uses this)
   data[hdrOff + 0xAB] = 0x00;
   data[hdrOff + 0xAC] = 0x00;
+  return true;
 }
 
 // Read the GEOS border-sector T/S pointer from the BAM/header sector

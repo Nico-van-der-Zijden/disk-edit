@@ -23,7 +23,7 @@ Sort writes the dir chain in the new order. Free sectors are unaffected — only
 
 ### Remove
 
-**File → Remove Entry** deletes the directory entry **without** scratching the file. The data sectors stay (potentially orphaned); the row vanishes.
+**File → Remove Entry** deletes the directory entry and frees the file's blocks in the BAM; the row vanishes. Sectors another file still uses stay allocated.
 
 This is different from **Scratch** which returns the data sectors to the BAM. Use Remove when you want to fix a directory layout without losing the underlying file data.
 

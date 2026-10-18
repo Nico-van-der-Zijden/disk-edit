@@ -50,7 +50,7 @@ The editor caps imports at 4 MiB to avoid pathological depth-3+ trees in the UI.
 
 ### LNK symlinks
 
-CFS supports `LNK` (link) entries that point at another file by path. The editor displays LNK entries as `LNK` in the type column; **View Link Target** shows where they point. Following a link (e.g., to view as PRG) opens the target file.
+CFS supports `LNK` (link) entries that point at another file by path. The editor displays LNK entries as `LNK` in the type column. Double-clicking a link follows it like a shortcut: a link to a directory enters it, a link to a file opens the directory holding it with the file selected. The breadcrumb shows the target's real location, so ".." goes to its actual parent. A path starting with `/` is taken from the partition root; any other path from the directory the link is in. A link whose target doesn't exist shows the path it points to.
 
 ## What you can do
 

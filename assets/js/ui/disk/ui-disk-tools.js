@@ -1051,10 +1051,7 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
       '</tr>';
   });
 
-  showModal('G64 Layout', []);
-  setModalSize('xl');
-  var body = document.getElementById('modal-body');
-  body.innerHTML =
+  var body = showViewerModal('G64 Layout',
     '<div class="text-base mb-md">' +
       '<b>' + escHtml(currentFileName || 'unnamed') + '</b> &mdash; ' + layout.length + ' tracks. ' +
       '<span class="g64-headline">' + escHtml(diskHeadline) + '</span> ' + chipsHtml +
@@ -1112,7 +1109,7 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
       '<div class="g64-raw-wrap" id="g64-raw-wrap">' +
         '<canvas id="g64-raw-canvas" width="640" height="640" class="g64-raw-canvas"></canvas>' +
       '</div>' +
-    '</div>';
+    '</div>');
 
   var canvas = body.querySelector('#g64-layout-canvas');
   var ctx = canvas.getContext('2d');
@@ -1245,13 +1242,6 @@ document.getElementById('opt-g64-layout').addEventListener('click', function(e) 
       }
     });
   });
-
-  var footer = document.querySelector('#modal-overlay .modal-footer');
-  footer.innerHTML = '<button id="modal-close">OK</button>';
-  document.getElementById('modal-close').addEventListener('click', function() {
-    document.getElementById('modal-overlay').classList.remove('open');
-  });
-  document.getElementById('modal-overlay').classList.add('open');
 });
 
 // Concentric rings, track 1 outermost, each running CCW from the bottom:

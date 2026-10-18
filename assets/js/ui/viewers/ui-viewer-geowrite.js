@@ -227,13 +227,13 @@ function geoWritePageToHtml(elements, imageCache) {
         html += '<img class="geowrite-img" src="' + img.url +
           '" width="' + img.w + '" height="' + img.h + '">';
       } else {
-        html += '<span style="color:#6C6C6C">[Image: record ' + el.record +
+        html += '<span class="geowrite-note">[Image: record ' + el.record +
           ', ' + el.w + 'x' + el.h + ']</span>';
       }
     }
   }
   closePara();
 
-  if (html === '') html = '<div class="geowrite-para" style="color:#6C6C6C">(empty page)</div>';
+  if (html === '') html = '<div class="geowrite-para geowrite-note">(empty page)</div>';
   return html;
 }

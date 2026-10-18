@@ -223,19 +223,27 @@ const DISK_FORMATS = {
       if (numTracks <= 35) return numTracks;
       return (currentBuffer && getSpeederVariant(currentBuffer, getCurrentCtx())) ? numTracks : 35;
     },
-    getBamBitmapBase(bamOff, track) { return _d64BamEntry(bamOff, track, null) + 1; },
+    // -1 from _d64BamEntry: track 36+ with no speeder BAM; no BAM bytes to touch.
+    getBamBitmapBase(bamOff, track) {
+      const base = _d64BamEntry(bamOff, track, null);
+      return base < 0 ? -1 : base + 1;
+    },
     readTrackFree(data, bamOff, track) {
-      return data[_d64BamEntry(bamOff, track, data)];
+      const base = _d64BamEntry(bamOff, track, data);
+      return base < 0 ? 0 : data[base];
     },
     writeTrackFree(data, bamOff, track, free) {
-      data[_d64BamEntry(bamOff, track, data)] = free;
+      const base = _d64BamEntry(bamOff, track, data);
+      if (base >= 0) data[base] = free;
     },
     readTrackBitmap(data, bamOff, track) {
       const base = _d64BamEntry(bamOff, track, data);
+      if (base < 0) return 0;
       return data[base + 1] | (data[base + 2] << 8) | (data[base + 3] << 16);
     },
     writeTrackBitmap(data, bamOff, track, bm) {
       const base = _d64BamEntry(bamOff, track, data);
+      if (base < 0) return;
       data[base + 1] = bm & 0xFF;
       data[base + 2] = (bm >> 8) & 0xFF;
       data[base + 3] = (bm >> 16) & 0xFF;
@@ -1262,15 +1270,19 @@ function getBamBitmapBase(track, bamOff, ctx) {
 }
 
 /** @param {Uint8Array} data @param {number} bamOff @param {number} track @param {number} sector @returns {boolean} */
+// A negative bitmap base means the track has no BAM entry (40-track D64
+// without a speeder BAM): it reads as used and is never written.
 function checkSectorFree(data, bamOff, track, sector, ctx) {
   if (ctx.format.isSectorFree) return ctx.format.isSectorFree(data, bamOff, track, sector);
   var base = getBamBitmapBase(track, bamOff, ctx);
+  if (base < 0) return false;
   return (data[base + (sector >> 3)] & ctx.format.bamBitMask(sector)) !== 0;
 }
 
 /** @param {Uint8Array} data @param {number} track @param {number} sector @param {number} bamOff */
 function bamMarkSectorUsed(data, track, sector, bamOff, ctx) {
   var base = getBamBitmapBase(track, bamOff, ctx);
+  if (base < 0) return;
   data[base + (sector >> 3)] &= ~ctx.format.bamBitMask(sector);
   bamRecalcFree(data, track, bamOff, ctx);
 }
@@ -1278,6 +1290,7 @@ function bamMarkSectorUsed(data, track, sector, bamOff, ctx) {
 /** @param {Uint8Array} data @param {number} track @param {number} sector @param {number} bamOff */
 function bamMarkSectorFree(data, track, sector, bamOff, ctx) {
   var base = getBamBitmapBase(track, bamOff, ctx);
+  if (base < 0) return;
   data[base + (sector >> 3)] |= ctx.format.bamBitMask(sector);
   bamRecalcFree(data, track, bamOff, ctx);
 }
@@ -1289,6 +1302,7 @@ function bamRecalcFree(data, track, bamOff, ctx) {
   var spt = fmt.sectorsPerTrack(track);
   var numBytes = Math.ceil(spt / 8);
   var base = getBamBitmapBase(track, bamOff, ctx);
+  if (base < 0) return;
   var free = 0;
   for (var i = 0; i < numBytes; i++) {
     var bval = data[base + i];
@@ -1448,9 +1462,33 @@ function _d64BamEntry(bamOff, track, data) {
     if (!cur.buffer) return -1;
     data = new Uint8Array(cur.buffer);
   }
-  if (_hasFdEntries(data, bamOff + 0xC0)) return bamOff + 0xC0 + (track - 36) * 4; // SpeedDOS
-  if (_hasFdEntries(data, bamOff + 0xAC)) return bamOff + 0xAC + (track - 36) * 4; // DolphinDOS
-  return -1;
+  var rel = _speederBamRel(data, bamOff);
+  return rel ? bamOff + rel + (track - 36) * 4 : -1;
+}
+
+// Speeder BAM offset (+$C0 SpeedDOS, +$AC DolphinDOS) last seen per disk
+// buffer and BAM position. Once tracks 36-40 are full the bitmaps are all
+// zero and look like no BAM at all, so the remembered offset is kept as
+// long as its entries still have the shape of BAM entries.
+var _speederBamSeen = new WeakMap();
+
+function _speederBamRel(data, bamOff) {
+  var key = data.byteOffset + bamOff;
+  var seen = _speederBamSeen.get(data.buffer);
+  var rel = seen && seen[key];
+  if (rel && _isFdShaped(data, bamOff + rel)) return rel;
+  rel = _hasFdEntries(data, bamOff + 0xC0) ? 0xC0 : _hasFdEntries(data, bamOff + 0xAC) ? 0xAC : 0;
+  if (rel) {
+    if (!seen) _speederBamSeen.set(data.buffer, seen = {});
+    seen[key] = rel;
+  }
+  return rel;
+}
+
+// Undo/redo copies the buffer; the copy keeps what was seen on the original.
+function inheritSpeederBamHint(fromBuffer, toBuffer) {
+  var seen = fromBuffer && _speederBamSeen.get(fromBuffer);
+  if (seen && toBuffer) _speederBamSeen.set(toBuffer, Object.assign({}, seen));
 }
 
 
@@ -1475,9 +1513,8 @@ function getSpeederVariant(buffer, ctx) {
   var data = new Uint8Array(buffer);
   var bamOff = sectorOffset(ctx.format.bamTrack, ctx.format.bamSector, ctx);
   if (bamOff < 0) return null;
-  if (_hasFdEntries(data, bamOff + 0xC0)) return 'SpeedDOS';
-  if (_hasFdEntries(data, bamOff + 0xAC)) return 'DolphinDOS';
-  return null;
+  var rel = _speederBamRel(data, bamOff);
+  return rel === 0xC0 ? 'SpeedDOS' : rel === 0xAC ? 'DolphinDOS' : null;
 }
 
 // 5 four-byte entries: free counts <= 17 and at least one non-zero bitmap byte.
@@ -1490,6 +1527,15 @@ function _hasFdEntries(data, off) {
     if (bm !== 0) anyBitmap = true;
   }
   return anyBitmap;
+}
+
+// 5 four-byte entries that could be BAM entries for 17-sector tracks
+// (free count <= 17, no bits above sector 16), full tracks included.
+function _isFdShaped(data, off) {
+  for (var i = 0; i < 5; i++) {
+    if (data[off + i * 4] > 17 || data[off + i * 4 + 3] > 0x01) return false;
+  }
+  return true;
 }
 
 // C128 auto-boot: 'CBM' at T1/S0 +$00 (C128BOOT.TXT).

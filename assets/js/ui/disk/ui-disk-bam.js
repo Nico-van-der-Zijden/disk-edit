@@ -104,6 +104,8 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     : checkBAMIntegrity(currentBuffer, viewCtx);
   var sectorOwner = bamCheck.sectorOwner;
 
+  // Redrawing the listing (its blocks-free count changes) also redraws
+  // this view in place, on the same tab and scroll position.
   function toggleBamBit(t, s) {
     pushUndo();
     var d = new Uint8Array(currentBuffer);
@@ -111,8 +113,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     var base = getBamBitmapBase(t, bamOff, ctx);
     d[base + (s >> 3)] ^= fmt.bamBitMask(s);
     if (fmt.hasBamFreeCounts) bamRecalcFree(d, t, bamOff, ctx);
-    document.getElementById('modal-overlay').classList.remove('open');
-    document.getElementById('opt-view-bam').click();
+    renderDisk(parseCurrentDir(currentBuffer));
   }
 
   var bamWarnings = '';
@@ -437,21 +438,20 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
   }
   html += '</div>';
 
-  showModal(title, []);
-  setModalSize('md');
-  var bamBody = document.getElementById('modal-body');
-  bamBody.innerHTML = html;
+  var bamBody = showViewerModal(title, html);
+  // Listeners go on the view's own root, which is replaced on every open.
+  var bamRoot = bamBody.querySelector('.bam-layout');
 
   // Tab switching
-  bamBody.querySelectorAll('.bam-tab').forEach(function(tab) {
+  bamRoot.querySelectorAll('.bam-tab').forEach(function(tab) {
     tab.addEventListener('click', function() {
-      bamBody.querySelectorAll('.bam-tab').forEach(function(t) { t.classList.remove('active'); });
+      bamRoot.querySelectorAll('.bam-tab').forEach(function(t) { t.classList.remove('active'); });
       tab.classList.add('active');
       var view = tab.getAttribute('data-bam-view');
-      bamBody.querySelectorAll('.bam-view-content').forEach(function(c) {
+      bamRoot.querySelectorAll('.bam-view-content').forEach(function(c) {
         c.style.display = c.getAttribute('data-bam-view') === view ? '' : 'none';
       });
-      var scroller = bamBody.querySelector('.bam-tab-scroll');
+      var scroller = bamRoot.querySelector('.bam-tab-scroll');
       if (scroller) scroller.scrollTop = 0;
     });
   });
@@ -551,7 +551,6 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     bamCanvas.addEventListener('click', function(e) {
       var pos = mapCoordsFromEvent(e);
       if (!inMap(pos)) return;
-      document.getElementById('modal-overlay').classList.remove('open');
       showSectorHexEditor(pos.track, pos.sector);
     });
 
@@ -580,7 +579,7 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     var dmColError = getBamSectorColor('error');
     var dmColOrphan = getBamSectorColor('orphan');
 
-    var dmSize = Math.min(520, window.innerWidth - 80, window.innerHeight - 260);
+    var dmSize = Math.max(160, Math.min(520, bamBody.clientWidth - 24, window.innerHeight - 260));
     diskMapCanvas.width = dmSize;
     diskMapCanvas.height = dmSize;
     var dmCx = dmSize / 2, dmCy = dmSize / 2;
@@ -674,7 +673,6 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
       var mx = e.clientX - rect.left, my = e.clientY - rect.top;
       for (var hi = dmHitMap.length - 1; hi >= 0; hi--) {
         if (dmCtx.isPointInPath(dmHitMap[hi].path, mx, my)) {
-          document.getElementById('modal-overlay').classList.remove('open');
           showSectorHexEditor(dmHitMap[hi].track, dmHitMap[hi].sector);
           return;
         }
@@ -682,20 +680,18 @@ document.getElementById('opt-view-bam').addEventListener('click', function(e) {
     });
   }
 
-  // Click on a sector block to open sector editor
-  bamBody.addEventListener('click', function(e) {
+  // Click on a sector block to open the sector editor (a modal over the pane)
+  bamRoot.addEventListener('click', function(e) {
     var block = e.target.closest('.bam-sector');
     if (!block) return;
     var bt = parseInt(block.getAttribute('data-t'), 10);
     var bs = parseInt(block.getAttribute('data-s'), 10);
     if (isNaN(bt) || isNaN(bs)) return;
-    // Close BAM modal and open sector editor
-    document.getElementById('modal-overlay').classList.remove('open');
     showSectorHexEditor(bt, bs);
   });
 
   // Right-click on a sector block to toggle free/used
-  bamBody.addEventListener('contextmenu', function(e) {
+  bamRoot.addEventListener('contextmenu', function(e) {
     var block = e.target.closest('.bam-sector');
     if (!block) return;
     e.preventDefault();
@@ -780,18 +776,16 @@ document.getElementById('opt-view-errors').addEventListener('click', function(e)
   var title = 'Error Bytes \u2014 ' + (totalErrors > 0 ? totalErrors + ' error(s)' : 'No errors') +
     ' in ' + totalSect + ' sectors';
 
-  showModal(title, []);
-  var errBody = document.getElementById('modal-body');
-  errBody.innerHTML = html;
+  var errBody = showViewerModal(title, '<div class="error-bytes-view">' + html + '</div>');
 
-  // Click to open sector editor
-  errBody.addEventListener('click', function(ev) {
+  // Click a sector to open it in the sector editor (a modal over the pane).
+  // The listener sits on the wrapper, which is replaced on every open.
+  errBody.querySelector('.error-bytes-view').addEventListener('click', function(ev) {
     var block = ev.target.closest('.error-sector');
     if (!block) return;
     var bt = parseInt(block.getAttribute('data-t'), 10);
     var bs = parseInt(block.getAttribute('data-s'), 10);
     if (isNaN(bt) || isNaN(bs)) return;
-    document.getElementById('modal-overlay').classList.remove('open');
     showSectorHexEditor(bt, bs);
   });
 });

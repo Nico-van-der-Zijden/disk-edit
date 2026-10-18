@@ -166,7 +166,8 @@
     flex: 1;
     min-height: 0;
   }
-  .modal-body:has(.bam-layout) {
+  .modal-body:has(.bam-layout),
+  .detail-pane-body:has(.bam-layout) {
     overflow-y: hidden;
     display: flex;
     flex-direction: column;

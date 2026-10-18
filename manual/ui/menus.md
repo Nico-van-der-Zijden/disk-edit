@@ -58,7 +58,7 @@ Operations on the selected directory entry, plus import / export of individual f
 | **Separator** ▸ | Insert ▸ (pick from saved separators) / Save Current as New / Edit List… |
 | **Copy** | Copies selected file(s) or directory to the clipboard |
 | **Paste** | Pastes clipboard contents into the current dir. Cross-family translation handles type differences |
-| **Remove Entry** (Delete) | Removes the dir entry (without freeing the data sectors). Works on a multi-selection; asks first about 1581 partitions that still contain files |
+| **Remove Entry** (Delete) | Removes the dir entry and frees its blocks. Works on a multi-selection; asks first about 1581 partitions that still contain files |
 | **Move Up / Down** | Swap with neighbour |
 | **Add Directory** | (DNP / D81 / IDE64 / DHD / RAMLink) — creates a sub-directory / sub-partition |
 | **New Partition** | (CMD / IDE64 partition list views) — adds a partition into free space |

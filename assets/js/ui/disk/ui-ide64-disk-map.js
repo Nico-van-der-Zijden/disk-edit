@@ -1,6 +1,6 @@
-// ── IDE64 .hdd BAM modal ──────────────────────────────────────────────
-// Tabbed modal opened from View → BAM whenever an .hdd image is the
-// active tab:
+// ── IDE64 .hdd BAM view ───────────────────────────────────────────────
+// Tabbed view in the detail pane, opened from View → BAM whenever an
+// .hdd image is the active tab:
 //   * Partitions tab — horizontal disk map (MBR, partition table,
 //     partitions, gaps, backup mirror)
 //   * <partition-name> tab — 64×64 CFS bitmap heat map, only shown
@@ -35,7 +35,7 @@ function showIde64BamModal() {
 
   // Default to the partition tab when inside a partition; the disk-map
   // tab otherwise. Either tab is reachable from the other via the tab
-  // bar at the top of the modal.
+  // bar at the top of the view.
   var activeTab = inPartition ? 'partition' : 'disk';
 
   var diskCtx = _buildIde64DiskMapContext(boot, info, hddBuffer);
@@ -69,10 +69,7 @@ function showIde64BamModal() {
     '</div>';
 
   var title = 'Disk Map — ' + (boot.label || 'IDE64 .hdd');
-  // 'lg' (720px fixed) — modal frame stays the same width across tab switches.
-  // forceModal: this viewer owns its footer (Density/Ownership toggle + Close)
-  // and tab controls, so it stays a modal rather than moving to the pane.
-  var body = showViewerModal(title, bodyHtml, 'lg', true);
+  var body = showViewerModal(title, bodyHtml);
 
   function activateTab(name) {
     body.querySelectorAll('.bam-tab').forEach(function(t) {
@@ -111,15 +108,16 @@ function showIde64BamModal() {
   _wireDiskMapHandlers(body, diskCtx, loadPartitionIntoTab);
   if (inPartition) _wireCfsBamHandlers(body, partCtx);
 
+  // The partition tab's colouring toggle sits in the viewer footer; the
+  // disk tab has none (an empty pane footer is hidden).
   function setFooter(tab) {
-    var footer = document.querySelector('#modal-overlay .modal-footer');
+    var footer = getViewerFooter();
     if (!footer) return;
     if (tab === 'partition' && partCtx) {
       footer.innerHTML =
         '<button id="cfs-bam-toggle" class="modal-btn-secondary">' +
           (partCtx.mode === 'density' ? 'Color by file ownership' : 'Color by density') +
-        '</button>' +
-        '<button id="ide64-bam-close">Close</button>';
+        '</button>';
       document.getElementById('cfs-bam-toggle').addEventListener('click', function() {
         partCtx.mode = (partCtx.mode === 'density') ? 'ownership' : 'density';
         var hostEl = body.querySelector('.bam-view-content[data-tab="partition"]');
@@ -130,11 +128,8 @@ function showIde64BamModal() {
         this.textContent = partCtx.mode === 'density' ? 'Color by file ownership' : 'Color by density';
       });
     } else {
-      footer.innerHTML = '<button id="ide64-bam-close">Close</button>';
+      footer.innerHTML = '';
     }
-    document.getElementById('ide64-bam-close').addEventListener('click', function() {
-      document.getElementById('modal-overlay').classList.remove('open');
-    });
   }
 
   body.querySelectorAll('.bam-tab').forEach(function(tab) {

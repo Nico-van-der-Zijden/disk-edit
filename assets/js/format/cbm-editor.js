@@ -1,5 +1,5 @@
 // ── Version ───────────────────────────────────────────────────────────
-var APP_VERSION = { major: 1, minor: 5, build: 1 };
+var APP_VERSION = { major: 1, minor: 5, build: 2 };
 var APP_VERSION_STRING = APP_VERSION.major + '.' + APP_VERSION.minor + '.' + APP_VERSION.build;
 
 // ── Current disk state ─────────────────────────────────────────────────
@@ -161,14 +161,21 @@ var MAX_UNDO = 20;
 var tabDirty = false;
 var cleanStackLength = 0;
 
+// The disk is about to change (or just did, for undo/redo): an open
+// detail-pane view redraws after the listing does.
+function notifyDiskChange() {
+  if (typeof markPaneStale === 'function') markPaneStale();
+}
+
 // `snapshot`: a pre-change copy the caller already took; default copies currentBuffer.
 function pushUndo(snapshot) {
-  if (snapshot) {
-    undoStack.push(snapshot);
-  } else {
+  notifyDiskChange();
+  if (!snapshot) {
     if (!currentBuffer) return;
-    undoStack.push(currentBuffer.slice(0));
+    snapshot = currentBuffer.slice(0);
   }
+  inheritSpeederBamHint(currentBuffer, snapshot);
+  undoStack.push(snapshot);
   if (undoStack.length > MAX_UNDO) {
     undoStack.shift();
     if (cleanStackLength > 0) cleanStackLength--;
@@ -184,7 +191,10 @@ function pushUndo(snapshot) {
 
 function popUndo() {
   if (undoStack.length === 0 || !currentBuffer) return false;
-  redoStack.push(currentBuffer.slice(0));
+  notifyDiskChange();
+  var redoSnap = currentBuffer.slice(0);
+  inheritSpeederBamHint(currentBuffer, redoSnap);
+  redoStack.push(redoSnap);
   if (redoStack.length > MAX_UNDO) redoStack.shift();
   currentBuffer = undoStack.pop();
   var tab = getActiveTab();
@@ -199,7 +209,10 @@ function popUndo() {
 
 function popRedo() {
   if (redoStack.length === 0 || !currentBuffer) return false;
-  undoStack.push(currentBuffer.slice(0));
+  notifyDiskChange();
+  var undoSnap = currentBuffer.slice(0);
+  inheritSpeederBamHint(currentBuffer, undoSnap);
+  undoStack.push(undoSnap);
   if (undoStack.length > MAX_UNDO) {
     undoStack.shift();
     if (cleanStackLength > 0) cleanStackLength--;
@@ -221,6 +234,7 @@ function popRedo() {
 // pointing at the restored buffer so a batch can carry on.
 function discardUndo() {
   if (undoStack.length === 0) return false;
+  notifyDiskChange();
   var old = currentBuffer;
   currentBuffer = undoStack.pop();
   if (hddBuffer === old) hddBuffer = currentBuffer;
@@ -808,6 +822,12 @@ function validateDisk(buffer, ctx) {
     var ps = fmt.getProtectedSectors(stk);
     for (var psi = 0; psi < ps.length; psi++) allocated[stk][ps[psi]] = 1;
   }
+  // In use without a dir entry: C128 boot block, GEOS border sector.
+  if (hasC128BootSignature(buffer, ctx)) allocated[1][0] = 1;
+  if (hasGeosSignature(buffer, ctx)) {
+    var border = readGeosBorderRef(buffer, ctx);
+    if (border && isValidChainLink(border.track, border.sector, ctx)) allocated[border.track][border.sector] = 1;
+  }
 
   function followChain(startTrack, startSector, label) {
     const visited = new Set();
@@ -916,6 +936,9 @@ function validateDisk(buffer, ctx) {
         var label = '"' + rname + '"';
         const result = followChain(fileTrack, fileSector, label);
         var totalBlocks = result.blocks;
+        if (fileType === FILE_TYPE.REL) {
+          totalBlocks += followChain(data[entryOff + 0x15], data[entryOff + 0x16], label + ' side sectors').blocks;
+        }
 
         forEachGeosAuxSector(data, entryOff,
           function(infoT, infoS) {
@@ -1079,6 +1102,9 @@ function validatePartition(buffer, startTrack, partSize, ctx) {
       var label = '"' + rname + '"';
       const result = followChain(fileTrack, fileSector, label);
       var totalBlocks = result.blocks;
+      if (fileType === FILE_TYPE.REL) {
+        totalBlocks += followChain(data[entryOff + 0x15], data[entryOff + 0x16], label + ' side sectors').blocks;
+      }
 
       forEachGeosAuxSector(data, entryOff,
         function(infoT, infoS) {
